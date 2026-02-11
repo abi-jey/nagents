@@ -1,4 +1,4 @@
-# Simple Agents
+# nagents
 
 A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration.
 
@@ -9,13 +9,13 @@ A lightweight, dependency-free LLM agent framework with direct HTTP-based provid
 - **Tool Execution**: Register Python functions as tools with automatic schema generation
 - **Session Management**: SQLite-based conversation persistence
 - **Batch Processing**: Process multiple requests efficiently
-- **Zero Heavy Dependencies**: Only `aiohttp` and `aiosqlite` required
+- **Minimal Dependencies**: Only `aiohttp` and `aiosqlite` required
 
 ## Quick Start
 
 ```python
 import asyncio
-from simple_agents import Agent, Provider, ProviderType
+from nagents import Agent, Provider, ProviderType
 
 async def main():
     # Create a provider
@@ -41,17 +41,17 @@ asyncio.run(main())
 ## Installation
 
 ```bash
-pip install simple-agents
+pip install nagents
 ```
 
 ## Providers
 
-Simple Agents supports three provider types:
+nagents supports three provider types:
 
 | Provider | Type | Models |
 |----------|------|--------|
 | OpenAI | `ProviderType.OPENAI_COMPATIBLE` | gpt-4o, gpt-4o-mini, etc. |
-| Anthropic | `ProviderType.ANTHROPIC_NATIVE` | claude-3-5-sonnet, claude-3-opus, etc. |
+| Anthropic | `ProviderType.ANTHROPIC` | claude-3-5-sonnet, claude-3-opus, etc. |
 | Google | `ProviderType.GEMINI_NATIVE` | gemini-2.0-flash, gemini-1.5-pro, etc. |
 
 ## Documentation

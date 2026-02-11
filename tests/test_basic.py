@@ -1,22 +1,22 @@
-"""Basic tests for simple_agents package."""
+"""Basic tests for nagents package."""
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from simple_agents import Agent
-from simple_agents import DoneEvent
-from simple_agents import ErrorEvent
-from simple_agents import GenerationConfig
-from simple_agents import Message
-from simple_agents import Provider
-from simple_agents import ProviderType
-from simple_agents import SessionManager
-from simple_agents import TextChunkEvent
-from simple_agents import TextDoneEvent
-from simple_agents import ToolCallEvent
-from simple_agents import ToolDefinition
-from simple_agents import ToolResultEvent
-from simple_agents import UsageEvent
+from nagents import Agent
+from nagents import DoneEvent
+from nagents import ErrorEvent
+from nagents import GenerationConfig
+from nagents import Message
+from nagents import Provider
+from nagents import ProviderType
+from nagents import SessionManager
+from nagents import TextChunkEvent
+from nagents import TextDoneEvent
+from nagents import ToolCallEvent
+from nagents import ToolDefinition
+from nagents import ToolResultEvent
+from nagents import UsageEvent
 
 
 class TestTypes:
@@ -32,7 +32,7 @@ class TestTypes:
 
     def test_message_with_tool_calls(self) -> None:
         """Test Message with tool calls."""
-        from simple_agents import ToolCall
+        from nagents import ToolCall
 
         tool_call = ToolCall(id="123", name="test_tool", arguments={"arg": "value"})
         msg = Message(role="assistant", content="", tool_calls=[tool_call])

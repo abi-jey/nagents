@@ -14,7 +14,7 @@ Batch processing allows you to:
 ## Basic Usage
 
 ```python
-from simple_agents import BatchManager, BatchRequest
+from nagents import BatchManager, BatchRequest
 
 batch_manager = BatchManager(provider=provider)
 
@@ -74,7 +74,7 @@ results = await batch_manager.get_results(job.id)
 Persist batch jobs and results:
 
 ```python
-from simple_agents import BatchStore
+from nagents import BatchStore
 
 store = BatchStore(Path("batches.db"))
 await store.initialize()

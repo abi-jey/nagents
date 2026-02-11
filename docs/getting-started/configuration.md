@@ -5,7 +5,7 @@
 ### OpenAI
 
 ```python
-from simple_agents import Provider, ProviderType
+from nagents import Provider, ProviderType
 
 provider = Provider(
     provider_type=ProviderType.OPENAI_COMPATIBLE,
@@ -19,7 +19,7 @@ provider = Provider(
 
 ```python
 provider = Provider(
-    provider_type=ProviderType.ANTHROPIC_NATIVE,
+    provider_type=ProviderType.ANTHROPIC,
     api_key="sk-ant-...",
     model="claude-3-5-sonnet-20241022",
 )
@@ -40,7 +40,7 @@ provider = Provider(
 Control generation parameters:
 
 ```python
-from simple_agents import GenerationConfig
+from nagents import GenerationConfig
 
 config = GenerationConfig(
     temperature=0.7,      # Creativity (0.0-2.0)

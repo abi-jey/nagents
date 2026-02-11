@@ -1,5 +1,5 @@
 """
-Example demonstrating the simple_agents module with all event types.
+Example demonstrating the nagents module with all event types.
 
 This example shows how to use the Agent class with streaming events,
 tool execution, and comprehensive event handling.
@@ -19,17 +19,17 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.text import Text
 
-from simple_agents import Agent
-from simple_agents import DoneEvent
-from simple_agents import ErrorEvent
-from simple_agents import Provider
-from simple_agents import ProviderType
-from simple_agents import SessionManager
-from simple_agents import TextChunkEvent
-from simple_agents import TextDoneEvent
-from simple_agents import ToolCallEvent
-from simple_agents import ToolResultEvent
-from simple_agents import UsageEvent
+from nagents import Agent
+from nagents import DoneEvent
+from nagents import ErrorEvent
+from nagents import Provider
+from nagents import ProviderType
+from nagents import SessionManager
+from nagents import TextChunkEvent
+from nagents import TextDoneEvent
+from nagents import ToolCallEvent
+from nagents import ToolResultEvent
+from nagents import UsageEvent
 
 load_dotenv()
 
@@ -77,7 +77,7 @@ def get_time(tz: str = "UTC") -> str:
 
 async def main() -> None:
     """Main example demonstrating all event types."""
-    console.print(Panel.fit("[bold blue]simple_agents Example[/bold blue]"))
+    console.print(Panel.fit("[bold blue]nagents Example[/bold blue]"))
 
     # Choose provider based on available API keys
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")

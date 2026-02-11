@@ -1,6 +1,6 @@
 # Quick Start
 
-This guide will help you get started with Simple Agents in minutes.
+This guide will help you get started with nagents in minutes.
 
 ## Basic Usage
 
@@ -9,7 +9,7 @@ This guide will help you get started with Simple Agents in minutes.
 First, create a provider with your API credentials:
 
 ```python
-from simple_agents import Provider, ProviderType
+from nagents import Provider, ProviderType
 
 # OpenAI
 provider = Provider(
@@ -20,7 +20,7 @@ provider = Provider(
 
 # Anthropic Claude
 provider = Provider(
-    provider_type=ProviderType.ANTHROPIC_NATIVE,
+    provider_type=ProviderType.ANTHROPIC,
     api_key="sk-ant-...",
     model="claude-3-5-sonnet-20241022",
 )
@@ -36,7 +36,7 @@ provider = Provider(
 ### 2. Create an Agent
 
 ```python
-from simple_agents import Agent
+from nagents import Agent
 
 agent = Agent(
     provider=provider,
@@ -86,7 +86,7 @@ async for event in agent.run("What's the weather in Paris?"):
 
 ```python
 from pathlib import Path
-from simple_agents import SessionManager
+from nagents import SessionManager
 
 session_manager = SessionManager(Path("sessions.db"))
 
@@ -113,10 +113,10 @@ async for event in agent.run(
 
 ## Handling Events
 
-Simple Agents emits various event types during generation:
+nagents emits various event types during generation:
 
 ```python
-from simple_agents import (
+from nagents import (
     TextChunkEvent,
     TextDoneEvent,
     ToolCallEvent,

@@ -1,13 +1,13 @@
 # Providers
 
-Simple Agents supports three LLM providers with a unified interface.
+nagents supports three LLM providers with a unified interface.
 
 ## Provider Types
 
 | Provider | Type | Description |
 |----------|------|-------------|
 | OpenAI | `ProviderType.OPENAI_COMPATIBLE` | OpenAI API and compatible services |
-| Anthropic | `ProviderType.ANTHROPIC_NATIVE` | Anthropic Claude API |
+| Anthropic | `ProviderType.ANTHROPIC` | Anthropic Claude API |
 | Google | `ProviderType.GEMINI_NATIVE` | Google Gemini API |
 
 ## OpenAI Compatible
@@ -15,7 +15,7 @@ Simple Agents supports three LLM providers with a unified interface.
 Works with OpenAI API and any compatible service (Azure, local models, etc.):
 
 ```python
-from simple_agents import Provider, ProviderType
+from nagents import Provider, ProviderType
 
 # OpenAI
 provider = Provider(
@@ -47,7 +47,7 @@ Native Anthropic API support:
 
 ```python
 provider = Provider(
-    provider_type=ProviderType.ANTHROPIC_NATIVE,
+    provider_type=ProviderType.ANTHROPIC,
     api_key="sk-ant-...",
     model="claude-3-5-sonnet-20241022",
 )
@@ -96,7 +96,7 @@ if provider_type == "openai":
     )
 elif provider_type == "anthropic":
     provider = Provider(
-        provider_type=ProviderType.ANTHROPIC_NATIVE,
+        provider_type=ProviderType.ANTHROPIC,
         api_key=os.getenv("ANTHROPIC_API_KEY"),
         model="claude-3-5-sonnet-20241022",
     )

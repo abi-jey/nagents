@@ -8,7 +8,7 @@ Create a session manager with a SQLite database:
 
 ```python
 from pathlib import Path
-from simple_agents import SessionManager
+from nagents import SessionManager
 
 session_manager = SessionManager(Path("sessions.db"))
 

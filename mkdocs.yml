@@ -1,9 +1,9 @@
-site_name: Simple Agents
+site_name: nagents
 site_description: A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration
 site_author: abi-jey
-site_url: https://abi-jey.github.io/simple-agents/
-repo_name: abi-jey/simple-agents
-repo_url: https://github.com/abi-jey/simple-agents
+site_url: https://abi-jey.github.io/nagents/
+repo_name: abi-jey/nagents
+repo_url: https://github.com/abi-jey/nagents
 
 theme:
   name: material
@@ -105,4 +105,4 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/abi-jey/simple-agents
+      link: https://github.com/abi-jey/nagents

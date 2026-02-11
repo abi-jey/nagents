@@ -1,6 +1,6 @@
 # Events
 
-Simple Agents uses an event-based streaming architecture.
+nagents uses an event-based streaming architecture.
 
 ## Event Types
 

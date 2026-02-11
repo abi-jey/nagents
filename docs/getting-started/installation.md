@@ -8,13 +8,13 @@
 ## Install from PyPI
 
 ```bash
-pip install simple-agents
+pip install nagents
 ```
 
 ## Install with Development Dependencies
 
 ```bash
-pip install simple-agents[dev]
+pip install nagents[dev]
 ```
 
 This includes:
@@ -27,21 +27,21 @@ This includes:
 ## Install with Documentation Dependencies
 
 ```bash
-pip install simple-agents[docs]
+pip install nagents[docs]
 ```
 
 ## Install from Source
 
 ```bash
-git clone https://github.com/abi-jey/simple-agents.git
-cd simple-agents
+git clone https://github.com/abi-jey/nagents.git
+cd nagents
 pip install -e ".[dev]"
 ```
 
 ## Verify Installation
 
 ```python
-from simple_agents import Agent, Provider, ProviderType
+from nagents import Agent, Provider, ProviderType
 
-print("simple-agents installed successfully!")
+print("nagents installed successfully!")
 ```

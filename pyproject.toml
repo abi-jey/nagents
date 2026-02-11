@@ -1,5 +1,5 @@
 [project]
-name = "simple-agents"
+name = "nagents"
 version = "0.1.0"
 description = "A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration"
 readme = "README.md"
@@ -54,17 +54,17 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/abi-jey/simple-agents"
-Repository = "https://github.com/abi-jey/simple-agents"
-Documentation = "https://abi-jey.github.io/simple-agents/"
-Issues = "https://github.com/abi-jey/simple-agents/issues"
+Homepage = "https://github.com/abi-jey/nagents"
+Repository = "https://github.com/abi-jey/nagents"
+Documentation = "https://abi-jey.github.io/nagents/"
+Issues = "https://github.com/abi-jey/nagents/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/simple_agents"]
+packages = ["src/nagents"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -92,7 +92,7 @@ quote-style = "double"
 [tool.ruff.lint.isort]
 force-single-line = true
 case-sensitive = true
-known-first-party = ["simple_agents"]
+known-first-party = ["nagents"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -114,7 +114,7 @@ asyncio_default_fixture_loop_scope = "function"
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
-source = ["src/simple_agents"]
+source = ["src/nagents"]
 branch = true
 
 [tool.coverage.report]
