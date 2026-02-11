@@ -207,7 +207,7 @@ class TestAgent:
                 tools=[example_tool],
             )
             # Check tool was registered
-            assert agent._tool_registry is not None
+            assert agent.tool_registry is not None
 
     def test_agent_with_system_prompt(self) -> None:
         """Test Agent with system prompt."""
