@@ -27,7 +27,7 @@ class TestTypes:
         msg = Message(role="user", content="Hello")
         assert msg.role == "user"
         assert msg.content == "Hello"
-        assert msg.tool_calls is None
+        assert msg.tool_calls == []
         assert msg.tool_call_id is None
 
     def test_message_with_tool_calls(self) -> None:
