@@ -15,12 +15,16 @@ if TYPE_CHECKING:
 
 
 class HTTPError(Exception):
-    """HTTP request error with status code and response body."""
+    """HTTP request error with status code, URI, and response body."""
 
-    def __init__(self, status: int, message: str, body: str | None = None):
+    def __init__(self, status: int, message: str, body: str | None = None, uri: str | None = None):
         self.status = status
         self.body = body
-        super().__init__(f"HTTP {status}: {message}")
+        self.uri = uri
+        if uri:
+            super().__init__(f"HTTP {status}: {message} (uri={uri})")
+        else:
+            super().__init__(f"HTTP {status}: {message}")
 
 
 class HTTPClient:
@@ -83,7 +87,7 @@ class HTTPClient:
                 self._logger.log_response(url, resp.status, body, self._session_id)
 
             if resp.status >= 400:
-                raise HTTPError(resp.status, resp.reason or "Request failed", body)
+                raise HTTPError(resp.status, resp.reason or "Request failed", body, url)
             return cast("dict[str, Any]", json.loads(body))
 
     async def get_json(
@@ -117,7 +121,7 @@ class HTTPClient:
                 self._logger.log_response(url, resp.status, body, self._session_id)
 
             if resp.status >= 400:
-                raise HTTPError(resp.status, resp.reason or "Request failed", body)
+                raise HTTPError(resp.status, resp.reason or "Request failed", body, url)
             return cast("dict[str, Any]", json.loads(body))
 
     async def post_stream(
@@ -151,7 +155,7 @@ class HTTPClient:
                 # Log error response
                 if self._logger:
                     self._logger.log_response(url, resp.status, body, self._session_id)
-                raise HTTPError(resp.status, resp.reason or "Request failed", body)
+                raise HTTPError(resp.status, resp.reason or "Request failed", body, url)
 
             # Read line by line for SSE
             async for line in resp.content:
@@ -204,7 +208,7 @@ class HTTPClient:
                 # Log error response
                 if self._logger:
                     self._logger.log_response(url, resp.status, body, self._session_id)
-                raise HTTPError(resp.status, resp.reason or "Request failed", body)
+                raise HTTPError(resp.status, resp.reason or "Request failed", body, url)
 
             buffer = ""
             async for chunk in resp.content:

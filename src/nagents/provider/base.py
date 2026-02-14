@@ -39,6 +39,10 @@ class ProviderType(Enum):
     OPENAI_COMPATIBLE = "openai_compatible"  # OpenAI, Gemini-via-compat, OpenRouter, etc.
     GEMINI_NATIVE = "gemini_native"  # Native Gemini REST API
     ANTHROPIC = "anthropic"  # Anthropic Claude API
+    AZURE_OPENAI_COMPATIBLE_V1 = "azure_openai_compatible_v1"  # Azure OpenAI Service
+    AZURE_OPENAI_COMPATIBLE = (
+        "azure_openai_compatible"  # Azure OpenAI Service (new name for v1, will be default in future)
+    )
 
 
 class Provider:
@@ -63,6 +67,7 @@ class Provider:
         model: str,
         base_url: str | None = None,
         timeout: float = 120.0,
+        api_version: str | None = None,
     ):
         """
         Initialize the provider.
@@ -70,23 +75,38 @@ class Provider:
         Args:
             provider_type: The type of provider to use
             api_key: API key for authentication
-            model: Model identifier to use
-            base_url: Optional custom base URL (overrides defaults)
+            model: Model identifier to use (for Azure, this is the deployment name)
+            base_url: Optional custom base URL (overrides defaults).
+                      For Azure OpenAI: https://{resource}.cognitiveservices.azure.com
             timeout: Request timeout in seconds
+            api_version: API version (required for Azure OpenAI, e.g., "2024-05-01-preview")
         """
         self.provider_type = provider_type
         self.api_key = api_key
         self.model = model
+        self.api_version = api_version
         self._http = HTTPClient(timeout=timeout)
         self._model_verified: bool | None = None  # None = not checked, True/False = result
 
-        # Set default base URLs
+        # Validate Azure-specific requirements
+        if provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1 and not base_url:
+            raise ValueError(
+                "base_url is required for Azure OpenAI. Format: https://{resource}.cognitiveservices.azure.com/openai"
+            )
+        if provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE:
+            if not api_version:
+                raise ValueError("api_version is required for Azure OpenAI")
+            if not base_url:
+                raise ValueError("base_url is required for Azure OpenAI")
         if base_url:
             self.base_url = base_url.rstrip("/")
         elif provider_type == ProviderType.OPENAI_COMPATIBLE:
             self.base_url = "https://api.openai.com/v1"
         elif provider_type == ProviderType.ANTHROPIC:
             self.base_url = "https://api.anthropic.com/v1"
+        elif provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1:
+            # Azure requires base_url, this should not be reached due to validation above
+            raise ValueError("base_url is required for Azure OpenAI")
         else:  # GEMINI_NATIVE
             self.base_url = "https://generativelanguage.googleapis.com/v1beta"
         if not self.api_key:
@@ -127,17 +147,26 @@ class Provider:
         if not force and self._model_verified is not None:
             return self._model_verified
 
-        # Anthropic doesn't have a models list endpoint
+        # Anthropic and Azure don't have a models list endpoint
         if self.provider_type == ProviderType.ANTHROPIC:
             logger.info(f"Skipping model verification for Anthropic (model: {self.model})")
             self._model_verified = True
             return True
 
+        if self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1:
+            logger.info(f"Skipping model verification for Azure OpenAI (deployment: {self.model})")
+            self._model_verified = True
+            return True
+        if self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE:
+            logger.info(f"Skipping model verification for Azure OpenAI (deployment: {self.model})")
+            self._model_verified = True
+            return True
         try:
             if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
                 url = f"{self.base_url}/models"
                 headers = {"Authorization": f"Bearer {self.api_key}"}
                 response = await self._http.get_json(url, headers)
+                logger.info(f"Model list response: {response}")
                 models = [m["id"] for m in response.get("data", [])]
 
                 # Check for exact match first
@@ -240,6 +269,12 @@ class Provider:
             if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
                 async for event in self._generate_openai(messages, tools, config, stream):
                     yield event
+            elif self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE:
+                async for event in self._generate_azure_openai(messages, tools, config, stream):
+                    yield event
+            elif self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1:
+                async for event in self._generate_azure_openai(messages, tools, config, stream):
+                    yield event
             elif self.provider_type == ProviderType.ANTHROPIC:
                 async for event in self._generate_anthropic(messages, tools, config, stream):
                     yield event
@@ -297,6 +332,67 @@ class Provider:
             if config.stop:
                 body["stop"] = config.stop
 
+        if stream:
+            async for event in self._stream_openai(url, body, headers):
+                yield event
+        else:
+            async for event in self._non_stream_openai(url, body, headers):
+                yield event
+
+    async def _generate_azure_openai(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        config: GenerationConfig | None,
+        stream: bool,
+    ) -> AsyncIterator[Event]:
+        """Generate using Azure OpenAI Service API.
+
+        Azure OpenAI uses a different URL structure and authentication:
+        - URL: https://{resource}.cognitiveservices.azure.com/openai/deployments/{deployment}/chat/completions
+        - base_url should include /openai suffix
+        - Auth: api-key header instead of Authorization Bearer
+        - Requires api-version query parameter
+        """
+        # Azure URL format: {base_url}/deployments/{deployment}/chat/completions?api-version={version}
+        # Note: base_url should include /openai suffix (e.g., https://{resource}.cognitiveservices.azure.com/openai)
+        if self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE:
+            url = f"{self.base_url}/deployments/{self.model}/chat/completions?api-version={self.api_version}"
+        elif self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1:
+            # V1 Azure OpenAI format (without api-version in query)
+            url = f"{self.base_url}/v1/deployments/{self.model}/chat/completions"
+        else:
+            raise ValueError(f"Unexpected provider type for Azure generation: {self.provider_type}")
+        # Azure uses api-key header instead of Authorization Bearer
+        headers = {
+            "api-key": self.api_key,
+            "Content-Type": "application/json",
+        }
+
+        body: dict[str, Any] = {
+            # Note: Azure doesn't need model in body since it's in the URL
+            "messages": openai_adapter.format_messages(messages),
+            "stream": stream,
+        }
+
+        # Request usage data in streaming responses
+        if stream:
+            body["stream_options"] = {"include_usage": True}
+
+        if tools:
+            body["tools"] = openai_adapter.format_tools(tools)
+
+        if config:
+            if config.temperature is not None:
+                body["temperature"] = config.temperature
+            if config.max_tokens is not None:
+                body["max_tokens"] = config.max_tokens  # Azure uses max_tokens, not max_completion_tokens
+            if config.top_p is not None:
+                body["top_p"] = config.top_p
+            if config.stop:
+                body["stop"] = config.stop
+
+        # Reuse the same streaming/non-streaming handlers as OpenAI
         if stream:
             async for event in self._stream_openai(url, body, headers):
                 yield event

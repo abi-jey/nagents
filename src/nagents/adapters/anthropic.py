@@ -234,7 +234,7 @@ def parse_response(response: dict[str, Any]) -> tuple[str, list[ToolCall], dict[
     tool_calls: list[ToolCall] = []
 
     # Parse content blocks
-    content = response.get("content", [])
+    content = response.get("content") or []
     for block in content:
         block_type = block.get("type")
 

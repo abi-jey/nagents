@@ -1,7 +1,7 @@
 # Used in examples
 sessions.db
 logs
-
+*.db
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

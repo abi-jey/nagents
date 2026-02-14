@@ -171,8 +171,8 @@ def parse_tool_calls(choice: dict[str, Any]) -> list[ToolCall]:
     Returns:
         List of ToolCall objects
     """
-    message = choice.get("message", {})
-    tool_calls_data = message.get("tool_calls", [])
+    message = choice.get("message") or {}
+    tool_calls_data = message.get("tool_calls") or []
 
     result = []
     for tc in tool_calls_data:
@@ -210,7 +210,7 @@ def parse_stream_delta(delta: dict[str, Any]) -> tuple[str | None, list[ToolCall
     tool_calls = []
 
     # Tool calls in streaming come as deltas too
-    tc_deltas = delta.get("tool_calls", [])
+    tc_deltas = delta.get("tool_calls") or []
     for tc in tc_deltas:
         func = tc.get("function", {})
         args_str = func.get("arguments", "")
@@ -256,7 +256,7 @@ class StreamingToolCallAccumulator:
         Returns:
             Complete ToolCall if we have all data, None otherwise
         """
-        tc_deltas = delta.get("tool_calls", [])
+        tc_deltas = delta.get("tool_calls") or []
 
         for tc in tc_deltas:
             idx = tc.get("index", 0)

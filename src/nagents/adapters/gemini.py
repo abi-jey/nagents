@@ -276,11 +276,11 @@ def parse_response(
     usage = None
 
     # Get candidates
-    candidates = response.get("candidates", [])
+    candidates = response.get("candidates") or []
     if candidates:
         candidate = candidates[0]
-        content = candidate.get("content", {})
-        parts = content.get("parts", [])
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
 
         for part in parts:
             # Extract text
