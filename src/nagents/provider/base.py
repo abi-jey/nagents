@@ -16,6 +16,7 @@ from typing import Any
 from ..adapters import openai as openai_adapter
 from ..events import ErrorEvent
 from ..events import Event
+from ..events import ReasoningChunkEvent
 from ..events import TextChunkEvent
 from ..events import TextDoneEvent
 from ..events import ToolCallEvent
@@ -423,6 +424,7 @@ class Provider:
     ) -> AsyncIterator[Event]:
         """Handle streaming OpenAI response."""
         full_text = ""
+        full_reasoning = ""
         tool_accumulator = openai_adapter.StreamingToolCallAccumulator()
         latest_usage = Usage()
 
@@ -444,13 +446,19 @@ class Provider:
                     total_tokens=usage.get("total_tokens", 0),
                 )
 
-            choices = chunk.get("choices", [])
+            choices = chunk.get("choices") or []
             if not choices:
                 continue
 
             choice = choices[0]
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
             _ = choice.get("finish_reason")  # Reserved for future use
+
+            # Handle reasoning content (e.g., from Kimi, DeepSeek, o1 models)
+            reasoning = delta.get("reasoning_content")
+            if reasoning:
+                full_reasoning += reasoning
+                yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage)
 
             # Handle text content
             content = delta.get("content")

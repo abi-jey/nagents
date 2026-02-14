@@ -112,6 +112,7 @@ from .events import DoneEvent
 from .events import ErrorEvent
 from .events import Event
 from .events import EventType
+from .events import ReasoningChunkEvent
 from .events import TextChunkEvent
 from .events import TextDoneEvent
 from .events import TokenUsage
@@ -172,6 +173,7 @@ __all__ = [
     "NagentsError",
     "Provider",
     "ProviderType",
+    "ReasoningChunkEvent",
     "SessionManager",
     "TextChunkEvent",
     "TextContent",

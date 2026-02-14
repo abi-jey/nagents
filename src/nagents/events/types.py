@@ -19,6 +19,7 @@ class EventType(Enum):
 
     # Streaming events
     TEXT_CHUNK = "text_chunk"  # Partial text during streaming
+    REASONING_CHUNK = "reasoning_chunk"  # Partial reasoning/thinking during streaming
 
     # Completion events
     TEXT_DONE = "text_done"  # Final complete text
@@ -77,6 +78,14 @@ class TextChunkEvent(Event):
     """Streaming text chunk."""
 
     type: EventType = field(default=EventType.TEXT_CHUNK)
+    chunk: str = ""
+
+
+@dataclass
+class ReasoningChunkEvent(Event):
+    """Streaming reasoning/thinking chunk (e.g., from models with chain-of-thought)."""
+
+    type: EventType = field(default=EventType.REASONING_CHUNK)
     chunk: str = ""
 
 
