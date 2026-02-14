@@ -40,6 +40,7 @@ from nagents import DoneEvent
 from nagents import ErrorEvent
 from nagents import Provider
 from nagents import ProviderType
+from nagents import ReasoningChunkEvent
 from nagents import SessionManager
 from nagents import TextChunkEvent
 from nagents import TextDoneEvent
@@ -162,7 +163,11 @@ async def main() -> None:
             user_id="azure-v1-example-user",
         ):
             # Handle each event type
-            if isinstance(event, TextChunkEvent):
+            if isinstance(event, ReasoningChunkEvent):
+                # Streaming reasoning chunk (from chain-of-thought models)
+                # Display in a dim style to distinguish from regular content
+                console.print(f"[dim italic]{event.chunk}[/dim italic]", end="")
+            elif isinstance(event, TextChunkEvent):
                 # Streaming text chunk - print without newline
                 console.print(event.chunk, end="")
                 response_text += event.chunk
