@@ -102,7 +102,7 @@ class BatchJob:
 
     id: str
     status: BatchStatus
-    provider: Literal["openai", "anthropic"]
+    provider: Literal["openai", "azure", "anthropic"]
 
     # Request counts
     request_counts: BatchRequestCounts = field(default_factory=BatchRequestCounts)
@@ -167,11 +167,14 @@ class BatchConfig:
     - endpoint: /v1/chat/completions, /v1/embeddings, etc.
     - completion_window: Only "24h" supported currently
 
+    Azure OpenAI:
+    - endpoint: /chat/completions (no /v1 prefix)
+    - completion_window: Only "24h" supported currently
+
     Anthropic:
     - No additional config needed (uses Messages API format)
     """
 
-    # OpenAI-specific
     endpoint: str = "/v1/chat/completions"
     completion_window: str = "24h"
 

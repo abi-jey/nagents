@@ -157,14 +157,16 @@ class Agent:
 
     def _init_batch_client(self) -> None:
         """Initialize the batch client for batch mode."""
-        if self.provider.provider_type not in (
+        valid_types = (
             ProviderType.OPENAI_COMPATIBLE,
+            ProviderType.AZURE_OPENAI_COMPATIBLE,
+            ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
             ProviderType.ANTHROPIC,
-        ):
+        )
+        if self.provider.provider_type not in valid_types:
             raise ValueError(
-                f"Batch mode only supported for OPENAI_COMPATIBLE and ANTHROPIC providers. "
-                f"Got: {self.provider.provider_type}. "
-                "Azure OpenAI batch uses a different API - use Azure OpenAI Studio instead."
+                f"Batch mode only supported for OPENAI_COMPATIBLE, AZURE_OPENAI, and ANTHROPIC providers. "
+                f"Got: {self.provider.provider_type}"
             )
         self._batch_client = BatchClient(
             provider_type=self.provider.provider_type,

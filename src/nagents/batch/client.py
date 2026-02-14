@@ -1,5 +1,5 @@
 """
-Batch processing client for OpenAI and Anthropic APIs.
+Batch processing client for OpenAI, Azure OpenAI, and Anthropic APIs.
 
 Provides a unified interface for:
 - Creating batch jobs
@@ -7,7 +7,7 @@ Provides a unified interface for:
 - Retrieving batch results
 - Cancelling batches
 
-Both providers offer 50% cost discount for batch processing.
+All providers offer 50% cost discount for batch processing.
 """
 
 import io
@@ -15,6 +15,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
+from typing import Literal
 
 from ..events import FinishReason
 from ..http import HTTPClient
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 class BatchClient:
     """
-    Unified batch processing client for OpenAI and Anthropic.
+    Unified batch processing client for OpenAI, Azure OpenAI, and Anthropic.
 
     Example:
         async with BatchClient(
@@ -80,7 +81,7 @@ class BatchClient:
         Initialize the batch client.
 
         Args:
-            provider_type: OPENAI_COMPATIBLE or ANTHROPIC
+            provider_type: OPENAI_COMPATIBLE, AZURE_OPENAI_COMPATIBLE, AZURE_OPENAI_COMPATIBLE_V1, or ANTHROPIC
             api_key: API key for authentication
             model: Default model for batch requests
             base_url: Optional custom base URL
@@ -94,17 +95,38 @@ class BatchClient:
         self.model = model
         self._http = HTTPClient(timeout=timeout)
 
-        # Set default base URLs
-        if base_url:
+        # Set base URLs based on provider type
+        if provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1:
+            # Azure V1: base_url includes /openai, need to add /v1 for batch API
+            if base_url:
+                self.base_url = f"{base_url.rstrip('/')}/v1"
+            else:
+                raise ValueError("base_url is required for AZURE_OPENAI_COMPATIBLE_V1")
+        elif base_url:
             self.base_url = base_url.rstrip("/")
         elif provider_type == ProviderType.OPENAI_COMPATIBLE:
             self.base_url = "https://api.openai.com/v1"
+        elif provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE:
+            # Azure deployment-based: needs base_url
+            raise ValueError("base_url is required for AZURE_OPENAI_COMPATIBLE")
         else:  # ANTHROPIC
             self.base_url = "https://api.anthropic.com/v1"
 
-    def _get_headers(self) -> dict[str, str]:
+    def _is_azure(self) -> bool:
+        """Check if this is an Azure provider."""
+        return self.provider_type in (
+            ProviderType.AZURE_OPENAI_COMPATIBLE,
+            ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
+        )
+
+    def _get_headers(self, for_file_upload: bool = False) -> dict[str, str]:
         """Get headers for API requests."""
-        if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if self._is_azure():
+            return {
+                "api-key": self.api_key,
+                "Content-Type": "application/json",
+            }
+        elif self.provider_type == ProviderType.OPENAI_COMPATIBLE:
             return {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -114,6 +136,18 @@ class BatchClient:
                 "x-api-key": self.api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
+            }
+
+    def _get_file_upload_headers(self) -> dict[str, str]:
+        """Get headers for file upload (no Content-Type for multipart)."""
+        if self._is_azure():
+            return {"api-key": self.api_key}
+        elif self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        else:  # ANTHROPIC
+            return {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
             }
 
     # =========================================================================
@@ -131,6 +165,14 @@ class BatchClient:
         from ..adapters import openai as openai_adapter
 
         config = config or BatchConfig()
+
+        # Azure uses /chat/completions, OpenAI uses /v1/chat/completions
+        # Strip /v1 prefix for Azure if present
+        file_endpoint = config.endpoint
+        batch_endpoint = config.endpoint
+        if self._is_azure() and file_endpoint.startswith("/v1/"):
+            file_endpoint = file_endpoint[3:]  # Remove /v1 prefix
+            batch_endpoint = file_endpoint
 
         # Build JSONL content
         lines = []
@@ -163,7 +205,7 @@ class BatchClient:
             line = {
                 "custom_id": req.custom_id,
                 "method": "POST",
-                "url": config.endpoint,
+                "url": file_endpoint,
                 "body": body,
             }
             lines.append(json.dumps(line))
@@ -172,7 +214,6 @@ class BatchClient:
 
         # Step 1: Upload the file
         upload_url = f"{self.base_url}/files"
-        headers = self._get_headers()
 
         # Use multipart form data for file upload
         import aiohttp
@@ -190,7 +231,7 @@ class BatchClient:
             aiohttp.ClientSession() as session,
             session.post(
                 upload_url,
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers=self._get_file_upload_headers(),
                 data=form,
             ) as resp,
         ):
@@ -206,18 +247,19 @@ class BatchClient:
         batch_url = f"{self.base_url}/batches"
         batch_body = {
             "input_file_id": input_file_id,
-            "endpoint": config.endpoint,
+            "endpoint": batch_endpoint,
             "completion_window": config.completion_window,
         }
         if config.metadata:
             batch_body["metadata"] = config.metadata
 
-        response = await self._http.post_json(batch_url, batch_body, headers)
+        response = await self._http.post_json(batch_url, batch_body, self._get_headers())
 
         return self._parse_openai_batch(response)
 
     def _parse_openai_batch(self, response: dict[str, Any]) -> BatchJob:
         """Parse OpenAI batch response into BatchJob."""
+
         status_map = {
             "validating": BatchStatus.VALIDATING,
             "failed": BatchStatus.FAILED,
@@ -230,11 +272,12 @@ class BatchClient:
         }
 
         counts = response.get("request_counts", {})
+        provider: Literal["openai", "azure", "anthropic"] = "azure" if self._is_azure() else "openai"
 
         return BatchJob(
             id=response["id"],
             status=status_map.get(response.get("status", ""), BatchStatus.IN_PROGRESS),
-            provider="openai",
+            provider=provider,
             request_counts=BatchRequestCounts(
                 total=counts.get("total", 0),
                 succeeded=counts.get("completed", 0),
@@ -620,7 +663,7 @@ class BatchClient:
         Returns:
             BatchJob with ID and initial status
         """
-        if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if self._is_azure() or self.provider_type == ProviderType.OPENAI_COMPATIBLE:
             return await self._create_batch_openai(requests, config, tools, generation_config)
         else:
             return await self._create_batch_anthropic(requests, config, tools, generation_config)
@@ -635,7 +678,7 @@ class BatchClient:
         Returns:
             Updated BatchJob
         """
-        if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if self._is_azure() or self.provider_type == ProviderType.OPENAI_COMPATIBLE:
             return await self._get_batch_openai(batch_id)
         else:
             return await self._get_batch_anthropic(batch_id)
@@ -650,7 +693,7 @@ class BatchClient:
         Yields:
             BatchResult for each request
         """
-        if job.provider == "openai":
+        if job.provider in ("openai", "azure"):
             async for result in self._get_results_openai(job):
                 yield result
         else:
@@ -667,7 +710,7 @@ class BatchClient:
         Returns:
             Updated BatchJob (status will be CANCELLING)
         """
-        if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if self._is_azure() or self.provider_type == ProviderType.OPENAI_COMPATIBLE:
             return await self._cancel_batch_openai(batch_id)
         else:
             return await self._cancel_batch_anthropic(batch_id)
@@ -683,7 +726,7 @@ class BatchClient:
         Returns:
             Tuple of (list of BatchJobs, next cursor or None)
         """
-        if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if self._is_azure() or self.provider_type == ProviderType.OPENAI_COMPATIBLE:
             return await self._list_batches_openai(limit, after)
         else:
             return await self._list_batches_anthropic(limit, after)

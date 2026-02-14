@@ -1,14 +1,10 @@
 """
-Example demonstrating batch processing with Azure OpenAI V1 API using Kimi model.
+Example demonstrating batch processing with Azure OpenAI V1 API.
 
-Note: Azure OpenAI V1 API uses standard OpenAI-compatible format with:
-- URL: https://{resource}.openai.azure.com/openai/v1/chat/completions
-- Auth: Bearer token (Authorization header)
-- Model specified in request body
+Azure OpenAI Batch API offers 50% cost discount compared to real-time API.
+Batch requests are processed asynchronously with 24-hour target turnaround.
 
-IMPORTANT: Azure OpenAI batch processing requires Azure OpenAI Studio.
-This example uses the standard OpenAI batch API as a demonstration.
-For real Azure batch processing, use Azure OpenAI Studio.
+IMPORTANT: You need a Global-Batch deployment type for batch processing.
 """
 
 import asyncio
@@ -53,34 +49,35 @@ def order_coffee(quantity: int, store: str) -> str:
 
 
 def get_azure_v1_provider() -> Provider:
-    """Create a Provider configured for Azure OpenAI V1 API with Kimi model."""
-    api_key = os.getenv("AZURE_OPENAI_V1_API_KEY")
-    endpoint = os.getenv("AZURE_OPENAI_V1_ENDPOINT")
-    model = os.getenv("AZURE_OPENAI_V1_MODEL", "Kimi-K2.5")
+    """Create a Provider configured for Azure OpenAI V1 API with batch support."""
+    endpoint = os.getenv("AZURE_DEPLOYED_MODEL_ENDPOINT")
+    api_key = os.getenv("AZURE_DEPLOYED_MODEL_NAME")
+    model_name = os.getenv("AZURE_DEPLOYED_MODEL_KEY")
 
-    if not api_key or not endpoint:
-        raise ValueError(
-            "Azure OpenAI V1 configuration not found. Please set:\n"
-            "  AZURE_OPENAI_V1_API_KEY=your-api-key\n"
-            "  AZURE_OPENAI_V1_ENDPOINT=https://{resource}.openai.azure.com/openai\n"
-            "  AZURE_OPENAI_V1_MODEL=Kimi-K2.5"
-        )
+    if not endpoint:
+        raise ValueError("AZURE_DEPLOYED_MODEL_ENDPOINT not set. Please set it in your .env file.")
+    if not api_key:
+        raise ValueError("AZURE_DEPLOYED_MODEL_NAME (API key) not set. Please set it in your .env file.")
+    if not model_name:
+        raise ValueError("AZURE_DEPLOYED_MODEL_KEY (model name) not set. Please set it in your .env file.")
 
-    console.print(f"[dim]Azure V1 endpoint: {endpoint}[/dim]")
-    console.print(f"[dim]Model: {model}[/dim]")
+    base_url = f"{endpoint.rstrip('/')}/openai"
+
+    console.print(f"[dim]Azure V1 endpoint: {base_url}[/dim]")
+    console.print(f"[dim]Model: {model_name}[/dim]")
 
     return Provider(
         provider_type=ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
         api_key=api_key,
-        model=model,
-        base_url=endpoint,
+        model=model_name,
+        base_url=base_url,
     )
 
 
 async def main() -> None:
     """Main example demonstrating batch processing with Azure V1."""
     console.print(Panel.fit("[bold blue]nagents Azure V1 Batch Processing Example[/bold blue]"))
-    console.print("[dim]Using Azure OpenAI V1 provider with Kimi model[/dim]\n")
+    console.print("[dim]Using Azure OpenAI V1 provider with batch mode[/dim]\n")
 
     try:
         provider = get_azure_v1_provider()
@@ -107,7 +104,7 @@ async def main() -> None:
         await agent.initialize()
         console.print(f"[green]Agent initialized, model: {provider.model}[/green]")
         console.print(f"[blue]HTTP logging to: {log_file}[/blue]")
-        console.print("[yellow]Batch mode enabled - this uses OpenAI batch API (Azure batch requires Studio)[/yellow]")
+        console.print("[yellow]Batch mode enabled - 50% cost discount![/yellow]")
 
         query = "What time is it? Can you order 2 coffees from the local shop?"
         console.print(Panel(f"[bold]User:[/bold] {query}", border_style="green"))
