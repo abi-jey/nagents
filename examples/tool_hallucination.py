@@ -3,6 +3,7 @@ Example demonstrating tool hallucination handling in nagents.
 
 This example shows how to configure the agent to handle cases where the LLM
 attempts to call tools that don't exist ("hallucinated" tools).
+HTTP traffic logging is also enabled for debugging.
 
 Two modes are available:
 1. Recovery mode (default): The error message (including available tools list)
@@ -14,6 +15,8 @@ Two modes are available:
 
 import asyncio
 import os
+from datetime import UTC
+from datetime import datetime
 from logging import basicConfig
 from logging import getLogger
 from pathlib import Path
@@ -74,6 +77,10 @@ async def demo_recovery_mode() -> None:
     )
     session_manager = SessionManager(Path("sessions.db"))
 
+    # Use a unique session ID for this run
+    session_id = f"hallucination-recovery-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+    log_file = Path("logs") / f"{session_id}.txt"
+
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
@@ -88,11 +95,13 @@ async def demo_recovery_mode() -> None:
 When the user asks for a calculation, IMMEDIATELY call the appropriate tool. Do not explain, just call the tool.""",
         streaming=True,
         fail_on_invalid_tool=False,  # Default: errors passed back to LLM
+        log_file=log_file,  # Enable HTTP/SSE logging
     )
 
     try:
         await agent.initialize()
         console.print("[green]Agent initialized (fail_on_invalid_tool=False)[/green]")
+        console.print(f"[blue]HTTP logging to: {log_file}[/blue]")
         console.print(f"[dim]Available tools: {agent.tool_registry.names()}[/dim]")
 
         # Explicitly ask to use a tool that doesn't exist
@@ -100,7 +109,7 @@ When the user asks for a calculation, IMMEDIATELY call the appropriate tool. Do 
         console.print(Panel(f"[bold]User:[/bold] {query}", border_style="green"))
         console.print()
 
-        async for event in agent.run(user_message=query):
+        async for event in agent.run(user_message=query, session_id=session_id):
             if isinstance(event, TextChunkEvent):
                 console.print(event.chunk, end="")
             elif isinstance(event, ToolCallEvent):
@@ -126,6 +135,7 @@ When the user asks for a calculation, IMMEDIATELY call the appropriate tool. Do 
             elif isinstance(event, DoneEvent):
                 console.print()
                 console.print("[bold green]Done[/bold green]\n")
+                console.print(f"[dim]HTTP traffic logged to: {log_file.absolute()}[/dim]")
     finally:
         await agent.close()
 
@@ -143,6 +153,10 @@ async def demo_fail_mode() -> None:
     )
     session_manager = SessionManager(Path("sessions.db"))
 
+    # Use a unique session ID for this run
+    session_id = f"hallucination-fail-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+    log_file = Path("logs") / f"{session_id}.txt"
+
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
@@ -157,11 +171,13 @@ async def demo_fail_mode() -> None:
 When the user asks for a calculation, IMMEDIATELY call the appropriate tool. Do not explain, just call the tool.""",
         streaming=True,
         fail_on_invalid_tool=True,  # Raise exception on hallucination
+        log_file=log_file,  # Enable HTTP/SSE logging
     )
 
     try:
         await agent.initialize()
         console.print("[green]Agent initialized (fail_on_invalid_tool=True)[/green]")
+        console.print(f"[blue]HTTP logging to: {log_file}[/blue]")
         console.print(f"[dim]Available tools: {agent.tool_registry.names()}[/dim]")
 
         # Explicitly ask to use a tool that doesn't exist
@@ -169,7 +185,7 @@ When the user asks for a calculation, IMMEDIATELY call the appropriate tool. Do 
         console.print(Panel(f"[bold]User:[/bold] {query}", border_style="green"))
         console.print()
 
-        async for event in agent.run(user_message=query):
+        async for event in agent.run(user_message=query, session_id=session_id):
             if isinstance(event, TextChunkEvent):
                 console.print(event.chunk, end="")
             elif isinstance(event, ToolCallEvent):
@@ -190,13 +206,15 @@ When the user asks for a calculation, IMMEDIATELY call the appropriate tool. Do 
             elif isinstance(event, DoneEvent):
                 console.print()
                 console.print("[bold green]Done[/bold green]\n")
+                console.print(f"[dim]HTTP traffic logged to: {log_file.absolute()}[/dim]")
 
     except ToolHallucinationError as e:
         console.print()
         console.print("[bold red]ToolHallucinationError caught![/bold red]")
         console.print(f"[red]Message: {e.message}[/red]")
         console.print(f"[yellow]Tool attempted: {e.tool_name}[/yellow]")
-        console.print(f"[green]Available tools: {e.available_tools}[/green]\n")
+        console.print(f"[green]Available tools: {e.available_tools}[/green]")
+        console.print(f"[dim]HTTP traffic logged to: {log_file.absolute()}[/dim]\n")
     finally:
         await agent.close()
 

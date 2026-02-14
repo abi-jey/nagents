@@ -2,7 +2,7 @@
 Example demonstrating the nagents module with Azure AI Services.
 
 This example shows how to use the Agent class with Azure-deployed models
-via the OpenAI-compatible API endpoint.
+via the OpenAI-compatible API endpoint with HTTP traffic logging.
 
 Azure AI Services Setup:
 ------------------------
@@ -130,7 +130,13 @@ async def main() -> None:
     # Create session manager
     session_manager = SessionManager(Path("sessions_azure.db"))
 
-    # Create agent with tools
+    # Use a unique session ID for this run
+    session_id = f"azure-session-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+
+    # Log file path: logs/<session_id>.txt
+    log_file = Path("logs") / f"{session_id}.txt"
+
+    # Create agent with tools and HTTP logging enabled
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
@@ -138,12 +144,14 @@ async def main() -> None:
         system_prompt="You are a helpful assistant with access to coffee ordering and time tools. "
         "Use them when appropriate to answer user questions.",
         streaming=True,  # Enable streaming to see TextChunkEvents
+        log_file=log_file,  # Enable HTTP/SSE logging
     )
 
     try:
         # Initialize the agent
         await agent.initialize()
         console.print(f"[green]Agent initialized, model: {provider.model}[/green]")
+        console.print(f"[blue]HTTP logging to: {log_file}[/blue]")
 
         # Example prompts that will trigger different behaviors
         query = "Hey, what time is it? Can you order 2 coffees for me from the local shop?"
@@ -154,7 +162,7 @@ async def main() -> None:
 
         async for event in agent.run(
             user_message=query,
-            session_id="azure-example-session",
+            session_id=session_id,
             user_id="azure-example-user",
         ):
             # Handle each event type
@@ -226,6 +234,9 @@ async def main() -> None:
                     )
                 console.print(usage_text)
         console.print()
+
+        # Show where the log file is
+        console.print(f"[dim]HTTP traffic logged to: {log_file.absolute()}[/dim]")
     finally:
         # Always close to release resources
         await agent.close()

@@ -2,7 +2,7 @@
 Example demonstrating the nagents module with all event types.
 
 This example shows how to use the Agent class with streaming events,
-tool execution, and comprehensive event handling.
+tool execution, HTTP traffic logging, and comprehensive event handling.
 """
 
 import asyncio
@@ -64,7 +64,13 @@ async def main() -> None:
     # Create session manager
     session_manager = SessionManager(Path("sessions.db"))
 
-    # Create agent with tools
+    # Use a unique session ID for this run
+    session_id = f"session-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+
+    # Log file path: logs/<session_id>.txt
+    log_file = Path("logs") / f"{session_id}.txt"
+
+    # Create agent with tools and HTTP logging enabled
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
@@ -72,12 +78,14 @@ async def main() -> None:
         system_prompt="You are a helpful assistant with access to coffee ordering and time tools. "
         "Use them when appropriate to answer user questions.",
         streaming=True,  # Enable streaming to see TextChunkEvents
+        log_file=log_file,  # Enable HTTP/SSE logging
     )
 
     try:
         # You can call agent.initialize() explicitly to catch errors early: but it is also auto ran on first turn.
         await agent.initialize()
         console.print(f"[green]Agent initialized, model: {provider.model}[/green]")
+        console.print(f"[blue]HTTP logging to: {log_file}[/blue]")
 
         # Example prompts that will trigger different behaviors
         query = "Hey, what time it is, can you order 2 coffees for me from local shop? can you also calculate 123*456 for me?"
@@ -88,7 +96,7 @@ async def main() -> None:
 
         async for event in agent.run(
             user_message=query,
-            session_id="example-session",  # Optional: use existing or create new
+            session_id=session_id,
             user_id="example-user",
         ):
             # Handle each event type
@@ -160,6 +168,9 @@ async def main() -> None:
                     )
                 console.print(usage_text)
         console.print()
+
+        # Show where the log file is
+        console.print(f"[dim]HTTP traffic logged to: {log_file.absolute()}[/dim]")
     finally:
         # Always close to release resources
         await agent.close()

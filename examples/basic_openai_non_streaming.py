@@ -3,6 +3,7 @@ Example demonstrating non-streaming usage of nagents.
 
 This example shows how to use the Agent with streaming=False (default),
 which still yields events but emits TextDoneEvent instead of TextChunkEvents.
+HTTP traffic logging is also enabled for debugging.
 """
 
 import asyncio
@@ -76,6 +77,12 @@ async def main() -> None:
 
     session_manager = SessionManager(Path("sessions.db"))
 
+    # Use a unique session ID for this run
+    session_id = f"session-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+
+    # Log file path: logs/<session_id>.txt
+    log_file = Path("logs") / f"{session_id}.txt"
+
     # Create agent with streaming=False (this is the default)
     agent = Agent(
         provider=provider,
@@ -83,11 +90,13 @@ async def main() -> None:
         tools=[get_weather, get_time],
         system_prompt="You are a helpful assistant with access to weather and time tools.",
         streaming=False,  # Non-streaming mode (default)
+        log_file=log_file,  # Enable HTTP/SSE logging
     )
 
     try:
         await agent.initialize()
         console.print(f"[green]Agent initialized, model: {provider.model}[/green]")
+        console.print(f"[blue]HTTP logging to: {log_file}[/blue]")
 
         # Example query
         query = "What's the weather in Paris and what time is it?"
@@ -95,7 +104,7 @@ async def main() -> None:
         console.print(Panel(f"[bold]User:[/bold] {query}", border_style="green"))
         console.print()
 
-        async for event in agent.run(user_message=query):
+        async for event in agent.run(user_message=query, session_id=session_id):
             if isinstance(event, ToolCallEvent):
                 tool_text = Text()
                 tool_text.append("Tool Call: ", style="bold yellow")
@@ -135,6 +144,9 @@ async def main() -> None:
                     style="dim",
                 )
                 console.print(usage_text)
+
+        # Show where the log file is
+        console.print(f"[dim]HTTP traffic logged to: {log_file.absolute()}[/dim]")
 
     finally:
         await agent.close()
