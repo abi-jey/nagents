@@ -5,15 +5,15 @@ This example shows how to use the Agent class with Azure-deployed models
 via the OpenAI-compatible V1 API endpoint.
 
 Azure OpenAI V1 Setup:
-----------------------
+---------------------
 1. Create an Azure OpenAI resource in Azure Portal
 2. Deploy a model (e.g., GPT-4o, Kimi-K2.5, etc.)
 3. Get your endpoint URL and API key from the Azure Portal
 4. Set the following environment variables in your .env file:
 
-   AZURE_V1_ENDPOINT=https://your-resource.openai.azure.com/openai
-   AZURE_V1_API_KEY=your-api-key
-   AZURE_V1_MODEL=your-deployed-model-name
+   AZURE_DEPLOYED_MODEL_ENDPOINT=https://your-resource.openai.azure.com
+   AZURE_DEPLOYED_MODEL_NAME=your-api-key
+   AZURE_DEPLOYED_MODEL_KEY=your-deployed-model-name
 
 The V1 API uses:
 - URL: https://{resource}.openai.azure.com/openai/v1/chat/completions
@@ -80,21 +80,21 @@ def get_azure_provider() -> Provider:
     Raises:
         ValueError: If required environment variables are not set
     """
-    # Get Azure configuration from environment
-    endpoint = os.getenv("AZURE_V1_ENDPOINT")
-    api_key = os.getenv("AZURE_V1_API_KEY")
-    model_name = os.getenv("AZURE_V1_MODEL")
+    # Get Azure configuration from environment (same vars as basic_azure.py)
+    endpoint = os.getenv("AZURE_DEPLOYED_MODEL_ENDPOINT")
+    api_key = os.getenv("AZURE_DEPLOYED_MODEL_NAME")  # This contains the API key
+    model_name = os.getenv("AZURE_DEPLOYED_MODEL_KEY")  # This contains the model name
 
     if not endpoint:
-        raise ValueError("AZURE_V1_ENDPOINT not set. Please set it in your .env file.")
+        raise ValueError("AZURE_DEPLOYED_MODEL_ENDPOINT not set. Please set it in your .env file.")
     if not api_key:
-        raise ValueError("AZURE_V1_API_KEY not set. Please set it in your .env file.")
+        raise ValueError("AZURE_DEPLOYED_MODEL_NAME (API key) not set. Please set it in your .env file.")
     if not model_name:
-        raise ValueError("AZURE_V1_MODEL not set. Please set it in your .env file.")
+        raise ValueError("AZURE_DEPLOYED_MODEL_KEY (model name) not set. Please set it in your .env file.")
 
-    # base_url should be: https://{resource}.openai.azure.com/openai
-    # The provider will append /v1/chat/completions
-    base_url = endpoint.rstrip("/")
+    # For V1 API, base_url should include /openai suffix
+    # URL format: https://{resource}.openai.azure.com/openai/v1/chat/completions
+    base_url = f"{endpoint.rstrip('/')}/openai"
 
     console.print(f"[dim]Azure V1 endpoint: {base_url}[/dim]")
     console.print(f"[dim]Model: {model_name}[/dim]")
@@ -116,9 +116,9 @@ async def main() -> None:
     except ValueError as e:
         console.print(f"[bold red]Configuration Error:[/bold red] {e}")
         console.print("\n[yellow]Please ensure your .env file contains:[/yellow]")
-        console.print("  AZURE_V1_ENDPOINT=https://your-resource.openai.azure.com/openai")
-        console.print("  AZURE_V1_API_KEY=your-api-key")
-        console.print("  AZURE_V1_MODEL=your-model-name")
+        console.print("  AZURE_DEPLOYED_MODEL_ENDPOINT=https://your-resource.openai.azure.com")
+        console.print("  AZURE_DEPLOYED_MODEL_NAME=your-api-key")
+        console.print("  AZURE_DEPLOYED_MODEL_KEY=your-model-name")
         return
 
     console.print("[dim]Using Azure OpenAI V1 provider[/dim]")
