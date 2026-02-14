@@ -9,6 +9,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .batch import BatchClient
+from .batch import BatchConfig
+from .batch import BatchRequest
+from .batch import BatchStatus
 from .events import DoneEvent
 from .events import ErrorEvent
 from .events import Event
@@ -20,6 +24,7 @@ from .events import Usage
 from .exceptions import ToolHallucinationError
 from .http import FileHTTPLogger
 from .provider import Provider
+from .provider import ProviderType
 from .session import SessionManager
 from .tools import ToolExecutor
 from .tools import ToolRegistry
@@ -69,6 +74,20 @@ class Agent:
         await agent.initialize()
         async for event in agent.run("Hello!"):
             ...
+
+    Batch Mode:
+        When batch=True, the agent uses batch processing API (50% cost discount).
+        The interface remains the same - just add batch=True:
+
+        agent = Agent(
+            provider=provider,
+            session_manager=session,
+            batch=True,  # Enable batch mode
+        )
+
+        async for event in agent.run("Hello!"):
+            # Events are yielded after batch completes
+            ...
     """
 
     def __init__(
@@ -81,6 +100,8 @@ class Agent:
         streaming: bool = False,
         log_file: Path | str | None = None,
         fail_on_invalid_tool: bool = False,
+        batch: bool = False,
+        batch_poll_interval: float = 10.0,
     ):
         """
         Initialize the agent.
@@ -98,6 +119,9 @@ class Agent:
                                   tries to call a tool that doesn't exist (tool
                                   hallucination). If False (default), the error
                                   is passed back to the LLM so it can recover.
+            batch: If True, use batch processing API (50% cost discount).
+                   Results are delayed but significantly cheaper.
+            batch_poll_interval: Seconds between batch status checks (default: 10)
         """
         self.provider = provider
         self.session = session_manager
@@ -105,12 +129,15 @@ class Agent:
         self.max_tool_rounds = max_tool_rounds
         self.streaming = streaming
         self.fail_on_invalid_tool = fail_on_invalid_tool
+        self.batch = batch
+        self.batch_poll_interval = batch_poll_interval
 
         self.tool_registry = ToolRegistry()
         self.tool_executor = ToolExecutor(self.tool_registry)
 
         self._initialized = False
         self._http_logger: FileHTTPLogger | None = None
+        self._batch_client: BatchClient | None = None
 
         # Set up HTTP logging if log_file is provided
         if log_file:
@@ -122,6 +149,29 @@ class Agent:
         if tools:
             for tool in tools:
                 self.tool_registry.register(tool)
+
+        # Initialize batch client if batch mode enabled
+        if self.batch:
+            self._init_batch_client()
+
+    def _init_batch_client(self) -> None:
+        """Initialize the batch client for batch mode."""
+        if self.provider.provider_type not in (
+            ProviderType.OPENAI_COMPATIBLE,
+            ProviderType.ANTHROPIC,
+        ):
+            raise ValueError(
+                f"Batch mode only supported for OPENAI_COMPATIBLE and ANTHROPIC providers. "
+                f"Got: {self.provider.provider_type}. "
+                "Azure OpenAI batch uses a different API - use Azure OpenAI Studio instead."
+            )
+        self._batch_client = BatchClient(
+            provider_type=self.provider.provider_type,
+            api_key=self.provider.api_key,
+            model=self.provider.model,
+            base_url=self.provider.base_url,
+        )
+        logger.info("Batch mode enabled - requests will be processed with 50% cost discount")
 
     @property
     def is_initialized(self) -> bool:
@@ -211,6 +261,12 @@ class Agent:
             ValueError: If model verification fails during auto-initialization
         """
         await self._ensure_initialized()
+
+        # Use batch mode if enabled
+        if self.batch:
+            async for event in self._run_batch(user_message, session_id, user_id, config):
+                yield event
+            return
 
         # Handle session ID
         if session_id is None:
@@ -421,6 +477,120 @@ class Agent:
             ),
         )
 
+    async def _run_batch(
+        self,
+        user_message: str,
+        session_id: str | None = None,
+        user_id: str = "default",
+        config: GenerationConfig | None = None,
+    ) -> AsyncIterator[Event]:
+        """
+        Run using batch processing API (50% cost discount).
+
+        This method submits the request as a batch job, waits for completion,
+        and yields events from the results.
+
+        Note: Batch mode does not support streaming or multi-turn tool execution.
+        """
+        if not self._batch_client:
+            yield ErrorEvent(message="Batch client not initialized")
+            return
+
+        # Handle session ID
+        if session_id is None:
+            session_id = f"batch-session-{uuid.uuid4().hex[:12]}"
+            await self.session.get_or_create_session(session_id, user_id)
+            logger.info(f"Created new batch session: {session_id}")
+        else:
+            if not await self.session.session_exists(session_id):
+                await self.session.get_or_create_session(session_id, user_id)
+
+        # Add user message to history
+        await self.session.add_message(session_id, Message(role="user", content=user_message))
+
+        # Get current history for the batch request
+        history = await self.session.get_history(session_id)
+
+        # Build messages for batch request
+        messages: list[Message] = []
+        if self.system_prompt:
+            messages.append(Message(role="system", content=self.system_prompt))
+        messages.extend(history)
+
+        # Create batch request
+        batch_request = BatchRequest(
+            custom_id=f"{session_id}-{uuid.uuid4().hex[:8]}",
+            messages=messages,
+            config=config,
+        )
+
+        # Submit batch
+        tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
+        logger.info(f"Submitting batch request: {batch_request.custom_id}")
+
+        try:
+            job = await self._batch_client.create_batch(
+                requests=[batch_request],
+                config=BatchConfig(),
+                tools=tools,
+                generation_config=config,
+            )
+            logger.info(f"Batch job created: {job.id}, status: {job.status}")
+        except Exception as e:
+            logger.error(f"Failed to create batch: {e}")
+            yield ErrorEvent(message=f"Failed to create batch: {e}")
+            return
+
+        # Wait for completion
+        logger.info("Waiting for batch completion...")
+        job = await self._batch_client.wait_for_completion(
+            job.id,
+            poll_interval=self.batch_poll_interval,
+        )
+        logger.info(f"Batch completed: {job.status}")
+
+        # Check status
+        if job.status != BatchStatus.COMPLETED:
+            yield ErrorEvent(
+                message=f"Batch job failed with status: {job.status}",
+                code=str(job.status.value),
+            )
+            return
+
+        # Get results
+        full_text = ""
+        usage = Usage()
+
+        async for result in self._batch_client.get_results(job):
+            if result.result_type == "succeeded":
+                if result.content:
+                    full_text = result.content
+                    yield TextDoneEvent(text=result.content, usage=usage)
+
+                # Handle usage from result
+                if result.usage:
+                    usage = Usage(
+                        prompt_tokens=result.usage.get("prompt_tokens", 0),
+                        completion_tokens=result.usage.get("completion_tokens", 0),
+                        total_tokens=result.usage.get("total_tokens", 0),
+                    )
+            elif result.result_type == "errored":
+                yield ErrorEvent(
+                    message=result.error_message or "Unknown batch error",
+                    code=result.error_type,
+                )
+                return
+
+        # Add assistant message to history
+        if full_text:
+            await self.session.add_message(session_id, Message(role="assistant", content=full_text))
+
+        yield DoneEvent(
+            final_text=full_text,
+            session_id=session_id,
+            usage=usage,
+        )
+
     async def run_simple(
         self,
         messages: list[Message],
@@ -495,4 +665,6 @@ class Agent:
     async def close(self) -> None:
         """Close the agent and release resources."""
         await self.provider.close()
+        if self._batch_client:
+            await self._batch_client.close()
         self._initialized = False

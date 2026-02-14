@@ -492,13 +492,13 @@ class Provider:
         """Handle non-streaming OpenAI response."""
         response = await self._http.post_json(url, body, headers)
 
-        choices = response.get("choices", [])
+        choices = response.get("choices") or []
         if not choices:
             yield ErrorEvent(message="No choices in response")
             return
 
         choice = choices[0]
-        message = choice.get("message", {})
+        message = choice.get("message") or {}
 
         # Handle usage
         latest_usage = Usage()
@@ -509,6 +509,11 @@ class Provider:
                 completion_tokens=usage.get("completion_tokens", 0),
                 total_tokens=usage.get("total_tokens", 0),
             )
+
+        # Handle reasoning content (from chain-of-thought models)
+        reasoning = message.get("reasoning_content")
+        if reasoning:
+            yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage)
 
         # Handle tool calls
         tool_calls = openai_adapter.parse_tool_calls(choice)
