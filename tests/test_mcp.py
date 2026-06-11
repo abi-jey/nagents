@@ -12,6 +12,8 @@ from nagents.mcp.client import MCP_PROTOCOL_VERSION
 from nagents.mcp.client import _PendingRequest
 from nagents.mcp.client import _extract_text_content
 from nagents.mcp.manager import _MCPToolInfo
+from nagents.mcp.manager import _mcp_type_to_python
+from nagents.mcp.manager import _param_to_mcp_name
 from nagents.tools.registry import ToolRegistry
 from nagents.types import JsonSchema
 
@@ -398,3 +400,100 @@ class TestToolRegistrationIntegration:
         assert td.parameters["properties"]["city"]["description"] == "City name to get weather for"
         assert td.parameters["properties"]["units"]["enum"] == ["metric", "imperial"]
         assert td.parameters["required"] == ["city"]
+
+
+class TestMCPTypeMapping:
+    """Tests for _mcp_type_to_python — MCP JSON schema → Python type."""
+
+    def test_integer(self) -> None:
+        assert _mcp_type_to_python({"type": "integer"}, "count") is int
+
+    def test_number(self) -> None:
+        assert _mcp_type_to_python({"type": "number"}, "price") is float
+
+    def test_boolean(self) -> None:
+        assert _mcp_type_to_python({"type": "boolean"}, "enabled") is bool
+
+    def test_array(self) -> None:
+        assert _mcp_type_to_python({"type": "array"}, "items") is list
+
+    def test_object(self) -> None:
+        assert _mcp_type_to_python({"type": "object"}, "config") is dict
+
+    def test_string(self) -> None:
+        assert _mcp_type_to_python({"type": "string"}, "name") is str
+
+    def test_unknown_defaults_to_str(self) -> None:
+        assert _mcp_type_to_python({"type": "custom"}, "x") is str
+
+    def test_missing_type_defaults_to_str(self) -> None:
+        assert _mcp_type_to_python({}, "x") is str
+
+
+class TestMCPParamNameMapping:
+    """Tests for _param_to_mcp_name — Python safe name → MCP original name."""
+
+    def test_exact_match(self) -> None:
+        props = {"url": {"type": "string"}}
+        assert _param_to_mcp_name("url", props) == "url"
+
+    def test_hyphen_to_underscore(self) -> None:
+        props = {"page-url": {"type": "string"}}
+        assert _param_to_mcp_name("page_url", props) == "page-url"
+
+    def test_no_match_returns_safe_name(self) -> None:
+        props = {"url": {"type": "string"}}
+        assert _param_to_mcp_name("unknown", props) == "unknown"
+
+
+class TestWrapperTypeAnnotations:
+    """Tests that wrapper annotations match MCP schema types."""
+
+    def test_integer_param_annotated_as_int(self) -> None:
+        manager = MCPManager([])
+        info = _MCPToolInfo(
+            server_name="test",
+            tool_name="resize",
+            description="Resize viewport",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "full_page": {"type": "boolean"},
+                    "device_scale": {"type": "number"},
+                },
+                "required": ["width", "height"],
+            },
+        )
+        wrapper = manager._create_tool_wrapper("mcp__test__resize", info)
+        annots = wrapper.__annotations__
+
+        assert annots["width"] is int
+        assert annots["height"] is int
+        assert annots["full_page"] is bool
+        assert annots["device_scale"] is float
+
+    def test_registry_extracts_correct_types(self) -> None:
+        """ToolRegistry should produce integer/number schema from wrapper annotations."""
+        manager = MCPManager([])
+        info = _MCPToolInfo(
+            server_name="test",
+            tool_name="resize",
+            description="Resize viewport",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                },
+                "required": ["width", "height"],
+            },
+        )
+        wrapper = manager._create_tool_wrapper("mcp__test__resize", info)
+        registry = ToolRegistry()
+        td = registry.register(wrapper)
+
+        assert td.parameters["properties"]["width"]["type"] == "integer"
+        assert td.parameters["properties"]["height"]["type"] == "integer"
+        assert td.parameters["required"] == ["height", "width"]  # sorted alphabetically
