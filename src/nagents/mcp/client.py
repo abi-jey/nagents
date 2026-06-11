@@ -428,9 +428,7 @@ class MCPClient:
         # Fail any pending requests
         for pending in self._pending.values():
             if not pending.future.done():
-                pending.future.set_exception(
-                    RuntimeError(f"MCP server '{self.config.name}' disconnected")
-                )
+                pending.future.set_exception(RuntimeError(f"MCP server '{self.config.name}' disconnected"))
         self._pending.clear()
 
         # Close stdin to signal EOF

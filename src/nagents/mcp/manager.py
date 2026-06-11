@@ -334,9 +334,7 @@ class MCPManager:
             except Exception as e:
                 logger.error("Error disconnecting from MCP server '%s': %s", name, e)
 
-        await asyncio.gather(
-            *(_disconnect_one(name, client) for name, client in self._clients.items())
-        )
+        await asyncio.gather(*(_disconnect_one(name, client) for name, client in self._clients.items()))
 
         self._clients.clear()
         self._tool_map.clear()

@@ -53,15 +53,11 @@ MCP_SERVER_CONFIGS = [
 
 
 async def main() -> None:
-    console.print(
-        Panel.fit("[bold blue]Playwright MCP — Screenshot google.com[/bold blue]")
-    )
+    console.print(Panel.fit("[bold blue]Playwright MCP — Screenshot google.com[/bold blue]"))
 
     api_key = os.getenv("OPENROUTER_API_KEY", "")
     if not api_key:
-        console.print(
-            "[red]OPENROUTER_API_KEY not set. Set it in .env or environment.[/red]"
-        )
+        console.print("[red]OPENROUTER_API_KEY not set. Set it in .env or environment.[/red]")
         return
 
     # ── Connect to MCP server ──────────────────────────────────────────
@@ -71,9 +67,7 @@ async def main() -> None:
     try:
         await manager.connect_all()
         mcp_tools = await manager.get_tools()
-        console.print(
-            f"[green]Connected to Playwright MCP server: {len(mcp_tools)} tools[/green]"
-        )
+        console.print(f"[green]Connected to Playwright MCP server: {len(mcp_tools)} tools[/green]")
         for tool in mcp_tools:
             console.print(f"  [dim]• {tool.__name__}[/dim]")
     except Exception as e:
@@ -107,9 +101,7 @@ async def main() -> None:
 
     try:
         await agent.initialize()
-        console.print(
-            f"[green]Agent initialized with model: {provider.model}[/green]"
-        )
+        console.print(f"[green]Agent initialized with model: {provider.model}[/green]")
 
         query = (
             "Navigate to https://google.com, wait for the page to load, "
@@ -134,10 +126,7 @@ async def main() -> None:
                 tool_text.append("🔧 ", style="bold yellow")
                 tool_text.append(event.name, style="cyan")
                 if event.arguments:
-                    args_str = ", ".join(
-                        f"{k}={str(v)[:60]}"
-                        for k, v in event.arguments.items()
-                    )
+                    args_str = ", ".join(f"{k}={str(v)[:60]}" for k, v in event.arguments.items())
                     tool_text.append(f"({args_str})", style="dim")
                 console.print(tool_text)
             elif isinstance(event, ToolResultEvent):
@@ -168,9 +157,7 @@ async def main() -> None:
         # Check if screenshot was saved
         if screenshot_path.exists():
             size_kb = screenshot_path.stat().st_size / 1024
-            console.print(
-                f"[green] Screenshot saved: {screenshot_path} ({size_kb:.1f} KB)[/green]"
-            )
+            console.print(f"[green] Screenshot saved: {screenshot_path} ({size_kb:.1f} KB)[/green]")
         else:
             console.print("[yellow] Screenshot was not saved to disk[/yellow]")
 
