@@ -136,6 +136,10 @@ from .events import ToolResultType
 from .events import Usage
 from .exceptions import NagentsError
 from .exceptions import ToolHallucinationError
+from .mcp import MCPClient
+from .mcp import MCPError
+from .mcp import MCPManager
+from .mcp import MCPServerConfig
 from .http import FileHTTPLogger
 from .media import AUDIO_MIME_TYPES
 from .media import DOCUMENT_MIME_TYPES
@@ -207,6 +211,10 @@ __all__ = [
     "JsonSchema",
     "JsonSchemaProperty",
     "JsonValue",
+    "MCPClient",
+    "MCPError",
+    "MCPManager",
+    "MCPServerConfig",
     "MediaCapabilities",
     "Message",
     "Messages",

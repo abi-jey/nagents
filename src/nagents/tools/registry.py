@@ -49,6 +49,7 @@ class ToolRegistry:
         func: Callable[..., Any],
         name: str | None = None,
         description: str | None = None,
+        parameters: JsonSchema | None = None,
     ) -> ToolDefinition:
         """
         Register a function as a tool.
@@ -57,14 +58,16 @@ class ToolRegistry:
             func: The function to register
             name: Optional override for tool name (defaults to function name)
             description: Optional override for description (defaults to docstring)
+            parameters: Optional JSON Schema for parameters. When provided,
+                         skips auto-extraction from type hints.
 
         Returns:
             The created ToolDefinition
         """
         tool_name = name or func.__name__
 
-        # Extract schema from type hints
-        parameters = self._extract_parameters(func)
+        # Use provided schema or extract from type hints
+        param_schema = parameters if parameters is not None else self._extract_parameters(func)
 
         # Get description from docstring or override
         tool_description = description or func.__doc__ or f"Call {tool_name}"
@@ -74,7 +77,7 @@ class ToolRegistry:
         tool_def = ToolDefinition(
             name=tool_name,
             description=tool_description,
-            parameters=parameters,
+            parameters=param_schema,
             func=func,
         )
 
