@@ -22,6 +22,31 @@ from .client import _extract_text_content
 logger = logging.getLogger(__name__)
 
 
+def _mcp_type_to_python(prop: dict[str, Any], name: str) -> type:
+    """Map MCP JSON Schema type to a Python type for annotations."""
+    _TYPE_MAP: dict[str, type] = {
+        "integer": int,
+        "number": float,
+        "boolean": bool,
+        "array": list,
+        "object": dict,
+        "string": str,
+    }
+    return _TYPE_MAP.get(prop.get("type", "string"), str)
+
+
+def _param_to_mcp_name(safe_name: str, properties: dict[str, Any]) -> str:
+    """Map a sanitised Python param name back to the original MCP property name.
+
+    Hyphens in MCP names become underscores in Python.  This reverse-maps
+    the underscored name back to the original key in *properties*.
+    """
+    for orig_name in properties:
+        if orig_name.replace("-", "_") == safe_name:
+            return orig_name
+    return safe_name
+
+
 class MCPManager:
     """Manages connections to multiple MCP servers.
 
@@ -311,7 +336,12 @@ class MCPManager:
         if params:
             new_sig = inspect.Signature(parameters=params)
             wrapper.__signature__ = new_sig  # type: ignore[attr-defined]
-            wrapper.__annotations__ = {p.name: str for p in params}
+            # Map MCP JSON schema types to Python types so ToolRegistry
+            # auto-extracts the correct JSON schema (string vs integer vs number)
+            wrapper.__annotations__ = {
+                p.name: _mcp_type_to_python(properties.get(_param_to_mcp_name(p.name, properties), {}), p.name)
+                for p in params
+            }
 
         return wrapper
 
