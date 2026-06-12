@@ -49,6 +49,8 @@ from .tools import ToolRegistry
 from .types import AudioContent
 from .types import ContentPart
 from .types import GenerationConfig
+from .types import JsonSchema
+from .types import JsonSchemaProperty
 from .types import Message
 from .types import RetryConfig
 from .types import TextContent
@@ -1114,9 +1116,18 @@ class Agent:
                         )
 
                     # Add tool result to history
-                    result_content = (
-                        str(result_event.result) if result_event.error is None else f"Error: {result_event.error}"
-                    )
+                    # Check for _save_to convention — save result to file
+                    save_path = _extract_save_path(tool_call)
+                    if save_path and result_event.error is None:
+                        result_content = _save_and_return(
+                            result_event, save_path, session_id
+                        )
+                    else:
+                        result_content = (
+                            str(result_event.result)
+                            if result_event.error is None
+                            else f"Error: {result_event.error}"
+                        )
                     await self.session.add_message(
                         session_id,
                         Message(
@@ -1243,6 +1254,8 @@ class Agent:
 
             # Submit batch
             tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
+            if tools:
+                tools = _inject_save_to(tools)
             logger.info(f"Submitting batch request: {batch_request.custom_id}")
 
             try:
@@ -1475,3 +1488,71 @@ class Agent:
         if self._batch_client:
             await self._batch_client.close()
         self._initialized = False
+
+
+# ---------------------------------------------------------------------------
+# _save_to convention — programmatic tool call emulation (provider-agnostic)
+# ---------------------------------------------------------------------------
+
+_SAVE_TO_PARAM_NAME = "_save_to"
+_SAVE_TO_PARAM_SCHEMA: JsonSchemaProperty = {
+    "type": "string",
+    "description": (
+        "Save the tool result to this file path instead of returning it in context. "
+        "Use this to avoid loading large results into context — chain multiple "
+        "tool calls with _save_to, then read the files afterward. "
+        "The tool result content is written to the file; only a confirmation "
+        "message is returned to the context."
+    ),
+}
+
+
+def _inject_save_to(tools: list[ToolDefinition]) -> list[ToolDefinition]:
+    """Inject _save_to as an optional parameter into every tool's schema.
+
+    Returns a new list of ToolDefinitions with the injected parameter.
+    Original ToolDefinitions are shallow-copied so the registry is unaffected.
+    """
+    injected: list[ToolDefinition] = []
+    for td in tools:
+        props = dict(td.parameters.get("properties", {}))
+        props[_SAVE_TO_PARAM_NAME] = _SAVE_TO_PARAM_SCHEMA
+        new_params: JsonSchema = {**td.parameters, "properties": props}
+        injected.append(
+            ToolDefinition(
+                name=td.name,
+                description=td.description,
+                parameters=new_params,
+                func=td.func,
+            )
+        )
+    return injected
+
+
+def _extract_save_path(tool_call: ToolCall) -> str | None:
+    """Extract _save_to path from tool call arguments, removing it."""
+    path = tool_call.arguments.pop(_SAVE_TO_PARAM_NAME, None)
+    if path and isinstance(path, str) and path.strip():
+        return path.strip()
+    return None
+
+
+def _save_and_return(result_event: Any, save_path: str, session_id: str) -> str:
+    """Save tool result to file and return a short confirmation message."""
+    import logging
+    from pathlib import Path
+
+    logger = logging.getLogger(__name__)
+    result_str = str(result_event.result) if result_event.result is not None else "(no output)"
+
+    try:
+        p = Path(save_path).expanduser().resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(result_str, encoding="utf-8")
+        size = p.stat().st_size
+        size_str = f"{size / 1024:.1f}KB" if size >= 1024 else f"{size}B"
+        logger.info(f"Tool result saved to {p} ({size_str})")
+        return f"[Tool result saved to {save_path} ({size_str})]"
+    except OSError as e:
+        logger.error(f"Failed to save tool result to {save_path}: {e}")
+        return f"[Failed to save tool result: {e}]\n{result_str[:1000]}"

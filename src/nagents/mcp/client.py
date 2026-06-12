@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_REQUEST_TIMEOUT = 60.0
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MiB (Playwright sends large screenshots)
 
 
 @dataclass
@@ -132,6 +133,7 @@ class MCPClient:
             stderr=asyncio.subprocess.PIPE,
             env=env,
             cwd=self.config.cwd,
+            limit=MAX_MESSAGE_SIZE,
         )
 
         # Start the response reader
@@ -257,8 +259,18 @@ class MCPClient:
 
         try:
             while True:
-                line = await self._process.stdout.readline()
-                if not line:
+                try:
+                    line = await self._process.stdout.readuntil(b"\n")
+                except asyncio.exceptions.LimitOverrunError:
+                    logger.warning(
+                        "MCP ← %s: message exceeded %d byte limit, skipping",
+                        self.config.name,
+                        MAX_MESSAGE_SIZE,
+                    )
+                    # Drain the oversized line
+                    await self._process.stdout.readuntil(b"\n")
+                    continue
+                except asyncio.IncompleteReadError:
                     break
 
                 try:
