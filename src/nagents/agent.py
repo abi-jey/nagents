@@ -1119,14 +1119,10 @@ class Agent:
                     # Check for _save_to convention — save result to file
                     save_path = _extract_save_path(tool_call)
                     if save_path and result_event.error is None:
-                        result_content = _save_and_return(
-                            result_event, save_path, session_id
-                        )
+                        result_content = _save_and_return(result_event, save_path, session_id)
                     else:
                         result_content = (
-                            str(result_event.result)
-                            if result_event.error is None
-                            else f"Error: {result_event.error}"
+                            str(result_event.result) if result_event.error is None else f"Error: {result_event.error}"
                         )
                     await self.session.add_message(
                         session_id,
