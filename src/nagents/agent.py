@@ -915,6 +915,8 @@ class Agent:
         self.provider.set_session_id(session_id)
 
         tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
+        if tools:
+            tools = _inject_save_to(tools)
 
         # Track last known usage to use for events without usage data
         last_usage = Usage()
@@ -1430,6 +1432,8 @@ class Agent:
         await self._ensure_initialized()
 
         tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
+        if tools:
+            tools = _inject_save_to(tools)
 
         # For simple runs, session_usage equals usage (single generation)
         session_usage = TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
