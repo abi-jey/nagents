@@ -1094,6 +1094,10 @@ class Agent:
                 # Execute each tool
                 for tool_call in pending_tool_calls:
                     logger.debug(f"Executing tool: {tool_call.name}")
+
+                    # _save_to convention: remove from args before tool execution
+                    save_path = _extract_save_path(tool_call)
+
                     result_event = await self.tool_executor.execute(tool_call)
                     # Attach last known usage info to tool result events
                     result_event.usage = Usage(
@@ -1118,8 +1122,6 @@ class Agent:
                         )
 
                     # Add tool result to history
-                    # Check for _save_to convention — save result to file
-                    save_path = _extract_save_path(tool_call)
                     if save_path and result_event.error is None:
                         result_content = _save_and_return(result_event, save_path, session_id)
                     else:
@@ -1371,17 +1373,26 @@ class Agent:
             if tool_calls_to_execute:
                 # Execute tools
                 for tool_call in tool_calls_to_execute:
+                    # _save_to convention: remove from args before tool execution
+                    save_path = _extract_save_path(tool_call)
+
                     result_event = await self.tool_executor.execute(tool_call)
                     yield result_event
 
                     # Add tool result to history
+                    if save_path and result_event.result is not None:
+                        result_content = _save_and_return(result_event, save_path, session_id)
+                    else:
+                        result_content = (
+                            str(result_event.result)
+                            if result_event.result is not None
+                            else (result_event.error or "Error")
+                        )
                     await self.session.add_message(
                         session_id,
                         Message(
                             role="tool",
-                            content=str(result_event.result)
-                            if result_event.result is not None
-                            else (result_event.error or "Error"),
+                            content=result_content,
                             tool_call_id=tool_call.id,
                             name=tool_call.name,
                         ),
