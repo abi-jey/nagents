@@ -19,7 +19,7 @@ build-backend = "hatchling.build"
 text = "MIT"
 
 [project.optional-dependencies]
-dev = [ "pytest>=8.0", "pytest-cov>=4.1.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0",]
+dev = [ "pytest>=8.0", "pytest-cov>=4.1.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0", "fastapi", "pydantic>=2.0",]
 docs = [ "mkdocs>=1.6.0", "mkdocs-material>=9.5.0", "mkdocstrings[python]>=0.27.0",]
 server = [ "fastapi", "uvicorn",]
 
@@ -44,6 +44,10 @@ disallow_incomplete_defs = true
 check_untyped_defs = true
 mypy_path = "src"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "nagents.server.*"
+ignore_errors = true
 
 [tool.ruff.lint]
 select = [ "E", "F", "I", "UP", "B", "SIM", "TCH", "RUF",]

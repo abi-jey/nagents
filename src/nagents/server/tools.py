@@ -8,8 +8,8 @@ from pathlib import Path
 
 from nagents import docker_run
 
-
 # ── Attachment store (in-memory registry, files on disk) ──────────────────────
+
 
 @dataclass
 class Attachment:
@@ -85,11 +85,7 @@ def attach_file(file_path: str, description: str = "") -> str:
     _pending_attachments.append(aid)
 
     size = p.stat().st_size
-    return (
-        f"File attached: /attachments/{aid}\n"
-        f"Name: {p.name}\n"
-        f"Size: {size} bytes"
-    )
+    return f"File attached: /attachments/{aid}\nName: {p.name}\nSize: {size} bytes"
 
 
 BASE_TOOLS = [
