@@ -157,6 +157,7 @@ from .stt import STTService
 from .stt import TranscriptionResult
 from .tools import ToolExecutor
 from .tools import ToolRegistry
+from .tools.docker import docker_run
 from .types import AudioContent
 from .types import ContentPart
 from .types import DocumentContent
@@ -248,6 +249,7 @@ __all__ = [
     "UnsupportedAudioError",
     "Usage",
     "UsageInfo",
+    "docker_run",
     "estimate_messages_tokens",
     "get_media_capabilities",
     "get_model_context_limit",
