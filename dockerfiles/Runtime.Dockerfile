@@ -20,5 +20,8 @@ USER agent
 
 ENV PYTHONUNBUFFERED=1
 
+EXPOSE 8080
+CMD ["python", "-m", "nagents.server"]
+
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
