@@ -1,9 +1,9 @@
 FROM python:3.12-slim
 
-ARG DOCKER_GID=984
+ARG DOCKER_GID=999
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    docker.io \
+    docker-cli \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
