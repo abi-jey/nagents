@@ -7,10 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install nagents (this directory will be the build context from the repo)
+# Install nagents + server dependencies (this directory is the build context from the repo)
 COPY pyproject.toml README.md ./
 COPY src/ src/
 RUN pip install hatchling && pip install --no-build-isolation . && pip uninstall -y hatchling
+RUN pip install fastapi uvicorn python-dotenv
 
 RUN useradd -m -u 1000 agent
 USER agent
