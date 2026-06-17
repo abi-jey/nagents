@@ -8,9 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install nagents (this directory will be the build context from the repo)
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY src/ src/
-RUN pip install hatchling && pip install -e . && pip uninstall -y hatchling
+RUN pip install hatchling && pip install --no-build-isolation . && pip uninstall -y hatchling
 
 RUN useradd -m -u 1000 agent
 USER agent
