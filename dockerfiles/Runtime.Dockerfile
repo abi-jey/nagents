@@ -5,6 +5,8 @@ ARG DOCKER_GID=999
 RUN apt-get update && apt-get install -y --no-install-recommends \
     docker-cli \
     curl \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
