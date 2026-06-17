@@ -299,7 +299,7 @@ jobs:
       packages: write
     env:
       REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
+      IMAGE_NAME: ${{ github.repository }}/agent-server
     steps:
       - uses: actions/checkout@v4
         with:
