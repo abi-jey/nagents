@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+ARG DOCKER_GID=984
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     docker.io \
     curl \
@@ -7,12 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install nagents + server dependencies (this directory is the build context from the repo)
+# Install nagents + server dependencies (this directory will be the build context from the repo)
 COPY pyproject.toml README.md ./
 COPY src/ src/
 RUN pip install hatchling && pip install --no-build-isolation ".[server]" && pip uninstall -y hatchling
 
-RUN useradd -m -u 1000 agent
+RUN groupadd -g ${DOCKER_GID} docker-host && \
+    useradd -m -u 1000 -G docker-host agent
 USER agent
 
 ENV PYTHONUNBUFFERED=1
