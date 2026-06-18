@@ -14,11 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Playwright + Chromium globally (matching MCP server expectations)
+# Install Playwright MCP + browser (chrome-for-testing, not plain chromium)
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN npm install -g playwright @playwright/mcp && \
-    npx -y playwright install chromium && \
-    npx -y playwright install-deps chromium 2>/dev/null || true
+    playwright-mcp install-browser chrome-for-testing
 
 # Install nagents + server dependencies (this directory will be the build context from the repo)
 COPY pyproject.toml README.md ./
