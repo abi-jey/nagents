@@ -357,7 +357,7 @@ async def _reload_if_changed() -> str:
                     _mcp_manager = MCPManager(configs)
                     await _mcp_manager.connect_all()
                     mcp_tools: list[Any] = await _mcp_manager.get_tools()
-                    mcp_names = sorted(t.name for t in mcp_tools)  # type: ignore[attr-defined]
+                    mcp_names = sorted(getattr(t, "__name__", str(t)) for t in mcp_tools)
                     new_mcp = set(mcp_names) - set(_last_mcp_tool_names)
                     removed_mcp = set(_last_mcp_tool_names) - set(mcp_names)
                     _last_mcp_tool_names = mcp_names
