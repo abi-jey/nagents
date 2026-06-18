@@ -233,9 +233,8 @@ function addMessage(type, text) {
 
 let currentAgentMsg = null;
 function appendText(text) {
-  if (!currentAgentMsg || currentAgentMsg.dataset.done) {
+  if (!currentAgentMsg) {
     currentAgentMsg = addMessage('agent', '');
-    currentAgentMsg.dataset.done = 'false';
   }
   currentAgentMsg.textContent += text;
   chat.scrollTop = chat.scrollHeight;
@@ -301,7 +300,7 @@ function handleEvent(evt) {
       break;
     case 'done':
       sessionId = evt.session_id;
-      if (currentAgentMsg) currentAgentMsg.dataset.done = 'true';
+      currentAgentMsg = null;
       if (evt.attachments?.length) {
         addMessage('tool', `📎 ${evt.attachments.length} attachment(s): ${evt.attachments.map(a => a.filename).join(', ')}`);
       }
