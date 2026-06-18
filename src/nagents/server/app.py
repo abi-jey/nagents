@@ -425,12 +425,12 @@ def _get_agent() -> Agent:
         system_prompt=sys_prompt,
         streaming=True,
         compactor="self",
-        compact_on=Tokens(input=100000, output=8000),
+        compact_on=Tokens(total=100000),
     )
     _agent._tools_list = tools  # type: ignore[attr-defined]
     _agent._mcp_manager = _mcp_manager  # type: ignore[attr-defined]
 
-    logger.info("Agent created with %d tools (compaction: 100k tokens)", len(tools))
+    logger.info("Agent created with %d tools (compaction: 100k total tokens, triggers at 80k)", len(tools))
     return _agent
 
 
@@ -457,7 +457,7 @@ def _rebuild_agent(new_tools: list[Callable[..., Any]]) -> None:
             system_prompt=cfg["system_prompt"],
             streaming=True,
             compactor="self",
-            compact_on=Tokens(input=100000, output=8000),
+            compact_on=Tokens(total=100000),
         )
         _agent._tools_list = new_tools  # type: ignore[attr-defined]
         _agent._mcp_manager = old_mcp  # type: ignore[attr-defined]

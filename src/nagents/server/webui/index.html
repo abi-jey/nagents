@@ -561,6 +561,7 @@ const statusDot = $('#status-dot');
 const statusText = $('#status-text');
 const eventLog = $('#event-log-body');
 let streaming = false;
+let queuedMessage = null;
 
 // ── Helpers ──
 function addMessage(type, text) {
@@ -593,10 +594,13 @@ function appendReasoning(text) {
 
 // ── SSE Stream ──
 async function sendMessage(message) {
-  if (streaming) return;
+  if (streaming) {
+    queuedMessage = message;
+    addMessage('system', `Queued: "${message.slice(0, 50)}${message.length > 50 ? '...' : ''}" — will send when response completes`);
+    return;
+  }
   streaming = true;
   sendBtn.disabled = true;
-  input.disabled = true;
   currentAgentMsg = null;
   currentReasoningMsg = null;
 
@@ -633,9 +637,15 @@ async function sendMessage(message) {
   }
 
   streaming = false;
-  sendBtn.disabled = false;
-  input.disabled = false;
-  input.focus();
+  if (queuedMessage) {
+    const next = queuedMessage;
+    queuedMessage = null;
+    sendBtn.disabled = false;
+    sendMessage(next);
+  } else {
+    sendBtn.disabled = false;
+    input.focus();
+  }
   refreshSidebar();
 }
 
