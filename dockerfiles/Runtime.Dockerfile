@@ -14,9 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Playwright browsers (shared location)
+# Install Playwright + Chromium globally (matching MCP server expectations)
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN npx -y playwright install chromium && \
+RUN npm install -g playwright @playwright/mcp && \
+    npx -y playwright install chromium && \
     npx -y playwright install-deps chromium 2>/dev/null || true
 
 # Install nagents + server dependencies (this directory will be the build context from the repo)
