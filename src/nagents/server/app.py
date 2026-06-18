@@ -74,13 +74,21 @@ app.add_middleware(
 logger = logging.getLogger("nagents.server")
 logger.setLevel(logging.DEBUG)
 
+_log_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
 _handler = BufferHandler()
-_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+_handler.setFormatter(_log_fmt)
 logger.addHandler(_handler)
+
+# Also log to stdout so logs appear in pod logs
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setFormatter(_log_fmt)
+logger.addHandler(_stdout_handler)
 
 _nagents_logger = logging.getLogger("nagents")
 _nagents_logger.setLevel(logging.DEBUG)
 _nagents_logger.addHandler(_handler)
+_nagents_logger.addHandler(_stdout_handler)
 _nagents_logger.propagate = False
 
 # ── Env config ───────────────────────────────────────────────────────────────

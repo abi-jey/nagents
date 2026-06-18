@@ -158,11 +158,18 @@ def wake_up_in(
     days: int | None = None,
     reason: str = "",
 ) -> str:
-    """Schedule the agent to wake up and resume this session after a delay.
+    """Schedule yourself to wake up and resume this conversation after a delay.
 
-    Use this tool when you need to follow up with the user later, check on
-    something after a delay, or remind the user about something. The agent
-    will wake up with full context of this conversation.
+    Use this tool to set reminders or schedule future actions. Common scenarios:
+
+    - **Monitoring**: "Check if the service is back up" — wake up in 30 minutes to retry.
+    - **Scheduled tasks**: "Fetch the daily report at 9 AM" — wake up tomorrow morning.
+    - **Waiting**: "Wait for the deployment to finish" — wake up in 10 minutes to check status.
+    - **Follow-ups**: "Remind the user about the pending PR" — wake up in 2 hours.
+
+    When you wake up, you will have full context of this conversation and can
+    continue exactly where you left off. The reason you provide will be shown
+    to you when you wake up, so make it descriptive.
 
     At least one time parameter must be provided. Parameters are additive:
     wake_up_in(hours=1, minutes=30) means 1 hour and 30 minutes from now.
@@ -172,7 +179,10 @@ def wake_up_in(
         minutes: Number of minutes to wait before waking up.
         hours: Number of hours to wait before waking up.
         days: Number of days to wait before waking up.
-        reason: Why you want to wake up (e.g., "check backup status").
+        reason: Why you want to wake up. Be specific — this will be shown to you
+                when you wake up. E.g., "Check if the API at X is responding",
+                "Fetch daily metrics from the monitoring endpoint",
+                "Retry the failed deployment after cooldown".
     """
     if all(v is None for v in [seconds, minutes, hours, days]):
         return "Error: At least one time parameter (seconds, minutes, hours, days) must be provided."
