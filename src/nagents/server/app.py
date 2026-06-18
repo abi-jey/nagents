@@ -29,6 +29,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from nagents import Agent
+from nagents import CompactionDoneEvent
+from nagents import CompactionStartedEvent
 from nagents import DoneEvent
 from nagents import ErrorEvent
 from nagents import Provider
@@ -37,6 +39,7 @@ from nagents import RateLimitEvent
 from nagents import ReasoningChunkEvent
 from nagents import SessionManager
 from nagents import TextChunkEvent
+from nagents import Tokens
 from nagents import ToolCallEvent
 from nagents import ToolResultEvent
 from nagents.mcp import MCPManager
@@ -421,11 +424,13 @@ def _get_agent() -> Agent:
         tools=tools,
         system_prompt=sys_prompt,
         streaming=True,
+        compactor="self",
+        compact_on=Tokens(input=100000, output=8000),
     )
     _agent._tools_list = tools  # type: ignore[attr-defined]
     _agent._mcp_manager = _mcp_manager  # type: ignore[attr-defined]
 
-    logger.info("Agent created with %d tools", len(tools))
+    logger.info("Agent created with %d tools (compaction: 100k tokens)", len(tools))
     return _agent
 
 
@@ -451,6 +456,8 @@ def _rebuild_agent(new_tools: list[Callable[..., Any]]) -> None:
             tools=new_tools,
             system_prompt=cfg["system_prompt"],
             streaming=True,
+            compactor="self",
+            compact_on=Tokens(input=100000, output=8000),
         )
         _agent._tools_list = new_tools  # type: ignore[attr-defined]
         _agent._mcp_manager = old_mcp  # type: ignore[attr-defined]
@@ -725,6 +732,23 @@ async def chat(body: ChatRequest) -> ChatResponse:
                 logger.info(
                     "Done session=%s tokens=%s", event.session_id, event.usage.total_tokens if event.usage else "?"
                 )
+            elif isinstance(event, CompactionStartedEvent):
+                logger.info(
+                    "Compaction started: %d messages, ~%d tokens (trigger=%s, session=%s)",
+                    event.message_count,
+                    event.estimated_tokens,
+                    event.trigger,
+                    event.session_id,
+                )
+            elif isinstance(event, CompactionDoneEvent):
+                logger.info(
+                    "Compaction done: %d->%d messages, %d->%d tokens (compactor=%s)",
+                    event.original_message_count,
+                    event.new_message_count,
+                    event.original_token_count,
+                    event.summary_tokens,
+                    event.compactor_used,
+                )
             elif isinstance(event, ErrorEvent):
                 logger.error("Agent error: %s (recoverable=%s)", event.message, event.recoverable)
                 if not event.recoverable:
@@ -800,6 +824,10 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                         break
                 elif isinstance(event, RateLimitEvent):
                     yield f"data: {json.dumps({'type': 'rate_limit', 'attempt': event.attempt, 'max_retries': event.max_retries, 'retry_after': event.retry_after, 'status_code': event.status_code})}\n\n"
+                elif isinstance(event, CompactionStartedEvent):
+                    yield f"data: {json.dumps({'type': 'compaction_started', 'message_count': event.message_count, 'estimated_tokens': event.estimated_tokens, 'session_id': event.session_id})}\n\n"
+                elif isinstance(event, CompactionDoneEvent):
+                    yield f"data: {json.dumps({'type': 'compaction_done', 'original_message_count': event.original_message_count, 'new_message_count': event.new_message_count, 'original_token_count': event.original_token_count, 'summary_tokens': event.summary_tokens, 'compactor_used': event.compactor_used})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
