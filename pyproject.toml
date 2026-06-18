@@ -21,7 +21,7 @@ text = "MIT"
 [project.optional-dependencies]
 dev = [ "pytest>=8.0", "pytest-cov>=4.1.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0", "fastapi", "pydantic>=2.0",]
 docs = [ "mkdocs>=1.6.0", "mkdocs-material>=9.5.0", "mkdocstrings[python]>=0.27.0",]
-server = [ "fastapi", "uvicorn",]
+server = [ "fastapi>=0.100", "uvicorn>=0.24", "pydantic>=2.0",]
 
 [project.urls]
 Homepage = "https://github.com/abi-jey/nagents"
@@ -67,18 +67,3 @@ packages = [ "src/nagents",]
 
 [tool.hatch.build.targets.sdist]
 include = [ "/src", "/docs", "LICENSE", "README.md", "pyproject.toml",]
-
-[tool.poetry.group.docs.dependencies]
-mkdocs-material = "^9.7.1"
-mkdocstrings = "^1.0.3"
-mkdocstrings-python = "^2.0.2"
-
-[tool.poetry.group.dev.dependencies]
-setuptools = "^82.0.0"
-qwen-tts = "^0.1.1"
-python-dotenv = "^1.2.1"
-pre-commit = "^4.5.1"
-
-[tool.poetry.group.dev.dependencies.huggingface-hub]
-extras = [ "cli",]
-version = "<1.0.0"
