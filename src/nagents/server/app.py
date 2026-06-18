@@ -789,6 +789,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
     user_message = body.message
     if sys_msg:
         user_message = f"{sys_msg}\n{body.message}"
+        # Emit the system notification as an SSE event so the UI can show it
+        logger.info("System notification: %s", sys_msg)
 
     agent = _get_agent()
     logger.info("Chat SSE user_id=%s session_id=%s message=%.100s", body.user_id, session_id, body.message)
@@ -796,6 +798,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
     async def event_stream() -> Any:
         final_session_id: str | None = None
         try:
+            if sys_msg:
+                yield f"data: {json.dumps({'type': 'system', 'message': sys_msg.replace('#system-notification: ', '')})}\n\n"
             async for event in agent.run(
                 user_message=user_message,
                 session_id=session_id,

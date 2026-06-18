@@ -233,6 +233,17 @@ body {
   padding: 7px 12px;
   line-height: 1.5;
 }
+.message.system {
+  align-self: center;
+  max-width: 90%;
+  background: var(--accent-glow);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--accent);
+  padding: 6px 14px;
+  text-align: center;
+}
 .message.tool .icon { color: var(--tool); }
 .message.error {
   align-self: flex-start;
@@ -354,6 +365,7 @@ body {
 .event-entry.type-rate_limit .tag { color: var(--warn); }
 .event-entry.type-compaction_started .tag { color: var(--warn); }
 .event-entry.type-compaction_done .tag { color: var(--success); }
+.event-entry.type-system .tag { color: var(--accent); }
 
 /* ── Config modal ── */
 .modal-overlay {
@@ -654,6 +666,11 @@ function handleEvent(evt) {
       break;
     case 'reasoning':
       appendReasoning(evt.content);
+      break;
+    case 'system':
+      currentAgentMsg = null;
+      currentReasoningMsg = null;
+      addMessage('system', evt.message);
       break;
     case 'tool_call':
       currentAgentMsg = null;
