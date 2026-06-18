@@ -6,19 +6,24 @@
 <title>Agent Server</title>
 <style>
 :root {
-  --bg: #0f0f13;
-  --surface: #1a1a24;
-  --border: #2a2a3a;
-  --text: #e0e0e0;
-  --muted: #888;
-  --accent: #6c5ce7;
-  --accent-dim: #4a3db8;
-  --success: #00b894;
-  --error: #e17055;
-  --tool: #0984e3;
-  --user-bubble: var(--accent);
-  --agent-bubble: var(--surface);
-  --radius: 8px;
+  --bg: #0a0a0f;
+  --surface: #13131c;
+  --surface-2: #1c1c28;
+  --border: #262636;
+  --border-hover: #363650;
+  --text: #e4e4ef;
+  --text-dim: #a0a0b8;
+  --muted: #6b6b85;
+  --accent: #7c6cf0;
+  --accent-dim: #5a4dc4;
+  --accent-glow: rgba(124,108,240,0.15);
+  --success: #34d399;
+  --error: #f87171;
+  --tool: #60a5fa;
+  --warn: #fbbf24;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -29,10 +34,18 @@ body {
   height: 100vh;
   display: flex;
   overflow: hidden;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 }
-/* Sidebar */
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+/* ── Left sidebar ── */
 .sidebar {
-  width: 280px;
+  width: 260px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
@@ -40,40 +53,75 @@ body {
   flex-shrink: 0;
 }
 .sidebar-header {
-  padding: 14px 16px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--border);
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-header::before {
+  content: '';
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 .sidebar-section {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
 }
+.sidebar-section:last-child { border-bottom: none; }
 .sidebar-section h3 {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 6px 8px;
-  margin-top: 4px;
+  letter-spacing: 1px;
+  padding: 8px 10px 4px;
+  font-weight: 600;
 }
 .tool-item, .attachment-item {
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: 4px;
-  cursor: default;
-  color: var(--muted);
-  word-break: break-all;
+  padding: 7px 10px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  word-break: break-word;
+  line-height: 1.5;
+  transition: background 0.15s;
 }
-.tool-item:hover, .attachment-item:hover { background: var(--border); }
-.tool-item .name { color: var(--text); font-weight: 500; }
-.attachment-item .name { color: var(--accent); cursor: pointer; }
-.attachment-item .meta { font-size: 10px; }
-/* Main */
+.tool-item:hover, .attachment-item:hover { background: var(--surface-2); }
+.tool-item .name { color: var(--text); font-weight: 600; font-family: var(--mono); font-size: 11px; }
+.attachment-item .name { color: var(--accent); text-decoration: none; font-weight: 500; }
+.attachment-item .name:hover { text-decoration: underline; }
+.attachment-item .meta { font-size: 9px; color: var(--muted); margin-top: 2px; }
+
+/* MCP items */
+.mcp-item {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 3px;
+  background: var(--surface-2);
+  transition: background 0.15s;
+}
+.mcp-item:hover { background: var(--border); }
+.mcp-item .mcp-header { display: flex; align-items: center; gap: 7px; }
+.mcp-item .mcp-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.mcp-item .mcp-dot.connected { background: var(--success); box-shadow: 0 0 6px rgba(52,211,153,0.4); }
+.mcp-item .mcp-dot.disconnected { background: var(--error); }
+.mcp-item .mcp-name { color: var(--text); font-weight: 600; font-size: 11px; }
+.mcp-item .mcp-cmd { color: var(--muted); font-size: 9px; font-family: var(--mono); margin-top: 2px; word-break: break-all; }
+.mcp-item .mcp-tools { margin-top: 5px; padding-left: 14px; }
+.mcp-item .mcp-tool { color: var(--tool); font-size: 9px; font-family: var(--mono); line-height: 1.7; }
+
+/* ── Main chat ── */
 .main {
   flex: 1;
   display: flex;
@@ -83,100 +131,170 @@ body {
 .header {
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  color: var(--muted);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  background: var(--surface);
 }
 .status-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--success);
+  box-shadow: 0 0 6px rgba(52,211,153,0.4);
+  flex-shrink: 0;
 }
+.status-dot.error { background: var(--error); box-shadow: 0 0 6px rgba(248,113,113,0.4); }
+#status-text { font-size: 12px; color: var(--text-dim); }
+.header .spacer { flex: 1; }
+
+.config-select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 10px;
+  font-family: var(--font);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  max-width: 180px;
+}
+.config-select:hover { border-color: var(--border-hover); }
+.config-select:focus { border-color: var(--accent); }
+.config-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-family: var(--font);
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.config-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-glow); }
+
+/* Chat area */
 .chat {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 24px 28px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 .message {
-  max-width: 80%;
-  padding: 10px 14px;
+  max-width: 75%;
+  padding: 11px 16px;
   border-radius: var(--radius);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+  animation: fadeIn 0.2s ease;
 }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 .message.user {
   align-self: flex-end;
-  background: var(--user-bubble);
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 3px;
 }
 .message.agent {
   align-self: flex-start;
-  background: var(--agent-bubble);
+  background: var(--surface-2);
   border: 1px solid var(--border);
+  border-bottom-left-radius: 3px;
+}
+.message.reasoning {
+  align-self: flex-start;
+  max-width: 75%;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-style: italic;
+  font-size: 12px;
+  padding: 8px 14px;
+  line-height: 1.5;
 }
 .message.tool {
   align-self: flex-start;
-  background: transparent;
-  border: 1px dashed var(--border);
+  max-width: 90%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tool);
+  border-radius: var(--radius-sm);
   font-size: 11px;
-  color: var(--tool);
-  padding: 6px 10px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+  padding: 7px 12px;
+  line-height: 1.5;
 }
+.message.tool .icon { color: var(--tool); }
 .message.error {
   align-self: flex-start;
   color: var(--error);
   font-size: 12px;
-  padding: 6px 10px;
-  background: transparent;
+  padding: 8px 14px;
+  background: rgba(248,113,113,0.08);
+  border: 1px solid rgba(248,113,113,0.2);
+  border-radius: var(--radius-sm);
 }
+
+/* Input */
 .input-area {
-  padding: 12px 20px;
+  padding: 14px 20px 18px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
   display: flex;
-  gap: 8px;
+  gap: 10px;
 }
 .input-area input {
   flex: 1;
-  background: var(--surface);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 14px;
+  padding: 11px 16px;
   color: var(--text);
   font-size: 13px;
   outline: none;
   font-family: var(--font);
+  transition: border-color 0.15s;
 }
-.input-area input:focus { border-color: var(--accent); }
+.input-area input::placeholder { color: var(--muted); }
+.input-area input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 .input-area button {
   background: var(--accent);
   color: white;
   border: none;
   border-radius: var(--radius);
-  padding: 0 20px;
+  padding: 0 22px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   font-family: var(--font);
+  transition: all 0.15s;
 }
 .input-area button:hover { background: var(--accent-dim); }
-.input-area button:disabled { opacity: 0.4; cursor: default; }
+.input-area button:disabled { opacity: 0.3; cursor: default; }
 .placeholder {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   color: var(--muted);
-  font-size: 14px;
 }
-/* Event log (right sidebar) */
+.placeholder .icon { font-size: 28px; opacity: 0.3; }
+.placeholder .text { font-size: 13px; }
+
+/* ── Event log (right) ── */
 .event-log {
-  width: 320px;
+  width: 300px;
   background: var(--surface);
   border-left: 1px solid var(--border);
   display: flex;
@@ -184,65 +302,155 @@ body {
   flex-shrink: 0;
 }
 .event-log-header {
-  padding: 14px 16px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--border);
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 .event-log-header button {
-  background: transparent;
+  background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--muted);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  font-size: 10px;
+  font-weight: 600;
   cursor: pointer;
   font-family: var(--font);
+  transition: all 0.15s;
 }
-.event-log-header button:hover { color: var(--text); border-color: var(--accent); }
+.event-log-header button:hover { color: var(--text); border-color: var(--border-hover); }
 .event-log-body {
   flex: 1;
   overflow-y: auto;
-  padding: 6px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 11px;
-  line-height: 1.4;
+  padding: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
 }
 .event-entry {
-  padding: 4px 6px;
-  border-radius: 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
   margin-bottom: 3px;
   word-break: break-all;
   white-space: pre-wrap;
-  color: var(--muted);
+  color: var(--text-dim);
   border-left: 2px solid var(--border);
+  background: var(--surface-2);
+  animation: fadeIn 0.15s ease;
 }
-.event-entry .ts { color: #555; margin-right: 4px; }
-.event-entry .tag {
-  font-weight: 600;
-  margin-right: 4px;
-}
+.event-entry .ts { color: var(--muted); margin-right: 6px; font-size: 9px; }
+.event-entry .tag { font-weight: 700; margin-right: 6px; font-size: 9px; text-transform: uppercase; }
 .event-entry.type-text .tag { color: var(--text); }
 .event-entry.type-tool_call .tag { color: var(--tool); }
 .event-entry.type-tool_result .tag { color: var(--success); }
 .event-entry.type-done .tag { color: var(--accent); }
 .event-entry.type-error .tag { color: var(--error); }
+.event-entry.type-reasoning .tag { color: var(--text-dim); }
+.event-entry.type-rate_limit .tag { color: var(--warn); }
+
+/* ── Config modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-overlay.show { display: flex; animation: fadeIn 0.15s ease; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 540px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.modal h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+.modal-field { margin-bottom: 14px; }
+.modal-field label {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+.modal-field input, .modal-field textarea, .modal-field select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  padding: 9px 12px;
+  outline: none;
+  font-family: var(--font);
+  transition: border-color 0.15s;
+}
+.modal-field input::placeholder, .modal-field textarea::placeholder { color: var(--muted); }
+.modal-field input:focus, .modal-field textarea:focus, .modal-field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.modal-field textarea { resize: vertical; min-height: 70px; font-family: var(--mono); line-height: 1.5; }
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+.modal-actions button {
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 9px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all 0.15s;
+}
+.modal-actions .btn-cancel {
+  background: var(--surface-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.modal-actions .btn-cancel:hover { color: var(--text); border-color: var(--border-hover); }
+.modal-actions .btn-save {
+  background: var(--accent);
+  color: white;
+}
+.modal-actions .btn-save:hover { background: var(--accent-dim); }
+.modal-actions .btn-save:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
 
-<!-- Sidebar -->
+<!-- Left Sidebar -->
 <aside class="sidebar">
   <div class="sidebar-header">Agent Server</div>
   <div class="sidebar-section" id="tools-list">
     <h3>Tools</h3>
     <div id="tools-container"></div>
+  </div>
+  <div class="sidebar-section" id="mcp-list">
+    <h3>MCP Servers</h3>
+    <div id="mcp-container"></div>
   </div>
   <div class="sidebar-section" id="attachments-list">
     <h3>Attachments</h3>
@@ -255,10 +463,16 @@ body {
   <header class="header">
     <span class="status-dot" id="status-dot"></span>
     <span id="status-text">connected</span>
+    <span class="spacer"></span>
+    <select class="config-select" id="config-select" title="Switch agent config"></select>
+    <button class="config-btn" id="new-config-btn" type="button">+ New</button>
   </header>
 
   <div class="chat" id="chat-container">
-    <div class="placeholder">Send a message to start</div>
+    <div class="placeholder">
+      <span class="icon">&#9881;</span>
+      <span class="text">Send a message to start</span>
+    </div>
   </div>
 
   <form class="input-area" id="chat-form">
@@ -267,7 +481,7 @@ body {
   </form>
 </main>
 
-<!-- Event Log (right sidebar) -->
+<!-- Event Log -->
 <aside class="event-log">
   <div class="event-log-header">
     <span>Events</span>
@@ -275,6 +489,51 @@ body {
   </div>
   <div class="event-log-body" id="event-log-body"></div>
 </aside>
+
+<!-- Config Modal -->
+<div class="modal-overlay" id="config-modal">
+  <div class="modal">
+    <h2 id="config-modal-title">New Config</h2>
+    <input type="hidden" id="config-edit-id">
+    <div class="modal-field">
+      <label>Name</label>
+      <input type="text" id="cfg-name" placeholder="e.g. Claude Sonnet">
+    </div>
+    <div class="modal-field">
+      <label>Model</label>
+      <input type="text" id="cfg-model" placeholder="e.g. anthropic/claude-sonnet-4">
+    </div>
+    <div class="modal-field">
+      <label>Provider</label>
+      <select id="cfg-provider">
+        <option value="openrouter">openrouter</option>
+        <option value="openai">openai</option>
+        <option value="anthropic">anthropic</option>
+        <option value="gemini">gemini</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label>Base URL</label>
+      <input type="text" id="cfg-base-url" placeholder="https://openrouter.ai/api/v1">
+    </div>
+    <div class="modal-field">
+      <label>API Key (optional — blank uses server default)</label>
+      <input type="password" id="cfg-api-key" placeholder="sk-...">
+    </div>
+    <div class="modal-field">
+      <label>System Prompt</label>
+      <textarea id="cfg-system-prompt" rows="5" placeholder="You are a helpful assistant..."></textarea>
+    </div>
+    <div class="modal-field">
+      <label>MCP Servers (one per line: name=command args)</label>
+      <textarea id="cfg-mcp-servers" rows="3" placeholder="playwright=playwright-mcp --browser chromium"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="cfg-cancel-btn" type="button">Cancel</button>
+      <button class="btn-save" id="cfg-save-btn" type="button">Save</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── State ──
@@ -301,11 +560,20 @@ function addMessage(type, text) {
 }
 
 let currentAgentMsg = null;
+let currentReasoningMsg = null;
 function appendText(text) {
+  currentReasoningMsg = null;
   if (!currentAgentMsg) {
     currentAgentMsg = addMessage('agent', '');
   }
   currentAgentMsg.textContent += text;
+  chat.scrollTop = chat.scrollHeight;
+}
+function appendReasoning(text) {
+  if (!currentReasoningMsg) {
+    currentReasoningMsg = addMessage('reasoning', '');
+  }
+  currentReasoningMsg.textContent += text;
   chat.scrollTop = chat.scrollHeight;
 }
 
@@ -316,6 +584,7 @@ async function sendMessage(message) {
   sendBtn.disabled = true;
   input.disabled = true;
   currentAgentMsg = null;
+  currentReasoningMsg = null;
 
   addMessage('user', message);
 
@@ -381,17 +650,25 @@ function handleEvent(evt) {
     case 'text':
       appendText(evt.content);
       break;
+    case 'reasoning':
+      appendReasoning(evt.content);
+      break;
     case 'tool_call':
-      addMessage('tool', `🔧 ${evt.name}(${JSON.stringify(evt.arguments)})`);
+      currentAgentMsg = null;
+      currentReasoningMsg = null;
+      addMessage('tool', `${evt.name}(${JSON.stringify(evt.arguments)})`);
       break;
     case 'tool_result':
-      // skip verbose results
+      currentAgentMsg = null;
+      currentReasoningMsg = null;
+      addMessage('tool', `${evt.name}: ${evt.result}`);
       break;
     case 'done':
       sessionId = evt.session_id;
       currentAgentMsg = null;
+      currentReasoningMsg = null;
       if (evt.attachments?.length) {
-        addMessage('tool', `📎 ${evt.attachments.length} attachment(s): ${evt.attachments.map(a => a.filename).join(', ')}`);
+        addMessage('tool', `${evt.attachments.length} attachment(s): ${evt.attachments.map(a => a.filename).join(', ')}`);
       }
       break;
     case 'error':
@@ -404,6 +681,8 @@ function handleEvent(evt) {
 async function refreshSidebar() {
   await loadTools();
   await loadAttachments();
+  await loadMCP();
+  await loadConfigs();
 }
 
 async function loadTools() {
@@ -426,6 +705,132 @@ async function loadAttachments() {
         <div class="meta">${fmtSize(a.size)} · ${a.fetch_count} downloads</div>
       </div>
     `).join('') || '<div class="attachment-item" style="color:var(--muted)">none</div>';
+  } catch(e) {}
+}
+
+async function loadMCP() {
+  try {
+    const res = await fetch('/mcp/status');
+    const servers = await res.json();
+    const c = $('#mcp-container');
+    if (!servers.length) {
+      c.innerHTML = '<div class="attachment-item" style="color:var(--muted)">none connected</div>';
+      return;
+    }
+    c.innerHTML = servers.map(s => `
+      <div class="mcp-item">
+        <div class="mcp-header">
+          <span class="mcp-dot ${s.connected ? 'connected' : 'disconnected'}"></span>
+          <span class="mcp-name">${esc(s.name)}</span>
+        </div>
+        <div class="mcp-cmd">${esc(s.command)} ${esc(s.args.join(' '))}</div>
+        ${s.tools.length ? `<div class="mcp-tools">${s.tools.map(t => `<div class="mcp-tool">${esc(t.name)}</div>`).join('')}</div>` : ''}
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
+// ── Config management ──
+let activeConfigId = 'default';
+
+async function loadConfigs() {
+  try {
+    const [listRes, activeRes] = await Promise.all([fetch('/configs'), fetch('/configs/active')]);
+    const configs = await listRes.json();
+    const active = await activeRes.json();
+    activeConfigId = active.active_id;
+    const sel = $('#config-select');
+    sel.innerHTML = configs.map(c => `<option value="${c.id}" ${c.id === activeConfigId ? 'selected' : ''}>${esc(c.name)}${c.embedded ? ' (embedded)' : ''}</option>`).join('');
+  } catch(e) {}
+}
+
+async function switchConfig(cfgId) {
+  if (cfgId === activeConfigId) return;
+  try {
+    const res = await fetch(`/configs/${cfgId}/activate`, { method: 'POST' });
+    if (res.ok) {
+      activeConfigId = cfgId;
+      sessionId = null;
+      addMessage('tool', `Switched to config: ${$('#config-select').selectedOptions[0].textContent}`);
+      await loadMCP();
+      await loadTools();
+    }
+  } catch(e) {}
+}
+
+function openConfigModal(editId) {
+  const modal = $('#config-modal');
+  const title = $('#config-modal-title');
+  $('#config-edit-id').value = editId || '';
+  if (editId) {
+    title.textContent = 'Edit Config';
+    fetch(`/configs`).then(r => r.json()).then(configs => {
+      const cfg = configs.find(c => c.id === editId);
+      if (!cfg) return;
+      $('#cfg-name').value = cfg.name;
+      $('#cfg-model').value = cfg.model;
+      $('#cfg-provider').value = cfg.provider;
+      $('#cfg-base-url').value = cfg.base_url;
+      $('#cfg-system-prompt').value = cfg.system_prompt;
+      $('#cfg-mcp-servers').value = (cfg.mcp_servers || []).map(s => `${s.name}=${s.command} ${s.args.join(' ')}`).join('\n');
+    });
+  } else {
+    title.textContent = 'New Config';
+    $('#cfg-name').value = '';
+    $('#cfg-model').value = '';
+    $('#cfg-provider').value = 'openrouter';
+    $('#cfg-base-url').value = '';
+    $('#cfg-api-key').value = '';
+    $('#cfg-system-prompt').value = '';
+    $('#cfg-mcp-servers').value = '';
+  }
+  modal.classList.add('show');
+  $('#cfg-name').focus();
+}
+
+function closeConfigModal() {
+  $('#config-modal').classList.remove('show');
+}
+
+async function saveConfig() {
+  const editId = $('#config-edit-id').value;
+  const name = $('#cfg-name').value.trim();
+  if (!name) return;
+  const mcpText = $('#cfg-mcp-servers').value.trim();
+  const mcpServers = mcpText ? mcpText.split('\n').filter(l => l.includes('=')).map(line => {
+    const eqIdx = line.indexOf('=');
+    const n = line.slice(0, eqIdx).trim();
+    const cmd = line.slice(eqIdx + 1).trim();
+    const parts = cmd.split(/\s+/);
+    return { name: n, command: parts[0], args: parts.slice(1) };
+  }) : [];
+
+  const body = {
+    name,
+    model: $('#cfg-model').value.trim(),
+    provider: $('#cfg-provider').value,
+    base_url: $('#cfg-base-url').value.trim(),
+    api_key: $('#cfg-api-key').value.trim(),
+    system_prompt: $('#cfg-system-prompt').value,
+    mcp_servers: mcpServers,
+  };
+
+  const url = editId ? `/configs/${editId}` : '/configs';
+  const method = editId ? 'PUT' : 'POST';
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      closeConfigModal();
+      await loadConfigs();
+      if (!editId) {
+        const created = await res.json();
+        await switchConfig(created.id);
+      }
+    }
   } catch(e) {}
 }
 
@@ -454,10 +859,18 @@ form.addEventListener('submit', (e) => {
   sendMessage(msg);
 });
 
-loadTools();
-loadAttachments();
-setStatus(true);
+$('#config-select').addEventListener('change', (e) => switchConfig(e.target.value));
+$('#new-config-btn').addEventListener('click', () => openConfigModal(''));
+$('#cfg-cancel-btn').addEventListener('click', closeConfigModal);
+$('#cfg-save-btn').addEventListener('click', saveConfig);
+$('#config-modal').addEventListener('click', (e) => { if (e.target === $('#config-modal')) closeConfigModal(); });
 $('#clear-events-btn').addEventListener('click', () => { eventLog.innerHTML = ''; });
+
+loadTools();
+loadMCP();
+loadAttachments();
+loadConfigs();
+setStatus(true);
 </script>
 </body>
 </html>

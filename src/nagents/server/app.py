@@ -33,6 +33,8 @@ from nagents import DoneEvent
 from nagents import ErrorEvent
 from nagents import Provider
 from nagents import ProviderType
+from nagents import RateLimitEvent
+from nagents import ReasoningChunkEvent
 from nagents import SessionManager
 from nagents import TextChunkEvent
 from nagents import ToolCallEvent
@@ -100,15 +102,117 @@ PROVIDER_TYPE = _env("HAL_LLM_PROVIDER", "openrouter")
 API_KEY = _env("HAL_LLM_API_KEY")
 MODEL = _env("HAL_LLM_MODEL", "moonshotai/kimi-k2.6")
 BASE_URL = _env("HAL_LLM_BASE_URL", "https://openrouter.ai/api/v1")
-SYSTEM_PROMPT = _env(
-    "HAL_SYSTEM_PROMPT",
-    "You are a helpful AI assistant with access to shell, file, and directory tools. "
-    "Use them when needed, and provide clear, concise responses.",
-)
+DEFAULT_SYSTEM_PROMPT = """\
+You are a helpful AI assistant with access to tools for shell execution, file I/O, directory listing, \
+file attachments, and MCP-provided capabilities (e.g., browser automation via Playwright).
+
+## Tool Usage Guidelines
+
+### When to use tools
+- Use `run_shell_command` for system operations: installing packages, running scripts, git commands, checking system state.
+- Use `read_file` / `write_file` / `list_directory` for file operations.
+- Use `attach_file` to share generated output (screenshots, logs, documents) with the user via the UI.
+- Use MCP tools (prefixed with `mcp__`) for specialized capabilities like browser automation.
+
+### Do's
+- **Do** provide clear, concise arguments to tools.
+- **Do** verify file paths exist before reading (use `list_directory` first if unsure).
+- **Do** attach outputs the user would want to see (e.g., screenshots, generated files).
+- **Do** chain tools when needed: list -> read -> modify -> write.
+- **Do** keep shell commands simple and focused on one task.
+
+### Don'ts
+- **Don't** use tools for information you already know -- answer directly.
+- **Don't** run destructive commands (rm -rf, drop tables) without confirming with the user.
+- **Don't** write large files in a single `write_file` call -- split if >1000 lines.
+- **Don't** ignore tool errors -- report them and suggest fixes.
+
+## Writing Custom Tools
+
+Custom tools are plain Python functions. Place `.py` files in the tools directory; they are auto-loaded \
+and become available immediately (no restart needed). Each callable function in the file becomes a tool.
+
+### Example tool
+
+```python
+def get_weather(city: str) -> str:
+    \"\"\"Get current weather for a city.
+
+    Args:
+        city: City name, e.g. "San Francisco"
+    \"\"\"
+    import urllib.request, json
+    url = f"https://wttr.in/{city}?format=j1"
+    resp = urllib.request.urlopen(url)
+    data = json.loads(resp.read())
+    current = data["current_condition"][0]
+    return f"{city}: {current['temp_C']}C, {current['weatherDesc'][0]['value']}"
+```
+
+### Rules for custom tools
+1. The function docstring is shown to the model -- make it descriptive and include parameter info.
+2. Return a string (or JSON string for structured data).
+3. Handle errors gracefully -- return error messages instead of raising exceptions.
+4. Keep tools focused -- one tool, one job.
+5. Type hints improve the model's understanding of arguments.
+6. Functions starting with `_` are ignored (use for helpers).
+7. Classes are ignored -- only plain functions become tools.
+"""
 SESSIONS_DB = Path(_env("HAL_SESSIONS_DB", "/data/sessions.db"))
 TOOLS_DIR = _env("HAL_TOOLS_DIR", "")
 MCP_ENABLED = _env("HAL_MCP_ENABLED", "").lower() in ("1", "true", "yes")
 MCP_CONFIG_PATH = _env("HAL_MCP_CONFIG", "")
+CONFIGS_PATH = Path(_env("HAL_CONFIGS_PATH", "/data/configs.json"))
+
+# ── Config management ─────────────────────────────────────────────────────────
+
+
+def _embedded_config() -> dict[str, Any]:
+    """Build the embedded default config from env vars."""
+    return {
+        "id": "default",
+        "name": "Default (env)",
+        "system_prompt": _env("HAL_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
+        "model": MODEL,
+        "provider": PROVIDER_TYPE,
+        "base_url": BASE_URL,
+        "api_key": "",
+        "mcp_servers": [],
+        "embedded": True,
+        "created_at": "",
+    }
+
+
+def _load_all_configs() -> dict[str, dict[str, Any]]:
+    """Load all configs: embedded default + saved user configs."""
+    configs: dict[str, dict[str, Any]] = {"default": _embedded_config()}
+    try:
+        if CONFIGS_PATH.is_file():
+            data = json.loads(CONFIGS_PATH.read_text())
+            for cfg in data.get("configs", []):
+                configs[cfg["id"]] = cfg
+    except Exception:
+        logger.exception("Failed to load configs from %s", CONFIGS_PATH)
+    return configs
+
+
+def _save_user_configs() -> None:
+    """Save non-embedded configs to disk."""
+    user_configs = [c for c in _all_configs.values() if not c.get("embedded")]
+    try:
+        CONFIGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIGS_PATH.write_text(json.dumps({"configs": user_configs}, indent=2))
+    except Exception:
+        logger.exception("Failed to save configs to %s", CONFIGS_PATH)
+
+
+_all_configs: dict[str, dict[str, Any]] = _load_all_configs()
+_active_config_id: str = "default"
+
+
+def _active_config() -> dict[str, Any]:
+    return _all_configs.get(_active_config_id) or _all_configs["default"]
+
 
 # ── Tool reload tracking ─────────────────────────────────────────────────────
 _tool_hashes: dict[int, str] = {}  # inode -> content hash (custom tools)
@@ -242,13 +346,20 @@ def _get_agent() -> Agent:
     if _agent is not None:
         return _agent
 
-    logger.info("Creating agent provider=%s model=%s", PROVIDER_TYPE, MODEL)
+    cfg = _active_config()
+    model = cfg["model"]
+    provider_type = cfg["provider"]
+    api_key = cfg["api_key"] or API_KEY
+    base_url = cfg["base_url"]
+    sys_prompt = cfg["system_prompt"]
+
+    logger.info("Creating agent config=%s provider=%s model=%s", cfg["name"], provider_type, model)
 
     provider = Provider(
-        provider_type=_provider_type(PROVIDER_TYPE),
-        api_key=API_KEY,
-        model=MODEL,
-        base_url=BASE_URL,
+        provider_type=_provider_type(provider_type),
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
     )
 
     session_manager = SessionManager(db_path=SESSIONS_DB)
@@ -258,7 +369,7 @@ def _get_agent() -> Agent:
         provider=provider,
         session_manager=session_manager,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=sys_prompt,
         streaming=True,
     )
     _agent._tools_list = tools  # type: ignore[attr-defined]
@@ -275,11 +386,12 @@ def _rebuild_agent(new_tools: list[Callable[..., Any]]) -> None:
     _agent = None
     _mcp_manager = None
     try:
+        cfg = _active_config()
         provider = Provider(
-            provider_type=_provider_type(PROVIDER_TYPE),
-            api_key=API_KEY,
-            model=MODEL,
-            base_url=BASE_URL,
+            provider_type=_provider_type(cfg["provider"]),
+            api_key=cfg["api_key"] or API_KEY,
+            model=cfg["model"],
+            base_url=cfg["base_url"],
         )
         session_manager = SessionManager(db_path=SESSIONS_DB)
 
@@ -287,7 +399,7 @@ def _rebuild_agent(new_tools: list[Callable[..., Any]]) -> None:
             provider=provider,
             session_manager=session_manager,
             tools=new_tools,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=cfg["system_prompt"],
             streaming=True,
         )
         _agent._tools_list = new_tools  # type: ignore[attr-defined]
@@ -447,6 +559,53 @@ class ToolsReloadResult(BaseModel):
     detail: str = ""
 
 
+class MCPServerSpec(BaseModel):
+    name: str
+    command: str
+    args: list[str] = []
+
+
+class AgentConfigCreate(BaseModel):
+    name: str
+    system_prompt: str = ""
+    model: str = ""
+    provider: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    mcp_servers: list[MCPServerSpec] = []
+
+
+class AgentConfigOut(BaseModel):
+    id: str
+    name: str
+    system_prompt: str
+    model: str
+    provider: str
+    base_url: str
+    mcp_servers: list[MCPServerSpec] = []
+    embedded: bool = False
+    created_at: str = ""
+
+
+class ActiveConfigOut(BaseModel):
+    active_id: str
+    config: AgentConfigOut
+
+
+class MCPToolInfo(BaseModel):
+    name: str
+    server: str
+    description: str
+
+
+class MCPServerStatus(BaseModel):
+    name: str
+    command: str
+    args: list[str]
+    connected: bool
+    tools: list[MCPToolInfo] = []
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -546,6 +705,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             ):
                 if isinstance(event, TextChunkEvent):
                     yield f"data: {json.dumps({'type': 'text', 'content': event.chunk})}\n\n"
+                elif isinstance(event, ReasoningChunkEvent):
+                    yield f"data: {json.dumps({'type': 'reasoning', 'content': event.chunk})}\n\n"
                 elif isinstance(event, ToolCallEvent):
                     yield f"data: {json.dumps({'type': 'tool_call', 'name': event.name, 'arguments': event.arguments})}\n\n"
                 elif isinstance(event, ToolResultEvent):
@@ -563,6 +724,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     yield f"data: {json.dumps({'type': 'error', 'message': event.message, 'recoverable': event.recoverable})}\n\n"
                     if not event.recoverable:
                         break
+                elif isinstance(event, RateLimitEvent):
+                    yield f"data: {json.dumps({'type': 'rate_limit', 'attempt': event.attempt, 'max_retries': event.max_retries, 'retry_after': event.retry_after, 'status_code': event.status_code})}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
@@ -602,6 +765,159 @@ async def reload_tools() -> ToolsReloadResult:
         return ToolsReloadResult(status="ok", count=len(tools), names=_collect_tool_names(tools))
     except Exception as exc:
         return ToolsReloadResult(status="error", detail=str(exc))
+
+
+# ── Config API ────────────────────────────────────────────────────────────────
+
+
+def _config_to_out(cfg: dict[str, Any]) -> AgentConfigOut:
+    return AgentConfigOut(
+        id=cfg["id"],
+        name=cfg["name"],
+        system_prompt=cfg.get("system_prompt", ""),
+        model=cfg.get("model", ""),
+        provider=cfg.get("provider", ""),
+        base_url=cfg.get("base_url", ""),
+        mcp_servers=[MCPServerSpec(**s) for s in cfg.get("mcp_servers", [])],
+        embedded=cfg.get("embedded", False),
+        created_at=cfg.get("created_at", ""),
+    )
+
+
+@app.get("/configs", response_model=list[AgentConfigOut])
+async def list_configs() -> list[AgentConfigOut]:
+    return [_config_to_out(c) for c in _all_configs.values()]
+
+
+@app.get("/configs/active", response_model=ActiveConfigOut)
+async def get_active_config() -> ActiveConfigOut:
+    return ActiveConfigOut(active_id=_active_config_id, config=_config_to_out(_active_config()))
+
+
+@app.post("/configs", response_model=AgentConfigOut)
+async def create_config(body: AgentConfigCreate) -> AgentConfigOut:
+    import uuid
+
+    cfg_id = uuid.uuid4().hex[:12]
+    cfg: dict[str, Any] = {
+        "id": cfg_id,
+        "name": body.name,
+        "system_prompt": body.system_prompt or _active_config()["system_prompt"],
+        "model": body.model or _active_config()["model"],
+        "provider": body.provider or _active_config()["provider"],
+        "base_url": body.base_url or _active_config()["base_url"],
+        "api_key": body.api_key,
+        "mcp_servers": [s.model_dump() for s in body.mcp_servers],
+        "embedded": False,
+        "created_at": datetime.now(tz=UTC).isoformat(),
+    }
+    _all_configs[cfg_id] = cfg
+    _save_user_configs()
+    logger.info("Created config: %s (%s)", cfg["name"], cfg_id)
+    return _config_to_out(cfg)
+
+
+@app.put("/configs/{cfg_id}", response_model=AgentConfigOut)
+async def update_config(cfg_id: str, body: AgentConfigCreate) -> AgentConfigOut:
+    if cfg_id not in _all_configs:
+        return Response(content='{"detail":"not found"}', status_code=404, media_type="application/json")
+    cfg = _all_configs[cfg_id]
+    if cfg.get("embedded"):
+        return Response(
+            content='{"detail":"cannot edit embedded config"}', status_code=403, media_type="application/json"
+        )
+    cfg["name"] = body.name
+    cfg["system_prompt"] = body.system_prompt or cfg.get("system_prompt", "")
+    cfg["model"] = body.model or cfg.get("model", "")
+    cfg["provider"] = body.provider or cfg.get("provider", "")
+    cfg["base_url"] = body.base_url or cfg.get("base_url", "")
+    if body.api_key:
+        cfg["api_key"] = body.api_key
+    cfg["mcp_servers"] = [s.model_dump() for s in body.mcp_servers]
+    _save_user_configs()
+    if cfg_id == _active_config_id:
+        await _activate_config_int(cfg_id)
+    return _config_to_out(cfg)
+
+
+@app.delete("/configs/{cfg_id}")
+async def delete_config(cfg_id: str) -> dict[str, str]:
+    if cfg_id not in _all_configs:
+        return Response(content='{"detail":"not found"}', status_code=404, media_type="application/json")
+    cfg = _all_configs[cfg_id]
+    if cfg.get("embedded"):
+        return Response(
+            content='{"detail":"cannot delete embedded config"}', status_code=403, media_type="application/json"
+        )
+    del _all_configs[cfg_id]
+    _save_user_configs()
+    if _active_config_id == cfg_id:
+        await _activate_config_int("default")
+    return {"status": "deleted", "id": cfg_id}
+
+
+async def _activate_config_int(cfg_id: str) -> None:
+    """Internal: switch active config and rebuild agent."""
+    global _active_config_id, _agent, _mcp_manager
+    if cfg_id not in _all_configs:
+        raise ValueError(f"Config not found: {cfg_id}")
+    _active_config_id = cfg_id
+
+    # Disconnect old MCP if present
+    if _mcp_manager:
+        with suppress(Exception):
+            await _mcp_manager.disconnect_all()
+        _mcp_manager = None
+
+    # Connect MCP servers from config (or fall back to env)
+    cfg = _active_config()
+    cfg_mcp = cfg.get("mcp_servers", [])
+    if cfg_mcp:
+        configs = [MCPServerConfig(name=s["name"], command=s["command"], args=s.get("args", [])) for s in cfg_mcp]
+        try:
+            _mcp_manager = MCPManager(configs)
+            await _mcp_manager.connect_all()
+        except Exception:
+            logger.exception("MCP connect failed for config %s", cfg["name"])
+            _mcp_manager = None
+    elif MCP_ENABLED:
+        # Fall back to env-based MCP
+        await _reload_if_changed()
+
+    # Rebuild agent with new config settings + tools
+    mcp_tools: list[Any] = await _mcp_manager.get_tools() if _mcp_manager else []
+    all_tools: list[Any] = list(BASE_TOOLS) + _custom_tools + mcp_tools
+    _rebuild_agent(all_tools)
+    logger.info("Activated config: %s (%s)", cfg["name"], cfg_id)
+
+
+@app.post("/configs/{cfg_id}/activate", response_model=ActiveConfigOut)
+async def activate_config(cfg_id: str) -> ActiveConfigOut:
+    if cfg_id not in _all_configs:
+        return Response(content='{"detail":"not found"}', status_code=404, media_type="application/json")
+    await _activate_config_int(cfg_id)
+    return ActiveConfigOut(active_id=_active_config_id, config=_config_to_out(_active_config()))
+
+
+# ── MCP Status API ────────────────────────────────────────────────────────────
+
+
+@app.get("/mcp/status", response_model=list[MCPServerStatus])
+async def mcp_status() -> list[MCPServerStatus]:
+    if not _mcp_manager:
+        return []
+    result: list[MCPServerStatus] = []
+    for cfg in _mcp_manager.configs:
+        client = _mcp_manager._clients.get(cfg.name)
+        connected = client.is_connected if client else False
+        tools: list[MCPToolInfo] = []
+        for _, info in _mcp_manager._tool_map.items():
+            if info.server_name == cfg.name:
+                tools.append(MCPToolInfo(name=info.tool_name, server=cfg.name, description=info.description))
+        result.append(
+            MCPServerStatus(name=cfg.name, command=cfg.command, args=list(cfg.args), connected=connected, tools=tools)
+        )
+    return result
 
 
 # ── Attachments API ──────────────────────────────────────────────────────────
