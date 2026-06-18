@@ -174,6 +174,65 @@ body {
   color: var(--muted);
   font-size: 14px;
 }
+/* Event log (right sidebar) */
+.event-log {
+  width: 320px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.event-log-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.event-log-header button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.event-log-header button:hover { color: var(--text); border-color: var(--accent); }
+.event-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.event-entry {
+  padding: 4px 6px;
+  border-radius: 4px;
+  margin-bottom: 3px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  color: var(--muted);
+  border-left: 2px solid var(--border);
+}
+.event-entry .ts { color: #555; margin-right: 4px; }
+.event-entry .tag {
+  font-weight: 600;
+  margin-right: 4px;
+}
+.event-entry.type-text .tag { color: var(--text); }
+.event-entry.type-tool_call .tag { color: var(--tool); }
+.event-entry.type-tool_result .tag { color: var(--success); }
+.event-entry.type-done .tag { color: var(--accent); }
+.event-entry.type-error .tag { color: var(--error); }
 </style>
 </head>
 <body>
@@ -208,6 +267,15 @@ body {
   </form>
 </main>
 
+<!-- Event Log (right sidebar) -->
+<aside class="event-log">
+  <div class="event-log-header">
+    <span>Events</span>
+    <button id="clear-events-btn" type="button">clear</button>
+  </div>
+  <div class="event-log-body" id="event-log-body"></div>
+</aside>
+
 <script>
 // ── State ──
 let sessionId = null;
@@ -218,6 +286,7 @@ const form = $('#chat-form');
 const sendBtn = $('#send-btn');
 const statusDot = $('#status-dot');
 const statusText = $('#status-text');
+const eventLog = $('#event-log-body');
 let streaming = false;
 
 // ── Helpers ──
@@ -287,7 +356,27 @@ async function sendMessage(message) {
   refreshSidebar();
 }
 
+// ── Event log ──
+function logEvent(evt) {
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false }) + '.' + String(Date.now() % 1000).padStart(3, '0');
+  const div = document.createElement('div');
+  div.className = `event-entry type-${evt.type}`;
+  const tag = document.createElement('span');
+  tag.className = 'tag';
+  tag.textContent = evt.type;
+  const time = document.createElement('span');
+  time.className = 'ts';
+  time.textContent = ts;
+  const payload = document.createElement('span');
+  const { type, ...rest } = evt;
+  payload.textContent = JSON.stringify(rest);
+  div.append(time, tag, payload);
+  eventLog.appendChild(div);
+  eventLog.scrollTop = eventLog.scrollHeight;
+}
+
 function handleEvent(evt) {
+  logEvent(evt);
   switch (evt.type) {
     case 'text':
       appendText(evt.content);
@@ -368,6 +457,7 @@ form.addEventListener('submit', (e) => {
 loadTools();
 loadAttachments();
 setStatus(true);
+$('#clear-events-btn').addEventListener('click', () => { eventLog.innerHTML = ''; });
 </script>
 </body>
 </html>
