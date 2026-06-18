@@ -104,14 +104,21 @@ MODEL = _env("HAL_LLM_MODEL", "moonshotai/kimi-k2.6")
 BASE_URL = _env("HAL_LLM_BASE_URL", "https://openrouter.ai/api/v1")
 DEFAULT_SYSTEM_PROMPT = """\
 You are a helpful AI assistant with access to tools for shell execution, file I/O, directory listing, \
-file attachments, and MCP-provided capabilities (e.g., browser automation via Playwright).
+file attachments, MCP server management, and MCP-provided capabilities (e.g., browser automation via Playwright).
+
+## Environment
+
+- The filesystem is read-only except for `/data` (persistent) and `/tmp` (ephemeral).
+- Custom tools directory: `/data/tools/` — place `.py` files here, they auto-load on the next message.
+- MCP config file: `/data/mcp.json` — JSON lines format, auto-reloads on the next message.
 
 ## Tool Usage Guidelines
 
 ### When to use tools
 - Use `run_shell_command` for system operations: installing packages, running scripts, git commands, checking system state.
-- Use `read_file` / `write_file` / `list_directory` for file operations.
+- Use `read_file` / `write_file` / `list_directory` for file operations (writes only work in /data and /tmp).
 - Use `attach_file` to share generated output (screenshots, logs, documents) with the user via the UI.
+- Use `add_mcp_server` to add new MCP servers at runtime (e.g., browser automation, filesystem access).
 - Use MCP tools (prefixed with `mcp__`) for specialized capabilities like browser automation.
 
 ### Do's
@@ -120,16 +127,19 @@ file attachments, and MCP-provided capabilities (e.g., browser automation via Pl
 - **Do** attach outputs the user would want to see (e.g., screenshots, generated files).
 - **Do** chain tools when needed: list -> read -> modify -> write.
 - **Do** keep shell commands simple and focused on one task.
+- **Do** write custom tools to `/data/tools/` when you need new capabilities.
+- **Do** use `add_mcp_server` when you need MCP-provided tools (e.g., Playwright for browser automation).
 
 ### Don'ts
 - **Don't** use tools for information you already know -- answer directly.
 - **Don't** run destructive commands (rm -rf, drop tables) without confirming with the user.
 - **Don't** write large files in a single `write_file` call -- split if >1000 lines.
 - **Don't** ignore tool errors -- report them and suggest fixes.
+- **Don't** try to write outside `/data` or `/tmp` -- the filesystem is read-only elsewhere.
 
 ## Writing Custom Tools
 
-Custom tools are plain Python functions. Place `.py` files in the tools directory; they are auto-loaded \
+Custom tools are plain Python functions. Place `.py` files in `/data/tools/`; they are auto-loaded \
 and become available immediately (no restart needed). Each callable function in the file becomes a tool.
 
 ### Example tool
@@ -157,12 +167,36 @@ def get_weather(city: str) -> str:
 5. Type hints improve the model's understanding of arguments.
 6. Functions starting with `_` are ignored (use for helpers).
 7. Classes are ignored -- only plain functions become tools.
+
+## Adding MCP Servers
+
+Use the `add_mcp_server` tool to add MCP servers at runtime. Examples:
+
+- Browser automation: `add_mcp_server(name="playwright", command="playwright-mcp", args="--browser chromium")`
+- Filesystem access: `add_mcp_server(name="filesystem", command="npx", args="-y @modelcontextprotocol/server-filesystem /data")`
+
+After adding an MCP server, its tools will be available on the next chat turn (prefixed with `mcp__<name>__`).
 """
 SESSIONS_DB = Path(_env("HAL_SESSIONS_DB", "/data/sessions.db"))
-TOOLS_DIR = _env("HAL_TOOLS_DIR", "")
+TOOLS_DIR = _env("HAL_TOOLS_DIR", "/data/tools")
 MCP_ENABLED = _env("HAL_MCP_ENABLED", "").lower() in ("1", "true", "yes")
-MCP_CONFIG_PATH = _env("HAL_MCP_CONFIG", "")
+MCP_CONFIG_PATH = _env("HAL_MCP_CONFIG", "/data/mcp.json")
 CONFIGS_PATH = Path(_env("HAL_CONFIGS_PATH", "/data/configs.json"))
+
+# ── Ensure writable dirs exist ────────────────────────────────────────────────
+for _d in [TOOLS_DIR, str(SESSIONS_DB.parent), str(CONFIGS_PATH.parent)]:
+    with suppress(OSError):
+        Path(_d).mkdir(parents=True, exist_ok=True)
+        logger.info("Ensured directory exists: %s", _d)
+
+logger.info(
+    "Config: TOOLS_DIR=%s MCP_ENABLED=%s MCP_CONFIG=%s CONFIGS=%s SESSIONS_DB=%s",
+    TOOLS_DIR,
+    MCP_ENABLED,
+    MCP_CONFIG_PATH,
+    CONFIGS_PATH,
+    SESSIONS_DB,
+)
 
 # ── Config management ─────────────────────────────────────────────────────────
 
@@ -439,6 +473,13 @@ async def _reload_if_changed() -> str:
             if current_hashes[ino] != _tool_hashes[ino]:
                 modified.add(ino)
 
+        logger.info(
+            "Custom tools changed: +%d -%d ~%d (total=%d)",
+            len(added),
+            len(removed),
+            len(modified),
+            len(current_hashes),
+        )
         if added or removed or modified:
             _custom_tools = _load_custom_tools(TOOLS_DIR)
             _tool_hashes = current_hashes
@@ -457,16 +498,19 @@ async def _reload_if_changed() -> str:
         configs = _load_mcp_configs()
         fp = _mcp_config_fingerprint(configs)
         if fp != _mcp_config_hash or (configs and _mcp_manager is None):
+            logger.info("MCP config changed: %d servers configured (fingerprint mismatch or new)", len(configs))
             _mcp_config_hash = fp
             # Disconnect old, connect new
             if _mcp_manager:
                 try:
                     await _mcp_manager.disconnect_all()
+                    logger.info("MCP disconnected for reload")
                 except Exception:
                     logger.exception("MCP disconnect failed")
                 _mcp_manager = None
 
             if configs:
+                logger.info("Connecting MCP servers: %s", [c.name for c in configs])
                 try:
                     _mcp_manager = MCPManager(configs)
                     await _mcp_manager.connect_all()
@@ -813,7 +857,14 @@ async def create_config(body: AgentConfigCreate) -> AgentConfigOut:
     }
     _all_configs[cfg_id] = cfg
     _save_user_configs()
-    logger.info("Created config: %s (%s)", cfg["name"], cfg_id)
+    logger.info(
+        "Created config: %s (id=%s, model=%s, provider=%s, mcp=%d)",
+        cfg["name"],
+        cfg_id,
+        cfg["model"],
+        cfg["provider"],
+        len(cfg["mcp_servers"]),
+    )
     return _config_to_out(cfg)
 
 
@@ -835,6 +886,7 @@ async def update_config(cfg_id: str, body: AgentConfigCreate) -> AgentConfigOut:
         cfg["api_key"] = body.api_key
     cfg["mcp_servers"] = [s.model_dump() for s in body.mcp_servers]
     _save_user_configs()
+    logger.info("Updated config: %s (id=%s)", cfg["name"], cfg_id)
     if cfg_id == _active_config_id:
         await _activate_config_int(cfg_id)
     return _config_to_out(cfg)
@@ -851,6 +903,7 @@ async def delete_config(cfg_id: str) -> dict[str, str]:
         )
     del _all_configs[cfg_id]
     _save_user_configs()
+    logger.info("Deleted config: %s (id=%s)", cfg.get("name", "?"), cfg_id)
     if _active_config_id == cfg_id:
         await _activate_config_int("default")
     return {"status": "deleted", "id": cfg_id}
@@ -862,33 +915,40 @@ async def _activate_config_int(cfg_id: str) -> None:
     if cfg_id not in _all_configs:
         raise ValueError(f"Config not found: {cfg_id}")
     _active_config_id = cfg_id
+    cfg = _active_config()
+    logger.info(
+        "Activating config: %s (id=%s, model=%s, provider=%s)", cfg["name"], cfg_id, cfg["model"], cfg["provider"]
+    )
 
     # Disconnect old MCP if present
     if _mcp_manager:
         with suppress(Exception):
             await _mcp_manager.disconnect_all()
         _mcp_manager = None
+        logger.info("Disconnected previous MCP manager")
 
     # Connect MCP servers from config (or fall back to env)
-    cfg = _active_config()
     cfg_mcp = cfg.get("mcp_servers", [])
     if cfg_mcp:
         configs = [MCPServerConfig(name=s["name"], command=s["command"], args=s.get("args", [])) for s in cfg_mcp]
+        logger.info("Connecting %d MCP servers from config: %s", len(configs), [c.name for c in configs])
         try:
             _mcp_manager = MCPManager(configs)
             await _mcp_manager.connect_all()
+            mcp_tools = await _mcp_manager.get_tools()
+            logger.info("MCP connected: %d tools from %d servers", len(mcp_tools), len(configs))
         except Exception:
             logger.exception("MCP connect failed for config %s", cfg["name"])
             _mcp_manager = None
     elif MCP_ENABLED:
-        # Fall back to env-based MCP
+        logger.info("No MCP in config, falling back to env-based MCP")
         await _reload_if_changed()
 
     # Rebuild agent with new config settings + tools
     mcp_tools: list[Any] = await _mcp_manager.get_tools() if _mcp_manager else []
     all_tools: list[Any] = list(BASE_TOOLS) + _custom_tools + mcp_tools
     _rebuild_agent(all_tools)
-    logger.info("Activated config: %s (%s)", cfg["name"], cfg_id)
+    logger.info("Activated config: %s (id=%s, total tools=%d)", cfg["name"], cfg_id, len(all_tools))
 
 
 @app.post("/configs/{cfg_id}/activate", response_model=ActiveConfigOut)

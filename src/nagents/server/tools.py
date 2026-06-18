@@ -1,7 +1,9 @@
 """Built-in tools for the agent server."""
 
 import hashlib
+import json
 import mimetypes
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,10 +90,59 @@ def attach_file(file_path: str, description: str = "") -> str:
     return f"File attached: /attachments/{aid}\nName: {p.name}\nSize: {size} bytes"
 
 
+def add_mcp_server(name: str, command: str, args: str = "") -> str:
+    """Add an MCP server to the configuration. It will be auto-loaded on the next chat turn.
+
+    Args:
+        name: A unique name for this MCP server (e.g., "playwright", "filesystem")
+        command: The command to run the MCP server (e.g., "npx", "playwright-mcp")
+        args: Space-separated arguments for the command (e.g., "@modelcontextprotocol/server-filesystem /tmp")
+    """
+    mcp_config = os.getenv("HAL_MCP_CONFIG", "/data/mcp.json")
+    config_path = Path(mcp_config)
+
+    # Parse existing configs to check for duplicates
+    existing_names: set[str] = set()
+    if config_path.is_file():
+        for line in config_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                try:
+                    existing_names.add(json.loads(line)["name"])
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+    if name in existing_names:
+        return f"Error: MCP server '{name}' already exists. Use a different name or remove it from {mcp_config} first."
+
+    # Build the config entry
+    arg_list = args.split() if args else []
+    entry = {"name": name, "command": command, "args": arg_list}
+
+    # Append to config file (JSON lines format)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+    # Ensure MCP is enabled
+    if os.getenv("HAL_MCP_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return (
+            f"MCP server '{name}' added to {mcp_config}, but HAL_MCP_ENABLED is not set. "
+            f"It will be loaded once MCP is enabled."
+        )
+
+    return (
+        f"MCP server '{name}' added to {mcp_config}.\n"
+        f"Command: {command} {' '.join(arg_list)}\n"
+        f"It will be auto-loaded on the next chat turn."
+    )
+
+
 BASE_TOOLS = [
     run_shell_command,
     read_file,
     write_file,
     list_directory,
     attach_file,
+    add_mcp_server,
 ]
