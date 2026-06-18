@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib.util
 import json
@@ -46,6 +47,7 @@ from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 
 from .scheduler import set_session_context
+from .scheduler import set_wakeup_callback
 from .scheduler import start_wakeup_loop
 from .scheduler import stop_wakeup_loop
 from .tools import BASE_TOOLS
@@ -55,6 +57,16 @@ from .tools import _reset_pending
 
 # ── Log buffer ───────────────────────────────────────────────────────────────
 LOG_BUFFER: deque[str] = deque(maxlen=1000)
+
+# ── Event bus for wake-ups ───────────────────────────────────────────────────
+_event_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
+
+
+def _broadcast_event(event: dict[str, Any]) -> None:
+    """Push an event to all connected SSE subscribers."""
+    for q in _event_subscribers:
+        with suppress(Exception):
+            q.put_nowait(event)
 
 
 class BufferHandler(logging.Handler):
@@ -679,7 +691,49 @@ class MCPServerStatus(BaseModel):
 @app.on_event("startup")
 async def _startup() -> None:
     start_wakeup_loop()
-    logger.info("Server startup complete")
+
+    async def _on_wakeup(wakeup: dict[str, str]) -> None:
+        """Called when a scheduled wake-up fires. Runs the agent and broadcasts to UI."""
+        session_id = wakeup.get("session_id")
+        reason = wakeup.get("reason", "")
+        logger.info("Wake-up fired: session=%s reason=%s", session_id, reason)
+
+        _broadcast_event({"type": "wakeup", "session_id": session_id, "reason": reason})
+
+        set_session_context(session_id, "wakeup")
+        agent = _get_agent()
+
+        wake_message = (
+            f"This is a scheduled wake-up. You asked to be reminded about: {reason}\n"
+            f"Please continue with the task you scheduled this wake-up for."
+        )
+
+        try:
+            async for event in agent.run(user_message=wake_message, session_id=session_id, user_id="wakeup"):
+                if isinstance(event, TextChunkEvent):
+                    _broadcast_event({"type": "text", "content": event.chunk})
+                elif isinstance(event, ToolCallEvent):
+                    _broadcast_event({"type": "tool_call", "name": event.name, "arguments": event.arguments})
+                elif isinstance(event, ToolResultEvent):
+                    result = event.result if event.result else event.error
+                    _broadcast_event({"type": "tool_result", "name": event.name, "result": str(result)[:200]})
+                elif isinstance(event, DoneEvent):
+                    _broadcast_event(
+                        {
+                            "type": "done",
+                            "session_id": event.session_id,
+                            "tokens": event.usage.total_tokens if event.usage else 0,
+                            "wakeup": True,
+                        }
+                    )
+                elif isinstance(event, ErrorEvent):
+                    _broadcast_event({"type": "error", "message": event.message})
+        except Exception:
+            logger.exception("Wake-up agent run failed")
+            _broadcast_event({"type": "error", "message": "Wake-up processing failed"})
+
+    set_wakeup_callback(_on_wakeup)
+    logger.info("Server startup complete (wake-up callback wired)")
 
 
 @app.on_event("shutdown")
@@ -843,6 +897,31 @@ async def logs(tail: int = 50) -> dict[str, object]:
     tail = max(1, min(tail, len(LOG_BUFFER)))
     items = list(LOG_BUFFER)[-tail:]
     return {"count": len(items), "lines": items}
+
+
+# ── Event stream (wake-ups) ──────────────────────────────────────────────────
+
+
+@app.get("/events")
+async def event_stream() -> StreamingResponse:
+    """SSE endpoint for wake-up events. UI connects on load and stays open."""
+
+    async def _stream() -> Any:
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        _event_subscribers.append(q)
+        try:
+            # Send initial connection event
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            while True:
+                event = await q.get()
+                yield f"data: {json.dumps(event)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if q in _event_subscribers:
+                _event_subscribers.remove(q)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 # ── Tools API ────────────────────────────────────────────────────────────────

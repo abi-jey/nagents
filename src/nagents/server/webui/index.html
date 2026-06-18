@@ -905,11 +905,32 @@ $('#cfg-save-btn').addEventListener('click', saveConfig);
 $('#config-modal').addEventListener('click', (e) => { if (e.target === $('#config-modal')) closeConfigModal(); });
 $('#clear-events-btn').addEventListener('click', () => { eventLog.innerHTML = ''; });
 
+// ── Wake-up event stream ──
+function connectEventStream() {
+  const es = new EventSource('/events');
+  es.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      if (evt.type === 'connected') return;
+      if (evt.type === 'wakeup') {
+        addMessage('system', `Wake-up triggered: ${evt.reason || 'no reason provided'}`);
+      } else {
+        handleEvent(evt);
+      }
+    } catch(err) {}
+  };
+  es.onerror = () => {
+    // Reconnect after 3s
+    setTimeout(() => connectEventStream(), 3000);
+  };
+}
+
 loadTools();
 loadMCP();
 loadAttachments();
 loadConfigs();
 setStatus(true);
+connectEventStream();
 </script>
 </body>
 </html>

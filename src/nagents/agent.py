@@ -159,7 +159,7 @@ class Agent:
         session_manager: SessionManager,
         tools: list[Callable[..., Any]] | None = None,
         system_prompt: str | None = None,
-        max_tool_rounds: int = 10,
+        max_tool_rounds: int = 1000,
         streaming: bool = False,
         log_file: Path | str | None = None,
         fail_on_invalid_tool: bool = False,
