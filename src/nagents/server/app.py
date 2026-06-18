@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import logging
 import os
 import sys
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 from fastapi import FastAPI
 from fastapi import Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from nagents import Agent
@@ -517,6 +519,52 @@ async def chat(body: ChatRequest) -> ChatResponse:
         session_id=final_session_id,
         attachments=attachments,
     )
+
+
+@app.post("/chat/stream")
+async def chat_stream(body: ChatRequest) -> StreamingResponse:
+    _reset_pending()
+
+    sys_msg = await _reload_if_changed()
+    user_message = body.message
+    if sys_msg:
+        user_message = f"{sys_msg}\n{body.message}"
+
+    agent = _get_agent()
+    session_id = body.session_id or None
+    logger.info("Chat SSE user_id=%s session_id=%s message=%.100s", body.user_id, session_id, body.message)
+
+    async def event_stream() -> Any:
+        final_session_id: str | None = None
+        try:
+            async for event in agent.run(
+                user_message=user_message,
+                session_id=session_id,
+                user_id=body.user_id,
+            ):
+                if isinstance(event, TextChunkEvent):
+                    yield f"data: {json.dumps({'type': 'text', 'content': event.chunk})}\n\n"
+                elif isinstance(event, ToolCallEvent):
+                    yield f"data: {json.dumps({'type': 'tool_call', 'name': event.name, 'arguments': event.arguments})}\n\n"
+                elif isinstance(event, ToolResultEvent):
+                    result = event.result if event.result else event.error
+                    yield f"data: {json.dumps({'type': 'tool_result', 'name': event.name, 'result': str(result)[:200]})}\n\n"
+                elif isinstance(event, DoneEvent):
+                    final_session_id = event.session_id
+                    attachments_ref: list[dict[str, str]] = []
+                    for aid in _collect_pending():
+                        a = _attachments.get(aid)
+                        if a is not None:
+                            attachments_ref.append({"id": a.id, "filename": a.path.name, "url": f"/attachments/{a.id}"})
+                    yield f"data: {json.dumps({'type': 'done', 'session_id': final_session_id, 'attachments': attachments_ref, 'tokens': event.usage.total_tokens if event.usage else 0})}\n\n"
+                elif isinstance(event, ErrorEvent):
+                    yield f"data: {json.dumps({'type': 'error', 'message': event.message, 'recoverable': event.recoverable})}\n\n"
+                    if not event.recoverable:
+                        break
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/logs")
