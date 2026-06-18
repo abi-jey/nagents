@@ -10,6 +10,8 @@ from pathlib import Path
 
 from nagents import docker_run
 
+from .scheduler import wake_up_in
+
 # ── Attachment store (in-memory registry, files on disk) ──────────────────────
 
 
@@ -98,7 +100,7 @@ def add_mcp_server(name: str, command: str, args: str = "") -> str:
         command: The command to run the MCP server (e.g., "npx", "playwright-mcp")
         args: Space-separated arguments for the command (e.g., "@modelcontextprotocol/server-filesystem /tmp")
     """
-    mcp_config = os.getenv("HAL_MCP_CONFIG", "/data/mcp.json")
+    mcp_config = os.getenv("NAGENTS_MCP_CONFIG", "/data/mcp.json")
     config_path = Path(mcp_config)
 
     # Parse existing configs to check for duplicates
@@ -125,9 +127,9 @@ def add_mcp_server(name: str, command: str, args: str = "") -> str:
         f.write(json.dumps(entry) + "\n")
 
     # Ensure MCP is enabled
-    if os.getenv("HAL_MCP_ENABLED", "").lower() not in ("1", "true", "yes"):
+    if os.getenv("NAGENTS_MCP_ENABLED", "").lower() not in ("1", "true", "yes"):
         return (
-            f"MCP server '{name}' added to {mcp_config}, but HAL_MCP_ENABLED is not set. "
+            f"MCP server '{name}' added to {mcp_config}, but NAGENTS_MCP_ENABLED is not set. "
             f"It will be loaded once MCP is enabled."
         )
 
@@ -145,4 +147,5 @@ BASE_TOOLS = [
     list_directory,
     attach_file,
     add_mcp_server,
+    wake_up_in,
 ]

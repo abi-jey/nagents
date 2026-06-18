@@ -42,6 +42,9 @@ from nagents import ToolResultEvent
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 
+from .scheduler import set_session_context
+from .scheduler import start_wakeup_loop
+from .scheduler import stop_wakeup_loop
 from .tools import BASE_TOOLS
 from .tools import _attachments
 from .tools import _collect_pending
@@ -98,10 +101,10 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-PROVIDER_TYPE = _env("HAL_LLM_PROVIDER", "openrouter")
-API_KEY = _env("HAL_LLM_API_KEY")
-MODEL = _env("HAL_LLM_MODEL", "moonshotai/kimi-k2.6")
-BASE_URL = _env("HAL_LLM_BASE_URL", "https://openrouter.ai/api/v1")
+PROVIDER_TYPE = _env("NAGENTS_LLM_PROVIDER", "openrouter")
+API_KEY = _env("NAGENTS_LLM_API_KEY")
+MODEL = _env("NAGENTS_LLM_MODEL", "moonshotai/kimi-k2.6")
+BASE_URL = _env("NAGENTS_LLM_BASE_URL", "https://openrouter.ai/api/v1")
 DEFAULT_SYSTEM_PROMPT = """\
 You are a helpful AI assistant with access to tools for shell execution, file I/O, directory listing, \
 file attachments, MCP server management, and MCP-provided capabilities (e.g., browser automation via Playwright).
@@ -129,6 +132,7 @@ file attachments, MCP server management, and MCP-provided capabilities (e.g., br
 - **Do** keep shell commands simple and focused on one task.
 - **Do** write custom tools to `/data/tools/` when you need new capabilities.
 - **Do** use `add_mcp_server` when you need MCP-provided tools (e.g., Playwright for browser automation).
+- **Do** use `wake_up_in` to schedule follow-ups (e.g., checking a long-running task, reminders).
 
 ### Don'ts
 - **Don't** use tools for information you already know -- answer directly.
@@ -177,11 +181,11 @@ Use the `add_mcp_server` tool to add MCP servers at runtime. Examples:
 
 After adding an MCP server, its tools will be available on the next chat turn (prefixed with `mcp__<name>__`).
 """
-SESSIONS_DB = Path(_env("HAL_SESSIONS_DB", "/data/sessions.db"))
-TOOLS_DIR = _env("HAL_TOOLS_DIR", "/data/tools")
-MCP_ENABLED = _env("HAL_MCP_ENABLED", "").lower() in ("1", "true", "yes")
-MCP_CONFIG_PATH = _env("HAL_MCP_CONFIG", "/data/mcp.json")
-CONFIGS_PATH = Path(_env("HAL_CONFIGS_PATH", "/data/configs.json"))
+SESSIONS_DB = Path(_env("NAGENTS_SESSIONS_DB", "/data/sessions.db"))
+TOOLS_DIR = _env("NAGENTS_TOOLS_DIR", "/data/tools")
+MCP_ENABLED = _env("NAGENTS_MCP_ENABLED", "").lower() in ("1", "true", "yes")
+MCP_CONFIG_PATH = _env("NAGENTS_MCP_CONFIG", "/data/mcp.json")
+CONFIGS_PATH = Path(_env("NAGENTS_CONFIGS_PATH", "/data/configs.json"))
 
 # ── Ensure writable dirs exist ────────────────────────────────────────────────
 for _d in [TOOLS_DIR, str(SESSIONS_DB.parent), str(CONFIGS_PATH.parent)]:
@@ -206,7 +210,7 @@ def _embedded_config() -> dict[str, Any]:
     return {
         "id": "default",
         "name": "Default (env)",
-        "system_prompt": _env("HAL_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
+        "system_prompt": _env("NAGENTS_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
         "model": MODEL,
         "provider": PROVIDER_TYPE,
         "base_url": BASE_URL,
@@ -335,7 +339,7 @@ def _load_mcp_configs() -> list[MCPServerConfig]:
             logger.exception("Failed to parse MCP config: %s", MCP_CONFIG_PATH)
 
     # From env var (comma-separated name=command patterns)
-    env_servers = _env("HAL_MCP_SERVERS", "")
+    env_servers = _env("NAGENTS_MCP_SERVERS", "")
     if env_servers:
         for spec in env_servers.split(","):
             spec = spec.strip()
@@ -653,6 +657,18 @@ class MCPServerStatus(BaseModel):
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
+@app.on_event("startup")
+async def _startup() -> None:
+    start_wakeup_loop()
+    logger.info("Server startup complete")
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    stop_wakeup_loop()
+    logger.info("Server shutdown complete")
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -661,6 +677,8 @@ async def health() -> HealthResponse:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(body: ChatRequest) -> ChatResponse:
     _reset_pending()
+    session_id = body.session_id or None
+    set_session_context(session_id, body.user_id)
 
     # Auto-reload tools/MCP before processing
     sys_msg = await _reload_if_changed()
@@ -671,7 +689,6 @@ async def chat(body: ChatRequest) -> ChatResponse:
 
     agent = _get_agent()
 
-    session_id = body.session_id or None
     logger.info("Chat user_id=%s session_id=%s message=%.100s", body.user_id, session_id, body.message)
 
     full_response: str = ""
@@ -729,6 +746,8 @@ async def chat(body: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(body: ChatRequest) -> StreamingResponse:
     _reset_pending()
+    session_id = body.session_id or None
+    set_session_context(session_id, body.user_id)
 
     sys_msg = await _reload_if_changed()
     user_message = body.message
@@ -736,7 +755,6 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
         user_message = f"{sys_msg}\n{body.message}"
 
     agent = _get_agent()
-    session_id = body.session_id or None
     logger.info("Chat SSE user_id=%s session_id=%s message=%.100s", body.user_id, session_id, body.message)
 
     async def event_stream() -> Any:
