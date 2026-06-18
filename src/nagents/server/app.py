@@ -23,7 +23,9 @@ if TYPE_CHECKING:
 from fastapi import FastAPI
 from fastapi import Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from nagents import Agent
@@ -645,3 +647,17 @@ async def get_attachment(attachment_id: str) -> Response:
             "X-Fetch-Count": str(a.fetch_count),
         },
     )
+
+
+# ── Web UI ───────────────────────────────────────────────────────────────────
+_WEBUI_DIR = Path(__file__).resolve().parent / "webui"
+
+if _WEBUI_DIR.is_dir():
+    app.mount("/ui", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="ui")
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> Response:
+        index_file = _WEBUI_DIR / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
+        return Response(content=b"web ui not found", status_code=404)
