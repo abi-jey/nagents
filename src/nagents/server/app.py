@@ -91,6 +91,10 @@ _nagents_logger.addHandler(_handler)
 _nagents_logger.addHandler(_stdout_handler)
 _nagents_logger.propagate = False
 
+# Server logger uses parent nagents logger's handlers
+logger.propagate = True
+logger.handlers.clear()
+
 # ── Env config ───────────────────────────────────────────────────────────────
 
 
