@@ -146,6 +146,15 @@ body {
 .status-dot.error { background: var(--error); box-shadow: 0 0 6px rgba(248,113,113,0.4); }
 #status-text { font-size: 12px; color: var(--text-dim); }
 .header .spacer { flex: 1; }
+.token-usage {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  padding: 3px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
 
 .config-select {
   background: var(--surface-2);
@@ -496,6 +505,7 @@ body {
     <span class="status-dot" id="status-dot"></span>
     <span id="status-text">connected</span>
     <span class="spacer"></span>
+    <span class="token-usage" id="token-usage">0 tokens</span>
     <select class="session-select" id="session-select" title="Session">
       <option value="">New session</option>
     </select>
@@ -701,18 +711,7 @@ function handleEvent(evt) {
     case 'system':
       currentAgentMsg = null;
       currentReasoningMsg = null;
-      {
-        const lines = evt.message.split('\n');
-        for (const line of lines) {
-          const m = addMessage('system', '');
-          const icon = document.createElement('span');
-          icon.textContent = line.match(/added/i) ? ' + ' : line.match(/removed/i) ? ' - ' : ' * ';
-          icon.style.fontWeight = '700';
-          icon.style.marginRight = '6px';
-          m.textContent = line;
-          m.prepend(icon);
-        }
-      }
+      addMessage('system', evt.message);
       break;
     case 'tool_call':
       currentAgentMsg = null;
@@ -728,6 +727,9 @@ function handleEvent(evt) {
       sessionId = evt.session_id;
       currentAgentMsg = null;
       currentReasoningMsg = null;
+      if (evt.tokens) {
+        $('#token-usage').textContent = `${evt.tokens.toLocaleString()} tokens`;
+      }
       if (evt.attachments?.length) {
         addMessage('tool', `${evt.attachments.length} attachment(s): ${evt.attachments.map(a => a.filename).join(', ')}`);
       }

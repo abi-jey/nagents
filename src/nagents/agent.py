@@ -572,17 +572,23 @@ class Agent:
 
         return Tokens(total=context_limit)
 
-    def _should_compact(self, messages: list[Message], trigger: Tokens | Messages) -> bool:
+    def _should_compact(self, messages: list[Message], trigger: Tokens | Messages, session_id: str = "") -> bool:
         """Check if compaction should trigger based on the trigger config.
 
         Args:
             messages: List of messages to check
             trigger: Trigger configuration (Tokens or Messages)
+            session_id: Session ID for looking up actual token counts
 
         Returns:
-            True if compaction should trigger, False otherwise
+            True if compaction should trigger, False if not
         """
         if isinstance(trigger, Tokens):
+            # Prefer actual token count from last API response (includes tools + system prompt)
+            actual = self._session_tokens.get(session_id, 0) if session_id else 0
+            if actual > 0:
+                logger.debug(f"Compaction using actual tokens: {actual}")
+                return actual >= (trigger.input - trigger.output)  # type: ignore[operator]
             estimated = estimate_messages_tokens(messages)
             # After __post_init__, input and output are guaranteed to be int
             assert trigger.input is not None and trigger.output is not None
@@ -631,13 +637,17 @@ class Agent:
 
         # Check if compaction needed
         estimated_tokens = estimate_messages_tokens(messages)
-        logger.debug(f"Compaction check: {len(messages)} messages, ~{estimated_tokens} tokens")
+        actual_tokens = self._session_tokens.get(session_id, 0)
+        used_tokens = actual_tokens if actual_tokens > 0 else estimated_tokens
+        logger.debug(
+            f"Compaction check: {len(messages)} messages, {used_tokens} tokens ({'actual' if actual_tokens > 0 else 'estimated'})"
+        )
 
-        if not self._should_compact(messages, trigger):
+        if not self._should_compact(messages, trigger, session_id):
             if isinstance(trigger, Tokens):
                 assert trigger.input is not None and trigger.output is not None
                 threshold = trigger.input - trigger.output
-                logger.debug(f"Compaction skipped: {estimated_tokens} tokens < {threshold} threshold")
+                logger.debug(f"Compaction skipped: {used_tokens} tokens < {threshold} threshold")
             else:
                 logger.debug(f"Compaction skipped: {len(messages)} messages < {trigger.length} threshold")
             return
