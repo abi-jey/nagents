@@ -524,9 +524,9 @@ async def _reload_if_changed() -> str:
             added_names = set(new_names) - set(old_names)
             removed_names = set(old_names) - set(new_names)
             if added_names:
-                messages.append(f"Tools added: {', '.join(sorted(added_names))}")
+                messages.append(f"Tools added ({len(added_names)}): " + ", ".join(sorted(added_names)))
             if removed_names:
-                messages.append(f"Tools removed: {', '.join(sorted(removed_names))}")
+                messages.append(f"Tools removed ({len(removed_names)}): " + ", ".join(sorted(removed_names)))
 
     # ── MCP check ───────────────────────────────────────────────────────
     if MCP_ENABLED:
@@ -555,9 +555,11 @@ async def _reload_if_changed() -> str:
                     removed_mcp = set(_last_mcp_tool_names) - set(mcp_names)
                     _last_mcp_tool_names = mcp_names
                     if new_mcp:
-                        messages.append(f"MCP tools added: {', '.join(sorted(new_mcp))}")
+                        clean_names = [n.replace("mcp__", "") for n in sorted(new_mcp)]
+                        messages.append(f"MCP tools added ({len(clean_names)}): " + ", ".join(clean_names))
                     if removed_mcp:
-                        messages.append(f"MCP tools removed: {', '.join(sorted(removed_mcp))}")
+                        clean_removed = [n.replace("mcp__", "") for n in sorted(removed_mcp)]
+                        messages.append(f"MCP tools removed ({len(clean_removed)}): " + ", ".join(clean_removed))
                     logger.info("MCP connected with %d tools", len(mcp_tools))
                 except Exception:
                     logger.exception("MCP connect failed")
@@ -571,7 +573,7 @@ async def _reload_if_changed() -> str:
         _rebuild_agent(all_tools)
 
     if messages:
-        return "#system-notification: " + " | ".join(messages)
+        return "#system-notification: " + "\n".join(messages)
 
     return ""
 
@@ -853,7 +855,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
         final_session_id: str | None = None
         try:
             if sys_msg:
-                yield f"data: {json.dumps({'type': 'system', 'message': sys_msg.replace('#system-notification: ', '')})}\n\n"
+                clean = sys_msg.replace("#system-notification: ", "")
+                yield f"data: {json.dumps({'type': 'system', 'message': clean})}\n\n"
             async for event in agent.run(
                 user_message=user_message,
                 session_id=session_id,

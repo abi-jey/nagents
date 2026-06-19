@@ -249,15 +249,18 @@ body {
   line-height: 1.5;
 }
 .message.system {
-  align-self: center;
+  align-self: flex-start;
   max-width: 90%;
   background: var(--accent-glow);
   border: 1px solid var(--accent);
+  border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   font-size: 11px;
-  color: var(--accent);
-  padding: 6px 14px;
-  text-align: center;
+  font-family: var(--mono);
+  color: var(--text);
+  padding: 6px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .message.tool .icon { color: var(--tool); }
 .message.error {
@@ -698,7 +701,18 @@ function handleEvent(evt) {
     case 'system':
       currentAgentMsg = null;
       currentReasoningMsg = null;
-      addMessage('system', evt.message);
+      {
+        const lines = evt.message.split('\n');
+        for (const line of lines) {
+          const m = addMessage('system', '');
+          const icon = document.createElement('span');
+          icon.textContent = line.match(/added/i) ? ' + ' : line.match(/removed/i) ? ' - ' : ' * ';
+          icon.style.fontWeight = '700';
+          icon.style.marginRight = '6px';
+          m.textContent = line;
+          m.prepend(icon);
+        }
+      }
       break;
     case 'tool_call':
       currentAgentMsg = null;
