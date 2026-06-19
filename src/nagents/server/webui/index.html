@@ -728,7 +728,11 @@ function handleEvent(evt) {
       currentAgentMsg = null;
       currentReasoningMsg = null;
       if (evt.tokens) {
-        $('#token-usage').textContent = `${evt.tokens.toLocaleString()} tokens`;
+        let parts = [`${evt.prompt_tokens.toLocaleString()} in`, `${evt.completion_tokens.toLocaleString()} out`];
+        if (evt.reasoning_tokens) parts.push(`${evt.reasoning_tokens.toLocaleString()} think`);
+        if (evt.cached_tokens) parts.push(`${evt.cached_tokens.toLocaleString()} cached`);
+        parts.push(`${evt.tokens.toLocaleString()} total`);
+        $('#token-usage').textContent = parts.join(' · ');
       }
       if (evt.attachments?.length) {
         addMessage('tool', `${evt.attachments.length} attachment(s): ${evt.attachments.map(a => a.filename).join(', ')}`);

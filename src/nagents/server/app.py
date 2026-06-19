@@ -878,7 +878,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                         a = _attachments.get(aid)
                         if a is not None:
                             attachments_ref.append({"id": a.id, "filename": a.path.name, "url": f"/attachments/{a.id}"})
-                    yield f"data: {json.dumps({'type': 'done', 'session_id': final_session_id, 'attachments': attachments_ref, 'tokens': event.usage.total_tokens if event.usage else 0})}\n\n"
+                    u = event.usage
+                    yield f"data: {json.dumps({'type': 'done', 'session_id': final_session_id, 'attachments': attachments_ref, 'tokens': u.total_tokens, 'prompt_tokens': u.prompt_tokens, 'completion_tokens': u.completion_tokens, 'reasoning_tokens': u.reasoning_tokens, 'cached_tokens': u.cached_tokens})}\n\n"
                 elif isinstance(event, ErrorEvent):
                     yield f"data: {json.dumps({'type': 'error', 'message': event.message, 'recoverable': event.recoverable})}\n\n"
                     if not event.recoverable:
