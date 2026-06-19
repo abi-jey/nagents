@@ -6,26 +6,34 @@ returning stdout, stderr, and exit code.
 
 from __future__ import annotations
 
+import os
 import subprocess
+
+# Defaults are read from env vars so the server config controls the execution environment.
+_DEFAULT_IMAGE = os.getenv("NAGENTS_SERVER_IMAGE", "python:3.12-slim")
+_DEFAULT_NETWORK = os.getenv("NAGENTS_SERVER_NETWORK", "bridge")
+_DEFAULT_MEMORY = os.getenv("NAGENTS_SERVER_MEMORY", "512m")
+_DEFAULT_CPUS = os.getenv("NAGENTS_SERVER_CPUS", "1.0")
+_DEFAULT_TIMEOUT = int(os.getenv("NAGENTS_SERVER_TIMEOUT", "120"))
 
 
 def docker_run(
     command: str,
     *,
-    image: str = "python:3.12-slim",
-    network: str = "none",
-    memory: str = "256m",
-    cpus: str = "1.0",
-    timeout: int = 120,
+    image: str = "",
+    network: str = "",
+    memory: str = "",
+    cpus: str = "",
+    timeout: int = 0,
     workdir: str = "/workspace",
 ) -> str:
     """Run a shell command inside a Docker container.
 
     Args:
         command: Shell command to execute.
-        image: Docker image (default: ``python:3.12-slim``).
-        network: Docker network mode — ``none`` blocks all external access.
-        memory: Memory limit (e.g. ``256m``, ``1g``).
+        image: Docker image (default: from NAGENTS_SANDBOX_IMAGE env or python:3.12-slim).
+        network: Docker network mode — ``bridge`` allows internet, ``none`` blocks it.
+        memory: Memory limit (e.g. ``512m``, ``1g``).
         cpus: CPU limit (e.g. ``1.0``, ``2.0``).
         timeout: Max runtime in seconds before container is killed.
         workdir: Working directory inside the container.
@@ -33,6 +41,12 @@ def docker_run(
     Returns:
         Formatted string with exit code, stdout, and stderr.
     """
+    img = image or _DEFAULT_IMAGE
+    net = network or _DEFAULT_NETWORK
+    mem = memory or _DEFAULT_MEMORY
+    cpu = cpus or _DEFAULT_CPUS
+    tout = timeout or _DEFAULT_TIMEOUT
+
     try:
         subprocess.run(
             ["docker", "version", "--format", "json"],
@@ -48,14 +62,14 @@ def docker_run(
         "run",
         "--rm",
         "--network",
-        network,
+        net,
         "--memory",
-        memory,
+        mem,
         "--cpus",
-        cpus,
+        cpu,
         "--workdir",
         workdir,
-        image,
+        img,
         "sh",
         "-c",
         command,
@@ -66,10 +80,10 @@ def docker_run(
             docker_cmd,
             capture_output=True,
             text=True,
-            timeout=timeout + 10,
+            timeout=tout + 10,
         )
     except subprocess.TimeoutExpired:
-        return f"Error: command timed out after {timeout}s"
+        return f"Error: command timed out after {tout}s"
 
     out = result.stdout.strip()
     err = result.stderr.strip()

@@ -31,6 +31,12 @@ USER agent
 
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+ENV NAGENTS_SERVER_IMAGE=python:3.12-slim
+ENV NAGENTS_SERVER_NETWORK=bridge
+ENV NAGENTS_SERVER_MEMORY=512m
+
+# Pre-pull the sandbox image so it's available without internet at runtime
+RUN docker pull python:3.12-slim || true
 
 EXPOSE 8080
 CMD ["python", "-m", "nagents.server"]
