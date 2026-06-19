@@ -162,6 +162,21 @@ body {
 }
 .config-select:hover { border-color: var(--border-hover); }
 .config-select:focus { border-color: var(--accent); }
+.session-select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 10px;
+  font-family: var(--font);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  max-width: 160px;
+}
+.session-select:hover { border-color: var(--border-hover); }
+.session-select:focus { border-color: var(--accent); }
 .config-btn {
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -478,6 +493,9 @@ body {
     <span class="status-dot" id="status-dot"></span>
     <span id="status-text">connected</span>
     <span class="spacer"></span>
+    <select class="session-select" id="session-select" title="Session">
+      <option value="">New session</option>
+    </select>
     <select class="config-select" id="config-select" title="Switch agent config"></select>
     <button class="config-btn" id="new-config-btn" type="button">+ New</button>
   </header>
@@ -699,6 +717,7 @@ function handleEvent(evt) {
       if (evt.attachments?.length) {
         addMessage('tool', `${evt.attachments.length} attachment(s): ${evt.attachments.map(a => a.filename).join(', ')}`);
       }
+      loadSessions();
       break;
     case 'error':
       addMessage('error', `Error: ${evt.message}`);
@@ -722,6 +741,7 @@ async function refreshSidebar() {
   await loadAttachments();
   await loadMCP();
   await loadConfigs();
+  await loadSessions();
 }
 
 async function loadTools() {
@@ -873,6 +893,52 @@ async function saveConfig() {
   } catch(e) {}
 }
 
+// ── Session management ──
+async function loadSessions() {
+  try {
+    const res = await fetch('/sessions');
+    const sessions = await res.json();
+    const sel = $('#session-select');
+    const current = sessionId || '';
+    sel.innerHTML = '<option value="">New session</option>' +
+      sessions.map(s => `<option value="${s.id}" ${s.id === current ? 'selected' : ''}>${s.id.slice(0, 12)} (${s.message_count} msgs)</option>`).join('');
+  } catch(e) {}
+}
+
+async function switchSession(id) {
+  sessionId = id || null;
+  chat.innerHTML = '<div class="placeholder"><span class="icon">&#9881;</span><span class="text">Send a message to start</span></div>';
+  currentAgentMsg = null;
+  currentReasoningMsg = null;
+  if (id) {
+    await loadSessionHistory(id);
+  }
+  await loadSessions();
+}
+
+async function loadSessionHistory(id) {
+  try {
+    const res = await fetch(`/sessions/${id}/history`);
+    const messages = await res.json();
+    chat.innerHTML = '';
+    for (const m of messages) {
+      if (m.role === 'user') {
+        addMessage('user', typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+      } else if (m.role === 'assistant') {
+        const text = typeof m.content === 'string' ? m.content : '';
+        if (text) addMessage('agent', text);
+        if (m.tool_calls?.length) {
+          for (const tc of m.tool_calls) {
+            addMessage('tool', `${tc.function?.name || tc.name || '?'}(${JSON.stringify(tc.function?.arguments || tc.arguments || {})})`);
+          }
+        }
+      } else if (m.role === 'tool') {
+        addMessage('tool', `${m.name}: ${typeof m.content === 'string' ? m.content.slice(0, 200) : ''}`);
+      }
+    }
+  } catch(e) {}
+}
+
 function esc(s) {
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -899,6 +965,7 @@ form.addEventListener('submit', (e) => {
 });
 
 $('#config-select').addEventListener('change', (e) => switchConfig(e.target.value));
+$('#session-select').addEventListener('change', (e) => switchSession(e.target.value));
 $('#new-config-btn').addEventListener('click', () => openConfigModal(''));
 $('#cfg-cancel-btn').addEventListener('click', closeConfigModal);
 $('#cfg-save-btn').addEventListener('click', saveConfig);
@@ -929,6 +996,7 @@ loadTools();
 loadMCP();
 loadAttachments();
 loadConfigs();
+loadSessions();
 setStatus(true);
 connectEventStream();
 </script>

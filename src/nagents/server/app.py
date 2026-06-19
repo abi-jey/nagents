@@ -910,7 +910,6 @@ async def event_stream() -> StreamingResponse:
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         _event_subscribers.append(q)
         try:
-            # Send initial connection event
             yield f"data: {json.dumps({'type': 'connected'})}\n\n"
             while True:
                 event = await q.get()
@@ -918,10 +917,92 @@ async def event_stream() -> StreamingResponse:
         except asyncio.CancelledError:
             pass
         finally:
-            if q in _event_subscribers:
+            with suppress(ValueError):
                 _event_subscribers.remove(q)
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+# ── Session API ──────────────────────────────────────────────────────────────
+
+
+class SessionInfo(BaseModel):
+    id: str
+    user_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    message_count: int = 0
+
+
+class SessionMessage(BaseModel):
+    role: str
+    content: str = ""
+    tool_calls: list[dict[str, Any]] = []
+    tool_call_id: str = ""
+    name: str = ""
+
+
+@app.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions() -> list[SessionInfo]:
+    sm = SessionManager(db_path=SESSIONS_DB)
+    sessions = await sm.list_sessions()
+    result: list[SessionInfo] = []
+    for s in sessions:
+        msg_count = await sm.get_message_count(s["id"])
+        result.append(
+            SessionInfo(
+                id=s["id"],
+                user_id=str(s.get("user_id", "")),
+                created_at=str(s.get("created_at", "")),
+                updated_at=str(s.get("updated_at", "")),
+                message_count=msg_count,
+            )
+        )
+    return result
+
+
+@app.get("/sessions/{session_id}", response_model=SessionInfo)
+async def get_session(session_id: str) -> SessionInfo:
+    sm = SessionManager(db_path=SESSIONS_DB)
+    s = await sm.get_session(session_id)
+    if s is None:
+        return Response(content='{"detail":"not found"}', status_code=404, media_type="application/json")
+    msg_count = await sm.get_message_count(session_id)
+    return SessionInfo(
+        id=s["id"],
+        user_id=str(s.get("user_id", "")),
+        created_at=str(s.get("created_at", "")),
+        updated_at=str(s.get("updated_at", "")),
+        message_count=msg_count,
+    )
+
+
+@app.get("/sessions/{session_id}/history", response_model=list[SessionMessage])
+async def get_session_history(session_id: str) -> list[SessionMessage]:
+    sm = SessionManager(db_path=SESSIONS_DB)
+    messages = await sm.get_history(session_id)
+    result: list[SessionMessage] = []
+    for m in messages:
+        content = m.content if isinstance(m.content, str) else json.dumps(m.content) if m.content else ""
+        tool_calls = [tc.__dict__ if hasattr(tc, "__dict__") else tc for tc in (m.tool_calls or [])]
+        result.append(
+            SessionMessage(
+                role=m.role,
+                content=content,
+                tool_calls=tool_calls,
+                tool_call_id=m.tool_call_id or "",
+                name=m.name or "",
+            )
+        )
+    return result
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str) -> dict[str, str]:
+    sm = SessionManager(db_path=SESSIONS_DB)
+    await sm.delete_session(session_id)
+    logger.info("Deleted session: %s", session_id)
+    return {"status": "deleted", "id": session_id}
 
 
 # ── Tools API ────────────────────────────────────────────────────────────────
