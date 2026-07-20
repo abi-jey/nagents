@@ -20,6 +20,9 @@ WAKEUPS_PATH = Path("/data/wakeups.json")
 _check_task: asyncio.Task[None] | None = None
 _on_wakeup: asyncio.Callable[[dict[str, str]], None] | None = None
 
+# Strong references to in-flight wake-up tasks (prevents GC mid-run).
+_wakeup_tasks: set[asyncio.Task[None]] = set()
+
 
 class ScheduledWakeUp:
     """A scheduled wake-up request."""
@@ -127,10 +130,13 @@ async def _wakeup_check_loop() -> None:
                 logger.info("Processing wake-up %s (session=%s, reason=%s)", w.id, w.session_id, w.reason)
                 w.completed = True
                 if _on_wakeup:
-                    try:
-                        _on_wakeup(w.to_dict())
-                    except Exception:
-                        logger.exception("Wake-up callback failed")
+                    # Fire-and-forget: the callback is a coroutine — schedule it
+                    # as a task so it actually runs (a bare call only creates the
+                    # coroutine, never executing it) and so a long agent run does
+                    # not block the check loop.
+                    task = asyncio.create_task(_on_wakeup(w.to_dict()))
+                    _wakeup_tasks.add(task)
+                    task.add_done_callback(_wakeup_tasks.discard)
             if due:
                 _save_wakeups(wakeups)
         except asyncio.CancelledError:

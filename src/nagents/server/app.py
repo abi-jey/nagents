@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from collections import deque
 from contextlib import suppress
 from datetime import UTC
@@ -752,7 +753,10 @@ async def health() -> HealthResponse:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(body: ChatRequest) -> ChatResponse:
     _reset_pending()
-    session_id = body.session_id or None
+    # Pre-generate the session id for fresh chats so tools that need the
+    # session context (e.g. wake_up_in) work on the very first message —
+    # agent.run() creates the session row for an unknown id.
+    session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     set_session_context(session_id, body.user_id)
 
     # Auto-reload tools/MCP before processing
@@ -838,7 +842,8 @@ async def chat(body: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(body: ChatRequest) -> StreamingResponse:
     _reset_pending()
-    session_id = body.session_id or None
+    # Pre-generate the session id for fresh chats — see chat() above.
+    session_id = body.session_id or f"session-{uuid.uuid4().hex[:12]}"
     set_session_context(session_id, body.user_id)
 
     sys_msg = await _reload_if_changed()
