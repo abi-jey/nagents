@@ -55,6 +55,7 @@ from .tools import BASE_TOOLS
 from .tools import _attachments
 from .tools import _collect_pending
 from .tools import _reset_pending
+from .tools import set_mcp_connect_handler
 
 # ── Log buffer ───────────────────────────────────────────────────────────────
 LOG_BUFFER: deque[str] = deque(maxlen=1000)
@@ -207,7 +208,7 @@ Use the `add_mcp_server` tool to add MCP servers at runtime. Examples:
 - Browser automation: `add_mcp_server(name="playwright", command="playwright-mcp", args="--browser chromium")`
 - Filesystem access: `add_mcp_server(name="filesystem", command="npx", args="-y @modelcontextprotocol/server-filesystem /data")`
 
-After adding an MCP server, its tools will be available on the next chat turn (prefixed with `mcp__<name>__`).
+After adding an MCP server, its tools are connected immediately and can be called in the SAME conversation (prefixed with `mcp__<name>__`).
 """
 SESSIONS_DB = Path(_env("NAGENTS_SESSIONS_DB", "/data/sessions.db"))
 TOOLS_DIR = _env("NAGENTS_TOOLS_DIR", "/data/tools")
@@ -481,6 +482,45 @@ def _rebuild_agent(new_tools: list[Callable[..., Any]]) -> None:
         _agent = old_agent
         _mcp_manager = old_mcp
         raise
+
+
+async def _connect_mcp_server_now(name: str, command: str, args: list[str]) -> list[str]:
+    """Connect an MCP server into the live agent immediately (mid-turn add).
+
+    Called by the add_mcp_server tool after it has persisted the config.
+    Registers the server's tools with the running agent's registry — the
+    agent re-resolves its tool list every round, so the tools are callable
+    from the very next tool round of the current conversation.
+
+    Returns the names of the newly registered tools.
+    """
+    global _mcp_manager, _mcp_config_hash, _last_mcp_tool_names
+    config = MCPServerConfig(name=name, command=command, args=args)
+
+    if _mcp_manager is None:
+        _mcp_manager = MCPManager([config])
+        await _mcp_manager.connect_all()
+        new_tools: list[Any] = await _mcp_manager.get_tools()
+    else:
+        new_tools = await _mcp_manager.add_server(config)
+
+    agent = _get_agent()
+    names: list[str] = []
+    for t in new_tools:
+        agent.register_tool(t)
+        names.append(getattr(t, "__name__", str(t)))
+
+    # Sync the reload bookkeeping so the next turn's _reload_if_changed()
+    # doesn't tear down and rebuild what was just connected.
+    _mcp_config_hash = _mcp_config_fingerprint(_load_mcp_configs())
+    all_mcp = await _mcp_manager.get_tools()
+    _last_mcp_tool_names = sorted(getattr(t, "__name__", str(t)) for t in all_mcp)
+
+    logger.info("MCP server '%s' connected mid-turn with tools: %s", name, names)
+    return names
+
+
+set_mcp_connect_handler(_connect_mcp_server_now)
 
 
 # ── Auto-reload logic ────────────────────────────────────────────────────────

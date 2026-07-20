@@ -924,15 +924,18 @@ class Agent:
         # Set session ID for HTTP logging
         self.provider.set_session_id(session_id)
 
-        tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
-        if tools:
-            tools = _inject_save_to(tools)
-
         # Track last known usage to use for events without usage data
         last_usage = Usage()
 
         for round_num in range(self.max_tool_rounds):
             logger.debug(f"Generation round {round_num + 1}/{self.max_tool_rounds}")
+
+            # Re-resolve the tool list every round so tools registered mid-run
+            # (e.g. an MCP server connected by a tool in the previous round)
+            # are already in the schema for the very next generation.
+            tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
+            if tools:
+                tools = _inject_save_to(tools)
 
             # Get current history
             history = await self.session.get_history(session_id)

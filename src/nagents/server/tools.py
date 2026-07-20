@@ -5,6 +5,8 @@ import json
 import mimetypes
 import os
 import time
+from collections.abc import Awaitable
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,8 +94,26 @@ def attach_file(file_path: str, description: str = "") -> str:
     return f"File attached: /attachments/{aid}\nName: {p.name}\nSize: {size} bytes"
 
 
-def add_mcp_server(name: str, command: str, args: str = "") -> str:
-    """Add an MCP server to the configuration. It will be auto-loaded on the next chat turn.
+# ── Runtime MCP bridge ───────────────────────────────────────────────────────
+# Async handler, installed by the app, that connects an MCP server into the
+# live agent immediately. Signature: (name, command, args) -> new tool names.
+_MCPConnectHandler = Callable[[str, str, list[str]], Awaitable[list[str]]]
+_mcp_connect_handler: _MCPConnectHandler | None = None
+
+
+def set_mcp_connect_handler(handler: _MCPConnectHandler) -> None:
+    """Install the immediate-connect handler used by add_mcp_server."""
+    global _mcp_connect_handler
+    _mcp_connect_handler = handler
+
+
+async def add_mcp_server(name: str, command: str, args: str = "") -> str:
+    """Add an MCP server and connect it immediately, mid-conversation.
+
+    The server's tools are registered with the live agent right away and can
+    be called in the NEXT tool round of this same conversation — no need to
+    wait for the next chat turn. The server is also persisted to the MCP
+    config file so it survives restarts.
 
     Args:
         name: A unique name for this MCP server (e.g., "playwright", "filesystem")
@@ -131,6 +151,21 @@ def add_mcp_server(name: str, command: str, args: str = "") -> str:
         return (
             f"MCP server '{name}' added to {mcp_config}, but NAGENTS_MCP_ENABLED is not set. "
             f"It will be loaded once MCP is enabled."
+        )
+
+    # Connect immediately so the tools are callable in this same conversation
+    if _mcp_connect_handler is not None:
+        try:
+            tool_names = await _mcp_connect_handler(name, command, arg_list)
+        except Exception as e:
+            return (
+                f"MCP server '{name}' saved to {mcp_config}, but immediate connection failed: {e}\n"
+                f"It will be retried automatically on the next chat turn."
+            )
+        listed = "\n".join(f"- {t}" for t in tool_names) if tool_names else "(server reported no tools)"
+        return (
+            f"MCP server '{name}' connected. The following tools are available NOW — "
+            f"you can call them right away in this conversation:\n{listed}"
         )
 
     return (

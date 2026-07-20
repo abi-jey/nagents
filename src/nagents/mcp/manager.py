@@ -147,6 +147,95 @@ class MCPManager:
             len(self._tool_map),
         )
 
+    async def add_server(self, config: MCPServerConfig) -> list[Callable[..., Any]]:
+        """Connect a single MCP server at runtime and return its tools.
+
+        Unlike connect_all(), this adds one server without disturbing any
+        existing connections — used when a server is registered while an
+        agent run is in progress (e.g. via the add_mcp_server tool).
+
+        Args:
+            config: The server configuration to connect.
+
+        Returns:
+            The server's tools as callables, ready for ToolRegistry.register().
+
+        Raises:
+            MCPError: If a server with this name is already connected, or
+                      the connection itself fails.
+        """
+        if config.name in self._clients:
+            raise MCPError(
+                message=f"MCP server '{config.name}' is already connected",
+                code=-1,
+            )
+
+        client = MCPClient(config, request_timeout=self.request_timeout)
+        try:
+            await client.connect()
+        except Exception as e:
+            raise MCPError(
+                message=f"Failed to connect to MCP server '{config.name}': {e}",
+                code=-1,
+            ) from e
+
+        self._clients[config.name] = client
+        if all(c.name != config.name for c in self.configs):
+            self.configs.append(config)
+
+        # Discover only this server's tools. On failure the connection is
+        # kept (refresh_tools() can rediscover later) — mirroring connect_all's
+        # per-server error tolerance.
+        wrappers: list[Callable[..., Any]] = []
+        try:
+            tools = await client.list_tools()
+        except Exception as e:
+            logger.error("Failed to list tools from MCP server '%s': %s", config.name, e)
+            return wrappers
+
+        for tool in tools:
+            tool_name = tool.get("name", "")
+            if not tool_name:
+                continue
+            qualified_name = f"mcp__{config.name}__{tool_name}"
+            tool_info = _MCPToolInfo(
+                server_name=config.name,
+                tool_name=tool_name,
+                description=tool.get("description", ""),
+                input_schema=tool.get("inputSchema", {}),
+                title=tool.get("title"),
+            )
+            self._tool_map[qualified_name] = tool_info
+            wrappers.append(self._create_tool_wrapper(qualified_name, tool_info))
+
+        logger.info("MCP server '%s' added at runtime with %d tools", config.name, len(wrappers))
+        return wrappers
+
+    async def remove_server(self, name: str) -> int:
+        """Disconnect a single server and drop its tools from the tool map.
+
+        Args:
+            name: The server name to remove.
+
+        Returns:
+            The number of tools removed.
+        """
+        client = self._clients.pop(name, None)
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception as e:
+                logger.error("Error disconnecting from MCP server '%s': %s", name, e)
+
+        self.configs = [c for c in self.configs if c.name != name]
+
+        removed = [q for q, info in self._tool_map.items() if info.server_name == name]
+        for q in removed:
+            del self._tool_map[q]
+
+        logger.info("MCP server '%s' removed (%d tools dropped)", name, len(removed))
+        return len(removed)
+
     async def _discover_tools(self) -> None:
         """Discover tools from all connected MCP servers."""
         self._tool_map.clear()

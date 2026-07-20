@@ -321,6 +321,105 @@ class TestMCPManagerToolMap:
         assert tools == []
 
 
+class _FakeMCPClient:
+    """Stand-in for MCPClient — no real subprocess, fixed tool list."""
+
+    def __init__(self, config: MCPServerConfig, request_timeout: float = 60.0) -> None:
+        self.config = config
+        self.request_timeout = request_timeout
+        self.is_connected = False
+
+    async def connect(self) -> None:
+        self.is_connected = True
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
+
+    async def list_tools(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "do_thing",
+                "description": "Does a thing",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}},
+                    "required": ["x"],
+                },
+            },
+            {"name": "ping", "description": "Ping", "inputSchema": {"type": "object"}},
+        ]
+
+
+class TestMCPManagerAddRemoveServer:
+    """Tests for runtime add_server / remove_server (mid-turn MCP adds)."""
+
+    def test_add_server_registers_tools(self, monkeypatch: Any) -> None:
+        from nagents.mcp import manager as mgr_mod
+
+        monkeypatch.setattr(mgr_mod, "MCPClient", _FakeMCPClient)
+        manager = MCPManager([])
+
+        async def run() -> list[Any]:
+            return await manager.add_server(MCPServerConfig(name="test", command="fake"))
+
+        tools = asyncio.run(run())
+        assert sorted(t.__name__ for t in tools) == ["mcp__test__do_thing", "mcp__test__ping"]
+        assert "mcp__test__do_thing" in manager._tool_map
+        assert manager.is_connected
+        assert [c.name for c in manager.configs] == ["test"]
+
+    def test_add_server_duplicate_raises(self, monkeypatch: Any) -> None:
+        from nagents.mcp import manager as mgr_mod
+
+        monkeypatch.setattr(mgr_mod, "MCPClient", _FakeMCPClient)
+        manager = MCPManager([])
+
+        async def run() -> None:
+            await manager.add_server(MCPServerConfig(name="test", command="fake"))
+            await manager.add_server(MCPServerConfig(name="test", command="fake"))
+
+        try:
+            asyncio.run(run())
+            raise AssertionError("expected MCPError")
+        except MCPError as e:
+            assert "already connected" in str(e)
+
+    def test_remove_server_drops_tools(self, monkeypatch: Any) -> None:
+        from nagents.mcp import manager as mgr_mod
+
+        monkeypatch.setattr(mgr_mod, "MCPClient", _FakeMCPClient)
+        manager = MCPManager([])
+
+        async def run() -> int:
+            await manager.add_server(MCPServerConfig(name="test", command="fake"))
+            return await manager.remove_server("test")
+
+        removed = asyncio.run(run())
+        assert removed == 2
+        assert manager._tool_map == {}
+        assert manager.configs == []
+        assert not manager.is_connected
+
+    def test_added_tools_register_in_tool_registry(self, monkeypatch: Any) -> None:
+        """Wrappers from add_server must register like any other tool."""
+        from nagents.mcp import manager as mgr_mod
+
+        monkeypatch.setattr(mgr_mod, "MCPClient", _FakeMCPClient)
+        manager = MCPManager([])
+        registry = ToolRegistry()
+
+        async def run() -> None:
+            tools = await manager.add_server(MCPServerConfig(name="test", command="fake"))
+            for t in tools:
+                registry.register(t)
+
+        asyncio.run(run())
+        td = registry.get("mcp__test__do_thing")
+        assert td is not None
+        assert td.parameters["properties"]["x"]["type"] == "string"
+        assert "x" in td.parameters["required"]
+
+
 class TestMCPProtocolConstants:
     def test_protocol_version(self) -> None:
         assert MCP_PROTOCOL_VERSION == "2025-06-18"
