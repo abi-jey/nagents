@@ -2,8 +2,8 @@
 sessions.db
 logs
 *.db
-
 .playwright-mcp
+.agents/chrome-context
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
