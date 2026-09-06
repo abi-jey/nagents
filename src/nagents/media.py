@@ -324,7 +324,7 @@ async def transcode_audio_to_wav(base64_data: str, source_format: str) -> str:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await process.communicate()
+        _stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
             error_msg = stderr.decode("utf-8", errors="replace").strip()

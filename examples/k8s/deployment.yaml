@@ -1,0 +1,195 @@
+# nagents agent server — single-file Kubernetes manifest (namespace, deployment,
+# service, and ts-serve ingress). Secrets are NOT included (never commit keys).
+#
+# Prerequisites (run once):
+#   1. LLM/API keys from your dotenv file:
+#        kubectl create secret generic nagents-secrets \
+#          --from-env-file=.env -n nagents
+#      (keys must be valid env var names; empty values are skipped)
+#
+#   2. Registry pull secret for ghcr.io (copy from an existing namespace):
+#        kubectl get secret ghcr-pull-secret -n base -o json | \
+#          jq '.metadata = {"name": "ghcr-pull-secret", "namespace": "nagents"}' | \
+#          kubectl apply -f -
+#
+# Apply everything:
+#   kubectl apply -f examples/k8s/deployment.yaml
+#
+# The server is exposed through a ts-serve (Tailscale) ingress, following the
+# same pattern as the other deployments in this cluster.
+#
+# Notes:
+# - No persistence: /data, /tmp, and the cache dir are emptyDir volumes, so
+#   sessions/tools/configs/wakeups are ephemeral and reset on pod restart.
+# - run_shell_command works because the host node's /var/run/docker.sock is
+#   mounted read-only (type: Socket). The agent user (uid 1000) accesses it
+#   through the image's docker-host group.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nagents
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nagents
+  namespace: nagents
+  labels:
+    app: nagents
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nagents
+  template:
+    metadata:
+      labels:
+        app: nagents
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/hostname: abja
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: ghcr.io/abi-jey/nagents/agent-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          # All keys from the dotenv file (OPENAI_API_KEY, OPENROUTER_API_KEY,
+          # AZURE_*, GOOGLE_API_KEY, LANGFUSE_*, ...) are injected as env vars.
+          envFrom:
+            - secretRef:
+                name: nagents-secrets
+          env:
+            - name: NAGENTS_LLM_PROVIDER
+              value: "openrouter"
+            - name: NAGENTS_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nagents-secrets
+                  key: OPENROUTER_API_KEY
+            - name: NAGENTS_LLM_MODEL
+              value: "moonshotai/kimi-k2.6"
+            - name: NAGENTS_LLM_BASE_URL
+              value: "https://openrouter.ai/api/v1"
+            - name: NAGENTS_SESSIONS_DB
+              value: "/data/sessions.db"
+            - name: NAGENTS_TOOLS_DIR
+              value: "/data/tools"
+            - name: NAGENTS_MCP_ENABLED
+              value: "true"
+            - name: NAGENTS_MCP_CONFIG
+              value: "/data/mcp.json"
+            - name: NAGENTS_CONFIGS_PATH
+              value: "/data/configs.json"
+            - name: NAGENTS_SERVER_IMAGE
+              value: "python:3.12-slim"
+            - name: NAGENTS_SERVER_NETWORK
+              value: "bridge"
+            - name: NAGENTS_SERVER_MEMORY
+              value: "512m"
+            - name: PORT
+              value: "8080"
+            # MCP servers spawned via npx/node need a writable HOME for the npm
+            # cache. The root filesystem is read-only, so point HOME at the
+            # writable emptyDir mounted at /home/agent/.cache.
+            - name: HOME
+              value: "/home/agent/.cache"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /home/agent/.cache
+            - name: docker-socket
+              mountPath: /var/run/docker.sock
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: docker-socket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nagents
+  namespace: nagents
+  labels:
+    app: nagents
+spec:
+  type: ClusterIP
+  selector:
+    app: nagents
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nagents
+  namespace: nagents
+spec:
+  ingressClassName: ts-serve
+  defaultBackend:
+    service:
+      name: nagents
+      port:
+        number: 8080

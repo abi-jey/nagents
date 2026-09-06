@@ -118,8 +118,8 @@ poetry run mypy nagents
     def process_message(
         content: str,
         max_tokens: int | None = None,
-    ) -> AsyncIterator[Event]:
-        ...
+    ) -> AsyncIterator[Event]: ...
+
 
     # Class with type hints
     class Agent:

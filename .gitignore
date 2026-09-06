@@ -2,6 +2,7 @@
 sessions.db
 logs
 *.db
+*.wav
 .playwright-mcp
 .agents/chrome-context
 

@@ -16,6 +16,8 @@ A lightweight LLM agent framework with direct HTTP-based provider integration.
 - **Tool Execution**: Register Python functions as tools with automatic schema generation
 - **Session Management**: SQLite-based conversation persistence
 - **Batch Processing**: Process multiple requests efficiently
+- **Python Harness Extensions**: Custom context transforms, lifecycle hooks, and replaceable compaction algorithms
+- **Optional Terminal Client**: `ngn` provides interactive coding, approvals, sessions, and headless JSON events
 - **Minimal Dependencies**: Only `aiohttp` and `aiosqlite` required
 
 ## Installation
@@ -24,11 +26,33 @@ A lightweight LLM agent framework with direct HTTP-based provider integration.
 pip install nagents
 ```
 
+## ngn Terminal Client
+
+Try the terminal harness from this checkout:
+
+```bash
+poetry install -E dev -E tui
+poetry run ngn --demo
+```
+
+The offline demo needs no API key and performs no workspace edits or shell
+commands. Send `demo approval` to try a change-preview dialog. For a real model,
+set your provider key in the environment and run `poetry run ngn --model MODEL_ID`.
+Use `ngn run --json "your prompt"` for headless integration.
+
+Python plugins can change how the agent builds context, compacts history, and
+executes tools. The TUI uses the same harness as the headless client; Textual
+remains an optional dependency. See the [ngn guide](docs/guide/ngn.md),
+[custom Python behavior example](examples/harness/custom_behavior.py), and
+[upstream research](docs/development/harness-research.md).
+
 ## Quick Start
 
 ```python
 import asyncio
-from nagents import Agent, Provider, ProviderType
+from pathlib import Path
+from nagents import Agent, Provider, ProviderType, SessionManager
+
 
 async def main():
     # Create a provider
@@ -39,14 +63,19 @@ async def main():
     )
 
     # Create an agent
-    agent = Agent(provider=provider)
+    agent = Agent(
+        provider=provider,
+        session_manager=SessionManager(Path("sessions.db")),
+        streaming=True,
+    )
 
     # Run a conversation
     async for event in agent.run("Hello, how are you?"):
-        if hasattr(event, 'chunk'):
+        if hasattr(event, "chunk"):
             print(event.chunk, end="")
 
     await agent.close()
+
 
 asyncio.run(main())
 ```
@@ -68,8 +97,10 @@ def get_weather(city: str) -> str:
     """Get the current weather for a city."""
     return f"Weather in {city}: Sunny, 22°C"
 
+
 agent = Agent(
     provider=provider,
+    session_manager=SessionManager(Path("sessions.db")),
     tools=[get_weather],
 )
 

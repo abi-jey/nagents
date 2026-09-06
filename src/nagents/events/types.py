@@ -21,6 +21,22 @@ class EventType(Enum):
     TEXT_CHUNK = "text_chunk"  # Partial text during streaming
     REASONING_CHUNK = "reasoning_chunk"  # Partial reasoning/thinking during streaming
 
+    # Audio events (Realtime speech-to-speech)
+    AUDIO_CHUNK = "audio_chunk"  # Base64-encoded output audio delta
+    AUDIO_TRANSCRIPT_DELTA = "audio_transcript_delta"  # Partial output audio transcript
+    INPUT_TRANSCRIPT_DELTA = "input_transcript_delta"  # Partial input audio transcript
+    INPUT_TRANSCRIPT_COMPLETED = "input_transcript_completed"  # Final input transcript
+    SPEECH_STARTED = "speech_started"  # User started speaking (VAD)
+    SPEECH_STOPPED = "speech_stopped"  # User stopped speaking (VAD)
+
+    # Realtime session lifecycle events
+    REALTIME_SESSION_CREATED = "realtime_session_created"  # Server session ready
+    REALTIME_SESSION_UPDATED = "realtime_session_updated"  # Session config updated
+    RESPONSE_CREATED = "response_created"  # Model started a new response
+    RESPONSE_CANCELLED = "response_cancelled"  # In-progress response was cancelled
+    REALTIME_RATE_LIMITS = "realtime_rate_limits"  # Rate limit / usage counters
+    REALTIME_RAW = "realtime_raw"  # Unmapped server event (raw passthrough)
+
     # Completion events
     TEXT_DONE = "text_done"  # Final complete text
 
@@ -119,6 +135,133 @@ class TextDoneEvent(Event):
     type: EventType = field(default=EventType.TEXT_DONE)
     text: str = ""
     finish_reason: FinishReason = FinishReason.STOP
+
+
+@dataclass
+class AudioChunkEvent(Event):
+    """Streaming output audio chunk from a Realtime speech-to-speech session.
+
+    Attributes:
+        chunk: Base64-encoded audio bytes (PCM16 by default).
+        format: Audio format of the chunk (e.g. "pcm16").
+    """
+
+    type: EventType = field(default=EventType.AUDIO_CHUNK)
+    chunk: str = ""
+    format: str = "pcm16"
+
+
+@dataclass
+class AudioTranscriptDeltaEvent(Event):
+    """Streaming transcript delta for model-generated audio.
+
+    Emitted as the model speaks, providing a live text rendering of its
+    spoken output.
+    """
+
+    type: EventType = field(default=EventType.AUDIO_TRANSCRIPT_DELTA)
+    delta: str = ""
+
+
+@dataclass
+class InputTranscriptDeltaEvent(Event):
+    """Streaming transcript delta for user input audio.
+
+    Emitted as the user speaks, providing a live text rendering of their
+    speech (requires input transcription to be enabled).
+    """
+
+    type: EventType = field(default=EventType.INPUT_TRANSCRIPT_DELTA)
+    delta: str = ""
+
+
+@dataclass
+class InputTranscriptCompletedEvent(Event):
+    """Final recognized transcript for a committed user audio turn.
+
+    Attributes:
+        transcript: The full transcribed text of the user's utterance.
+    """
+
+    type: EventType = field(default=EventType.INPUT_TRANSCRIPT_COMPLETED)
+    transcript: str = ""
+
+
+@dataclass
+class SpeechStartedEvent(Event):
+    """Voice activity detection detected the start of user speech."""
+
+    type: EventType = field(default=EventType.SPEECH_STARTED)
+
+
+@dataclass
+class SpeechStoppedEvent(Event):
+    """Voice activity detection detected the end of user speech."""
+
+    type: EventType = field(default=EventType.SPEECH_STOPPED)
+
+
+@dataclass
+class RealtimeSessionCreatedEvent(Event):
+    """A Realtime session has been created on the server.
+
+    Attributes:
+        session_id: The server-assigned session identifier.
+    """
+
+    type: EventType = field(default=EventType.REALTIME_SESSION_CREATED)
+    session_id: str = ""
+
+
+@dataclass
+class RealtimeSessionUpdatedEvent(Event):
+    """The Realtime session configuration was updated."""
+
+    type: EventType = field(default=EventType.REALTIME_SESSION_UPDATED)
+
+
+@dataclass
+class ResponseCancelledEvent(Event):
+    """The in-progress model response was cancelled (e.g. user interruption)."""
+
+    type: EventType = field(default=EventType.RESPONSE_CANCELLED)
+
+
+@dataclass
+class ResponseCreatedEvent(Event):
+    """The model started generating a new response."""
+
+    type: EventType = field(default=EventType.RESPONSE_CREATED)
+
+
+@dataclass
+class RealtimeRateLimitsEvent(Event):
+    """Rate-limit and usage counters reported by the Realtime API.
+
+    Attributes:
+        rate_limits: Raw ``rate_limits`` array from the server, where each
+            entry has ``name``, ``limit``, ``remaining``, and ``reset_seconds``.
+    """
+
+    type: EventType = field(default=EventType.REALTIME_RATE_LIMITS)
+    rate_limits: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class RealtimeRawEvent(Event):
+    """A server event the client does not explicitly model, passed through raw.
+
+    Useful for debugging and for reacting to events not yet covered by the
+    client (e.g. new server features). The full payload is preserved.
+
+    Attributes:
+        event_type: The raw server event type string.
+        payload: The full raw event payload.
+    """
+
+    type: EventType = field(default=EventType.REALTIME_RAW)
+    event_type: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

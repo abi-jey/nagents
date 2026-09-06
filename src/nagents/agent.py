@@ -2,10 +2,15 @@
 Main orchestrator for LLM interactions with auto tool execution.
 """
 
+import asyncio
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 from collections.abc import AsyncIterator
 from collections.abc import Callable
+from collections.abc import Iterable
+from copy import deepcopy
+from dataclasses import replace
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,8 +41,15 @@ from .events import TextChunkEvent
 from .events import TextDoneEvent
 from .events import TokenUsage
 from .events import ToolCallEvent
+from .events import ToolResultEvent
 from .events import Usage
 from .exceptions import ToolHallucinationError
+from .extensions import AgentPlugin
+from .extensions import CompactionRequest
+from .extensions import CompactionResult
+from .extensions import CompactionStrategy
+from .extensions import ModelRequest
+from .extensions import RunContext
 from .http import FileHTTPLogger
 from .http import HTTPError
 from .media import transcode_audio_to_wav
@@ -58,6 +70,9 @@ from .types import ToolCall
 from .types import ToolDefinition
 
 if TYPE_CHECKING:
+    from .realtime import AudioDuplex
+    from .realtime import RealtimeConfig
+    from .realtime import RealtimeSession
     from .stt import STTService
 
 
@@ -167,10 +182,15 @@ class Agent:
         batch_poll_interval: float = 30.0,
         stt_service: "STTService | None" = None,
         unsupported_audio: UnsupportedAudioBehavior = UnsupportedAudioBehavior.RAISE,
+        audio: "AudioDuplex | None" = None,
         retry_config: RetryConfig | None = None,
-        compactor: Compactor | Literal["self"] | None | object = _COMPACTOR_NOT_SET,
+        compactor: Compactor | Literal["self"] | object | None = _COMPACTOR_NOT_SET,
         compact_on: Tokens | Messages | None = None,
         compact_prompt: str | None = None,
+        plugins: Iterable[AgentPlugin] = (),
+        compaction_strategy: CompactionStrategy | None = None,
+        tool_executor: ToolExecutor | None = None,
+        save_tool_outputs: bool = True,
     ):
         """
         Initialize the agent.
@@ -201,6 +221,11 @@ class Agent:
                                - DROP: Replace audio with a text warning
                                - TRANSCRIBE: Auto-transcribe using stt_service
                                  (requires stt_service to be set)
+            audio: Optional :class:`~nagents.realtime.AudioDuplex` pairing an
+                   :class:`~nagents.realtime.AudioInput` and
+                   :class:`~nagents.realtime.AudioOutput`. When set, calling
+                   :meth:`run` with no message runs a Realtime speech-to-speech
+                   conversation. Either end may be ``None`` to disable it.
             retry_config: Optional retry configuration for rate limit (HTTP 429)
                           and server error (5xx) handling. If provided, overrides
                           the provider's retry config. Retries are enabled by
@@ -217,6 +242,14 @@ class Agent:
                        - None: Use resolution order (agent -> compactor -> provider default)
             compact_prompt: Custom prompt for "self" compaction. If None, uses
                            DEFAULT_COMPACT_PROMPT.
+            plugins: Trusted, ordered hooks for the text run lifecycle.
+            compaction_strategy: Python context replacement strategy; takes
+                                 precedence over the legacy compactor.
+            tool_executor: Optional authorization/execution boundary. The consumer
+                           must ensure its registry matches this agent's tools;
+                           assigning an executor after construction is supported.
+            save_tool_outputs: Enable the reserved _save_to filesystem convention.
+                               Disable for executor-controlled filesystem access.
         """
         self.provider = provider
         self.session = session_manager
@@ -228,6 +261,10 @@ class Agent:
         self.batch_poll_interval = batch_poll_interval
         self.stt_service = stt_service
         self.unsupported_audio = unsupported_audio
+        self.audio = audio
+        self.plugins: list[AgentPlugin] = list(plugins)
+        self.compaction_strategy = compaction_strategy
+        self.save_tool_outputs = save_tool_outputs
 
         # Compaction configuration
         # None (default) -> use DEFAULT_COMPACTOR
@@ -249,7 +286,10 @@ class Agent:
             )
 
         self.tool_registry = ToolRegistry()
-        self.tool_executor = ToolExecutor(self.tool_registry)
+        self._default_tool_executor = ToolExecutor(self.tool_registry)
+        self.tool_executor = tool_executor if tool_executor is not None else self._default_tool_executor
+        if self.batch:
+            self._check_extension_mode("batch")
 
         # Track actual prompt_tokens from API responses per session
         # Maps session_id -> last known prompt_tokens
@@ -298,6 +338,15 @@ class Agent:
             logger=self._http_logger,
         )
         logger.info("Batch mode enabled - requests will be processed with 50% cost discount")
+
+    def _check_extension_mode(self, mode: str) -> None:
+        if (
+            self.plugins
+            or self.compaction_strategy is not None
+            or self.tool_executor is not self._default_tool_executor
+            or not self.save_tool_outputs
+        ):
+            raise ValueError(f"Agent extensions are not supported in {mode} mode; use text run()")
 
     @property
     def is_initialized(self) -> bool:
@@ -356,6 +405,114 @@ class Agent:
             description: Optional override for description
         """
         return self.tool_registry.register(func, name, description)
+
+    def realtime_session(
+        self,
+        model: str | None = None,
+        voice: str | None = None,
+        config: "RealtimeConfig | None" = None,
+        audio: "AudioDuplex | None" = None,
+        base_url: str = "wss://api.openai.com/v1/realtime",
+        heartbeat: float | None = None,
+        log_file: Path | str | None = None,
+    ) -> "RealtimeSession":
+        """
+        Create a Realtime speech-to-speech session for this agent.
+
+        Reuses this agent's provider credentials, system prompt, and registered
+        tools. The model and its configuration come from the provider's
+        :attr:`~nagents.Provider.realtime_config` (or ``config``), with the
+        model falling back to ``model``, then the provider's model, then the
+        default Realtime model.
+
+        Requires an OpenAI-compatible provider.
+
+        Example:
+            async with agent.realtime_session() as session:
+                async for event in session:
+                    ...
+
+        Args:
+            model: Optional Realtime model override.
+            voice: Optional output voice override.
+            config: Optional :class:`~nagents.realtime.RealtimeConfig` override
+                (defaults to ``provider.realtime_config``).
+            audio: Optional :class:`~nagents.realtime.AudioDuplex` (defaults to
+                the agent's ``audio``).
+            base_url: WebSocket endpoint (defaults to OpenAI).
+            heartbeat: Optional WebSocket heartbeat interval in seconds.
+            log_file: Optional path to a JSON-lines log of all raw events.
+
+        Returns:
+            A connectable :class:`~nagents.realtime.RealtimeSession`.
+
+        Raises:
+            ValueError: If the provider is not OpenAI-compatible.
+        """
+        self._check_extension_mode("voice")
+
+        from .realtime import DEFAULT_REALTIME_MODEL
+        from .realtime import RealtimeConfig
+        from .realtime import RealtimeSession
+
+        if self.provider.provider_type != ProviderType.OPENAI_COMPATIBLE:
+            raise ValueError(
+                "Realtime speech-to-speech sessions require an OPENAI_COMPATIBLE provider. "
+                f"Got: {self.provider.provider_type}"
+            )
+
+        cfg = config or self.provider.realtime_config or RealtimeConfig()
+        if model is not None:
+            cfg.model = model
+        if voice is not None:
+            cfg.voice = voice
+        if cfg.model is None:
+            cfg.model = self.provider.model or DEFAULT_REALTIME_MODEL
+
+        duplex = audio or self.audio
+        tool_funcs = [td.func for td in self.tool_registry.get_all() if td.func is not None]
+
+        return RealtimeSession(
+            api_key=self.provider.api_key,
+            instructions=self.system_prompt or "",
+            tools=tool_funcs,
+            config=cfg,
+            audio_in=duplex.input if duplex else None,
+            audio_out=duplex.output if duplex else None,
+            base_url=base_url,
+            heartbeat=heartbeat,
+            log_file=log_file,
+        )
+
+    async def _run_voice(
+        self,
+        *,
+        auto_commit: bool | None = None,
+        log_file: Path | str | None = None,
+    ) -> AsyncIterator[Event]:
+        """
+        Run a full-duplex speech-to-speech conversation through this agent.
+
+        Uses the agent's ``audio`` :class:`~nagents.realtime.AudioDuplex` (set
+        at construction) and the provider's Realtime model/config. Audio flows
+        in through the duplex input and out through its output, while
+        transcripts and tool events are yielded — the same event stream as
+        :meth:`run`.
+        """
+        duplex = self.audio
+        if duplex is None or (duplex.input is None and duplex.output is None):
+            raise ValueError(
+                "Voice mode requires an AudioDuplex with at least an input or output. "
+                "Set audio=AudioDuplex(input=..., output=...) on the Agent."
+            )
+
+        session = self.realtime_session(audio=duplex, log_file=log_file)
+        try:
+            await session.connect()
+            async for event in session.run_duplex(duplex.input, duplex.output, auto_commit=auto_commit):
+                yield event
+        finally:
+            await session.close()
 
     async def _process_multimodal_content(
         self,
@@ -606,6 +763,11 @@ class Agent:
         Yields:
             CompactionStartedEvent, CompactionDoneEvent if compaction occurs
         """
+        if self.compaction_strategy is not None:
+            async for event in self._compact_with_strategy(session_id):
+                yield event
+            return
+
         compactor = self._resolve_compactor()
 
         # Log compactor resolution
@@ -668,6 +830,11 @@ class Agent:
         Yields:
             CompactionStartedEvent, intermediate events, CompactionDoneEvent
         """
+        if self.compaction_strategy is not None:
+            async for event in self._compact_with_strategy(session_id, force=True):
+                yield event
+            return
+
         compactor = self._resolve_compactor()
 
         if compactor is None:
@@ -769,8 +936,7 @@ class Agent:
             role="compaction_summary",
             content=summary_text,
         )
-        summary_message_id = await self.session.add_message(session_id, summary_msg)
-        await self.session.set_compaction_boundary(session_id, summary_message_id)
+        await self.session.replace_context(session_id, [summary_msg])
 
         # Yield done event
         new_count = 1  # Just the summary
@@ -791,6 +957,36 @@ class Agent:
         logger.info(
             f"Compaction complete: {original_count} -> {new_count} messages, "
             f"{original_tokens} -> {summary_tokens} tokens"
+        )
+
+    async def _compact_with_strategy(self, session_id: str, force: bool = False) -> AsyncIterator[Event]:
+        strategy = self.compaction_strategy
+        assert strategy is not None
+        history = await self.session.get_history(session_id)
+        original_count = len(history)
+        original_tokens = estimate_messages_tokens(history)
+        request = CompactionRequest(deepcopy(history), session_id, self.provider, original_tokens, force)
+        if not force and not await strategy.should_compact(request):
+            return
+        yield CompactionStartedEvent(
+            message_count=original_count,
+            estimated_tokens=original_tokens,
+            session_id=session_id,
+        )
+        result = await strategy.compact(request)
+        if not isinstance(result, CompactionResult):
+            raise TypeError("CompactionStrategy.compact must return CompactionResult")
+        await self.session.replace_context(session_id, result.messages)
+        new_tokens = estimate_messages_tokens(result.messages)
+        self._session_tokens[session_id] = new_tokens
+        yield CompactionDoneEvent(
+            original_message_count=original_count,
+            original_token_count=original_tokens,
+            new_message_count=len(result.messages),
+            summary_tokens=new_tokens,
+            summary_text=result.summary,
+            compactor_used=type(strategy).__name__,
+            session_id=session_id,
         )
 
     def trigger_compaction(self) -> None:
@@ -829,6 +1025,9 @@ class Agent:
             print(f"Compacted: {result.original_message_count} -> {result.new_message_count}")
             print(f"Summary: {result.summary_text[:100]}...")
         """
+        if not await self.session.session_exists(session_id):
+            raise ValueError(f"Session '{session_id}' not found")
+
         # Get current messages
         messages: list[Message] = []
         if self.system_prompt:
@@ -849,22 +1048,28 @@ class Agent:
 
     async def run(
         self,
-        user_message: str | list[ContentPart] | Message,
+        user_message: str | list[ContentPart] | Message | None = None,
         session_id: str | None = None,
         user_id: str = "default",
         config: GenerationConfig | None = None,
-    ) -> AsyncIterator[Event]:
+        *,
+        auto_commit: bool | None = None,
+        log_file: Path | str | None = None,
+    ) -> AsyncGenerator[Event, None]:
         """
         Run a complete interaction with automatic tool execution.
 
         Auto-initializes the agent on first call (verifies model, sets up database).
 
-        Yields all events (text chunks, tool calls, tool results, etc.)
-        as they occur. Tool calls are automatically executed and their
-        results fed back to the model.
+        Two modes:
+        - **Text**: pass ``user_message`` (str, list of content parts, or a
+          :class:`Message`). Yields text chunks, tool calls/results, etc.
+        - **Voice**: pass ``user_message=None`` and configure ``audio=`` on the
+          agent. Runs a Realtime speech-to-speech conversation, yielding the
+          same event stream (transcripts, tool calls/results, done, errors).
 
         Args:
-            user_message: The user's message. Can be:
+            user_message: The user's message, or ``None`` for voice mode. Can be:
                           - str: Simple text message
                           - list[ContentPart]: Multimodal content (text, images, audio)
                           - Message: Full message object
@@ -873,7 +1078,11 @@ class Agent:
             session_id: Optional session identifier. If provided, verifies it exists
                         or creates a new one. If None, creates a new session.
             user_id: User identifier (default: "default")
-            config: Optional generation configuration
+            config: Optional generation configuration (text mode)
+            auto_commit: Voice mode: whether to commit input and request a response
+                         when the input is exhausted (push-to-talk). Defaults to the
+                         inverse of the Realtime config's turn detection.
+            log_file: Voice mode: optional JSON-lines log of all raw events.
 
         Yields:
             Events as they occur
@@ -882,11 +1091,110 @@ class Agent:
             ValueError: If model verification fails during auto-initialization
             UnsupportedAudioError: If audio content is sent to a model that doesn't
                                     support it and unsupported_audio is RAISE (default)
+
+        Text runs repair unresolved persisted calls without replaying them.
+        Cancellation records unknown outcomes, not exactly-once execution:
+        an interrupted synchronous tool may still finish in its worker thread.
+        Consumers must serialize runs/compaction for the same session and close
+        the iterator explicitly when stopping consumption early.
         """
+        if user_message is None:
+            self._check_extension_mode("voice")
+            async for event in self._run_voice(auto_commit=auto_commit, log_file=log_file):
+                yield event
+            return
+
+        if self.batch:
+            self._check_extension_mode("batch")
         await self._ensure_initialized()
 
         # Normalize user_message to a Message object
         message = Message(role="user", content=user_message) if isinstance(user_message, str | list) else user_message
+        message = deepcopy(message)
+        if self.batch:
+            message.content = await self._process_multimodal_content(message.content)
+            async for event in self._run_batch(message, session_id, user_id, config):
+                yield event
+            return
+
+        if session_id is None:
+            session_id = f"session-{uuid.uuid4().hex[:12]}"
+        await self.session.get_or_create_session(session_id, user_id)
+        context = RunContext(self, session_id, user_id)
+        plugins = tuple(self.plugins)
+        text_run: AsyncGenerator[Event, None] | None = None
+        try:
+            await self._repair_tool_calls(session_id)
+            for plugin in plugins:
+                message = await plugin.before_run(context, message)
+                if not isinstance(message, Message):
+                    raise TypeError(f"{type(plugin).__name__}.before_run must return Message")
+            text_run = self._run_text(message, context, config, plugins)
+            async for event in text_run:
+                for plugin in plugins:
+                    await plugin.on_event(context, deepcopy(event))
+                yield event
+        finally:
+
+            async def cleanup() -> None:
+                errors: list[BaseException] = []
+                try:
+                    if text_run is not None:
+                        await text_run.aclose()
+                except BaseException as error:
+                    errors.append(error)
+                try:
+                    # Re-read durable state, including commits that raced cancellation.
+                    await self._repair_tool_calls(session_id)
+                except BaseException as error:
+                    errors.append(error)
+                for plugin in plugins:
+                    try:
+                        await plugin.after_run(context)
+                    except BaseException as error:
+                        error.add_note(f"{type(plugin).__name__}.after_run failed")
+                        errors.append(error)
+                if errors:
+                    raise BaseExceptionGroup("Agent run cleanup failed", errors)
+
+            cleanup_task = asyncio.create_task(cleanup())
+            cancelled: asyncio.CancelledError | None = None
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError as error:
+                    cancelled = error
+            cleanup_task.result()
+            if cancelled is not None:
+                raise cancelled
+
+    async def _repair_tool_calls(self, session_id: str) -> None:
+        """Close interrupted tool blocks without assuming whether side effects ran."""
+        pending: dict[str, ToolCall] = {}
+        for message in await self.session.get_history(session_id):
+            for call in message.tool_calls:
+                pending[call.id] = call
+            if message.role == "tool" and message.tool_call_id in pending:
+                del pending[message.tool_call_id]
+        for call in pending.values():
+            await self.session.add_message(
+                session_id,
+                Message(
+                    role="tool",
+                    tool_call_id=call.id,
+                    name=call.name,
+                    content="Error: Tool outcome unknown (run interrupted or cancelled); call was not replayed.",
+                ),
+            )
+
+    async def _run_text(
+        self,
+        message: Message,
+        context: RunContext,
+        config: GenerationConfig | None,
+        plugins: tuple[AgentPlugin, ...],
+    ) -> AsyncGenerator[Event, None]:
+        session_id = context.session_id
 
         # Process audio content through STT if present
         processed_content = await self._process_multimodal_content(message.content)
@@ -900,24 +1208,6 @@ class Agent:
             name=message.name,
         )
 
-        # Use batch mode if enabled
-        if self.batch:
-            async for event in self._run_batch(processed_message, session_id, user_id, config):
-                yield event
-            return
-
-        # Handle session ID
-        if session_id is None:
-            session_id = f"session-{uuid.uuid4().hex[:12]}"
-            await self.session.get_or_create_session(session_id, user_id)
-            logger.info(f"Created new session: {session_id}")
-        else:
-            if await self.session.session_exists(session_id):
-                logger.debug(f"Using existing session: {session_id}")
-            else:
-                logger.info(f"Session '{session_id}' not found, creating new session")
-                await self.session.get_or_create_session(session_id, user_id)
-
         # Add user message to history
         await self.session.add_message(session_id, processed_message)
 
@@ -928,13 +1218,14 @@ class Agent:
         last_usage = Usage()
 
         for round_num in range(self.max_tool_rounds):
+            context.round_number = round_num
             logger.debug(f"Generation round {round_num + 1}/{self.max_tool_rounds}")
 
             # Re-resolve the tool list every round so tools registered mid-run
             # (e.g. an MCP server connected by a tool in the previous round)
             # are already in the schema for the very next generation.
             tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None
-            if tools:
+            if tools and self.save_tool_outputs:
                 tools = _inject_save_to(tools)
 
             # Get current history
@@ -984,7 +1275,13 @@ class Agent:
             )
 
             # Apply context compaction if configured
-            async for event in self._maybe_compact(messages, session_id):
+            compaction = (
+                self._do_compact(messages, session_id)
+                if self._compaction_requested
+                else self._maybe_compact(messages, session_id)
+            )
+            self._compaction_requested = False
+            async for event in compaction:
                 yield event
                 # Update messages if compaction was done
                 if isinstance(event, CompactionDoneEvent):
@@ -999,39 +1296,26 @@ class Agent:
                     # The next API call will give us new actual prompt_tokens
                     self._session_tokens[session_id] = event.summary_tokens
 
-            # Check if compaction was requested via trigger_compaction()
-            if self._compaction_requested:
-                self._compaction_requested = False  # Reset flag
-
-                # Reload messages with latest history
-                messages = []
-                if self.system_prompt:
-                    messages.append(Message(role="system", content=self.system_prompt))
-                history = await self.session.get_history(session_id)
-                messages.extend(history)
-                messages = self._filter_unsupported_audio(messages)
-
-                # Run compaction
-                async for event in self._do_compact(messages, session_id):
-                    yield event
-
-                # Reload messages after compaction
-                messages = []
-                if self.system_prompt:
-                    messages.append(Message(role="system", content=self.system_prompt))
-                history = await self.session.get_history(session_id)
-                messages.extend(history)
-                messages = self._filter_unsupported_audio(messages)
-
             # Generate response
             pending_tool_calls: list[ToolCall] = []
             full_text = ""
             has_error = False
 
+            # Copy schemas, not callable owners (which can hold locks or live clients).
+            request = ModelRequest(
+                deepcopy(messages),
+                [replace(tool, parameters=deepcopy(tool.parameters)) for tool in tools or []],
+                deepcopy(config),
+            )
+            for plugin in plugins:
+                request = await plugin.before_model(context, request)
+                if not isinstance(request, ModelRequest):
+                    raise TypeError(f"{type(plugin).__name__}.before_model must return ModelRequest")
+
             async for event in self.provider.generate(
-                messages=messages,
-                tools=tools,
-                config=config,
+                messages=request.messages,
+                tools=request.tools or None,
+                config=request.config,
                 stream=self.streaming,
             ):
                 # Track usage from events that have actual token counts
@@ -1058,22 +1342,32 @@ class Agent:
                     total_tokens=last_usage.total_tokens,
                 )
 
-                yield event  # Always emit events to caller
-
                 if isinstance(event, TextChunkEvent):
                     full_text += event.chunk
                 elif isinstance(event, TextDoneEvent):
                     full_text = event.text
                 elif isinstance(event, ToolCallEvent):
-                    pending_tool_calls.append(
-                        ToolCall(
-                            id=event.id,
-                            name=event.name,
-                            arguments=event.arguments,
-                            metadata=event.metadata,
-                        )
+                    call = ToolCall(
+                        id=event.id,
+                        name=event.name,
+                        arguments=deepcopy(event.arguments),
+                        metadata=deepcopy(event.metadata),
                     )
-                elif isinstance(event, ErrorEvent):
+                    if not call.id or not call.name or any(tc.id == call.id for tc in pending_tool_calls):
+                        raise ValueError("Tool calls require unique nonempty IDs and nonempty names")
+                    for plugin in plugins:
+                        call = await plugin.before_tool(context, call)
+                        if not isinstance(call, ToolCall) or (call.id, call.name) != (event.id, event.name):
+                            raise ValueError(f"{type(plugin).__name__}.before_tool must preserve tool call id/name")
+                    if not self.save_tool_outputs:
+                        call.arguments.pop(_SAVE_TO_PARAM_NAME, None)
+                    pending_tool_calls.append(deepcopy(call))
+                    event.arguments = deepcopy(call.arguments)
+                    event.metadata = deepcopy(call.metadata)
+
+                yield event
+
+                if isinstance(event, ErrorEvent):
                     has_error = True
                     if not event.recoverable:
                         yield DoneEvent(
@@ -1101,7 +1395,7 @@ class Agent:
                 # Add assistant message with tool calls to history
                 await self.session.add_message(
                     session_id,
-                    Message(role="assistant", content=None, tool_calls=pending_tool_calls),
+                    Message(role="assistant", content=full_text or None, tool_calls=pending_tool_calls),
                 )
 
                 # Execute each tool
@@ -1109,9 +1403,22 @@ class Agent:
                     logger.debug(f"Executing tool: {tool_call.name}")
 
                     # _save_to convention: remove from args before tool execution
-                    save_path = _extract_save_path(tool_call)
+                    execution_call = deepcopy(tool_call)
+                    save_path = _extract_save_path(execution_call) if self.save_tool_outputs else None
 
-                    result_event = await self.tool_executor.execute(tool_call)
+                    result_event = await self.tool_executor.execute(execution_call)
+                    if not isinstance(result_event, ToolResultEvent) or (result_event.id, result_event.name) != (
+                        tool_call.id,
+                        tool_call.name,
+                    ):
+                        raise ValueError("Tool executor must preserve tool call id/name")
+                    for plugin in plugins:
+                        result_event = await plugin.after_tool(context, result_event)
+                        if not isinstance(result_event, ToolResultEvent) or (result_event.id, result_event.name) != (
+                            tool_call.id,
+                            tool_call.name,
+                        ):
+                            raise ValueError(f"{type(plugin).__name__}.after_tool must preserve tool call id/name")
                     # Attach last known usage info to tool result events
                     result_event.usage = Usage(
                         prompt_tokens=last_usage.prompt_tokens,
@@ -1123,19 +1430,8 @@ class Agent:
                             total_tokens=last_usage.total_tokens,
                         ),
                     )
-                    yield result_event
-
-                    # Check for invalid tool (hallucination) and raise if configured
-                    if result_event.error and self.fail_on_invalid_tool and "does not exist" in result_event.error:
-                        logger.error(f"Tool hallucination detected: {tool_call.name}")
-                        raise ToolHallucinationError(
-                            tool_name=tool_call.name,
-                            available_tools=self.tool_registry.names(),
-                            message=result_event.error,
-                        )
-
                     # Add tool result to history
-                    if save_path and result_event.error is None:
+                    if self.save_tool_outputs and save_path and result_event.error is None:
                         result_content = _save_and_return(result_event, save_path, session_id)
                     else:
                         result_content = (
@@ -1150,6 +1446,16 @@ class Agent:
                             name=tool_call.name,
                         ),
                     )
+                    yield result_event
+
+                    # Persist the error before either UI interruption or fail-fast exit.
+                    if result_event.error and self.fail_on_invalid_tool and "does not exist" in result_event.error:
+                        logger.error(f"Tool hallucination detected: {tool_call.name}")
+                        raise ToolHallucinationError(
+                            tool_name=tool_call.name,
+                            available_tools=self.tool_registry.names(),
+                            message=result_event.error,
+                        )
 
                 # Continue to next round (model will see tool results)
                 continue
@@ -1218,6 +1524,7 @@ class Agent:
         and yields events from the results. Supports multi-turn tool execution
         by submitting subsequent batches with tool results.
         """
+        self._check_extension_mode("batch")
         if not self._batch_client:
             yield ErrorEvent(message="Batch client not initialized")
             return
@@ -1453,6 +1760,7 @@ class Agent:
         Yields:
             Events as they occur
         """
+        self._check_extension_mode("simple")
         await self._ensure_initialized()
 
         tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else None

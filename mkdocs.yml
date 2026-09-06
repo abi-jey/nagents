@@ -82,6 +82,7 @@ nav:
       - Quick Start: getting-started/quickstart.md
       - Configuration: getting-started/configuration.md
   - User Guide:
+      - ngn Terminal Harness: guide/ngn.md
       - Providers: guide/providers.md
       - Tools: guide/tools.md
       - Sessions: guide/sessions.md
@@ -102,6 +103,7 @@ nav:
       - Batch: api/batch.md
   - Development:
       - Contributing: development/contributing.md
+      - Harness Research: development/harness-research.md
 
 extra:
   social:

@@ -39,6 +39,7 @@ from ..types import ToolDefinition
 
 if TYPE_CHECKING:
     from ..http import HTTPLogger
+    from ..realtime import RealtimeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class Provider:
         timeout: float = 120.0,
         api_version: str | None = None,
         retry_config: RetryConfig | None = None,
+        realtime_config: "RealtimeConfig | None" = None,
     ):
         """
         Initialize the provider.
@@ -95,12 +97,16 @@ class Provider:
             retry_config: Retry configuration for rate limit and server error handling.
                           Defaults to RetryConfig() (3 retries, 5s base delay).
                           Set RetryConfig(max_retries=0) to disable retry.
+            realtime_config: Optional :class:`~nagents.realtime.RealtimeConfig`
+                for Realtime speech-to-speech sessions. When set, voice sessions
+                reuse the provider's model and this configuration.
         """
         self.provider_type = provider_type
         self.api_key = api_key
         self.model = model
         self.api_version = api_version
         self.retry_config = retry_config or RetryConfig()
+        self.realtime_config = realtime_config
         self._http = HTTPClient(timeout=timeout)
         self._model_verified: bool | None = None  # None = not checked, True/False = result
 

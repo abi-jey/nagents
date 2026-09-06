@@ -151,6 +151,7 @@ stateDiagram-v2
 from pathlib import Path
 from nagents import Agent, SessionManager
 
+
 async def main():
     session_manager = SessionManager(Path("sessions.db"))
 
@@ -233,6 +234,7 @@ import asyncio
 from pathlib import Path
 from nagents import Agent, Provider, ProviderType, SessionManager, DoneEvent
 
+
 async def chat(session_id: str):
     """Run an interactive chat session."""
 
@@ -260,15 +262,17 @@ async def chat(session_id: str):
 
         print("Assistant: ", end="")
         async for event in agent.run(user_input, session_id=session_id):
-            if hasattr(event, 'chunk'):
+            if hasattr(event, "chunk"):
                 print(event.chunk, end="", flush=True)
         print()  # newline
 
     await agent.close()
     print("\nGoodbye!")
 
+
 if __name__ == "__main__":
     import sys
+
     session_id = sys.argv[1] if len(sys.argv) > 1 else "default"
     asyncio.run(chat(session_id))
 ```

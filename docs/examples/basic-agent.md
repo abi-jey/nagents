@@ -220,9 +220,7 @@ agent = Agent(
 
     ```python
     # Clean up old sessions periodically
-    old_sessions = await session_manager.list_sessions(
-        older_than=timedelta(days=30)
-    )
+    old_sessions = await session_manager.list_sessions(older_than=timedelta(days=30))
     for session in old_sessions:
         await session_manager.delete_session(session.id)
     ```

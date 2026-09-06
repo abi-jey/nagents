@@ -165,6 +165,31 @@ def format_tools(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     ]
 
 
+def format_realtime_tools(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
+    """
+    Convert ToolDefinition objects to the OpenAI Realtime API tools format.
+
+    Unlike the Chat Completions format, Realtime tools are flattened: the
+    function name, description, and parameters live at the top level of each
+    tool entry (not nested under a ``function`` key).
+
+    Args:
+        tools: List of ToolDefinition objects
+
+    Returns:
+        List of tool dicts in Realtime API format
+    """
+    return [
+        {
+            "type": "function",
+            "name": t.name,
+            "description": t.description,
+            "parameters": t.parameters,
+        }
+        for t in tools
+    ]
+
+
 def parse_tool_calls(choice: dict[str, Any]) -> list[ToolCall]:
     """
     Parse tool calls from an OpenAI response choice.

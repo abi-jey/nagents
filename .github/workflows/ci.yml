@@ -71,7 +71,7 @@ jobs:
           allow-prereleases: true
 
       - name: Install package and test dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,tui]"
 
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
@@ -110,7 +110,7 @@ jobs:
           allow-prereleases: true
 
       - name: Install package and test dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,tui]"
 
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
@@ -145,7 +145,7 @@ jobs:
           allow-prereleases: true
 
       - name: Install package and test dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,tui]"
 
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"

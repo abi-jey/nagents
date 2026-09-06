@@ -10,6 +10,7 @@ from typing import Any
 
 import aiosqlite
 
+from ..extensions import _validate_context
 from ..migrations.manager import MigrationManager
 from ..migrations.sessions import migrations as session_migrations
 from ..types import AudioContent
@@ -221,30 +222,12 @@ class SessionManager:
         """
         await self.initialize()
 
-        tool_calls_json = None
-        if message.tool_calls:
-            tool_calls_json = json.dumps([asdict(tc) for tc in message.tool_calls])
-
-        # Serialize multimodal content (list[ContentPart]) to JSON for SQLite
-        content_value: str | None
-        if isinstance(message.content, list):
-            content_value = json.dumps([asdict(part) for part in message.content])
-        else:
-            content_value = message.content
-
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """INSERT INTO v2_messages
                    (session_id, role, content, tool_calls, tool_call_id, name)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    session_id,
-                    message.role,
-                    content_value,
-                    tool_calls_json,
-                    message.tool_call_id,
-                    message.name,
-                ),
+                self._message_values(session_id, message),
             )
             message_id = cursor.lastrowid
             assert message_id is not None
@@ -255,6 +238,52 @@ class SessionManager:
             await db.commit()
 
         return message_id
+
+    @staticmethod
+    def _message_values(session_id: str, message: Message) -> tuple[str | None, ...]:
+        """Shared serialization for ordinary messages and context replacements."""
+        return (
+            session_id,
+            message.role,
+            json.dumps([asdict(part) for part in message.content])
+            if isinstance(message.content, list)
+            else message.content,
+            json.dumps([asdict(call) for call in message.tool_calls]) if message.tool_calls else None,
+            message.tool_call_id,
+            message.name,
+        )
+
+    async def replace_context(self, session_id: str, messages: list[Message]) -> None:
+        """Append a validated replacement and move the inclusive boundary atomically.
+
+        Raw history is never deleted. Validation and serialization complete
+        before any writes; failed inserts/boundary updates roll back together.
+        """
+        _validate_context(messages)
+        values = [self._message_values(session_id, message) for message in messages]
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute("SELECT 1 FROM v2_sessions WHERE id = ?", (session_id,))
+            if await cursor.fetchone() is None:
+                raise ValueError(f"Session '{session_id}' not found")
+            first_id: int | None = None
+            for row in values:
+                cursor = await db.execute(
+                    """INSERT INTO v2_messages
+                       (session_id, role, content, tool_calls, tool_call_id, name)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    row,
+                )
+                if first_id is None:
+                    first_id = cursor.lastrowid
+            assert first_id is not None
+            await db.execute(
+                """UPDATE v2_sessions SET compacted_at_message_id = ?,
+                   updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                (first_id, session_id),
+            )
+            await db.commit()
 
     async def set_compaction_boundary(self, session_id: str, message_id: int) -> None:
         """

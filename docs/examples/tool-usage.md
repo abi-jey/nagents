@@ -165,9 +165,7 @@ async def main():
         tools=tools,
     )
 
-    async for event in agent.run(
-        "What's the weather in Tokyo and tell me about Mount Fuji?"
-    ):
+    async for event in agent.run("What's the weather in Tokyo and tell me about Mount Fuji?"):
         if event.type == "text_delta":
             print(event.content, end="", flush=True)
 
@@ -191,13 +189,11 @@ Tools can accept complex parameter types:
 
     class EmailParams(BaseModel):
         """Parameters for sending an email."""
+
         to: str = Field(description="Recipient email address")
         subject: str = Field(description="Email subject line")
         body: str = Field(description="Email body content")
-        priority: str = Field(
-            default="normal",
-            description="Email priority: low, normal, or high"
-        )
+        priority: str = Field(default="normal", description="Email priority: low, normal, or high")
 
 
     async def send_email(params: EmailParams) -> str:
@@ -259,6 +255,7 @@ from nagents.providers import OpenAIProvider
 
 class ToolError(Exception):
     """Custom exception for tool errors."""
+
     pass
 
 
@@ -358,13 +355,15 @@ async def web_search(query: str, num_results: int = 3) -> str:
         num_results: Number of results to return (default 3)
     """
     # Simulated search results (replace with real API in production)
-    return json.dumps({
-        "query": query,
-        "results": [
-            {"title": f"Result {i+1} for '{query}'", "snippet": f"Information about {query}..."}
-            for i in range(num_results)
-        ]
-    })
+    return json.dumps(
+        {
+            "query": query,
+            "results": [
+                {"title": f"Result {i + 1} for '{query}'", "snippet": f"Information about {query}..."}
+                for i in range(num_results)
+            ],
+        }
+    )
 
 
 # Tool: Note Taking

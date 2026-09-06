@@ -22,9 +22,9 @@ All events inherit from `Event` and include common fields:
 ```python
 @dataclass
 class Event:
-    type: EventType         # Type discriminator
-    timestamp: datetime     # When the event occurred
-    usage: Usage           # Token usage (always present)
+    type: EventType  # Type discriminator
+    timestamp: datetime  # When the event occurred
+    usage: Usage  # Token usage (always present)
 ```
 
 !!! info "Usage is Never None"
@@ -39,15 +39,16 @@ Track token usage for cost monitoring and optimization:
 ```python
 @dataclass
 class TokenUsage:
-    prompt_tokens: int      # Input tokens
+    prompt_tokens: int  # Input tokens
     completion_tokens: int  # Output tokens
-    total_tokens: int       # Sum of above
+    total_tokens: int  # Sum of above
+
 
 @dataclass
 class Usage:
-    prompt_tokens: int          # Current generation
-    completion_tokens: int      # Current generation
-    total_tokens: int           # Current generation
+    prompt_tokens: int  # Current generation
+    completion_tokens: int  # Current generation
+    total_tokens: int  # Current generation
     session: TokenUsage | None  # Cumulative across tool rounds
 ```
 
@@ -106,9 +107,9 @@ Emitted when the model calls a tool:
 ```python
 @dataclass
 class ToolCallEvent(Event):
-    id: str               # Unique call identifier
-    name: str             # Tool function name
-    arguments: dict       # Tool arguments
+    id: str  # Unique call identifier
+    name: str  # Tool function name
+    arguments: dict  # Tool arguments
 ```
 
 ```python title="tool_call.py"
@@ -127,11 +128,11 @@ Emitted after tool execution:
 ```python
 @dataclass
 class ToolResultEvent(Event):
-    id: str               # Matches ToolCallEvent.id
-    name: str             # Tool function name
-    result: Any           # Tool return value (if successful)
-    error: str | None     # Error message (if failed)
-    duration_ms: float    # Execution time in milliseconds
+    id: str  # Matches ToolCallEvent.id
+    name: str  # Tool function name
+    result: Any  # Tool return value (if successful)
+    error: str | None  # Error message (if failed)
+    duration_ms: float  # Execution time in milliseconds
 ```
 
 ```python title="tool_result.py"
@@ -152,9 +153,9 @@ Emitted when an error occurs:
 ```python
 @dataclass
 class ErrorEvent(Event):
-    message: str           # Error message
-    code: str | None       # Error code (provider-specific)
-    recoverable: bool      # Can the conversation continue?
+    message: str  # Error message
+    code: str | None  # Error code (provider-specific)
+    recoverable: bool  # Can the conversation continue?
 ```
 
 ```python title="error_handling.py"
@@ -175,8 +176,8 @@ Emitted when generation is complete:
 ```python
 @dataclass
 class DoneEvent(Event):
-    final_text: str        # Complete response text
-    session_id: str | None # Session ID used
+    final_text: str  # Complete response text
+    session_id: str | None  # Session ID used
 ```
 
 ```python title="done_event.py"
@@ -203,6 +204,7 @@ from nagents import (
     ErrorEvent,
     DoneEvent,
 )
+
 
 async def process_response(agent: Agent, message: str):
     """Process agent response with full event handling."""
