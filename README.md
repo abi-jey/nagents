@@ -28,9 +28,12 @@ pip install nagents
 
 ## ngn Terminal Client
 
-`ngn` is an optional terminal and headless coding harness in this **source
-checkout**, not yet a published CLI release. `pip install nagents` installs the
-published library; do not assume it includes these unreleased CLI features.
+`ngn` is an optional terminal and headless coding harness. The published
+[v0.5.0 release](https://github.com/abi-jey/nagents/releases/tag/v0.5.0) includes
+the CLI and the `tui` extra. This README describes the **current source checkout**,
+which also contains changes after that release. See
+[release availability](docs/guide/ngn-installation.md#release-availability) before
+assuming a particular command or fix is in an installed distribution.
 
 Keep the existing Poetry workflow from the repository root:
 
@@ -96,6 +99,25 @@ executes tools. The TUI uses the same harness as the headless client; Textual
 remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
 [custom Python behavior example](examples/harness/custom_behavior.py), and
 [upstream research](docs/development/harness-research.md).
+
+## HTTP Interfaces
+
+These are separate applications, not interchangeable launch commands:
+
+| Command | Purpose | Installation |
+| --- | --- | --- |
+| `python -m nagents.server` | Legacy HTTP/SSE API server; retained as the Docker image's default command. The current source has no bundled chat UI. | Current checkout with `[server]`; see the [legacy API server guide](docs/guide/server.md) for token, bind, and deployment setup. |
+| `ngn serve` | New local React client for the ngn coding harness, sharing its workspace sessions and approvals. | Current checkout with `[web]` and built frontend assets; not included in `v0.5.0`. See the [local web client guide](docs/guide/ngn-web.md). |
+
+The new frontend source lives in `src/nagents/web-ui/`; its Vite build goes to
+`src/nagents/web/static/`. Neither installing `[web]` nor launching the server
+builds those assets. Source build/check commands are in
+[Contributing](docs/development/contributing.md#web-client-development).
+
+The legacy server's authentication hardening and removal of its old UI are also
+post-`0.5.0` changes. Do not apply the current security guarantees to that older
+wheel or an unverified container image. Both applications are trusted-operator
+tools, not sandboxes or multi-user services.
 
 ## Quick Start
 
@@ -182,6 +204,8 @@ async for event in agent.run("Remember my name is Alice", session_id="user-123")
 - [ngn Installation](docs/guide/ngn-installation.md)
 - [ngn Usage Guide](docs/guide/ngn.md)
 - [ngn Configuration Reference](docs/guide/ngn-configuration.md)
+- [ngn Local Web Client](docs/guide/ngn-web.md)
+- [Legacy API Server](docs/guide/server.md)
 - [Installation](https://abi-jey.github.io/nagents/getting-started/installation/)
 - [Quick Start](https://abi-jey.github.io/nagents/getting-started/quickstart/)
 - [Providers Guide](https://abi-jey.github.io/nagents/guide/providers/)

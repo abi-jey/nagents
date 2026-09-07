@@ -1,15 +1,39 @@
-# Install ngn from source
+# Install ngn
 
-`ngn` is the terminal and headless client included in the **current source
-checkout** of nagents. It is not yet a published CLI release. Installing the
-latest `nagents` from PyPI does not guarantee these unreleased commands, extras,
-or configuration fields are present, even if its version matches the checkout.
-Use a local checkout that actually contains `src/nagents/cli.py` and the `ngn`
-entry point in `pyproject.toml`.
+`ngn` is the terminal and headless client for nagents. Choose a published
+distribution for a release snapshot, or an editable checkout for current
+development. Do not let Poetry and uv independently manage the same virtualenv.
 
-This page uses local checkout paths so development launches cannot silently
-select the older published package. Choose one environment workflow; do not let Poetry and uv
-independently manage the same virtualenv.
+## Release availability
+
+The stable [v0.5.0 release](https://github.com/abi-jey/nagents/releases/tag/v0.5.0),
+published September 7, 2026 from tag commit `01b5bde`, includes the `ngn` console
+entry point, terminal client, coding harness, and headless commands. Its released
+wheel contains `nagents/cli.py`, `nagents/harness/`, and `nagents/tui/`, with the
+`tui` and `voice` extras. A pinned PyPI wheel download matched the GitHub release
+wheel. The CLI is therefore not source-only.
+
+For that release, install into your chosen virtual environment:
+
+```bash
+python -m pip install 'nagents[tui]==0.5.0'
+ngn --demo
+```
+
+Omit `[tui]` for headless-only use. The instructions below primarily use editable
+source installs so changes in the checkout appear on the next launch.
+
+!!! important "Current checkout is not the release snapshot"
+    `ngn serve`, its `[web]` extra, and the React client are new source-checkout
+    features, absent from `v0.5.0`. The legacy server's token/loopback hardening
+    and removal of its old chat UI also postdate that release. Use the
+    [web client guide](ngn-web.md) or [legacy API server guide](server.md) for
+    the appropriate application, rather than assuming a published version has
+    the current behavior.
+
+Local development metadata can lag a published release or be reused while code
+changes. Check the selected environment's `ngn --help`, installed source, and
+release contents, not just `ngn --version`, when verifying feature availability.
 
 ## Requirements
 
@@ -259,14 +283,14 @@ approval is a preview only; approving it does not edit a file.
 
 | Symptom | Check |
 | --- | --- |
-| `ngn` is missing or has different flags | Use the selected environment's launcher and install from this source checkout. A published package with the same version number may not contain the unreleased CLI. |
+| `ngn` is missing or has different flags | Check the selected environment and [release availability](#release-availability). `v0.5.0` includes the CLI but not `serve`; use the current checkout for newer commands and fixes. |
 | TUI extra is missing | Install the local checkout with `[tui]`, or use the headless `run` subcommand. |
 | TUI needs a terminal | Use a real interactive terminal, or `ngn run --json "prompt"` in a script. |
 | uv tries to synchronize the project or use `uv.lock` | Use `uv pip install --python ...` and `uv run --no-project --python ...`; do not substitute `uv sync` or bare project-managed `uv run`. |
 | Changes do not appear in an isolated `uvx` run | It is non-editable. Use the local editable workflow for development, or `uvx --no-cache --isolated --from '/absolute/path/nagents[tui]' ngn --demo` for a fresh build. |
 | Missing API key | Configure an environment-variable **name** with `api_key_env`, set its value outside TOML, or use eligible OpenAI device login. `--demo` needs neither. |
 | A setting in the environment seems ignored | TOML has higher priority than `NGN_*` defaults. Check [precedence](ngn-configuration.md#precedence). |
-| New fields or `voice` extra are unavailable | Check that the local source includes the corresponding implementation; the CLI is under active development, not a published release. |
+| New fields or extras are unavailable | Compare the installed distribution with the current source. `v0.5.0` includes `voice` and `tui`, but not the new `web` extra. |
 
 Continue with the [usage guide](ngn.md) and the
 [complete configuration reference](ngn-configuration.md).

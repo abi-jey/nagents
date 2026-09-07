@@ -24,16 +24,20 @@ delivery dates. See the [README](README.md) for installation and usage.
 - OpenAI Realtime WebSocket sessions with audio input/output, transcription events,
   and function calling. This is not Gemini Live support.
 
-The optional server also provides HTTP/SSE chat, session management, tool/MCP
-reload, and a web UI. These implementations do not imply identical capabilities
-across the core library, server, and terminal client.
+The optional legacy server provides HTTP/SSE chat, session management, and
+tool/MCP reload. Its bundled chat UI has been removed from the current source;
+`python -m nagents.server` remains the API-only Docker default. See the
+[legacy server guide](docs/guide/server.md) for its single-operator security
+boundary. These implementations do not imply identical capabilities across the
+core library, server, and ngn clients.
 
-## ngn: Source Checkout Only
+## ngn Clients
 
-The optional `ngn` coding harness and terminal/headless clients are implemented
-here but **not yet a published CLI release**. Do not assume `pip install nagents`
-includes them. Use the [source installation guide](docs/guide/ngn-installation.md)
-and [ngn usage guide](docs/guide/ngn.md).
+The optional `ngn` coding harness and terminal/headless clients are included in
+the published `v0.5.0` distribution. This roadmap still describes the current
+checkout, including later changes, rather than a release-specific feature list.
+See [release availability and installation](docs/guide/ngn-installation.md) and
+the [ngn usage guide](docs/guide/ngn.md).
 
 - Interactive TUI and headless JSON events, local sessions, coding tools, approval
   policies, trusted project configuration, Python plugins, and an offline demo.
@@ -44,6 +48,10 @@ and [ngn usage guide](docs/guide/ngn.md).
   distributed orchestration system or A2A protocol implementation.
 - API-key providers and separate ChatGPT/Codex subscription authentication, plus
   opt-in microphone dictation that produces an editable draft, not a sent prompt.
+- A new local React/Vite web client launched by `ngn serve`, backed by the same
+  harness rather than the legacy API server. This is a source-checkout feature,
+  **not included in `v0.5.0`**. See the [web client guide](docs/guide/ngn-web.md)
+  for its current scope and limitations; it is not a remote hosting service.
 
 ## Remaining Directions
 

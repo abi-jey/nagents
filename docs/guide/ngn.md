@@ -4,12 +4,15 @@
 harness powers interactive and headless use. Python extensions change the agent's
 behavior, not just its appearance.
 
-This is an initial, source-only customer-testing version, not a published CLI
-release or an OpenCode feature-parity release. Read the limitations and trust
-model below before using it on important workspaces.
+The terminal and headless CLI are included in the published `v0.5.0` release.
+This guide describes the current checkout, including later fixes; it is not an
+OpenCode feature-parity claim. Read the limitations and trust model below before
+using it on important workspaces, and check
+[release availability](ngn-installation.md#release-availability).
 
 Related pages: [installation and environment choices](ngn-installation.md),
-[complete configuration schema and recipes](ngn-configuration.md).
+[complete configuration schema and recipes](ngn-configuration.md), and the new
+[local web client](ngn-web.md), which is not included in `v0.5.0`.
 
 ## Install and launch
 
@@ -35,9 +38,10 @@ explains activation and optional isolated tool installations. Commands written
 as bare `ngn` below assume the intended environment is activated; otherwise use
 `poetry run ngn` or `uv run --no-project --python .venv/bin/python ngn`.
 
-Install the **local source** with the `tui` extra; do not assume the latest PyPI
-package contains the unreleased CLI. Textual is optional: importing `nagents`,
-using `Agent`, or running the headless client does not import Textual.
+Install the **local source** with the `tui` extra for the behavior documented
+here, or select a published CLI release as described in the installation guide.
+Textual is optional: importing `nagents`, using `Agent`, or running the headless
+client does not import Textual.
 
 The offline demo needs no API key and does not execute shell commands, change
 workspace files, or contact a model. It also skips Python plugins, since even
@@ -192,12 +196,14 @@ selection uses reverse video, so arrow-key navigation remains visible without
 guessing whether the inherited background is light or dark.
 
 Each preset has a subtle three-column ASCII activity animation at eight frames
-per second. Only the status line animates while busy; idle/error states remain
-still and the conversation is not moved. Use `animations = false` in TOML or
-`NGN_ANIMATIONS=false` to disable motion. Theme selection also accepts TOML
-`theme` and `NGN_THEME`; background selection has the `NGN_THEME_BACKGROUND`
-environment default. TOML overrides environment defaults. These are color/motion
-presets, not a graphical Bot avatar or a separate team-view implementation.
+per second; idle/error status states remain still. In the current checkout,
+`--no-animations`, `animations = false` in TOML, or `NGN_ANIMATIONS=false`
+disables the indicator, animated scrolling, and input cursor blinking.
+`TEXTUAL_ANIMATIONS=none` also disables these motions. Brief button-press feedback
+remains. Theme selection also accepts TOML `theme` and `NGN_THEME`; background
+selection has the `NGN_THEME_BACKGROUND` environment default. TOML overrides
+`NGN_*` environment defaults. These are color/motion presets, not a graphical
+Bot avatar or a separate team-view implementation.
 
 ## Dictation
 
@@ -461,6 +467,7 @@ after the subcommand; prefer supplying each option only once.
 | --- | --- |
 | `ngn` | Full-screen terminal client. Requires the `tui` extra and a terminal. |
 | `ngn run [--json] [prompt ...]` | Headless prompt execution. `-`, or no prompt with piped stdin, reads stdin. |
+| `ngn serve` | New local React client for the harness. Requires the current checkout, `[web]`, and built assets; see [Local Web Client](ngn-web.md). Not the legacy `python -m nagents.server` API. |
 | `ngn sessions` | List saved sessions for the selected workspace. |
 | `ngn doctor` | Initialize the harness and show configuration/extension diagnostics without an LLM request. Trusted plugins still execute. Use `--demo` to skip them. |
 | `ngn login [--device-auth]` | Start OpenAI device-code login; device auth is the default method. |
@@ -484,7 +491,7 @@ after the subcommand; prefer supplying each option only once.
 | `--max-subagent-depth N` | Integer `0..8`; default `2`, with the root at depth `0`. |
 | `--theme NAME` | Select `terminal`, `graphite`, `ocean`, or `ember`. |
 | `--theme-background auto\|terminal\|theme` | Choose preset-default, terminal-native, or preset background behavior. |
-| `--no-animations` | Disable busy-status motion. |
+| `--no-animations` | Disable the busy indicator's motion, animated scrolling, and cursor blinking; brief button feedback remains. |
 | `--dictation`, `--no-dictation` | Explicitly enable or disable the opt-in microphone feature. Never starts recording automatically. |
 | `--dictation-model ID` | Select the separate transcription model. |
 | `--dictation-base-url URL` | Set the transcription API base. |

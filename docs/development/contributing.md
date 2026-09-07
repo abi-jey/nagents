@@ -20,7 +20,7 @@ Thank you for your interest in contributing to nagents! This guide will help you
     cd nagents
 
     # Install dependencies
-    poetry install -E dev -E tui -E voice
+    poetry install -E dev -E tui -E voice -E web
 
     # Install pre-commit hooks
     poetry run pre-commit install
@@ -37,7 +37,7 @@ Thank you for your interest in contributing to nagents! This guide will help you
     cd nagents
 
     # Create virtual environment and install all dependencies
-    poetry install -E dev -E docs -E tui -E voice  # (1)!
+    poetry install -E dev -E docs -E tui -E voice -E web  # (1)!
 
     # Install pre-commit hooks
     poetry run pre-commit install
@@ -52,19 +52,43 @@ Thank you for your interest in contributing to nagents! This guide will help you
     poetry run mkdocs build --strict
     ```
 
-    1. These are package extras from `[project.optional-dependencies]`, not Poetry dependency groups. `dev`, `tui`, and `voice` match the test installation in CI; `docs` adds MkDocs and mkdocstrings.
+    1. These are package extras from `[project.optional-dependencies]`, not Poetry dependency groups. `dev`, `tui`, `voice`, and `web` match the test installation in CI; `docs` adds MkDocs and mkdocstrings.
 
 If you already use a local `.venv`, keep that environment rather than letting
 multiple tools manage it. The equivalent editable install is
-`.venv/bin/python -m pip install -e '.[dev,docs,tui,voice]'`; use `.venv/bin/pytest`,
+`.venv/bin/python -m pip install -e '.[dev,docs,tui,voice,web]'`; use `.venv/bin/pytest`,
 `.venv/bin/mypy`, and `.venv/bin/mkdocs` in place of `poetry run` below.
 The build backend is Hatchling, regardless of the environment manager.
 
-!!! important "ngn is source-only"
-    The current terminal harness is not yet a published CLI release. Install
-    this checkout, not an older PyPI build, when testing `ngn`. A matching
-    package version alone does not prove it contains the current CLI. See
-    [ngn Installation](../guide/ngn-installation.md).
+!!! important "Test the checkout, not a release snapshot"
+    The published `v0.5.0` wheel includes the terminal/headless CLI, but not the
+    new `ngn serve` web client or later server hardening. Use this checkout for
+    development; matching version metadata alone does not prove matching code.
+    See [release availability](../guide/ngn-installation.md#release-availability).
+
+### Web Client Development
+
+The React/TypeScript frontend lives in `src/nagents/web-ui/`; the Python backend
+is `src/nagents/web/`. With the checkout installed in `.venv`, run from the
+repository root:
+
+```bash
+.venv/bin/python -m pip install -e '.[web]'
+npm --prefix src/nagents/web-ui ci
+npm --prefix src/nagents/web-ui run typecheck
+npm --prefix src/nagents/web-ui test
+npm --prefix src/nagents/web-ui run build
+.venv/bin/ngn serve --demo
+```
+
+Use Node.js `24.20.0` to match the current CI build. Vite emits assets into
+`src/nagents/web/static/`; build them before packaging or launching from source.
+The wheel includes generated assets, while the source distribution also carries
+the frontend source and lockfile. Installing `[web]` adds optional Python HTTP
+dependencies, not a JavaScript build step. `ngn serve` never installs npm
+dependencies at startup. See the [web client guide](../guide/ngn-web.md) for
+operation and safety; it is separate from the
+[legacy API server](../guide/server.md), which remains the Docker default.
 
 ## Development Workflow
 

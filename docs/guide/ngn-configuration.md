@@ -1,8 +1,9 @@
 # ngn configuration reference
 
-This page describes the source-checkout `ngn` harness, not the configuration API
-of a published nagents release or another coding assistant. See
-[installation](ngn-installation.md) to select the correct local environment.
+This page describes the current source-checkout `ngn` harness, which can differ
+from a published release or another coding assistant. The CLI is available in
+`v0.5.0`; see [release availability and installation](ngn-installation.md) before
+assuming every current field or behavior is present in that snapshot.
 
 ## Quick example
 
@@ -214,7 +215,7 @@ additional safeguards, not extra TOML fields. See
 | --- | --- | --- | --- |
 | `theme` | string | `"terminal"` | `"terminal"`, `"graphite"`, `"ocean"`, or `"ember"`. |
 | `theme_background` | string | `"auto"` | `"auto"`, `"terminal"`, or `"theme"`. Automatic preset behavior, terminal-native background, or the theme's background. Separate from palette selection. |
-| `animations` | boolean | `true` | Enable the small busy-status animation; disable for reduced motion. |
+| `animations` | boolean | `true` | Enable motion; `false` disables the busy animation, animated scrolling, and cursor blinking. `TEXTUAL_ANIMATIONS=none` also disables them; brief button feedback remains. |
 | `submit_mode` | string | `"queue"` | `"queue"` or `"interrupt"`: queue new prompts during work, or cancel/await current work before sending the new prompt. |
 | `tab_action` | string | `"agent"` | `"agent"`, `"complete"`, or `"focus"`: cycle profiles, complete slash commands, or navigate widgets. |
 
