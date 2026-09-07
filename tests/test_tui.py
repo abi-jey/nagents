@@ -176,11 +176,14 @@ def make_app(backend: FakeHarness) -> NagentsApp:
 
 
 async def idle(app: NagentsApp, pilot: Pilot[None]) -> None:
-    for _ in range(150):
-        await pilot.pause(0.01)
-        if not app.busy and (not app._queued_prompts or app._queue_paused):
-            return
-    raise AssertionError("Backend task did not become idle")
+    try:
+        async with asyncio.timeout(5):
+            while True:
+                await pilot.pause(0.01)
+                if not app.busy and (not app._queued_prompts or app._queue_paused):
+                    return
+    except TimeoutError:
+        raise AssertionError("Backend task did not become idle") from None
 
 
 async def send(app: NagentsApp, pilot: Pilot[None], text: str) -> None:

@@ -233,6 +233,30 @@ def test_cancellation_and_shutdown_never_return_drafts(tmp_path: Path, phase: st
     asyncio.run(scenario())
 
 
+def test_cleanup_without_screen_stack_clears_preview_and_closes_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        app, voice = make_modal_app(tmp_path)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.modal._preview.load_text("Synthetic private transcript")
+
+            def forbidden() -> None:
+                pytest.fail("Cleanup must not touch selection after the screen stack is removed")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(type(app), "screen_stack", property(lambda self: []))
+                patch.setattr(app, "clear_selection", forbidden)
+                await app.modal.close()
+            assert voice.closed
+            assert not app.modal._preview.text
+            assert not app.modal._audio
+
+    asyncio.run(scenario())
+
+
 def test_real_service_modal_flow_uses_only_fake_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     microphone = FakeMicrophone()
     network = FakeNetwork()

@@ -202,12 +202,22 @@ class DictationModal(ModalScreen[str | None]):
         """Discard transient data and await I/O cleanup without dismissing the screen."""
         self._leaving = True
         self._audio = b""
-        self._preview.load_text("")
-        if self._job is not None:
-            self._job.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._job
-        await self.service.close()
+        try:
+            if self._job is not None:
+                self._job.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._job
+        finally:
+            try:
+                await self.service.close()
+            finally:
+                if self.is_mounted and self in self.app.screen_stack:
+                    self._preview.load_text("")
+                else:
+                    # load_text moves the cursor and touches the active screen,
+                    # which may already be gone during external dismiss/shutdown.
+                    self._preview.history.clear()
+                    self._preview.document.replace_range((0, 0), self._preview.document.end, "")
 
     async def action_cancel_dictation(self) -> None:
         if self._leaving:
