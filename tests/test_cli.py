@@ -90,3 +90,20 @@ def test_demo_sessions_and_resume(
     assert "first prompt" in capsys.readouterr().out
     assert main([*common, "run", "--continue", "second prompt"]) == 0
     assert "Session:" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+@pytest.mark.parametrize("profile_model", ["", "profile-model"])
+def test_profile_activation_model_precedence_over_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], profile_model: str
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'model = "top-level-model"\nagent = "audit"\n[profiles.audit]\nmode = "reviewer"\nmodel = "{profile_model}"\n'
+    )
+    assert (
+        main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "--model", "cli-model", "doctor"]) == 0
+    )
+    output = capsys.readouterr()
+    assert f"Provider/model: openai / {profile_model or 'cli-model'}" in output.out
+    assert "Agent: audit (reviewer)" in output.out

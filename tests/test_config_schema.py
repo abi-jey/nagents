@@ -9,6 +9,7 @@ import pytest
 from nagents.cli import _parser
 from nagents.harness import Harness
 from nagents.harness.config import API_NAMES
+from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 
@@ -170,3 +171,34 @@ def test_cli_overrides_and_disable_dictation(tmp_path: Path) -> None:
     assert args.prompt == ["hello"]
     config = replace(HarnessConfig(workspace=tmp_path), api=args.api, max_subagent_depth=args.max_subagent_depth)
     assert config.api == "responses" and config.max_subagent_depth == 0
+
+
+def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user"))
+    user = tmp_path / "user/ngn"
+    user.mkdir(parents=True)
+    (user / "config.toml").write_text(
+        'agent = "audit"\n[profiles.audit]\nmode = "reviewer"\nmodel = "audit-model"\n'
+        'instructions = "User instructions"\n[profiles.other]\nmode = "reviewer"\n'
+    )
+    project = tmp_path / ".ngn"
+    project.mkdir()
+    (project / "config.toml").write_text('[profiles.audit]\ninstructions = "Project instructions"\n')
+    explicit = tmp_path / "explicit.toml"
+    explicit.write_text("[profiles]\n")
+
+    with pytest.warns(UserWarning, match="Ignoring untrusted project"):
+        untrusted = load_config(tmp_path, explicit)
+    assert untrusted.profile("audit") == AgentProfile("reviewer", "User instructions", "audit-model")
+
+    trusted = load_config(tmp_path, explicit, trust_project=True)
+    # Documented replacement resets omitted mode/model; an empty table deletes nothing.
+    assert trusted.profile("audit") == AgentProfile("build", "Project instructions", "")
+    assert trusted.profile("other") == AgentProfile("reviewer")
+
+    explicit.write_text('[profiles.audit]\nmode = "reviewer"\n')
+    overridden = load_config(tmp_path, explicit, trust_project=True)
+    assert overridden.profile("audit") == AgentProfile("reviewer")
+    assert overridden.profile("other") == AgentProfile("reviewer")

@@ -145,6 +145,8 @@ class HarnessExecutor(ToolExecutor):
                 if tool.func is not None:
                     inspect.signature(tool.func).bind(**call.arguments)
             if not builtin:
+                function = tool.func if tool is not None else None
+                parameters = copy.deepcopy(tool.parameters) if tool is not None else {}
                 await self.harness.approve(
                     call.name,
                     call.arguments,
@@ -154,6 +156,11 @@ class HarnessExecutor(ToolExecutor):
                 )
                 if self.harness.config.demo or self.harness.mode == "reviewer":
                     raise PermissionError("Active profile no longer allows custom tools")
+                # Approval applies to the validated definition, not a replacement registered while waiting.
+                if self._registry.get(call.name) is not tool or (
+                    tool is not None and (tool.func is not function or tool.parameters != parameters)
+                ):
+                    raise PermissionError("Tool definition changed during approval; retry the call for fresh approval")
             return await super().execute(call)
         except Exception as exc:
             return ToolResultEvent(
