@@ -232,10 +232,10 @@ class Agent:
                           default (3 retries with exponential backoff). Set
                           RetryConfig(max_retries=0) to disable.
             compactor: Context compaction configuration. Options:
-                      - None (default): Use DEFAULT_COMPACTOR with main agent's provider
+                      - Omitted (default): Use an agent-local copy of DEFAULT_COMPACTOR
+                      - None: Disable compaction
                       - "self": Use the main agent for compaction (same provider/model)
                       - Compactor: Use a separate agent for compaction
-                      - To disable compaction, don't specify and set compact_on=None explicitly
             compact_on: When to trigger compaction. Options:
                        - Tokens(input=N, output=M): Compact when tokens >= N-M
                        - Messages(length=N): Compact when message count >= N
@@ -267,7 +267,7 @@ class Agent:
         self.save_tool_outputs = save_tool_outputs
 
         # Compaction configuration
-        # None (default) -> use DEFAULT_COMPACTOR
+        # Omitted -> use an agent-local DEFAULT_COMPACTOR; None -> disabled
         # "self" -> use main agent for compaction
         # Compactor -> use separate agent for compaction
         self.compactor = compactor
@@ -681,26 +681,22 @@ class Agent:
         Returns:
             - None: No compaction (user explicitly set compactor=None)
             - "self": Use main agent for compaction
-            - Compactor: Use configured compactor or DEFAULT_COMPACTOR
+            - Compactor: Use configured compactor or an agent-local DEFAULT_COMPACTOR
         """
-        # If compactor is the sentinel (not set), use DEFAULT_COMPACTOR
-        if isinstance(self.compactor, _CompactorNotSet):
-            return DEFAULT_COMPACTOR
-
-        # If compactor is explicitly None, no compaction
         if self.compactor is None:
             return None
-
-        # If compactor is "self", use main agent
         if self.compactor == "self":
             return "self"
 
-        # If compactor is a Compactor instance, use it
-        if isinstance(self.compactor, Compactor):
-            return self.compactor
-
-        # Fallback: use DEFAULT_COMPACTOR
-        return DEFAULT_COMPACTOR
+        if not isinstance(self.compactor, Compactor) or self.compactor is DEFAULT_COMPACTOR:
+            # Copy configuration, never the cached agent or its live provider/session state.
+            self.compactor = Compactor(
+                provider=DEFAULT_COMPACTOR.provider or self.provider,
+                system_prompt=DEFAULT_COMPACTOR.system_prompt,
+                compact_on=deepcopy(DEFAULT_COMPACTOR.compact_on),
+                model=DEFAULT_COMPACTOR.model,
+            )
+        return self.compactor
 
     def _resolve_compact_on(self) -> Tokens | Messages | None:
         """Resolve the compaction trigger configuration.
@@ -842,10 +838,6 @@ class Agent:
 
         if compactor is None:
             raise ValueError("No compactor configured. Set compactor=DEFAULT_COMPACTOR or compactor='self'")
-
-        if isinstance(compactor, _CompactorNotSet):
-            # Use default compactor
-            compactor = DEFAULT_COMPACTOR
 
         # Get trigger for event (use resolved trigger or None for manual)
         trigger = self._resolve_compact_on()
