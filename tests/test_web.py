@@ -5,6 +5,7 @@ import builtins
 import json
 from collections.abc import AsyncGenerator
 from collections.abc import AsyncIterator
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from contextlib import suppress
 from pathlib import Path
@@ -22,7 +23,9 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
+from nagents.harness.tools import CodingTools
 from nagents.harness.types import HarnessEvent
+from nagents.types import Message as SessionMessage
 from nagents.web import built_assets
 from nagents.web import local_authority
 from nagents.web import serve
@@ -36,8 +39,21 @@ if TYPE_CHECKING:
 URL = "http://127.0.0.1:8765"
 
 
+@pytest.fixture(autouse=True)
+def no_guarded_workspace_io(request: pytest.FixtureRequest) -> Iterator[None]:
+    if request.node.get_closest_marker("requires_posix") is not None:
+        yield
+        return
+    # Prove portable cases do not depend on workspace tools, even on a POSIX host.
+    with patch.object(
+        CodingTools, "directory", side_effect=OSError("Guarded workspace file tools currently require POSIX")
+    ) as guarded:
+        yield
+        guarded.assert_not_called()
+
+
 class ControlledHarness(Harness):
-    """A blocking stream exercises ownership; approvals still use Harness.approve."""
+    """Portable scripted runs; real Harness sessions, approvals, initialization and close."""
 
     def __init__(self, config: HarnessConfig) -> None:
         super().__init__(config)
@@ -45,6 +61,13 @@ class ControlledHarness(Harness):
         self.closed = False
         self.decisions: list[bool] = []
         self.loop = asyncio.get_running_loop()
+
+    async def initialize(self) -> None:
+        assert asyncio.get_running_loop() is self.loop
+        # Replace only workspace discovery on this injected test instance. Keep
+        # the real initialization lock and SQLite session/membership lifecycle.
+        with patch.object(self.tools, "instructions", return_value=""), patch.object(self.tools, "discover_skills"):
+            await super().initialize()
 
     async def run(self, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
         try:
@@ -77,7 +100,7 @@ class ControlledHarness(Harness):
 
 @asynccontextmanager
 async def client_app(
-    tmp_path: Path, *, controlled: bool = False
+    tmp_path: Path, *, controlled: bool = True
 ) -> AsyncIterator[tuple["FastAPI", httpx.AsyncClient, dict[str, str], list[Harness]]]:
     assets = tmp_path / "static"
     assets.mkdir(exist_ok=True)
@@ -252,9 +275,10 @@ def test_security_boundary_and_static_paths(tmp_path: Path) -> None:
     asyncio.run(check())
 
 
-def test_demo_sessions_and_workspace_membership(tmp_path: Path) -> None:
+@pytest.mark.requires_posix
+def test_demo_run_uses_workspace_tools(tmp_path: Path) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, controlled=False) as (_, client, headers, _):
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             first = snapshot["session_id"]
             response = await client.post("/api/run", json={"session_id": first, "prompt": "hello"}, headers=headers)
@@ -265,6 +289,15 @@ def test_demo_sessions_and_workspace_membership(tmp_path: Path) -> None:
             assert any(event["event"] == "tool_call" for event in events)
             assert any(event["event"] == "text_chunk" for event in events)
             assert any("OFFLINE DEMO" in event.get("text", "") for event in events)
+
+    asyncio.run(check())
+
+
+def test_session_history_and_workspace_membership(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path) as (_, client, headers, harnesses):
+            first = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
+            await harnesses[0].agent.session.add_message(first, SessionMessage(role="user", content="hello"))
             second = (await client.post("/api/sessions/new", json={}, headers=headers)).json()["session_id"]
             assert first != second
             response = await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)
