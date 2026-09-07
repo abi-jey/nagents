@@ -1,13 +1,12 @@
 [project]
 name = "nagents"
-version = "0.4.4"
+version = "0.5.0"
 description = "A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration"
 readme = "README.md"
 requires-python = ">=3.11, <4.0"
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: MIT License", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Programming Language :: Python :: 3.14", "Topic :: Scientific/Engineering :: Artificial Intelligence", "Topic :: Software Development :: Libraries :: Python Modules", "Typing :: Typed",]
 keywords = [ "llm", "agent", "ai", "openai", "anthropic", "gemini", "claude", "gpt", "streaming", "async",]
 dependencies = [ "aiohttp>=3.9.0", "aiosqlite>=0.20.0",]
-
 [[project.authors]]
 name = "Abbas Jafari"
 email = "git@public.abja.dev"
@@ -41,7 +40,6 @@ target-version = "py311"
 src = [ "src",]
 
 [tool.mypy]
-# Match installed dependency stubs; CI tests cover the supported Python versions.
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
@@ -50,7 +48,6 @@ disallow_incomplete_defs = true
 check_untyped_defs = true
 mypy_path = "src"
 ignore_missing_imports = true
-
 [[tool.mypy.overrides]]
 module = "nagents.server.*"
 ignore_errors = true
