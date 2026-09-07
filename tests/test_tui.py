@@ -896,6 +896,7 @@ def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path,
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         backend.config.animations = enabled
+        backend.messages = [Message(role="assistant", content="Earlier paragraph.\n\n" * 20)]
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr("textual.constants.TEXTUAL_ANIMATIONS", level)
             app = make_app(backend)
@@ -912,8 +913,17 @@ def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path,
             assert status.endswith("Working")
             assert (status != "Working") is expected_motion
             conversation = app.query_one("#conversation", VerticalScroll)
+            conversation.scroll_home(animate=False, immediate=True)
+            assert conversation.max_scroll_y > 1
+            assert conversation.scroll_y == 0
             conversation.animate("scroll_y", 1, duration=60)
-            await pilot.pause()
+            if expected_motion:
+                await pilot.pause()
+            else:
+                # Reduced motion reaches its final value on a later animator tick.
+                async with asyncio.timeout(5):
+                    await app.animator.wait_until_complete()
+                assert conversation.scroll_y == 1
             assert app.animator.is_being_animated(conversation, "scroll_y") is expected_motion
             await conversation.stop_animation("scroll_y")
             app._status("Failure", error=True)
