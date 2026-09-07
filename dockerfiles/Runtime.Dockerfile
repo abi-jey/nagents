@@ -1,3 +1,11 @@
+FROM node:24.20.0-bookworm-slim AS web-build
+
+WORKDIR /build/src/nagents/web-ui
+COPY src/nagents/web-ui/package.json src/nagents/web-ui/package-lock.json ./
+RUN npm ci
+COPY src/nagents/web-ui/ ./
+RUN npm run build
+
 FROM python:3.12-slim
 
 ARG DOCKER_GID=999
@@ -22,7 +30,8 @@ RUN npm install -g playwright @playwright/mcp && \
 # Install nagents + server dependencies (this directory will be the build context from the repo)
 COPY pyproject.toml README.md ./
 COPY src/ src/
-RUN pip install hatchling && pip install --no-build-isolation ".[server]" && pip uninstall -y hatchling
+COPY --from=web-build /build/src/nagents/web/static/ src/nagents/web/static/
+RUN pip install hatchling && pip install --no-build-isolation ".[server,web]" && pip uninstall -y hatchling
 
 RUN groupadd -g ${DOCKER_GID} docker-host && \
     useradd -m -u 1000 -G docker-host agent && \

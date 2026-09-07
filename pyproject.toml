@@ -22,6 +22,7 @@ text = "MIT"
 dev = [ "pytest>=8.0", "pytest-cov>=4.1.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0", "fastapi", "pydantic>=2.0", "sounddevice>=0.5.0", "numpy>=2.4.6; python_version < '3.12'", "numpy>=2.5.2; python_version >= '3.12'", "python-dotenv>=1.0",]
 docs = [ "mkdocs>=1.6.0", "mkdocs-material>=9.5.0", "mkdocstrings[python]>=0.27.0",]
 server = [ "fastapi>=0.100", "uvicorn>=0.24", "pydantic>=2.0",]
+web = [ "fastapi>=0.100", "uvicorn>=0.24", "pydantic>=2.0",]
 tui = [ "textual>=8.2.8",]
 voice = [ "sounddevice>=0.5.6",]
 
@@ -65,8 +66,13 @@ force-single-line = true
 case-sensitive = true
 known-first-party = [ "nagents",]
 
+[tool.hatch.build]
+artifacts = [ "/src/nagents/web/static/**",]
+
 [tool.hatch.build.targets.wheel]
 packages = [ "src/nagents",]
+exclude = [ "/src/nagents/web-ui",]
 
 [tool.hatch.build.targets.sdist]
 include = [ "/src", "/docs", "LICENSE", "README.md", "pyproject.toml",]
+exclude = [ "**/node_modules", "**/.vite", "**/.cache", "**/*.tsbuildinfo",]
