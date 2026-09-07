@@ -335,15 +335,7 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-
-      - name: Add version tag from bump output
-        if: github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'
-        run: |
-          VERSION="${{ needs.bump-version.outputs.version }}"
-          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
-          echo "tags=${{ steps.meta.outputs.tags }},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${VERSION}" >> $GITHUB_OUTPUT
-        id: version-tag
-        shell: bash
+            type=raw,value=v${{ needs.bump-version.outputs.version }},enable=${{ needs.bump-version.result == 'success' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -351,7 +343,7 @@ jobs:
           context: .
           file: dockerfiles/Runtime.Dockerfile
           push: true
-          tags: ${{ steps.version-tag.outputs.tags || steps.meta.outputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
