@@ -997,7 +997,9 @@ def test_timeout_is_sanitized_without_replay(stream: bool) -> None:
 
         async with (
             endpoint(handle) as url,
-            Provider(ProviderType.LITELLM, KEY, "fixture", base_url=url, api="responses", timeout=0.05) as provider,
+            # Allow connection establishment under instrumented CI load; the
+            # handler deliberately blocks until cleanup to exercise the timeout.
+            Provider(ProviderType.LITELLM, KEY, "fixture", base_url=url, api="responses", timeout=2) as provider,
         ):
             try:
                 events = [

@@ -163,6 +163,7 @@ def test_explicit_start_stop_preview_edit_accept(tmp_path: Path, size: tuple[int
             await pilot.pause(0.3)
             await pilot.click("#dictation-primary")
             await pilot.pause()
+            await wait_until(lambda: bool(app.results))
             assert app.results == ["Edited transcript."]
             assert app.query_one("#composer", TextArea).text == "Existing draft. Edited transcript."
             assert voice.closed
@@ -187,6 +188,7 @@ def test_time_cap_waits_for_explicit_upload(tmp_path: Path) -> None:
             assert voice.capture_calls == 1
             assert len(voice.uploads) == 1
             await pilot.press("escape")
+            await wait_until(lambda: bool(app.results))
             assert not app.modal._audio
             assert app.results == [None]
 
@@ -220,6 +222,7 @@ def test_cancellation_and_shutdown_never_return_drafts(tmp_path: Path, phase: st
             else:
                 await pilot.press("ctrl+q" if cancel == "quit" else cancel)
             if cancel != "quit":
+                await wait_until(lambda: bool(app.results))
                 assert app.results == [None]
                 assert app.query_one("#composer", TextArea).text == "Existing draft. "
         assert voice.closed
@@ -284,6 +287,7 @@ def test_real_service_modal_flow_uses_only_fake_io(tmp_path: Path, monkeypatch: 
             await pilot.pause(0.3)
             await pilot.click("#dictation-primary")
             await pilot.pause()
+            await wait_until(lambda: bool(app.results))
             assert app.results == ["A synthetic draft."]
 
     asyncio.run(scenario())
@@ -308,6 +312,7 @@ def test_real_service_readiness_error_never_opens_device(
             await pilot.pause()
             assert not microphone.calls
             await pilot.press("escape")
+            await wait_until(lambda: bool(app.results))
             assert app.results == [None]
 
     asyncio.run(scenario())
@@ -327,6 +332,7 @@ def test_blank_preview_cannot_be_accepted(tmp_path: Path) -> None:
             assert app.modal.query_one("#dictation-primary", Button).disabled
             assert not app.results
             await pilot.press("escape")
+            await wait_until(lambda: bool(app.results))
             assert app.results == [None]
 
     asyncio.run(scenario())
@@ -374,11 +380,14 @@ def test_nagents_host_integration_preserves_draft_and_never_sends(
                 await pilot.pause(0.3)
                 await pilot.click("#dictation-primary")
                 await pilot.pause()
+                await wait_until(lambda: bool(results))
                 assert results == ["Synthetic dictated draft."]
                 assert composer.text == "Kept draft. Synthetic dictated draft."
             else:
                 await pilot.press("ctrl+q" if finish == "quit" else finish)
                 await pilot.pause()
+                if finish != "quit":
+                    await wait_until(lambda: bool(results))
                 assert composer.text == "Kept draft. "
                 assert not any(results)
             assert not backend.prompts
@@ -405,6 +414,7 @@ def test_cancel_keeps_modal_until_cleanup_finishes(tmp_path: Path) -> None:
             voice.cleanup_release.set()
             await cancelling
             await pilot.pause()
+            await wait_until(lambda: bool(app.results))
             assert voice.closed
             assert app.results == [None]
 
