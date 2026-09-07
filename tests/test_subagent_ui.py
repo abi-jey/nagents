@@ -97,7 +97,8 @@ def test_agent_tree_continues_saved_child_and_notifies_parent(tmp_path: Path) ->
             await send(app, pilot, "demo subagents")
             await idle(app, pilot)
             tree = app.default_screen.query_one("#agent-tree", AgentTree)
-            assert tree.region.x < app.query_one("#conversation").region.x
+            assert tree.region.x >= app.query_one("#conversation").region.right
+            assert app.query_one("#rail").region.right == app.size.width
             assert len(tree.task_nodes) == 3
             await pilot.press("ctrl+t", "down", "enter")
             await pilot.pause()

@@ -127,7 +127,8 @@ def test_login_choices_and_api_key_instructions(tmp_path: Path, monkeypatch: pyt
         async with app.run_test(size=(80, 24)) as pilot:
             await idle(app, pilot)
             assert backend.login_calls == 0
-            assert "Not signed in" in str(app.query_one("#mode", Static).content)
+            assert not app.query_one("#mode").display
+            assert "Not signed in" in str(app.query_one("#rail-auth", Static).content)
             await pilot.press("ctrl+p")
             assert isinstance(app.screen, ChoiceModal)
             app.screen.query_one(Input).value = "/login"
@@ -239,11 +240,12 @@ def test_login_cancel_awaits_cleanup(tmp_path: Path, after_code: bool, cancel: s
     asyncio.run(scenario())
 
 
-def test_login_success_logout_and_job_guard(tmp_path: Path) -> None:
+@pytest.mark.parametrize("size", [(60, 20), (132, 38)])
+def test_login_success_logout_and_job_guard(tmp_path: Path, size: tuple[int, int]) -> None:
     async def scenario() -> None:
         backend = LoginHarness(tmp_path)
         app = make_app(backend)
-        async with app.run_test(size=(132, 38)) as pilot:
+        async with app.run_test(size=size) as pilot:
             await idle(app, pilot)
             modal = await start_login(app, pilot)
             backend.issue_code.set()
@@ -259,7 +261,8 @@ def test_login_success_logout_and_job_guard(tmp_path: Path) -> None:
             assert modal._user_code == ""
             assert backend.config.auth == "chatgpt"
             assert "gpt-5.3-codex" in str(app.query_one("#model", Static).content)
-            assert "signed in" in str(app.query_one("#mode", Static).content)
+            assert not app.query_one("#mode").display
+            assert app.query_one("#main").region.y == app.query_one("#topbar").region.bottom
             assert "signed in" in str(app.query_one("#rail-auth", Static).content)
             assert not app.query_one("#status").has_class("error")
             assert any(
@@ -270,7 +273,9 @@ def test_login_success_logout_and_job_guard(tmp_path: Path) -> None:
             await idle(app, pilot)
             assert backend.logout_calls == 1
             assert backend.config.auth == "api-key"
-            assert "Not signed in" in str(app.query_one("#mode", Static).content)
+            assert not app.query_one("#mode").display
+            assert app.query_one("#main").region.y == app.query_one("#topbar").region.bottom
+            assert "Not signed in" in str(app.query_one("#rail-auth", Static).content)
             assert_private(app)
 
     asyncio.run(scenario())
@@ -393,7 +398,8 @@ def test_unexpected_verification_url_is_not_opened_or_displayed(
     asyncio.run(scenario())
 
 
-def test_cancellation_forgets_textual_clipboard_copy(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_context", [False, True])
+def test_cancellation_forgets_textual_clipboard_copy(tmp_path: Path, with_context: bool) -> None:
     async def scenario() -> None:
         backend = LoginHarness(tmp_path)
         app = make_app(backend)
@@ -404,6 +410,8 @@ def test_cancellation_forgets_textual_clipboard_copy(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.click("#device-copy")
             assert app.clipboard == USER_CODE
+            if with_context:
+                app.copy_to_clipboard(f"Device login\n{USER_CODE}\nWaiting for approval")
             await pilot.press("escape")
             await idle(app, pilot)
             assert app.clipboard == ""

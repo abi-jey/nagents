@@ -124,6 +124,32 @@ The equivalent TOML settings are `submit_mode = "queue"` and
 and `focus` for ordinary widget navigation. They also accept `NGN_SUBMIT_MODE`
 and `NGN_TAB_ACTION` environment defaults.
 
+### Selection and clipboard
+
+Drag to highlight text and release the mouse button to copy it automatically.
+This works for responses, tool output, code, and mouse selections in text fields;
+code indentation and line breaks are preserved. Double-click selections copy too.
+Choosing an agent or slash-command row is navigation, not text copying.
+
+Ctrl+C copies selected text instead of cancelling work. Without selected text,
+it retains the normal cancel/exit behavior. Ctrl+Shift+C explicitly copies without
+cancelling; Command+C also works if the terminal forwards it to ngn. Keyboard
+selection in an editable field does not automatically replace the clipboard, so
+select-all followed by paste still works normally. Use Ctrl+C to copy that selection.
+
+ngn sends the terminal's OSC 52 clipboard request and also uses a local clipboard
+helper when available: `pbcopy` on macOS, `wl-copy` on Wayland, `xclip` or `xsel`
+on X11, or PowerShell on Windows. This makes copying work in macOS Terminal,
+which does not support Textual's OSC 52-only clipboard path. Helpers receive text
+on stdin, not as a shell command or command-line argument. ngn never reads your
+desktop clipboard automatically.
+
+Over SSH, only terminal clipboard forwarding is used, not the remote desktop's
+clipboard. OSC 52 writing must be allowed by your terminal and, if applicable,
+tmux. If the terminal blocks it, configure its clipboard permissions or use the
+terminal's own selection/copy mechanism. Usual terminal paste shortcuts continue
+to work; pasted multiline text is never submitted automatically.
+
 ## Themes and motion
 
 ```bash
@@ -285,7 +311,7 @@ remain in local storage but do not clutter the ordinary session picker.
 
 ### Agent tree and follow-ups
 
-The left rail contains a scrollable tree of running and finished agents. Nested
+The right rail contains a scrollable tree of running and finished agents. Nested
 delegations appear under their parent, with status labels. Collapse branches with
 Left/Right or the mouse; selection and expansion survive status updates. Ctrl+T
 focuses the tree, and Enter or a click opens the selected conversation. On narrow

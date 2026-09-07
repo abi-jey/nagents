@@ -119,7 +119,7 @@ class DeviceLoginModal(ModalScreen[None]):
             self.query_one("#device-status", Static).update("Code expired. Stopping login...")
 
     def clear_code(self) -> None:
-        if self._user_code and self.app.clipboard == self._user_code:
+        if self._user_code and self._user_code in self.app.clipboard:
             # Forget Textual's paste buffer, not the OS clipboard the user explicitly copied to.
             self.app._clipboard = ""
         self._user_code = ""

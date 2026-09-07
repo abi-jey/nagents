@@ -38,7 +38,7 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #prompt-explain { color: $ngn-assistant; }
 #prompt-review { color: $ngn-tool; }
 #welcome-hint { color: $ngn-muted; height: auto; margin-top: 1; }
-#rail { width: 31; padding: 0 1; border-right: solid $ngn-border; }
+#rail { width: 31; padding: 0 1; border-left: solid $ngn-border; }
 #rail-details { height: auto; max-height: 60%; border: none; padding: 0; }
 #rail-details > CollapsibleTitle { padding: 0; color: $ngn-info; }
 #rail-details > Contents { padding: 0; }

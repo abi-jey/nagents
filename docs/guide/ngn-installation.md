@@ -42,8 +42,9 @@ mapping, or access to a paid provider account.
   commands on this page also apply to macOS.
 - Shift+Enter requires the terminal to send a distinct key sequence. If it does
   not, use Ctrl+J for a newline. Alt/Option+Enter also works when the terminal is
-  configured to send Option as Meta. Command-key shortcuts are not aliases for
-  the documented Ctrl-key bindings.
+  configured to send Option as Meta. Most shortcuts use Ctrl rather than Command;
+  copying also accepts Command+C when the terminal forwards it. Mouse selections
+  copy on release, and local macOS copying uses `pbcopy`, including in Terminal.
 - macOS configuration stays at `~/.config/ngn/config.toml` and state at
   `~/.local/share/ngn`, unless XDG settings override them; ngn does not switch to
   `~/Library/Application Support` on this platform.

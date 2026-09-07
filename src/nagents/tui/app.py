@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from contextlib import aclosing
+from contextlib import suppress
 from time import monotonic
 from typing import TYPE_CHECKING
 from typing import ClassVar
@@ -16,8 +17,10 @@ from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
+from textual.screen import Screen
 from textual.widgets import Button
 from textual.widgets import Collapsible
+from textual.widgets import Input
 from textual.widgets import Markdown
 from textual.widgets import Static
 from textual.widgets import TextArea
@@ -40,6 +43,7 @@ from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
 from nagents.types import TextContent
 
+from .clipboard import copy_native
 from .commands import SlashMenu
 from .dictation import DictationModal
 from .login import DeviceLoginModal
@@ -64,7 +68,10 @@ if TYPE_CHECKING:
 
     from textual.app import ComposeResult
     from textual.binding import BindingType
+    from textual.events import Click
+    from textual.events import MouseDown
     from textual.events import Resize
+    from textual.events import TextSelected
     from textual.widget import Widget
 
     from nagents.harness import Harness
@@ -84,7 +91,9 @@ Ctrl+P                Commands
 Ctrl+N / Ctrl+L       New session / saved sessions
 Ctrl+T                Agent tree / conversations
 Ctrl+G                Dictation (opt-in; editable draft)
-Ctrl+C                Cancel if busy; press twice to exit if idle
+Mouse text selection  Copy automatically on release
+Ctrl+C                Copy selection; otherwise cancel / exit
+Ctrl+Shift+C           Copy selection without cancelling
 Ctrl+Q                Quit
 
 Tool cards expand with Enter or a click. Scroll up to pause
@@ -106,6 +115,7 @@ class NagentsApp(App[None]):
         Binding("ctrl+g", "dictation", "Dictation", priority=True),
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("ctrl+c", "interrupt", "Cancel / exit", priority=True),
+        Binding("ctrl+shift+c,super+c", "copy_selection", "Copy", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
 
@@ -138,6 +148,9 @@ class NagentsApp(App[None]):
         self._queued_prompts: deque[str] = deque()
         self._queue_paused = False
         self._task_drafts: dict[str, str] = {}
+        self._clipboard_task: asyncio.Task[None] | None = None
+        self._clipboard_pending: str | None = None
+        self._mouse_selection_editor: TextArea | Input | None = None
 
     @property
     def busy(self) -> bool:
@@ -151,6 +164,22 @@ class NagentsApp(App[None]):
             yield Static(id="profile", markup=False)
         yield Static(id="mode", markup=False)
         with Horizontal(id="main"):
+            with VerticalScroll(id="conversation", can_focus=True), Vertical(id="welcome"):
+                yield Static("A little context.\nA clear next step.", id="welcome-title", markup=False)
+                yield Static(
+                    "An offline walkthrough. No API key or workspace writes."
+                    if self.harness.config.demo
+                    else "Work with your code, one conversation at a time.",
+                    id="welcome-subtitle",
+                    markup=False,
+                )
+                yield Button("Explain this workspace", id="prompt-explain", classes="suggestion")
+                yield Button(
+                    "Preview an approval" if self.harness.config.demo else "Review the current changes",
+                    id="prompt-review",
+                    classes="suggestion",
+                )
+                yield Static("/ for commands   ctrl+l to pick up where you left off", id="welcome-hint", markup=False)
             with Vertical(id="rail"):
                 yield Static("AGENTS  /  CTRL+T", classes="section-label", markup=False)
                 yield AgentTree()
@@ -168,22 +197,6 @@ class NagentsApp(App[None]):
                     yield Static(id="rail-auth", markup=False)
                 yield Static(id="rail-activity", markup=False)
                 yield Static("Arrows navigate\nEnter inspect / follow up", id="rail-note", markup=False)
-            with VerticalScroll(id="conversation", can_focus=True), Vertical(id="welcome"):
-                yield Static("A little context.\nA clear next step.", id="welcome-title", markup=False)
-                yield Static(
-                    "An offline walkthrough. No API key or workspace writes."
-                    if self.harness.config.demo
-                    else "Work with your code, one conversation at a time.",
-                    id="welcome-subtitle",
-                    markup=False,
-                )
-                yield Button("Explain this workspace", id="prompt-explain", classes="suggestion")
-                yield Button(
-                    "Preview an approval" if self.harness.config.demo else "Review the current changes",
-                    id="prompt-review",
-                    classes="suggestion",
-                )
-                yield Static("/ for commands   ctrl+l to pick up where you left off", id="welcome-hint", markup=False)
         with Vertical(id="compose-area"):
             yield SlashMenu()
             yield Static(id="queue-status", markup=False)
@@ -239,6 +252,80 @@ class NagentsApp(App[None]):
     @on(TextArea.SelectionChanged, "#composer")
     def composer_selection_changed(self) -> None:
         self._refresh_completions()
+
+    def copy_to_clipboard(self, text: str) -> None:
+        if self._shutting_down:
+            return
+        super().copy_to_clipboard(text)
+        self._interrupt_at = 0
+        if self.is_headless or not self.is_running:
+            return
+        self._clipboard_pending = text
+        if self._clipboard_task is None or self._clipboard_task.done():
+            self._clipboard_task = asyncio.create_task(self._copy_native_pending(), name="ngn-clipboard")
+
+    async def _copy_native_pending(self) -> None:
+        try:
+            while self._clipboard_pending is not None:
+                text, self._clipboard_pending = self._clipboard_pending, None
+                # The terminal copy was already requested; never log clipboard content.
+                with suppress(OSError, ValueError):
+                    await copy_native(text, self.harness.workspace)
+        finally:
+            self._clipboard_pending = None
+
+    def _copy_selection(self, *, editor_only: bool = False) -> bool:
+        if self._shutting_down or not self.screen_stack:
+            return False
+        focused = self.screen.focused
+        if isinstance(focused, TextArea | Input):
+            if isinstance(focused, Input) and focused.password:
+                return False
+            text = focused.selected_text
+            if text:
+                self.copy_to_clipboard(text)
+                return True
+        if not editor_only and (screen_text := self.screen.get_selected_text()):
+            self.copy_to_clipboard(screen_text)
+            return True
+        return False
+
+    def action_copy_selection(self) -> None:
+        self._copy_selection()
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        if self._shutting_down:
+            return
+        focused = self.focused if self.screen_stack else None
+        self._mouse_selection_editor = (
+            focused
+            if isinstance(focused, TextArea | Input) and focused.region.contains(event.screen_x, event.screen_y)
+            else None
+        )
+
+    def on_text_selected(self, event: TextSelected) -> None:
+        if not self._shutting_down and self.screen_stack:
+            # Mouse release precedes double-click word selection and editor
+            # mouse-up handling. Read the completed selection after that work.
+            self.call_after_refresh(self._copy_mouse_selection, self.screen)
+
+    def on_mouse_up(self) -> None:
+        if not self._shutting_down and self.screen_stack and self._mouse_selection_editor is not None:
+            self.call_after_refresh(self._copy_mouse_selection, self.screen)
+
+    def on_click(self, event: Click) -> None:
+        if event.chain >= 2 and not self._shutting_down and self.screen_stack:
+            self._mouse_selection_editor = event.widget if isinstance(event.widget, TextArea | Input) else None
+            self.call_after_refresh(self._copy_mouse_selection, self.screen)
+
+    def _copy_mouse_selection(self, screen: Screen[object]) -> None:
+        focused, self._mouse_selection_editor = self._mouse_selection_editor, None
+        if self._shutting_down or not self.screen_stack or screen is not self.screen:
+            return
+        if text := screen.get_selected_text():
+            self.copy_to_clipboard(text)
+        elif focused is not None and focused is screen.focused and self.mouse_captured is None:
+            self._copy_selection(editor_only=True)
 
     def _refresh_completions(self) -> None:
         if self._shutting_down or not self.query("#slash-menu"):
@@ -345,9 +432,10 @@ class NagentsApp(App[None]):
         self.query_one("#workspace", Static).update(self.harness.workspace.name or str(self.harness.workspace))
         self.query_one("#model", Static).update(config.model)
         self.query_one("#profile", Static).update(config.agent)
-        mode = "OFFLINE DEMO  /  no provider calls; no workspace writes" if config.demo else f"{auth_status}  /  /login"
-        self.query_one("#mode", Static).update(mode)
-        self.query_one("#mode").set_class(config.demo, "demo")
+        mode = self.query_one("#mode", Static)
+        mode.display = config.demo
+        mode.update("OFFLINE DEMO  /  no provider calls; no workspace writes" if config.demo else "")
+        mode.set_class(config.demo, "demo")
         self.query_one("#rail-workspace", Static).update(str(self.harness.workspace))
         self.query_one("#rail-session", Static).update(self.harness.session_id or "New session")
         self.query_one("#rail-auth", Static).update(auth_status)
@@ -728,6 +816,8 @@ class NagentsApp(App[None]):
             self._active.cancel()
 
     def action_interrupt(self) -> None:
+        if self._copy_selection():
+            return
         if isinstance(self.screen, DictationModal):
             self.screen.run_worker(self.screen.action_cancel_dictation())
             return
@@ -766,7 +856,11 @@ class NagentsApp(App[None]):
                 await asyncio.gather(self._active, return_exceptions=True)
             await self.harness.close()
         finally:
-            await super()._shutdown()
+            try:
+                if self._clipboard_task is not None:
+                    await self._clipboard_task
+            finally:
+                await super()._shutdown()
 
     def action_commands(self) -> None:
         if not isinstance(self.screen, ModalScreen):

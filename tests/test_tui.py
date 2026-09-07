@@ -12,6 +12,7 @@ from textual.color import Color
 from textual.containers import VerticalScroll
 from textual.events import Paste
 from textual.widgets import Button
+from textual.widgets import Collapsible
 from textual.widgets import Input
 from textual.widgets import Markdown
 from textual.widgets import Static
@@ -227,13 +228,50 @@ def test_startup_and_history(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("size,rail", [((60, 20), False), ((80, 24), False), ((110, 30), False), ((132, 38), True)])
-def test_responsive_layout(tmp_path: Path, size: tuple[int, int], rail: bool) -> None:
+@pytest.mark.parametrize(
+    "demo,auth_status",
+    [(True, "OFFLINE DEMO"), (False, "ChatGPT device login saved"), (False, "Not signed in")],
+)
+def test_responsive_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: tuple[int, int],
+    rail: bool,
+    demo: bool,
+    auth_status: str,
+) -> None:
     async def scenario() -> None:
-        app = make_app(FakeHarness(tmp_path))
+        backend = FakeHarness(tmp_path)
+        backend.config.demo = demo
+        monkeypatch.setattr(backend, "auth_status", lambda: auth_status)
+        app = make_app(backend)
         async with app.run_test(size=size) as pilot:
             await idle(app, pilot)
             composer = app.query_one(Composer)
+            mode = app.query_one("#mode", Static)
+            assert mode.display is demo
+            assert mode.region.height == int(demo)
+            assert app.query_one("#main").region.y == app.query_one("#topbar").region.bottom + int(demo)
+            if demo:
+                assert str(mode.content) == "OFFLINE DEMO  /  no provider calls; no workspace writes"
+                assert mode.styles.color == Color.parse(app.get_css_variables()["ngn-warning"])
+            else:
+                assert str(mode.content) == ""
+            assert str(app.query_one("#model", Static).content) == backend.config.model
+            assert str(app.query_one("#profile", Static).content) == backend.config.agent
+            assert app.query_one("#status").region.height == 1
+            assert str(app.query_one("#rail-auth", Static).content) == auth_status
+            details = app.query_one("#rail-details", Collapsible)
+            assert details.collapsed
             assert app.query_one("#rail").display is rail
+            if rail:
+                assert app.query_one("#rail").region.x == app.query_one("#conversation").region.right
+                await pilot.click("#rail-details > CollapsibleTitle")
+                await pilot.pause()
+                assert not details.collapsed
+                await pilot.press("enter")
+                await pilot.pause()
+                assert details.collapsed
             assert composer.region.y > 3
             assert composer.region.bottom <= size[1] - 2
             assert composer.region.width >= size[0] - (36 if rail else 4)
@@ -242,6 +280,9 @@ def test_responsive_layout(tmp_path: Path, size: tuple[int, int], rail: bool) ->
             # Resize dispatch precedes Textual's deferred layout refresh.
             await pilot.pause()
             assert not app.query_one("#rail").display
+            assert mode.display is demo
+            assert mode.region.height == int(demo)
+            assert app.query_one("#main").region.y == app.query_one("#topbar").region.bottom + int(demo)
             assert composer.region.bottom <= 18
 
     asyncio.run(scenario())
@@ -472,7 +513,7 @@ def test_missing_credentials_are_visible_and_recoverable(tmp_path: Path) -> None
         app = make_app(backend)
         async with app.run_test() as pilot:
             await idle(app, pilot)
-            assert "OFFLINE DEMO" not in str(app.query_one("#mode", Static).content)
+            assert not app.query_one("#mode").display
             await send(app, pilot, "hello")
             await idle(app, pilot)
             assert app.query_one("#status").has_class("error")
