@@ -13,5 +13,6 @@
 **/*.pyc
 **/.vite
 **/.cache
+**/.test-build
 **/*.tsbuildinfo
 src/nagents/web/static

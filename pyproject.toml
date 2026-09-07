@@ -75,4 +75,4 @@ exclude = [ "/src/nagents/web-ui",]
 
 [tool.hatch.build.targets.sdist]
 include = [ "/src", "/docs", "LICENSE", "README.md", "pyproject.toml",]
-exclude = [ "**/node_modules", "**/.vite", "**/.cache", "**/*.tsbuildinfo",]
+exclude = [ "**/node_modules", "**/.vite", "**/.cache", "**/.test-build", "**/*.tsbuildinfo",]

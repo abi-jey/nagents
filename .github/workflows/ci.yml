@@ -286,6 +286,10 @@ jobs:
         working-directory: src/nagents/web-ui
         run: npm run typecheck
 
+      - name: Test web frontend
+        working-directory: src/nagents/web-ui
+        run: npm test
+
       - name: Build web assets
         working-directory: src/nagents/web-ui
         run: npm run build
@@ -318,7 +322,7 @@ jobs:
           assert "src/nagents/web-ui/package-lock.json" in sdist_files
           assert not any(name.startswith("nagents/web-ui/") for name in wheel_files)
           for name in wheel_files + sdist_files:
-              assert not {"node_modules", ".vite", ".cache"}.intersection(Path(name).parts), name
+              assert not {"node_modules", ".vite", ".cache", ".test-build"}.intersection(Path(name).parts), name
               assert not name.endswith(".tsbuildinfo"), name
           print("Web assets are bundled; frontend dependencies and caches are excluded")
 
