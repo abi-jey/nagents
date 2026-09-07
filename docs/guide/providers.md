@@ -134,6 +134,7 @@ import os
 from pathlib import Path
 from nagents import Agent, Provider, ProviderType, SessionManager
 
+
 def get_provider(provider_name: str) -> Provider:
     """Create a provider based on name."""
     match provider_name:
@@ -173,7 +174,7 @@ async def main():
     )
 
     async for event in agent.run("Hello!"):
-        if hasattr(event, 'chunk'):
+        if hasattr(event, "chunk"):
             print(event.chunk, end="")
 
     await agent.close()

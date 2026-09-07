@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -54,6 +54,7 @@ jobs:
   test-linux:
     name: Test Linux (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [lint]
     if: always() && needs.lint.result == 'success'
     strategy:
@@ -63,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -71,7 +72,7 @@ jobs:
           allow-prereleases: true
 
       - name: Install package and test dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,tui,voice]"
 
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
@@ -91,18 +92,23 @@ jobs:
   # MACOS TESTS
   # =============================================================================
   test-macos:
-    name: Test macOS (py${{ matrix.python-version }})
-    runs-on: macos-latest
+    name: Test macOS (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     needs: [lint]
     if: always() && needs.lint.result == 'success'
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-latest]
         python-version: ['3.11', '3.12', '3.13', '3.14']
+        include:
+          - os: macos-15-intel
+            python-version: '3.13'
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -110,7 +116,10 @@ jobs:
           allow-prereleases: true
 
       - name: Install package and test dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,tui,voice]"
+
+      - name: Report platform
+        run: python -c "import platform; print(platform.platform(), platform.machine())"
 
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
@@ -124,6 +133,7 @@ jobs:
   test-windows:
     name: Test Windows (py${{ matrix.python-version }})
     runs-on: windows-latest
+    timeout-minutes: 20
     needs: [lint]
     if: always() && needs.lint.result == 'success'
     strategy:
@@ -133,11 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
-
-      - name: Pull latest changes
-        shell: bash
-        run: git pull origin ${{ github.ref_name }} || true
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -145,13 +151,13 @@ jobs:
           allow-prereleases: true
 
       - name: Install package and test dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,tui,voice]"
 
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
-      - name: Run tests
-        run: pytest tests/ -v
+      - name: Run portable tests (POSIX harness cases are marked)
+        run: pytest tests/ -v -rs
 
   # =============================================================================
   # BUMP VERSION (runs only after all tests pass)
@@ -260,10 +266,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
-      - name: Pull latest changes
-        run: git pull --rebase origin ${{ github.ref_name }} || true
+      - name: Fetch successful version bump
+        if: needs.bump-version.result == 'success'
+        run: git fetch origin "${GITHUB_REF}" && git checkout --detach FETCH_HEAD
 
       - uses: actions/setup-python@v5
         with:

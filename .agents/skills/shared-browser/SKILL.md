@@ -25,4 +25,3 @@ Source of truth for the browser workflow. Do not duplicate the learning and setu
 - Use dedicated profile `.agents/chrome-context` in the current dir, not any other chrome profiles
 - CDP/MCP can access cookies/session tokens/open tabs; keep localhost-only and disable when done.
 - Do not store API keys/secrets in workspace docs.
-

@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import cast
 
@@ -15,7 +16,9 @@ from nagents.mcp.manager import _MCPToolInfo
 from nagents.mcp.manager import _mcp_type_to_python
 from nagents.mcp.manager import _param_to_mcp_name
 from nagents.tools.registry import ToolRegistry
-from nagents.types import JsonSchema
+
+if TYPE_CHECKING:
+    from nagents.types import JsonSchema
 
 
 class TestMCPServerConfig:
@@ -493,7 +496,7 @@ class TestToolRegistrationIntegration:
         wrapper = manager._create_tool_wrapper("mcp__weather__get_forecast", info)
 
         registry = ToolRegistry()
-        td = registry.register(wrapper, parameters=cast(JsonSchema, mcp_schema))
+        td = registry.register(wrapper, parameters=cast("JsonSchema", mcp_schema))
 
         # Schema should match exactly what MCP server provided
         assert td.parameters["properties"]["city"]["description"] == "City name to get weather for"

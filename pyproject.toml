@@ -7,6 +7,7 @@ requires-python = ">=3.11, <4.0"
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "License :: OSI Approved :: MIT License", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Programming Language :: Python :: 3.14", "Topic :: Scientific/Engineering :: Artificial Intelligence", "Topic :: Software Development :: Libraries :: Python Modules", "Typing :: Typed",]
 keywords = [ "llm", "agent", "ai", "openai", "anthropic", "gemini", "claude", "gpt", "streaming", "async",]
 dependencies = [ "aiohttp>=3.9.0", "aiosqlite>=0.20.0",]
+
 [[project.authors]]
 name = "Abbas Jafari"
 email = "git@public.abja.dev"
@@ -19,9 +20,14 @@ build-backend = "hatchling.build"
 text = "MIT"
 
 [project.optional-dependencies]
-dev = [ "pytest>=8.0", "pytest-cov>=4.1.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0", "fastapi", "pydantic>=2.0",]
+dev = [ "pytest>=8.0", "pytest-cov>=4.1.0", "ruff>=0.9.0", "mypy>=1.14.0", "pre-commit>=4.0.0", "fastapi", "pydantic>=2.0", "sounddevice>=0.5.0", "numpy>=2.4.6; python_version < '3.12'", "numpy>=2.5.2; python_version >= '3.12'", "python-dotenv>=1.0",]
 docs = [ "mkdocs>=1.6.0", "mkdocs-material>=9.5.0", "mkdocstrings[python]>=0.27.0",]
 server = [ "fastapi>=0.100", "uvicorn>=0.24", "pydantic>=2.0",]
+tui = [ "textual>=8.2.8",]
+voice = [ "sounddevice>=0.5.6",]
+
+[project.scripts]
+ngn = "nagents.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/abi-jey/nagents"
@@ -35,7 +41,7 @@ target-version = "py311"
 src = [ "src",]
 
 [tool.mypy]
-python_version = "3.11"
+# Match installed dependency stubs; CI tests cover the supported Python versions.
 strict = true
 warn_return_any = true
 warn_unused_ignores = true

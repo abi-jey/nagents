@@ -317,9 +317,7 @@ async def compare_providers(message: str):
     }
 
     # Run all providers in parallel
-    tasks = [
-        get_response(agent, message, name) for name, agent in agents.items()
-    ]
+    tasks = [get_response(agent, message, name) for name, agent in agents.items()]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)  # (1)!
 
@@ -362,6 +360,7 @@ if __name__ == "__main__":
 
     ```python
     import os
+
 
     def get_available_providers() -> list[Provider]:
         providers = []

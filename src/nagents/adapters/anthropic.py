@@ -4,7 +4,6 @@ Anthropic Claude format adapters.
 Handles conversion between our internal types and Anthropic Claude API format.
 """
 
-import json
 from typing import Any
 
 from ..types import COMPACTION_SUMMARY_PREFIX
@@ -16,6 +15,9 @@ from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
 from ..types import ToolDefinition
+from ._validation import ProtocolError
+from ._validation import string_data
+from ._validation import tool_arguments
 
 
 def _format_content_part(part: ContentPart) -> dict[str, Any]:
@@ -98,15 +100,21 @@ def format_messages(messages: list[Message]) -> tuple[str | None, list[dict[str,
     """
     system_prompt: str | None = None
     compaction_summaries: list[str] = []
-    result = []
+    result: list[dict[str, Any]] = []
 
     for msg in messages:
-        if msg.role == "system":
+        if msg.role in {"system", "developer"}:
             if isinstance(msg.content, str):
-                system_prompt = msg.content
+                text = msg.content
             elif isinstance(msg.content, list):
+                if not all(isinstance(part, TextContent) for part in msg.content):
+                    raise ProtocolError("Messages system instructions must contain text only.")
                 text_parts = [p.text for p in msg.content if isinstance(p, TextContent)]
-                system_prompt = "\n".join(text_parts) if text_parts else None
+                text = "\n".join(text_parts)
+            else:
+                text = ""
+            if text:
+                system_prompt = f"{system_prompt}\n\n{text}" if system_prompt else text
             continue
 
         if msg.role == "compaction_summary":
@@ -114,8 +122,7 @@ def format_messages(messages: list[Message]) -> tuple[str | None, list[dict[str,
             compaction_summaries.append(content_str)
             continue
 
-        # Convert developer role to assistant for better compatibility
-        role = msg.role if msg.role != "developer" else "assistant"
+        role = msg.role
         formatted: dict[str, Any] = {"role": role}
 
         # Handle content
@@ -147,6 +154,8 @@ def format_messages(messages: list[Message]) -> tuple[str | None, list[dict[str,
             formatted["content"] = content_parts if content_parts else ""
 
         elif msg.role == "tool":
+            if not msg.tool_call_id:
+                raise ProtocolError("Messages tool results require a tool call ID.")
             # Tool result messages in Anthropic format
             formatted["role"] = "user"  # Tool results come from user role
             tool_result_content: str | list[dict[str, Any]]
@@ -173,7 +182,16 @@ def format_messages(messages: list[Message]) -> tuple[str | None, list[dict[str,
             else:
                 formatted["content"] = formatted_content
 
-        result.append(formatted)
+        if (
+            msg.role == "tool"
+            and result
+            and result[-1]["role"] == "user"
+            and isinstance(result[-1]["content"], list)
+            and all(part.get("type") == "tool_result" for part in result[-1]["content"])
+        ):
+            result[-1]["content"].extend(formatted["content"])
+        else:
+            result.append(formatted)
 
     if compaction_summaries:
         combined = "\n\n".join(compaction_summaries)
@@ -224,14 +242,16 @@ def parse_response(response: dict[str, Any]) -> tuple[str, list[ToolCall], dict[
         block_type = block.get("type")
 
         if block_type == "text":
-            text += block.get("text", "")
+            text += string_data(block.get("text", ""))
 
         elif block_type == "tool_use":
+            if not block.get("id") or not block.get("name") or any(call.id == block["id"] for call in tool_calls):
+                raise ProtocolError("Provider returned invalid or duplicate tool identities; no tools were released.")
             tool_calls.append(
                 ToolCall(
-                    id=block.get("id", ""),
-                    name=block.get("name", ""),
-                    arguments=block.get("input", {}),
+                    id=string_data(block.get("id", "")),
+                    name=string_data(block.get("name", "")),
+                    arguments=tool_arguments(block.get("input", {})),
                 )
             )
 
@@ -255,12 +275,15 @@ class StreamingToolCallAccumulator:
         self._tool_calls: dict[int, dict[str, Any]] = {}
         self._current_index: int = 0
 
-    def start_tool_call(self, index: int, tool_id: str, name: str) -> None:
+    def start_tool_call(self, index: int, tool_id: str, name: str, initial_input: object = None) -> None:
         """Start a new tool call block."""
+        if index in self._tool_calls or type(index) is not int or not 0 <= index < 1024:
+            raise ProtocolError("Provider returned a duplicate or invalid tool block index.")
         self._tool_calls[index] = {
             "id": tool_id,
             "name": name,
             "arguments": "",
+            "initial_input": tool_arguments(initial_input) if initial_input is not None else {},
         }
         self._current_index = index
 
@@ -268,6 +291,8 @@ class StreamingToolCallAccumulator:
         """Add input JSON fragment to a tool call."""
         if index in self._tool_calls:
             self._tool_calls[index]["arguments"] += partial_json
+        else:
+            raise ProtocolError("Provider returned arguments without a tool block.")
 
     def get_complete_tool_calls(self) -> list[ToolCall]:
         """
@@ -276,22 +301,21 @@ class StreamingToolCallAccumulator:
         Returns:
             List of complete ToolCall objects
         """
-        result = []
+        result: list[ToolCall] = []
         for idx in sorted(self._tool_calls.keys()):
             tc = self._tool_calls[idx]
-            if tc["id"] and tc["name"]:
-                try:
-                    arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                except json.JSONDecodeError:
-                    arguments = {"raw": tc["arguments"]}
-
-                result.append(
-                    ToolCall(
-                        id=tc["id"],
-                        name=tc["name"],
-                        arguments=arguments,
-                    )
+            if not tc["id"] or not tc["name"] or any(call.id == tc["id"] for call in result):
+                raise ProtocolError("Provider returned invalid or duplicate tool identities; no tools were released.")
+            arguments = tool_arguments(tc["arguments"]) if tc["arguments"] else tc["initial_input"]
+            if tc["initial_input"] and arguments != tc["initial_input"]:
+                raise ProtocolError("Provider returned inconsistent tool block arguments.")
+            result.append(
+                ToolCall(
+                    id=tc["id"],
+                    name=tc["name"],
+                    arguments=arguments,
                 )
+            )
         return result
 
     def clear(self) -> None:

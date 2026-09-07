@@ -81,10 +81,10 @@ Control generation parameters for fine-tuned responses:
 from nagents import GenerationConfig
 
 config = GenerationConfig(
-    temperature=0.7,      # (1)!
-    max_tokens=1000,      # (2)!
-    top_p=0.9,            # (3)!
-    stop=["END"],         # (4)!
+    temperature=0.7,  # (1)!
+    max_tokens=1000,  # (2)!
+    top_p=0.9,  # (3)!
+    stop=["END"],  # (4)!
 )
 
 async for event in agent.run(

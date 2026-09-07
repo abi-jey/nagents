@@ -75,13 +75,15 @@ agent = Agent(
 ```python
 import asyncio
 
+
 async def main():
     async for event in agent.run("What is the capital of France?"):
-        if hasattr(event, 'chunk'):
+        if hasattr(event, "chunk"):
             print(event.chunk, end="", flush=True)
     print()  # newline at end
 
     await agent.close()
+
 
 asyncio.run(main())
 ```
@@ -96,6 +98,7 @@ Here's a complete, runnable example:
 import asyncio
 from pathlib import Path
 from nagents import Agent, Provider, ProviderType, SessionManager
+
 
 async def main():
     # 1. Create provider
@@ -116,11 +119,12 @@ async def main():
 
     # 4. Run conversation
     async for event in agent.run("Hello! What can you help me with?"):
-        if hasattr(event, 'chunk'):
+        if hasattr(event, "chunk"):
             print(event.chunk, end="", flush=True)
     print()
 
     await agent.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -136,13 +140,16 @@ Define Python functions as tools that the agent can call:
 from nagents import Agent, Provider, ProviderType, SessionManager
 from pathlib import Path
 
+
 def get_weather(city: str) -> str:
     """Get the current weather for a city."""
     return f"The weather in {city} is sunny, 22°C"
 
+
 def calculate(expression: str) -> str:
     """Evaluate a mathematical expression."""
     return str(eval(expression))
+
 
 async def main():
     provider = Provider(...)
@@ -172,6 +179,7 @@ Sessions allow the agent to remember previous conversations:
 ```python title="persistent_sessions.py" hl_lines="10-11 17-18"
 from pathlib import Path
 from nagents import Agent, SessionManager, Provider, ProviderType
+
 
 async def main():
     provider = Provider(...)

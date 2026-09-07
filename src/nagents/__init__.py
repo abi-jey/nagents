@@ -118,6 +118,8 @@ from .compactor import DEFAULT_COMPACT_PROMPT
 from .compactor import Compactor
 from .compactor import Messages
 from .compactor import Tokens
+from .events import AudioChunkEvent
+from .events import AudioTranscriptDeltaEvent
 from .events import CompactionDoneEvent
 from .events import CompactionStartedEvent
 from .events import DoneEvent
@@ -125,8 +127,18 @@ from .events import ErrorEvent
 from .events import Event
 from .events import EventType
 from .events import FinishReason
+from .events import InputTranscriptCompletedEvent
+from .events import InputTranscriptDeltaEvent
 from .events import RateLimitEvent
+from .events import RealtimeRateLimitsEvent
+from .events import RealtimeRawEvent
+from .events import RealtimeSessionCreatedEvent
+from .events import RealtimeSessionUpdatedEvent
 from .events import ReasoningChunkEvent
+from .events import ResponseCancelledEvent
+from .events import ResponseCreatedEvent
+from .events import SpeechStartedEvent
+from .events import SpeechStoppedEvent
 from .events import TextChunkEvent
 from .events import TextDoneEvent
 from .events import TokenUsage
@@ -136,6 +148,12 @@ from .events import ToolResultType
 from .events import Usage
 from .exceptions import NagentsError
 from .exceptions import ToolHallucinationError
+from .extensions import AgentPlugin
+from .extensions import CompactionRequest
+from .extensions import CompactionResult
+from .extensions import CompactionStrategy
+from .extensions import ModelRequest
+from .extensions import RunContext
 from .http import FileHTTPLogger
 from .mcp import MCPClient
 from .mcp import MCPError
@@ -147,8 +165,24 @@ from .media import IMAGE_MIME_TYPES
 from .media import MediaCapabilities
 from .media import get_media_capabilities
 from .media import transcode_audio_to_wav
+from .provider import DEFAULT_CODEX_MODEL
+from .provider import CodexCredentials
+from .provider import CodexProvider
 from .provider import Provider
 from .provider import ProviderType
+from .realtime import DEFAULT_REALTIME_MODEL
+from .realtime import REALTIME_VOICES
+from .realtime import AudioDuplex
+from .realtime import AudioFormat
+from .realtime import AudioInput
+from .realtime import AudioOutput
+from .realtime import BytesAudioInput
+from .realtime import BytesAudioOutput
+from .realtime import NullAudioOutput
+from .realtime import RealtimeConfig
+from .realtime import RealtimeSession
+from .realtime import WAVFileAudioInput
+from .realtime import WAVFileAudioOutput
 from .session import SessionManager
 from .stt import OPENAI_TRANSCRIPTION_FORMATS
 from .stt import GeminiSTTService
@@ -177,13 +211,23 @@ from .types import ToolDefinition
 
 __all__ = [
     "AUDIO_MIME_TYPES",
+    "DEFAULT_CODEX_MODEL",
     "DEFAULT_COMPACTOR",
     "DEFAULT_COMPACT_PROMPT",
+    "DEFAULT_REALTIME_MODEL",
     "DOCUMENT_MIME_TYPES",
     "IMAGE_MIME_TYPES",
     "OPENAI_TRANSCRIPTION_FORMATS",
+    "REALTIME_VOICES",
     "Agent",
+    "AgentPlugin",
+    "AudioChunkEvent",
     "AudioContent",
+    "AudioDuplex",
+    "AudioFormat",
+    "AudioInput",
+    "AudioOutput",
+    "AudioTranscriptDeltaEvent",
     "BatchClient",
     "BatchConfig",
     "BatchJob",
@@ -194,8 +238,15 @@ __all__ = [
     "BatchStatus",
     "BatchStore",
     "BatchToolCall",
+    "BytesAudioInput",
+    "BytesAudioOutput",
+    "CodexCredentials",
+    "CodexProvider",
     "CompactionDoneEvent",
+    "CompactionRequest",
+    "CompactionResult",
     "CompactionStartedEvent",
+    "CompactionStrategy",
     "Compactor",
     "ContentPart",
     "DocumentContent",
@@ -209,6 +260,8 @@ __all__ = [
     "GeminiThinkingConfig",
     "GenerationConfig",
     "ImageContent",
+    "InputTranscriptCompletedEvent",
+    "InputTranscriptDeltaEvent",
     "JsonSchema",
     "JsonSchemaProperty",
     "JsonValue",
@@ -219,16 +272,29 @@ __all__ = [
     "MediaCapabilities",
     "Message",
     "Messages",
+    "ModelRequest",
     "NagentsError",
+    "NullAudioOutput",
     "OpenAISTTService",
     "OpenRouterReasoningConfig",
     "Provider",
     "ProviderType",
     "RateLimitEvent",
+    "RealtimeConfig",
+    "RealtimeRateLimitsEvent",
+    "RealtimeRawEvent",
+    "RealtimeSession",
+    "RealtimeSessionCreatedEvent",
+    "RealtimeSessionUpdatedEvent",
     "ReasoningChunkEvent",
+    "ResponseCancelledEvent",
+    "ResponseCreatedEvent",
     "RetryConfig",
+    "RunContext",
     "STTService",
     "SessionManager",
+    "SpeechStartedEvent",
+    "SpeechStoppedEvent",
     "TextChunkEvent",
     "TextContent",
     "TextDoneEvent",
@@ -249,6 +315,8 @@ __all__ = [
     "UnsupportedAudioError",
     "Usage",
     "UsageInfo",
+    "WAVFileAudioInput",
+    "WAVFileAudioOutput",
     "docker_run",
     "estimate_messages_tokens",
     "get_media_capabilities",

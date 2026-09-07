@@ -57,6 +57,7 @@ import asyncio
 from pathlib import Path
 from nagents import Agent, Provider, ProviderType, SessionManager
 
+
 async def main():
     # Create a provider
     provider = Provider(
@@ -76,10 +77,11 @@ async def main():
 
     # Run a conversation
     async for event in agent.run("Hello, how are you?"):
-        if hasattr(event, 'chunk'):
+        if hasattr(event, "chunk"):
             print(event.chunk, end="")
 
     await agent.close()
+
 
 asyncio.run(main())
 ```

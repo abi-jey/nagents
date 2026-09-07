@@ -77,6 +77,7 @@ print("nagents installed successfully!")
 ??? note "Check Version"
     ```python
     import nagents
+
     print(nagents.__version__)
     ```
 

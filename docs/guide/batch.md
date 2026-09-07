@@ -29,18 +29,9 @@ batch_manager = BatchManager(provider=provider)
 
 # Create batch requests
 requests = [
-    BatchRequest(
-        id="req-1",
-        messages=[{"role": "user", "content": "Summarize: AI is transforming..."}]
-    ),
-    BatchRequest(
-        id="req-2",
-        messages=[{"role": "user", "content": "Summarize: Machine learning..."}]
-    ),
-    BatchRequest(
-        id="req-3",
-        messages=[{"role": "user", "content": "Summarize: Neural networks..."}]
-    ),
+    BatchRequest(id="req-1", messages=[{"role": "user", "content": "Summarize: AI is transforming..."}]),
+    BatchRequest(id="req-2", messages=[{"role": "user", "content": "Summarize: Machine learning..."}]),
+    BatchRequest(id="req-3", messages=[{"role": "user", "content": "Summarize: Neural networks..."}]),
 ]
 
 # Submit batch job
@@ -204,6 +195,7 @@ from nagents import (
     ProviderType,
 )
 
+
 async def process_documents(documents: list[str]) -> dict[str, str]:
     """Process multiple documents with batch API."""
 
@@ -221,13 +213,7 @@ async def process_documents(documents: list[str]) -> dict[str, str]:
 
     # Create requests
     requests = [
-        BatchRequest(
-            id=f"doc-{i}",
-            messages=[{
-                "role": "user",
-                "content": f"Summarize in one sentence: {doc}"
-            }]
-        )
+        BatchRequest(id=f"doc-{i}", messages=[{"role": "user", "content": f"Summarize in one sentence: {doc}"}])
         for i, doc in enumerate(documents)
     ]
 

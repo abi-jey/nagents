@@ -16,6 +16,7 @@ def get_weather(city: str) -> str:
     # Your implementation
     return f"Weather in {city}: Sunny, 22°C"
 
+
 def calculate(expression: str) -> str:
     """Evaluate a mathematical expression.
 
@@ -106,6 +107,7 @@ Async functions are fully supported:
 ```python title="async_tools.py"
 import aiohttp
 
+
 async def fetch_data(url: str) -> str:
     """Fetch data from a URL.
 
@@ -116,6 +118,7 @@ async def fetch_data(url: str) -> str:
         async with session.get(url) as response:
             return await response.text()
 
+
 async def query_database(query: str) -> str:
     """Execute a database query.
 
@@ -125,6 +128,7 @@ async def query_database(query: str) -> str:
     # Async database operations
     result = await db.execute(query)
     return str(result)
+
 
 agent = Agent(
     provider=provider,
@@ -224,6 +228,7 @@ Tools can have complex parameter types:
 ```python title="complex_params.py"
 from typing import Optional
 
+
 def search(
     query: str,
     limit: int = 10,
@@ -238,6 +243,7 @@ def search(
     """
     results = perform_search(query, limit, filters)
     return str(results)
+
 
 def create_event(
     title: str,

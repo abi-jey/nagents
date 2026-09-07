@@ -1,0 +1,42 @@
+# ngn source-checkout configuration. Select explicitly with --config, or use
+# ~/.config/ngn/config.toml or a trusted <workspace>/.ngn/config.toml.
+# Flat TOML: all root settings must appear before [profiles.NAME] tables.
+# API keys belong in the named environment variables, never in this file.
+
+provider = "openai"
+model = "gpt-4.1"
+api = "auto"
+auth = "auto"
+base_url = ""
+api_key_env = "OPENAI_API_KEY"
+api_version = ""
+
+agent = "build"
+max_tool_rounds = 30
+max_subagent_depth = 2 # Root=0, child=1, grandchild=2. Zero disables delegation.
+shell_timeout = 60.0
+max_output = 32768
+max_file_bytes = 262144
+demo = false
+
+theme = "ocean"
+theme_background = "auto" # auto, terminal (native surfaces), or theme (painted).
+animations = true
+submit_mode = "queue" # queue or interrupt.
+tab_action = "agent" # agent, complete, or focus.
+
+dictation_enabled = false # Enabling still requires an explicit recording action.
+dictation_model = "gpt-4o-mini-transcribe"
+dictation_base_url = "https://api.openai.com/v1"
+dictation_api_key_env = "OPENAI_API_KEY"
+dictation_language = "" # Auto-detect, or a two-letter lowercase code.
+dictation_max_seconds = 120
+
+# Omit data_dir to use $XDG_DATA_HOME/ngn or ~/.local/share/ngn.
+# A relative data_dir or .py plugin path is relative to this TOML file.
+plugins = [] # Trusted Python: ["./extension.py:setup", "package.module:setup"].
+
+[profiles.audit]
+mode = "reviewer"
+instructions = "Report regressions, security issues, and missing tests. Do not modify files."
+model = ""
