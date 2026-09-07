@@ -1,4 +1,8 @@
-"""Built-in tools for the agent server."""
+"""Trusted-operator tools, not a sandbox: file paths use process permissions.
+
+Custom Python/MCP tools execute with server privileges. Access to a host Docker
+socket can grant host control even when the socket mount is marked read-only.
+"""
 
 import hashlib
 import json
@@ -48,7 +52,7 @@ def _make_attachment_id(path: Path) -> str:
 
 
 def run_shell_command(command: str) -> str:
-    """Run a shell command inside an isolated Docker sandbox and return output."""
+    """Run a shell command using Docker; isolation depends on daemon/deployment policy."""
     return docker_run(command)
 
 
