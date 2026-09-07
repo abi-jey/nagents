@@ -1,39 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendEvent, readEvents, type WireEvent } from "./protocol.js";
-
-test("NDJSON tolerates arbitrary UTF-8/chunk boundaries", async () => {
-  const bytes = new TextEncoder().encode(
-    '{"event":"text_chunk","chunk":"\u00e9"}\n{"event":"done"}\n',
-  );
-  const events: WireEvent[] = [];
-  await readEvents(
-    new ReadableStream({
-      start(controller) {
-        for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
-        controller.close();
-      },
-    }),
-    (event) => events.push(event),
-  );
-  assert.equal(events[0].chunk, "\u00e9");
-  assert.equal(events[1].event, "done");
-});
-
-test("partial events fail instead of silently succeeding", async () => {
-  await assert.rejects(
-    readEvents(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"event":"done"}'));
-          controller.close();
-        },
-      }),
-      () => undefined,
-    ),
-    /partway/,
-  );
-});
+import { appendEvent, fromHistory } from "./transcript.js";
 
 test("text finalization does not duplicate streamed text and errors retain it", () => {
   let entries = appendEvent([], { event: "text_chunk", chunk: "partial" });
@@ -89,4 +56,27 @@ test("a new run never appends to a cancelled partial response", () => {
   });
   assert.equal(entries.length, 2);
   assert.equal(entries[0].text, "partial");
+});
+
+test("saved tool results rejoin their call rather than duplicating activity", () => {
+  const entries = fromHistory([
+    {
+      role: "assistant",
+      content: "",
+      name: "",
+      tool_call_id: "",
+      tool_calls: [
+        { id: "one", name: "read_file", arguments: { path: "example" } },
+      ],
+    },
+    {
+      role: "tool",
+      content: "saved result",
+      name: "read_file",
+      tool_call_id: "one",
+      tool_calls: [],
+    },
+  ]);
+  assert.equal(entries.length, 1);
+  assert.match(entries[0].text, /saved result/);
 });

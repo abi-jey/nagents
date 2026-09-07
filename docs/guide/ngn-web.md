@@ -25,17 +25,18 @@ extra also supplies the HTTP dependencies, but the applications are independent.
 
 ### Source Checkout
 
-The React/TypeScript source and npm lockfile live in `web/`. Use Node 20.19 or newer:
+The React/TypeScript source and npm lockfile live in `src/nagents/web-ui/`.
+Use Node 20.19 or newer:
 
 ```bash
 pip install -e '.[web]'
-npm --prefix web ci
-npm --prefix web run build
+npm --prefix src/nagents/web-ui ci
+npm --prefix src/nagents/web-ui run build
 ngn serve --demo --workspace /path/to/project
 ```
 
 Vite builds into `src/nagents/web/static/`. These generated assets and
-`web/node_modules/` are ignored by Git. Rebuild after editing frontend source.
+`src/nagents/web-ui/node_modules/` are ignored by Git. Rebuild after editing frontend source.
 There is no separate Vite origin/proxy required: test the production client through
 `ngn serve`. Startup never downloads dependencies or builds assets. Missing assets
 produce an actionable error; published distributions must include the build.
@@ -117,10 +118,24 @@ automatically replaying a request with side effects.
 
 ## Development Checks
 
+The frontend is organized by responsibility within `src/nagents/web-ui/src/`:
+
+- `app/App.tsx` composes the layout and features. `app/useClient.ts` coordinates
+  connection, shared busy state, and explicit recovery.
+- `features/chat/` contains conversation/composer rendering, the owning run-stream
+  hook, and a tested transcript reducer/history adapter.
+- `features/sessions/` owns session transport/state and session navigation.
+- `features/approvals/` owns the exact pending decision and its accessible modal.
+- `api/` contains authenticated HTTP transport and tested NDJSON parsing.
+- `types.ts` defines shared backend contracts; `main.tsx` only mounts the app.
+
+The Vite output contract is `../web/static` relative to `src/nagents/web-ui/`.
+Python distributions include those generated assets, not frontend dependencies.
+
 ```bash
 .venv/bin/pytest tests/test_web.py tests/test_cli.py
 .venv/bin/ruff check src/nagents/web src/nagents/cli.py tests/test_web.py
 .venv/bin/mypy src/nagents/web src/nagents/cli.py tests/test_web.py
-npm --prefix web test
-npm --prefix web run build
+npm --prefix src/nagents/web-ui test
+npm --prefix src/nagents/web-ui run build
 ```

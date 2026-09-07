@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   build: {
-    outDir: "../src/nagents/web/static",
+    outDir: "../web/static",
     emptyOutDir: true,
     sourcemap: false,
   },

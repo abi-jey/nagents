@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": false,
     "outDir": ".test-build"
   },
-  "include": ["src/protocol.ts", "src/protocol.test.ts"]
+  "include": ["src/api/*.ts", "src/features/chat/transcript*.ts"]
 }
