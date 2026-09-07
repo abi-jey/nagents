@@ -1,4 +1,7 @@
-"""Agent server — FastAPI app with chat, tools, attachments, auto-reload, MCP."""
+"""Agent API server with chat, tools, attachments, auto-reload, and MCP.
+
+The legacy bundled UI is removed; / and /ui are intentionally unregistered.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +29,6 @@ from fastapi import FastAPI
 from fastapi import Response
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from nagents import Agent
@@ -146,7 +148,7 @@ file attachments, MCP server management, and MCP-provided capabilities (e.g., br
 ### When to use tools
 - Use `run_shell_command` for system operations: installing packages, running scripts, git commands, checking system state.
 - Use `read_file` / `write_file` / `list_directory` for file operations; keep writes in operator-approved directories.
-- Use `attach_file` to share generated output (screenshots, logs, documents) with the user via the UI.
+- Use `attach_file` to share generated output (screenshots, logs, documents) through authenticated download URLs.
 - Use `add_mcp_server` to add new MCP servers at runtime (e.g., browser automation, filesystem access).
 - Use MCP tools (prefixed with `mcp__`) for specialized capabilities like browser automation.
 
@@ -733,7 +735,7 @@ async def _startup() -> None:
     start_wakeup_loop()
 
     async def _on_wakeup(wakeup: dict[str, str]) -> None:
-        """Called when a scheduled wake-up fires. Runs the agent and broadcasts to UI."""
+        """Called when a scheduled wake-up fires. Runs the agent and broadcasts to SSE subscribers."""
         session_id = wakeup.get("session_id")
         reason = wakeup.get("reason", "")
         logger.info("Wake-up fired: session=%s reason=%s", session_id, reason)
@@ -887,7 +889,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
     user_message = body.message
     if sys_msg:
         user_message = f"{sys_msg}\n{body.message}"
-        # Emit the system notification as an SSE event so the UI can show it
+        # Emit the system notification as an SSE event for connected clients.
         logger.info("System notification: %s", sys_msg)
 
     agent = _get_agent()
@@ -950,7 +952,7 @@ async def logs(tail: int = 50) -> dict[str, object]:
 
 @app.get("/events")
 async def event_stream() -> StreamingResponse:
-    """SSE endpoint for wake-up events. UI connects on load and stays open."""
+    """SSE endpoint for wake-up events; clients stay connected for notifications."""
 
     async def _stream() -> Any:
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -1282,7 +1284,7 @@ async def get_attachment(attachment_id: str) -> Response:
     a.fetch_count += 1
     a.last_fetched_at = time.time()
 
-    # Agent-generated HTML/SVG must not execute with the UI's authenticated origin.
+    # Agent-generated HTML/SVG must not execute with the server's authenticated origin.
     return FileResponse(
         path=a.path,
         media_type=a.content_type,
@@ -1293,17 +1295,3 @@ async def get_attachment(attachment_id: str) -> Response:
             "X-Fetch-Count": str(a.fetch_count),
         },
     )
-
-
-# ── Web UI ───────────────────────────────────────────────────────────────────
-_WEBUI_DIR = Path(__file__).resolve().parent / "webui"
-
-if _WEBUI_DIR.is_dir():
-    app.mount("/ui", StaticFiles(directory=str(_WEBUI_DIR), html=True), name="ui")
-
-    @app.get("/", include_in_schema=False)
-    async def index() -> Response:
-        index_file = _WEBUI_DIR / "index.html"
-        if index_file.is_file():
-            return FileResponse(index_file)
-        return Response(content=b"web ui not found", status_code=404)
