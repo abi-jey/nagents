@@ -941,19 +941,17 @@ class Provider:
         extra: dict[str, Any] = {}
 
         async for data in self._http.post_stream(url, body, headers):
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-
+            chunk = load_object(data)
             text, tool_calls, usage = gemini_adapter.parse_response(chunk)
+            reason = gemini_adapter.parse_finish_reason(chunk)
+            if finish_reason != FinishReason.UNKNOWN:
+                if text or tool_calls or reason not in {FinishReason.UNKNOWN, finish_reason}:
+                    raise ProtocolError("Gemini sent generation data after completion; no tools were released.")
+            elif reason != FinishReason.UNKNOWN:
+                finish_reason = reason
 
-            if usage:
-                latest_usage = Usage(
-                    prompt_tokens=usage.get("promptTokenCount", 0),
-                    completion_tokens=usage.get("candidatesTokenCount", 0),
-                    total_tokens=usage.get("totalTokenCount", 0),
-                )
+            if usage is not None:
+                latest_usage = token_usage(usage, "gemini")
 
             if text:
                 full_text += text
@@ -962,7 +960,16 @@ class Provider:
             if tool_calls:
                 all_tool_calls.extend(tool_calls)
 
-        # Emit tool calls
+        if finish_reason == FinishReason.UNKNOWN:
+            raise ProtocolError("Gemini stream ended before completion; no tools were released.")
+        if all_tool_calls and finish_reason != FinishReason.STOP:
+            raise ProtocolError("Gemini returned incomplete tool calls; no tools were released.")
+        yield TextDoneEvent(
+            text=full_text,
+            usage=latest_usage,
+            finish_reason=FinishReason.TOOL_CALLS if all_tool_calls else finish_reason,
+            extra=extra,
+        )
         if all_tool_calls:
             for tc in all_tool_calls:
                 yield ToolCallEvent(
@@ -974,8 +981,6 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
-        elif full_text:
-            yield TextDoneEvent(text=full_text, usage=latest_usage, finish_reason=finish_reason, extra=extra)
 
     async def _non_stream_gemini(
         self,
@@ -989,31 +994,23 @@ class Provider:
         response = await self._http.post_json(url, body, headers)
         text, tool_calls, usage = gemini_adapter.parse_response(response)
 
-        # Parse usage
-        latest_usage = Usage()
-        if usage:
-            latest_usage = Usage(
-                prompt_tokens=usage.get("promptTokenCount", 0),
-                completion_tokens=usage.get("candidatesTokenCount", 0),
-                total_tokens=usage.get("totalTokenCount", 0),
-            )
-
-        # Parse finish_reason from Gemini response
-        finish_reason = FinishReason.UNKNOWN
-        candidates = response.get("candidates", [])
-        if candidates:
-            finish_reason_str = candidates[0].get("finishReason", "")
-            if finish_reason_str == "STOP":
-                finish_reason = FinishReason.STOP
-            elif finish_reason_str == "MAX_TOKENS":
-                finish_reason = FinishReason.LENGTH
-            elif finish_reason_str == "SAFETY":
-                finish_reason = FinishReason.CONTENT_FILTER
+        latest_usage = token_usage(usage, "gemini")
+        finish_reason = gemini_adapter.parse_finish_reason(response)
+        if finish_reason == FinishReason.UNKNOWN:
+            raise ProtocolError("Gemini response ended before completion; no tools were released.")
+        if tool_calls and finish_reason != FinishReason.STOP:
+            raise ProtocolError("Gemini returned incomplete tool calls; no tools were released.")
 
         extra: dict[str, Any] = {}
         if "model" in response:
             extra["model"] = response["model"]
 
+        yield TextDoneEvent(
+            text=text,
+            usage=latest_usage,
+            finish_reason=FinishReason.TOOL_CALLS if tool_calls else finish_reason,
+            extra=extra,
+        )
         if tool_calls:
             for tc in tool_calls:
                 yield ToolCallEvent(
@@ -1025,8 +1022,6 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
-        elif text:
-            yield TextDoneEvent(text=text, usage=latest_usage, finish_reason=finish_reason, extra=extra)
 
     async def _generate_anthropic(
         self,
