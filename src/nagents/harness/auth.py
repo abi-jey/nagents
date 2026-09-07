@@ -303,7 +303,13 @@ class OpenAIAuth:
                     cast("dict[str, object]", data),
                     _retry_after(response.headers.get("Retry-After", "5")),
                 )
-        except (aiohttp.ClientError, TimeoutError, ValueError):
+        except TimeoutError:
+            # Event-loop timers can fire before the next monotonic-clock tick.
+            # Classify by the limiting budget, not a second clock comparison.
+            if remaining <= _REQUEST_SECONDS:
+                raise OpenAIAuthError("ChatGPT login timed out or expired; start /login again.") from None
+            raise OpenAIAuthError("OpenAI authentication connection failed or timed out; retry /login.") from None
+        except (aiohttp.ClientError, ValueError):
             raise OpenAIAuthError("OpenAI authentication connection failed or timed out; retry /login.") from None
 
     async def _wait(self, delay: float, deadline: float) -> None:

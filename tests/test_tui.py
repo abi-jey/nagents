@@ -696,6 +696,9 @@ def test_long_approval_is_scrollable_without_truncating(tmp_path: Path) -> None:
             await pilot.pause()
             assert isinstance(app.screen, ApprovalModal)
             scroll = app.screen.query_one(".approval-content", VerticalScroll)
+            async with asyncio.timeout(5):
+                while scroll.max_scroll_y == 0:
+                    await pilot.pause()
             assert scroll.max_scroll_y > 100
             assert app.screen.request.preview == preview
             assert app.screen.focused is app.screen.query_one("#deny")

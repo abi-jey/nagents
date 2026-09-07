@@ -14,6 +14,7 @@ from time import monotonic
 from time import time
 from typing import TYPE_CHECKING
 
+import aiohttp
 import pytest
 from aiohttp import web
 
@@ -207,6 +208,30 @@ def test_deadline_interrupts_pending_poll(monkeypatch: pytest.MonkeyPatch) -> No
             with pytest.raises(OpenAIAuthError, match="expired"):
                 await asyncio.wait_for(auth.complete_device_login(authorization), timeout=1)
             assert not auth.path.exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("remaining,message", [(0.03, "expired"), (60.0, "connection")])
+@pytest.mark.parametrize("error_type", [TimeoutError, aiohttp.ConnectionTimeoutError])
+def test_timeout_uses_limiting_budget_before_clock_advances(
+    monkeypatch: pytest.MonkeyPatch,
+    remaining: float,
+    message: str,
+    error_type: type[TimeoutError],
+) -> None:
+    def timeout(*args: object, **kwargs: object) -> None:
+        raise error_type(ACCESS)
+
+    monkeypatch.setattr("nagents.harness.auth.monotonic", lambda: 100.0)
+    monkeypatch.setattr(aiohttp, "ClientSession", timeout)
+
+    async def scenario() -> None:
+        auth = OpenAIAuth()
+        with pytest.raises(OpenAIAuthError, match=message) as error:
+            await auth._post("/api/accounts/deviceauth/token", {}, 100.0 + remaining)
+        assert ACCESS not in str(error.value)
+        assert not auth.path.exists()
 
     asyncio.run(scenario())
 
