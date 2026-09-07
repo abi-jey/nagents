@@ -111,6 +111,9 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Emit versioned JSON Lines events; approvals fail closed")
     run.add_argument("prompt", nargs="*", help="Prompt text, or - to read from standard input")
     commands.add_parser("sessions", parents=[common], help="List this workspace's saved sessions")
+    serve = commands.add_parser("serve", parents=[common], help="Serve the local React web client (web extra)")
+    serve.add_argument("--host", default="127.0.0.1", help="Loopback address only (default: 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8765, help="Local HTTP port (default: 8765)")
     login = commands.add_parser("login", parents=[common], help="Sign in to OpenAI with a ChatGPT device code")
     method = login.add_mutually_exclusive_group()
     method.add_argument(
@@ -345,6 +348,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugins.append(f"{location}:{function}")
             overrides["plugins"] = tuple(plugins)
         config = replace(config, **overrides)
+        if args.command == "serve":
+            from .web import serve
+
+            serve(
+                config,
+                host=args.host,
+                port=args.port,
+                resume_session=getattr(args, "resume", ""),
+                continue_session=getattr(args, "continue_session", False),
+            )
+            return 0
         harness = Harness(config)
         if args.command:
             return asyncio.run(_headless(harness, args))
