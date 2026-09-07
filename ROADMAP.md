@@ -1,109 +1,73 @@
 # Roadmap
 
-This document outlines the planned features and improvements for nagents.
+This roadmap describes the current source checkout, not a guarantee of what is
+included in a published package. Planned work has no assigned release versions or
+delivery dates. See the [README](README.md) for installation and usage.
 
-## Current Status
+## Implemented Core
 
-nagents currently supports:
-- OpenAI-compatible APIs (OpenAI, Azure OpenAI, local models)
-- Streaming and non-streaming responses
-- Tool/function calling
-- Session management with SQLite
-- HTTP/SSE traffic logging for debugging
-- Tool hallucination handling
+- Native Anthropic Messages and Gemini REST providers, alongside OpenAI-compatible
+  APIs, Azure OpenAI, and OpenRouter. Streaming, non-streaming generation, and
+  function calling are implemented; provider-specific capabilities still differ.
+- Generic OpenAI Responses support through `api="responses"`, including text,
+  user images, custom function tools, and reasoning-item replay. This is distinct
+  from the ChatGPT/Codex authentication route and is not full Responses parity.
+- LiteLLM gateway access with an explicit endpoint and API key, with selectable
+  HTTP contracts. This does not implement a local router, fallback policy, or
+  load balancer; those can be configured at the gateway.
+- Python tool registration and execution, invalid-tool handling, MCP stdio clients,
+  SQLite session persistence and migrations, context compaction, and batch APIs
+  for supported providers. Trusted Python lifecycle hooks, context transforms,
+  and replaceable compaction strategies extend the text agent loop.
+- Usage events, retry/backoff handling, and HTTP/SSE debug logging. These are not
+  an integrated tracing or cost-monitoring system.
+- OpenAI Realtime WebSocket sessions with audio input/output, transcription events,
+  and function calling. This is not Gemini Live support.
 
-## Planned Features
+The optional server also provides HTTP/SSE chat, session management, tool/MCP
+reload, and a web UI. These implementations do not imply identical capabilities
+across the core library, server, and terminal client.
 
-### Provider Support
+## ngn: Source Checkout Only
 
-#### Google Gemini API
-- [ ] Native Gemini API implementation
-- [ ] Gemini-specific features (grounding, code execution)
-- [ ] Examples for Gemini usage
+The optional `ngn` coding harness and terminal/headless clients are implemented
+here but **not yet a published CLI release**. Do not assume `pip install nagents`
+includes them. Use the [source installation guide](docs/guide/ngn-installation.md)
+and [ngn usage guide](docs/guide/ngn.md).
 
-#### Anthropic Claude API
-- [ ] Native Anthropic API implementation
-- [ ] Claude-specific features (extended thinking, computer use)
-- [ ] Examples for Claude usage
+- Interactive TUI and headless JSON events, local sessions, coding tools, approval
+  policies, trusted project configuration, Python plugins, and an offline demo.
+- Local `SKILL.md` discovery and text loading, including skill slash commands.
+  Loading a skill does not automatically execute its scripts.
+- Process-local asynchronous subagent trees, bounded delegation, task inspection,
+  and explicit follow-ups with inherited permission ceilings. This is not a
+  distributed orchestration system or A2A protocol implementation.
+- API-key providers and separate ChatGPT/Codex subscription authentication, plus
+  opt-in microphone dictation that produces an editable draft, not a sent prompt.
 
-#### OpenAI Responses API
-- [ ] Support for the new Responses API format
-- [ ] Built-in tools (web search, code interpreter, file search)
-- [ ] Reasoning models support (o1, o3)
+## Remaining Directions
 
-#### Vertex AI
-- [ ] Google Cloud Vertex AI support
-- [ ] Authentication via service accounts
-- [ ] Gemini models on Vertex
+These are planned or proposed areas for discussion, not shipped features or
+commitments to complete every provider's API surface:
 
-#### LiteLLM Integration
-- [ ] LiteLLM as a provider option
-- [ ] Access to 100+ LLM providers through single interface
-- [ ] Fallback and load balancing support
-
-### Observability
-
-#### Langfuse Integration
-- [ ] Automatic tracing of agent runs
-- [ ] Token usage tracking
-- [ ] Cost monitoring
-- [ ] Prompt management integration
-
-### Advanced Features
-
-#### Skills Support
-- [ ] Pluggable skill system
-- [ ] Pre-built skills library
-- [ ] Custom skill development API
-- [ ] Skill composition and chaining
-
-#### Multi-Agent Support
-- [ ] Agent-to-agent communication
-- [ ] Agent orchestration and coordination
-- [ ] Hierarchical agent structures
-- [ ] Shared context and memory between agents
-
-#### A2A Protocol Support
-- [ ] Google A2A (Agent-to-Agent) protocol implementation
-- [ ] Agent discovery and registration
-- [ ] Standardized agent communication
-- [ ] Interoperability with other A2A-compatible frameworks
-
-### Realtime & Live APIs
-
-#### OpenAI Realtime API
-- [ ] WebSocket-based realtime communication
-- [ ] Voice input/output support
-- [ ] Low-latency streaming responses
-- [ ] Realtime function calling
-
-#### Google Gemini Live API
-- [ ] Bidirectional streaming support
-- [ ] Live audio/video input processing
-- [ ] Real-time multimodal interactions
-- [ ] Live API-specific features
-
-### Documentation & Examples
-
-- [ ] Comprehensive provider-specific examples
-- [ ] Migration guides from other frameworks
-- [ ] Best practices documentation
-- [ ] Performance tuning guide
+- **Provider coverage:** Vertex AI and service-account authentication; Gemini Live
+  bidirectional audio/video; broader native built-in tools such as Gemini
+  grounding/code execution, Anthropic computer use, and Responses web search,
+  file search, and code interpreter. Reasoning controls and model-specific
+  behavior need continued coverage rather than a blanket parity claim.
+- **Skills and multi-agent interoperability:** A reusable skills library,
+  composition patterns, shared-context coordination beyond local delegation,
+  and A2A discovery/communication remain proposals.
+- **Observability:** Langfuse/OpenTelemetry tracing, cost monitoring, and prompt
+  management remain planned/research only. Existing logs, usage events, and
+  extension hooks are not automatic instrumentation or an exporter integration.
+- **Documentation and validation:** Expand provider-specific examples, migration
+  and best-practice guides, performance guidance, and coverage of supported API
+  combinations and their limitations.
 
 ## Contributing
 
-We welcome contributions! If you'd like to help implement any of these features, please:
-
-1. Check the [issues](https://github.com/abi-jey/nagents/issues) for existing discussions
-2. Open a new issue to discuss your approach
-3. Submit a pull request
-
-## Versioning
-
-- **0.1.x** - Current: OpenAI-compatible API support, core features
-- **0.2.x** - Multi-provider support (Gemini, Anthropic, Vertex)
-- **0.3.x** - Advanced features (Skills, LiteLLM)
-- **0.4.x** - Observability (Langfuse, OpenTelemetry)
-- **0.5.x** - Multi-agent support (A2A protocol, agent orchestration)
-- **0.6.x** - Realtime APIs (OpenAI Realtime, Gemini Live)
-- **1.0.0** - Stable release with full feature set
+Check the [issues](https://github.com/abi-jey/nagents/issues) for existing
+discussions, or open one to agree on scope and limitations before implementing a
+proposal. Include tests and documentation, and update this roadmap when an
+implementation lands; release availability should be documented separately.
