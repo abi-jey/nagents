@@ -193,6 +193,7 @@ def test_provider_aliases_and_missing_explicit_config(config: HarnessConfig, tmp
         load_config(config.workspace, tmp_path / "missing.toml")
 
 
+@pytest.mark.requires_posix
 def test_initialize_is_local_and_missing_credentials_are_deferred(
     config: HarnessConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -243,6 +244,7 @@ def test_initialize_is_local_and_missing_credentials_are_deferred(
         "infra.tfstate",
     ],
 )
+@pytest.mark.requires_posix
 def test_file_boundaries_and_credentials(config: HarnessConfig, path: str) -> None:
     async def scenario() -> None:
         harness = Harness(config)
@@ -260,6 +262,7 @@ def test_file_boundaries_and_credentials(config: HarnessConfig, path: str) -> No
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_symlinks_hardlinks_special_files_and_absolute_paths(config: HarnessConfig, tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("outside fixture")
@@ -291,6 +294,7 @@ def test_symlinks_hardlinks_special_files_and_absolute_paths(config: HarnessConf
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_bounded_read_literal_search_globs_ignores_and_instructions(config: HarnessConfig) -> None:
     root = config.workspace
     (root / "AGENTS.md").write_text("Root policy")
@@ -335,6 +339,7 @@ def test_bounded_read_literal_search_globs_ignores_and_instructions(config: Harn
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_exact_edit_diff_mode_and_no_silent_overwrite(config: HarnessConfig) -> None:
     path = config.workspace / "app.py"
     path.write_bytes(b"print('old')\r\n")
@@ -372,6 +377,7 @@ def test_exact_edit_diff_mode_and_no_silent_overwrite(config: HarnessConfig) -> 
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_default_denial_ambiguous_replace_and_stale_reads(config: HarnessConfig) -> None:
     path = config.workspace / "app.txt"
     path.write_text("old old\n")
@@ -399,6 +405,7 @@ def test_default_denial_ambiguous_replace_and_stale_reads(config: HarnessConfig)
 
 
 @pytest.mark.parametrize("mutation", ["content", "mode", "symlink", "parent_symlink", "instructions"])
+@pytest.mark.requires_posix
 def test_edit_rechecks_after_awaiting_approval(config: HarnessConfig, tmp_path: Path, mutation: str) -> None:
     folder = config.workspace / "src"
     folder.mkdir()
@@ -451,6 +458,7 @@ def test_edit_rechecks_after_awaiting_approval(config: HarnessConfig, tmp_path: 
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_new_file_race_preserves_user_file(config: HarnessConfig) -> None:
     path = config.workspace / "new.txt"
 
@@ -473,6 +481,7 @@ def test_new_file_race_preserves_user_file(config: HarnessConfig) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_new_nested_instructions_are_returned_before_writing(config: HarnessConfig) -> None:
     (config.workspace / "src").mkdir()
     (config.workspace / "src/AGENTS.md").write_text("Use a specific style")
@@ -492,6 +501,7 @@ def test_new_nested_instructions_are_returned_before_writing(config: HarnessConf
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_post_plugin_validation_and_custom_tools_share_core_loop(config: HarnessConfig) -> None:
     called: list[str] = []
     requests: list[ApprovalRequest] = []
@@ -541,6 +551,7 @@ def test_post_plugin_validation_and_custom_tools_share_core_loop(config: Harness
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_builtin_override_is_not_automatically_trusted(config: HarnessConfig) -> None:
     invoked = False
 
@@ -563,6 +574,7 @@ def test_builtin_override_is_not_automatically_trusted(config: HarnessConfig) ->
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_transformed_builtin_paths_and_reserved_save_outputs_cannot_bypass_gate(
     config: HarnessConfig, tmp_path: Path
 ) -> None:
@@ -592,6 +604,7 @@ def test_transformed_builtin_paths_and_reserved_save_outputs_cannot_bypass_gate(
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_profiles_gate_mutations_shell_and_custom_tools(config: HarnessConfig) -> None:
     (config.workspace / "read.txt").write_text("readable")
     requests: list[ApprovalRequest] = []
@@ -637,6 +650,7 @@ def test_profiles_gate_mutations_shell_and_custom_tools(config: HarnessConfig) -
 
 
 @pytest.mark.parametrize("async_setup", [False, True])
+@pytest.mark.requires_posix
 def test_trusted_python_plugins_diagnostics_and_library_access(
     config: HarnessConfig, tmp_path: Path, async_setup: bool
 ) -> None:
@@ -666,6 +680,7 @@ def test_trusted_python_plugins_diagnostics_and_library_access(
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_installed_plugin_and_explicit_failure(
     config: HarnessConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -694,6 +709,7 @@ def test_installed_plugin_and_explicit_failure(
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_skill_discovery_is_text_only_and_on_demand(config: HarnessConfig) -> None:
     skill = config.workspace / ".agents/skills/audit"
     skill.mkdir(parents=True)
@@ -718,6 +734,7 @@ def test_skill_discovery_is_text_only_and_on_demand(config: HarnessConfig) -> No
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_shell_always_asks_and_default_denies(config: HarnessConfig) -> None:
     async def scenario() -> None:
         harness = Harness(config)
@@ -743,6 +760,7 @@ def test_shell_always_asks_and_default_denies(config: HarnessConfig) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None:
     command = (
         f"{shlex.quote(sys.executable)} -c {shlex.quote('import os; print(os.getcwd()); print(chr(120) * 10000)')}"
@@ -777,6 +795,7 @@ def test_shell_streams_bounded_output_and_timeout(config: HarnessConfig) -> None
 
 
 @pytest.mark.parametrize("cancel_consumer", [False, True])
+@pytest.mark.requires_posix
 def test_run_aclose_and_cancellation_kill_shell_and_await_plugins(config: HarnessConfig, cancel_consumer: bool) -> None:
     output_ready = asyncio.Event()
     cleanup_finished = asyncio.Event()
@@ -830,6 +849,7 @@ def test_run_aclose_and_cancellation_kill_shell_and_await_plugins(config: Harnes
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_concurrent_runs_and_session_mutations_rejected(config: HarnessConfig) -> None:
     entered = asyncio.Event()
 
@@ -872,6 +892,7 @@ def test_concurrent_runs_and_session_mutations_rejected(config: HarnessConfig) -
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_cancellation_while_shell_spawns_reaps_process(config: HarnessConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = asyncio.Event()
     release = asyncio.Event()
@@ -920,6 +941,7 @@ def test_cancellation_while_shell_spawns_reaps_process(config: HarnessConfig, mo
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_demo_cancellation_during_approval_does_not_write(config: HarnessConfig) -> None:
     entered = asyncio.Event()
     cancelled = asyncio.Event()
@@ -955,6 +977,7 @@ def test_demo_cancellation_during_approval_does_not_write(config: HarnessConfig)
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_workspace_sessions_titles_resume_and_custom_compaction(config: HarnessConfig, tmp_path: Path) -> None:
     class LocalCompaction:
         async def should_compact(self, request: CompactionRequest) -> bool:
@@ -1004,6 +1027,7 @@ def test_workspace_sessions_titles_resume_and_custom_compaction(config: HarnessC
 
 
 @pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.requires_posix
 def test_offline_demo_approval_sessions_and_no_plugins(config: HarnessConfig, tmp_path: Path, accepted: bool) -> None:
     marker = tmp_path / "plugin-imported"
     plugin = tmp_path / "demo-plugin.py"

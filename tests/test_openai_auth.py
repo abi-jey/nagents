@@ -70,6 +70,7 @@ async def issuer(
         await runner.cleanup()
 
 
+@pytest.mark.requires_posix
 def test_device_success_pending_and_secure_reopen(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -211,6 +212,7 @@ def test_deadline_interrupts_pending_poll(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.parametrize("phase", ["start", "exchange", "refresh"])
+@pytest.mark.requires_posix
 def test_rate_limit_retry_on_code_and_token_endpoints(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
     async def scenario() -> None:
         limited = False
@@ -246,6 +248,7 @@ def test_rate_limit_retry_on_code_and_token_endpoints(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.parametrize("failure", ["cancel", "malformed", "denied", "timeout", "exchange"])
+@pytest.mark.requires_posix
 def test_failed_login_never_replaces_saved_tokens(monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     async def scenario() -> None:
         pending = asyncio.Event()
@@ -290,6 +293,7 @@ def test_failed_login_never_replaces_saved_tokens(monkeypatch: pytest.MonkeyPatc
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_refresh_rotation_is_serialized_and_saved(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         requests = 0
@@ -321,6 +325,7 @@ def test_refresh_rotation_is_serialized_and_saved(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 500])
+@pytest.mark.requires_posix
 def test_refresh_errors_are_safe_and_preserve_store(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     async def scenario() -> None:
         async def handle(request: web.Request) -> web.Response:
@@ -338,6 +343,7 @@ def test_refresh_errors_are_safe_and_preserve_store(monkeypatch: pytest.MonkeyPa
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_logout_during_refresh_does_not_resurrect_login(monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         pending, release = asyncio.Event(), asyncio.Event()
@@ -362,6 +368,7 @@ def test_logout_during_refresh_does_not_resurrect_login(monkeypatch: pytest.Monk
 
 
 @pytest.mark.parametrize("unsafe", ["symlink", "directory_symlink", "hardlink", "fifo", "file_mode", "directory_mode"])
+@pytest.mark.requires_posix
 def test_unsafe_stores_refused(tmp_path: Path, unsafe: str) -> None:
     auth = OpenAIAuth()
     auth._save(_tokens(token_data()))
@@ -395,6 +402,7 @@ def test_unsafe_stores_refused(tmp_path: Path, unsafe: str) -> None:
 
 
 @pytest.mark.parametrize("raw", ["not json fake-access-secret", "[]", '{"version":99}', '{"version":1}'])
+@pytest.mark.requires_posix
 def test_corrupt_store_does_not_reveal_contents(raw: str) -> None:
     auth = OpenAIAuth()
     auth._save(_tokens(token_data()))
@@ -407,6 +415,7 @@ def test_corrupt_store_does_not_reveal_contents(raw: str) -> None:
     auth.logout()
 
 
+@pytest.mark.requires_posix
 def test_atomic_save_failure_keeps_previous_login(monkeypatch: pytest.MonkeyPatch) -> None:
     auth = OpenAIAuth()
     auth._save(_tokens(token_data()))
@@ -440,6 +449,7 @@ def test_auth_redirects_never_forward_codes(monkeypatch: pytest.MonkeyPatch) -> 
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_claims_are_optional_routing_metadata_and_expiry_is_bounded() -> None:
     auth = OpenAIAuth()
     auth._save(

@@ -136,6 +136,8 @@ def test_rapid_slash_arrows_and_enter_stay_in_input_order(tmp_path: Path, target
             for key in keys:
                 receiver.post_message(Key(key, key if len(key) == 1 else None))
             await idle(app, pilot)
+            # Backend idleness does not drain Changed messages from the input burst.
+            await pilot.pause()
             assert composer.text == ("" if execute else "/new ")
             assert backend.new_count == int(execute)
             assert not app.query_one(SlashMenu).display
@@ -322,6 +324,7 @@ def test_required_arguments_and_prompt_command_follow_normal_run(tmp_path: Path)
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_discovered_skill_is_invocable_from_composer(tmp_path: Path) -> None:
     directory = tmp_path / ".agents/skills/audit"
     directory.mkdir(parents=True)

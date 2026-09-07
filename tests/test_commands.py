@@ -147,6 +147,7 @@ def test_sync_callbacks_rejected_without_invocation(harness: Harness) -> None:
     assert not invoked
 
 
+@pytest.mark.requires_posix
 def test_async_callable_objects_and_partial_handlers(harness: Harness) -> None:
     class Callback:
         async def __call__(self, instance: Harness, arguments: str) -> CommandResult:
@@ -184,6 +185,7 @@ def test_async_callable_objects_and_partial_handlers(harness: Harness) -> None:
         ("$ARGUMENTS", "  keep whitespace\n", "  keep whitespace\n"),
     ],
 )
+@pytest.mark.requires_posix
 def test_literal_argument_expansion(harness: Harness, template: str, arguments: str, expected: str) -> None:
     async def scenario() -> None:
         registry = CommandRegistry(harness)
@@ -197,6 +199,7 @@ def test_literal_argument_expansion(harness: Harness, template: str, arguments: 
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_required_arguments_prevent_callback_invocation(harness: Harness) -> None:
     arguments_received: list[str] = []
 
@@ -293,6 +296,7 @@ def test_list_is_live_deduplicated_and_does_not_load_or_call(harness: Harness, m
     callback.assert_not_called()
 
 
+@pytest.mark.requires_posix
 def test_callbacks_can_use_public_harness_methods_without_model_calls(harness: Harness) -> None:
     async def callback(instance: Harness, arguments: str) -> CommandResult:
         assert instance is harness and not instance._busy
@@ -330,6 +334,7 @@ def test_busy_entry_rejected_before_initialization(harness: Harness, monkeypatch
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_builtin_and_unknown_commands_are_not_evaluated(harness: Harness) -> None:
     async def scenario() -> None:
         registry = CommandRegistry(harness)
@@ -347,6 +352,7 @@ def test_builtin_and_unknown_commands_are_not_evaluated(harness: Harness) -> Non
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_callback_cancellation_and_error_propagate(harness: Harness) -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -395,6 +401,7 @@ def test_command_result_validation() -> None:
         CommandResult(message=cast("str", 42))
 
 
+@pytest.mark.requires_posix
 def test_callback_results_validated_at_execution(harness: Harness) -> None:
     async def wrong_type(instance: Harness, arguments: str) -> CommandResult:
         return cast("CommandResult", "not a result")
@@ -424,6 +431,7 @@ def test_callback_results_validated_at_execution(harness: Harness) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_discovered_skill_loads_current_content_on_demand(harness: Harness) -> None:
     folder = harness.workspace / ".agents/skills/audit"
     folder.mkdir(parents=True)
@@ -453,6 +461,7 @@ def test_discovered_skill_loads_current_content_on_demand(harness: Harness) -> N
 
 
 @pytest.mark.parametrize("outside_path", [False, True])
+@pytest.mark.requires_posix
 def test_skill_execution_preserves_symlink_and_workspace_guards(
     harness: Harness, tmp_path: Path, outside_path: bool
 ) -> None:

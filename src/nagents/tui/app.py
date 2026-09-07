@@ -220,6 +220,8 @@ class NagentsApp(App[None]):
 
     @on(TextArea.Changed, "#composer")
     def composer_changed(self) -> None:
+        if self._shutting_down:
+            return
         self._interrupt_at = 0
         if self.query_one(Composer).text != self._dismissed_completion:
             self._dismissed_completion = ""

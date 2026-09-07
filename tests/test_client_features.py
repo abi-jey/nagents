@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from tests.test_subagents import FakeProvider
 
 
+@pytest.mark.requires_posix
 def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         blocked = asyncio.Event()

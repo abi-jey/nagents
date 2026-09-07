@@ -50,6 +50,7 @@ def test_conflicting_resume_flags_across_subcommand(capsys: pytest.CaptureFixtur
     assert "either --continue or --resume" in capsys.readouterr().err
 
 
+@pytest.mark.requires_posix
 def test_missing_credentials_are_actionable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -61,6 +62,7 @@ def test_missing_credentials_are_actionable(
     assert "NGN_UNSET_TEST_KEY" in capsys.readouterr().err
 
 
+@pytest.mark.requires_posix
 def test_demo_json_is_parseable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -75,6 +77,7 @@ def test_demo_json_is_parseable(
     assert any(record["event"] == "done" for record in records)
 
 
+@pytest.mark.requires_posix
 def test_demo_sessions_and_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -156,8 +156,8 @@ jobs:
       - name: Verify package import
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
-      - name: Run tests
-        run: pytest tests/ -v
+      - name: Run portable tests (POSIX harness cases are marked)
+        run: pytest tests/ -v -rs
 
   # =============================================================================
   # BUMP VERSION (runs only after all tests pass)

@@ -30,6 +30,10 @@ if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
 
 
+# Every scenario initializes the real harness and its guarded workspace tools.
+pytestmark = pytest.mark.requires_posix
+
+
 @asynccontextmanager
 async def local_provider(*, change: bool = False) -> AsyncIterator[tuple[str, list[dict[str, object]]]]:
     requests: list[dict[str, object]] = []

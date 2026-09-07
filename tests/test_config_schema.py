@@ -49,6 +49,7 @@ def test_generic_api_route_never_uses_chatgpt_auth(tmp_path: Path, api: str) -> 
 
 
 @pytest.mark.parametrize("api", ["chat_completions", "responses"])
+@pytest.mark.requires_posix
 def test_saved_login_does_not_override_explicit_api(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

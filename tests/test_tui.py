@@ -190,6 +190,18 @@ async def send(app: NagentsApp, pilot: Pilot[None], text: str) -> None:
     await pilot.press("enter")
 
 
+def test_composer_callback_after_shutdown_does_not_query_unmounted_widgets(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = make_app(FakeHarness(tmp_path))
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            app._shutting_down = True
+            await app.query_one(Composer).remove()
+            app.composer_changed()
+
+    asyncio.run(scenario())
+
+
 def test_startup_and_history(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
@@ -224,6 +236,8 @@ def test_responsive_layout(tmp_path: Path, size: tuple[int, int], rail: bool) ->
             assert composer.region.width >= size[0] - (36 if rail else 4)
             assert app.query_one("#welcome-title").region.bottom < composer.region.y
             await pilot.resize_terminal(60, 20)
+            # Resize dispatch precedes Textual's deferred layout refresh.
+            await pilot.pause()
             assert not app.query_one("#rail").display
             assert composer.region.bottom <= 18
 
@@ -588,6 +602,7 @@ def test_palette_arrow_keys_and_new_session_option(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("allow", [True, False])
+@pytest.mark.requires_posix
 def test_real_harness_demo_approval_and_resume(tmp_path: Path, allow: bool) -> None:
     async def scenario() -> None:
         backend = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", demo=True))
@@ -621,6 +636,7 @@ def test_real_harness_demo_approval_and_resume(tmp_path: Path, allow: bool) -> N
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_real_harness_boot_without_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NGN_TUI_TEST_MISSING_KEY", raising=False)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+import pytest
 from textual.widgets import Markdown
 from textual.widgets import Static
 from textual.widgets import TextArea
@@ -60,6 +61,7 @@ def test_late_subagent_result_does_not_overwrite_parent_answer(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_three_offline_jobs_render_in_tui_and_tasks_view(tmp_path: Path) -> None:
     async def scenario() -> None:
         harness = Harness(HarnessConfig(workspace=tmp_path, demo=True))
@@ -85,6 +87,7 @@ def test_three_offline_jobs_render_in_tui_and_tasks_view(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_agent_tree_continues_saved_child_and_notifies_parent(tmp_path: Path) -> None:
     async def scenario() -> None:
         harness = Harness(HarnessConfig(workspace=tmp_path, demo=True))
@@ -126,6 +129,7 @@ def test_agent_tree_continues_saved_child_and_notifies_parent(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_narrow_task_tree_keeps_unsent_draft_on_escape(tmp_path: Path) -> None:
     async def scenario() -> None:
         harness = Harness(HarnessConfig(workspace=tmp_path, demo=True))

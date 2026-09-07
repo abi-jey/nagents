@@ -72,6 +72,7 @@ class FakeAuth:
         self.closed = True
 
 
+@pytest.mark.requires_posix
 def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeAuth()
     monkeypatch.setattr(runtime, "OpenAIAuth", lambda: fake)
@@ -109,6 +110,7 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
 @pytest.mark.parametrize(
     "auth,endpoint,expected", [("auto", "", True), ("api-key", "", False), ("auto", "https://example.test/v1", False)]
 )
+@pytest.mark.requires_posix
 def test_saved_oauth_never_reaches_custom_endpoints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth: str, endpoint: str, expected: bool
 ) -> None:
@@ -153,6 +155,7 @@ def test_login_rejects_incompatible_modes_before_network(
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_cancel_login_awaits_polling_and_releases_operation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeAuth(wait=True)
     monkeypatch.setattr(runtime, "OpenAIAuth", lambda: fake)
@@ -179,6 +182,7 @@ def test_cancel_login_awaits_polling_and_releases_operation(tmp_path: Path, monk
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_posix
 def test_cli_login_and_status_are_safe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -210,6 +214,7 @@ def test_file_tools_cannot_read_oauth_store_even_with_custom_session_path(tmp_pa
         harness.tools.relative(".codex/auth.json")
 
 
+@pytest.mark.requires_posix
 def test_initial_storage_is_private_under_group_writable_umask(tmp_path: Path) -> None:
     async def scenario() -> None:
         harness = Harness(HarnessConfig(workspace=tmp_path))
@@ -235,6 +240,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
     (project / "ngn").mkdir(parents=True)
     (project / "ngn/config.toml").write_text('model = "untrusted-model"\n')
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", "")
     monkeypatch.setenv("XDG_DATA_HOME", "")
     monkeypatch.chdir(project)
@@ -246,6 +252,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
         harness.tools.relative(str(home / ".local/share/ngn/auth/openai.json"))
 
 
+@pytest.mark.requires_posix
 def test_saved_login_drives_real_responses_tool_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeAuth(saved=True)
     monkeypatch.setattr(runtime, "OpenAIAuth", lambda: fake)

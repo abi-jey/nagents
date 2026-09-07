@@ -55,6 +55,10 @@ if TYPE_CHECKING:
     Script = Callable[["FakeProvider", list[Message]], AsyncIterator[Event]]
 
 
+# Controlled providers still run through real harness initialization and file guards.
+pytestmark = pytest.mark.requires_posix
+
+
 @pytest.fixture(autouse=True)
 def collect_released_resources() -> Iterator[None]:
     yield
