@@ -193,7 +193,7 @@ def test_missing_dependencies_and_assets(tmp_path: Path) -> None:
         serve(config)
     with (
         patch("nagents.web.__file__", str(tmp_path / "__init__.py")),
-        pytest.raises(ValueError, match="npm --prefix web ci"),
+        pytest.raises(ValueError, match="npm --prefix src/nagents/web-ui ci"),
     ):
         built_assets()
     with pytest.raises(ValueError, match="--port"):

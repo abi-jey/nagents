@@ -217,4 +217,6 @@ __marimo__/
 # React web client: source and package-lock.json are tracked, output is packaged by CI.
 /web/node_modules/
 /web/.test-build/
+/src/nagents/web-ui/node_modules/
+/src/nagents/web-ui/.test-build/
 /src/nagents/web/static/

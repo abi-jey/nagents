@@ -21,8 +21,8 @@ def built_assets() -> Path:
     directory = Path(__file__).parent / "static"
     if not (directory / "index.html").is_file() or not (directory / "assets").is_dir():
         raise ValueError(
-            "The ngn React assets are missing. In a source checkout run `npm --prefix web ci` then "
-            "`npm --prefix web run build`. For a packaged install, reinstall a release that includes web assets. "
+            "The ngn React assets are missing. In a source checkout run `npm --prefix src/nagents/web-ui ci` then "
+            "`npm --prefix src/nagents/web-ui run build`. For a packaged install, reinstall a release that includes web assets. "
             "ngn serve never downloads or builds at startup."
         )
     return directory
