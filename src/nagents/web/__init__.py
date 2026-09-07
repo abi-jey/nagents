@@ -45,8 +45,8 @@ def serve(
         if error.name not in {"fastapi", "starlette", "pydantic", "uvicorn", "anyio"}:
             raise
         raise ValueError(
-            "The web server dependencies are not installed. Run `pip install 'nagents[web]'` or, "
-            "in this source checkout's virtualenv, `pip install -e '.[web]'` (or `poetry install -E web`). "
+            "The web server dependencies are not installed. From the repository root, in this source checkout's "
+            "virtualenv, run `pip install -e '.[web]'` (or `poetry install -E web`). "
             "The existing server extra also supplies these dependencies. Textual is not required."
         ) from error
     assets = built_assets()

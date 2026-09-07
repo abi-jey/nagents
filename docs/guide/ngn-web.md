@@ -4,14 +4,28 @@
 terminal client's workspace-scoped sessions, tools, provider configuration, and
 per-call approvals. It does not use the older `nagents.server` application.
 
-## Start
+## Source Availability
 
-In your Python virtual environment, install the optional HTTP dependencies:
+This guide describes the **current source checkout**, not the published `v0.5.0`
+release. That release includes the existing ngn CLI, Harness, TUI, and headless
+commands, but does **not** include `ngn serve` or the `web` extra. Install this
+feature from the checkout using the commands below.
+
+## Start From Source
+
+From the repository root, with your Python virtual environment active and
+Node 20.19 or newer installed:
 
 ```bash
-pip install 'nagents[web]'
-ngn serve --workspace /path/to/project
+python -m pip install -e '.[web]'
+npm --prefix src/nagents/web-ui ci
+npm --prefix src/nagents/web-ui run build
+ngn serve --demo --workspace /path/to/project
 ```
+
+For Poetry, use `poetry install -E web` instead of the editable pip command, run
+the same npm commands, and launch with `poetry run ngn serve --demo --workspace
+/path/to/project`. Omit `--demo` when you want configured live provider requests.
 
 Open **http://127.0.0.1:8765**. Use the exact host and port you started; `localhost`
 and `127.0.0.1` are intentionally different origins. `--port 9876` selects another
@@ -23,23 +37,16 @@ OAuth credentials stay on the backend. Configure credentials through the existin
 CLI/environment, not the browser. Textual is not required. The existing `server`
 extra also supplies the HTTP dependencies, but the applications are independent.
 
-### Source Checkout
+### Frontend Build
 
 The React/TypeScript source and npm lockfile live in `src/nagents/web-ui/`.
-Use Node 20.19 or newer:
-
-```bash
-pip install -e '.[web]'
-npm --prefix src/nagents/web-ui ci
-npm --prefix src/nagents/web-ui run build
-ngn serve --demo --workspace /path/to/project
-```
-
 Vite builds into `src/nagents/web/static/`. These generated assets and
 `src/nagents/web-ui/node_modules/` are ignored by Git. Rebuild after editing frontend source.
 There is no separate Vite origin/proxy required: test the production client through
 `ngn serve`. Startup never downloads dependencies or builds assets. Missing assets
-produce an actionable error; published distributions must include the build.
+produce an actionable error. A future published distribution with web support
+must include this build; installing the published `v0.5.0` wheel is not a
+replacement for these source-checkout steps.
 
 ## Try It Offline
 
@@ -47,9 +54,9 @@ produce an actionable error; published distributions must include the build.
 ngn serve --demo
 ```
 
-Choose **Inspect workspace** for real streamed local tool events, then **Try an
-approval** (or send `demo approval`). Review the sample diff and choose **Deny**,
-or press Escape. **Allow Once** records only a demo decision; it does not write the
+Choose **Inspect workspace** for real streamed local tool events, then **Review a
+demo approval** (or send `demo approval`). Review the sample diff and choose **Deny**,
+or press Escape. **Allow once** records only a demo decision; it does not write the
 sample file. **Stop run** cancels an active run, including a pending approval.
 Create a new session and select an older session to read/resume its conversation.
 

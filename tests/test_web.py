@@ -189,7 +189,10 @@ def test_missing_dependencies_and_assets(tmp_path: Path) -> None:
             raise ModuleNotFoundError("No uvicorn", name="uvicorn")
         return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
 
-    with patch("builtins.__import__", side_effect=missing), pytest.raises(ValueError, match=r"nagents\[web\]"):
+    with (
+        patch("builtins.__import__", side_effect=missing),
+        pytest.raises(ValueError, match=r"pip install -e '\.\[web\]'"),
+    ):
         serve(config)
     with (
         patch("nagents.web.__file__", str(tmp_path / "__init__.py")),
