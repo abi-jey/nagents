@@ -436,7 +436,8 @@ class Agent:
             model: Optional Realtime model override.
             voice: Optional output voice override.
             config: Optional :class:`~nagents.realtime.RealtimeConfig` override
-                (defaults to ``provider.realtime_config``).
+                (defaults to ``provider.realtime_config``). Empty instructions
+                inherit the agent's system prompt; the supplied config is not mutated.
             audio: Optional :class:`~nagents.realtime.AudioDuplex` (defaults to
                 the agent's ``audio``).
             base_url: WebSocket endpoint (defaults to OpenAI).
@@ -461,7 +462,8 @@ class Agent:
                 f"Got: {self.provider.provider_type}"
             )
 
-        cfg = config or self.provider.realtime_config or RealtimeConfig()
+        cfg = deepcopy(config or self.provider.realtime_config or RealtimeConfig())
+        cfg.instructions = cfg.instructions or self.system_prompt or ""
         if model is not None:
             cfg.model = model
         if voice is not None:
@@ -474,7 +476,6 @@ class Agent:
 
         return RealtimeSession(
             api_key=self.provider.api_key,
-            instructions=self.system_prompt or "",
             tools=tool_funcs,
             config=cfg,
             audio_in=duplex.input if duplex else None,

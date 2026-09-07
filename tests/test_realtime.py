@@ -3,11 +3,22 @@
 import asyncio
 import wave
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+import pytest
+
+from nagents import Agent
+from nagents import Provider
+from nagents import ProviderType
+from nagents import SessionManager
 from nagents.adapters.openai import format_realtime_tools
+from nagents.events import DoneEvent
+from nagents.events import ErrorEvent
+from nagents.events import FinishReason
 from nagents.events import RealtimeRateLimitsEvent
 from nagents.events import ResponseCancelledEvent
 from nagents.events import ResponseCreatedEvent
+from nagents.events import ToolCallEvent
 from nagents.realtime import AudioFormat
 from nagents.realtime import BytesAudioInput
 from nagents.realtime import BytesAudioOutput
@@ -75,6 +86,94 @@ def test_build_session_uses_adapter_formats() -> None:
     audio = session._build_session()["audio"]
     assert audio["input"]["format"] == {"type": "audio/pcm", "rate": 8000}
     assert audio["output"]["format"] == {"type": "audio/pcm", "rate": 16000}
+
+
+@pytest.mark.parametrize("source", ["default", "provider", "explicit"])
+@pytest.mark.parametrize("instructions", ["", "Use these explicit voice instructions."])
+def test_agent_realtime_inherits_instructions_without_mutating_config(
+    tmp_path: Path, source: str, instructions: str
+) -> None:
+    config = RealtimeConfig(instructions=instructions)
+    provider = Provider(
+        ProviderType.OPENAI_COMPATIBLE,
+        model="gpt-realtime-2.1",
+        api_key="sk-test",
+        realtime_config=config if source == "provider" else None,
+    )
+    agent = Agent(
+        provider,
+        SessionManager(tmp_path / "voice.db"),
+        system_prompt="Keep all operations read-only.",
+        tools=[_weather],
+        compactor=None,
+    )
+    try:
+        session = agent.realtime_session(config=config if source == "explicit" else None, voice="cedar")
+        expected = instructions if source != "default" and instructions else agent.system_prompt
+        assert session._build_session()["instructions"] == expected
+        assert session.tool_names == ["_weather"]
+        assert session._config.voice == "cedar"
+        assert config.instructions == instructions
+        assert config.model is None and config.voice == "marin"
+        session._config.instructions = "Changed in this session only."
+        assert config.instructions == instructions
+    finally:
+        asyncio.run(agent.close())
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "failed", "incomplete", None])
+@pytest.mark.parametrize("item_status", ["completed", "incomplete", None])
+def test_realtime_only_executes_fully_completed_tool_batches(
+    monkeypatch: pytest.MonkeyPatch, status: str | None, item_status: str | None
+) -> None:
+    async def run() -> None:
+        calls: list[str] = []
+
+        def record(value: str) -> str:
+            """Record a synthetic side effect."""
+            calls.append(value)
+            return value
+
+        session = RealtimeSession(api_key="sk-test", tools=[record])
+        send = AsyncMock()
+        monkeypatch.setattr(session, "_send", send)
+        output = [
+            {
+                "type": "function_call",
+                "status": "completed",
+                "name": "record",
+                "call_id": "call-1",
+                "arguments": '{"value":"first"}',
+            },
+            {
+                "type": "function_call",
+                "name": "record",
+                "call_id": "call-2",
+                "arguments": '{"value":"second"}',
+            },
+        ]
+        if item_status is not None:
+            output[1]["status"] = item_status
+        response: dict[str, object] = {"output": output, "usage": {"total_tokens": 3}}
+        if status is not None:
+            response["status"] = status
+        events = await session._handle_server_event({"type": "response.done", "response": response})
+        done = events[-1]
+        assert isinstance(done, DoneEvent) and done.usage.total_tokens == 3
+        if status == item_status == "completed":
+            assert calls == ["first", "second"]
+            assert sum(isinstance(event, ToolCallEvent) for event in events) == 2
+            assert done.finish_reason is FinishReason.TOOL_CALLS
+            assert send.await_count == 3
+            send.assert_awaited_with({"type": "response.create"})
+        else:
+            assert calls == []
+            assert not any(isinstance(event, ToolCallEvent) for event in events)
+            assert isinstance(events[0], ResponseCancelledEvent if status == "cancelled" else ErrorEvent)
+            assert done.finish_reason is FinishReason.UNKNOWN
+            send.assert_not_awaited()
+
+    asyncio.run(run())
 
 
 def test_build_session_includes_tools_and_config() -> None:

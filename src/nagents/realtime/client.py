@@ -541,6 +541,25 @@ class RealtimeSession:
         events: list[Event] = []
 
         output = response.get("output") or []
+        # Validate the entire batch before any tool can produce side effects.
+        if response.get("status") != "completed" or any(
+            item.get("status") != "completed" for item in output if item.get("type") == "function_call"
+        ):
+            if response.get("status") == "cancelled":
+                events.append(ResponseCancelledEvent())
+            else:
+                events.append(ErrorEvent(message="Realtime response or tool call did not complete"))
+            events.append(
+                DoneEvent(
+                    final_text=self._response_text,
+                    session_id=self._session_id,
+                    finish_reason=FinishReason.UNKNOWN,
+                    usage=usage,
+                    extra=self._latency_extra(),
+                )
+            )
+            return events
+
         has_tool_calls = False
 
         for item in output:
