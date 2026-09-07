@@ -2,8 +2,9 @@
 
 File tools reject all symlinks (including in-workspace symlinks), multi-link
 files, special files, common credential paths, and traversal. POSIX directory
-descriptors keep file operations anchored during path changes. This is not an
-OS sandbox: approved shell commands and trusted Python have full user access.
+descriptors keep file operations anchored during path changes. Storage directory
+identities also block filesystem aliases such as case-insensitive names. This is
+not an OS sandbox: approved shell commands and trusted Python have full user access.
 
 Ignore discovery supports nested .gitignore files, !negation, /anchoring,
 directory patterns and fnmatch globs; escaped patterns and Git's complete
@@ -170,6 +171,7 @@ class CodingTools:
         self.call_id: ContextVar[str] = ContextVar("harness_tool_call_id", default="")
         self.builtins: dict[str, Callable[..., object]] = {}
         self.skills: dict[str, tuple[str, str]] = {}
+        self._storage_ids: dict[tuple[int, int], str] = {}
 
     def register(self) -> None:
         for function in (
@@ -187,6 +189,21 @@ class CodingTools:
         if self.harness.config.demo:
             self.harness.agent.register_tool(self.demo_preview)
             self.builtins["demo_preview"] = self.demo_preview
+
+    def _check_storage(self, info: os.stat_result) -> None:
+        auth_directory = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth"
+        for path, reason in (
+            (self.harness.config.data_dir, "Harness session storage is not accessible to file tools"),
+            (auth_directory.expanduser(), "OAuth credential storage is not accessible to file tools"),
+        ):
+            try:
+                storage = path.stat()
+            except FileNotFoundError:
+                continue
+            # Retain observed identities if storage is renamed between inspection and open.
+            self._storage_ids[storage.st_dev, storage.st_ino] = reason
+        if message := self._storage_ids.get((info.st_dev, info.st_ino)):
+            raise PermissionError(message)
 
     def relative(self, path: str) -> Path:
         if not path or "\x00" in path:
@@ -213,11 +230,18 @@ class CodingTools:
         auth_directory = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth"
         if absolute.is_relative_to(auth_directory.expanduser().resolve()):
             raise PermissionError("OAuth credential storage is not accessible to file tools")
+        for ancestor in self.root.parents:
+            self._check_storage(ancestor.stat())
         current = self.root
-        for part in relative.parts:
+        for part in ("", *relative.parts):
             current = current / part
-            if current.is_symlink():
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                break
+            if stat.S_ISLNK(info.st_mode):
                 raise PermissionError("Symlinks are not allowed by workspace file tools")
+            self._check_storage(info)
         if not absolute.resolve().is_relative_to(self.root):
             raise PermissionError("Resolved path is outside the workspace")
         return relative
@@ -226,12 +250,15 @@ class CodingTools:
     def directory(self, relative: Path) -> Iterator[int]:
         if os.name != "posix":
             raise OSError("Guarded workspace file tools currently require POSIX")
+        relative = self.relative(str(relative))
         descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
+            self._check_storage(os.fstat(descriptor))
             for part in relative.parts:
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
                 os.close(descriptor)
                 descriptor = child
+                self._check_storage(os.fstat(descriptor))
             yield descriptor
         finally:
             os.close(descriptor)

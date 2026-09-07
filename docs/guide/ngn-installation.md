@@ -7,8 +7,8 @@ or configuration fields are present, even if its version matches the checkout.
 Use a local checkout that actually contains `src/nagents/cli.py` and the `ngn`
 entry point in `pyproject.toml`.
 
-This page deliberately uses local paths, not a Git URL for an unpublished
-feature branch. Choose one environment workflow; do not let Poetry and uv
+This page uses local checkout paths so development launches cannot silently
+select the older published package. Choose one environment workflow; do not let Poetry and uv
 independently manage the same virtualenv.
 
 ## Requirements
@@ -47,6 +47,12 @@ mapping, or access to a paid provider account.
 - macOS configuration stays at `~/.config/ngn/config.toml` and state at
   `~/.local/share/ngn`, unless XDG settings override them; ngn does not switch to
   `~/Library/Application Support` on this platform.
+- Use consistent on-disk casing when selecting a workspace: case variants can
+  currently select different session scopes even on case-insensitive APFS.
+  Prefer workspace-relative tool paths. macOS aliases such as `/tmp` versus
+  `/private/tmp` are not interchangeable for absolute guarded-tool paths; a custom
+  `XDG_DATA_HOME` must use physical, non-symlinked ancestors. The ordinary defaults
+  under `/Users/...` avoid these system aliases.
 - Dictation requires microphone permission for the application launching ngn,
   such as Terminal, iTerm, or an IDE. Check **System Settings > Privacy & Security
   > Microphone** and the selected audio input device. The macOS `sounddevice`

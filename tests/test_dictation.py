@@ -426,6 +426,7 @@ def test_http_errors_never_read_bodies_follow_redirects_or_retry(
 @pytest.mark.parametrize(
     "body",
     [b"not-json", b"[]", b'{"text": 42}', b'{"text":"  "}', b'{"error":"private"}', b"x" * (MAX_RESPONSE_BYTES + 1)],
+    ids=["invalid-json", "non-object", "non-text", "blank", "error-envelope", "oversized"],
 )
 def test_invalid_response_is_bounded_and_safe(config: HarnessConfig, network: FakeNetwork, body: bytes) -> None:
     network.body = body
@@ -481,6 +482,18 @@ def test_upload_cancellation_closes_session(config: HarnessConfig, network: Fake
         wav_bytes(frames=16001),
         wav_bytes()[:-2],
         b"x" * (BYTES_PER_SECOND + 4097),
+    ],
+    ids=[
+        "empty",
+        "path-bytes",
+        "path-string",
+        "not-wav",
+        "sample-rate",
+        "stereo",
+        "sample-width",
+        "duration",
+        "truncated",
+        "oversized",
     ],
 )
 def test_invalid_audio_never_reads_paths_or_uploads(
