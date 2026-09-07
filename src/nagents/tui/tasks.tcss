@@ -9,7 +9,7 @@ TaskScreen {
     height: 92%;
     min-height: 16;
     padding: 1 2;
-    border: round $ngn-accent;
+    border: round $ngn-border;
     background: $ngn-panel;
     color: $ngn-text;
 }

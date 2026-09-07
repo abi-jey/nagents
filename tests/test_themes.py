@@ -299,6 +299,12 @@ def test_theme_css_renders_native_defaults_and_modal_states(name: str, backgroun
             assert app.screen.styles.background == Color.parse(variables["ngn-background"])
             assert app.query_one("#composer").region.bottom <= size[1] - 2
             assert app.query_one("#rail").display is (size[0] > 110)
+            panel = Color.parse(variables["ngn-panel"])
+            assert app.query_one("#rail").styles.background == panel
+            assert app.query_one(".user").styles.background == panel
+            for selector in ("#rail", ".user", ".assistant"):
+                assert app.query_one(selector).styles.border_left[0] == ""
+            assert app.query_one("#composer").styles.border_top[1] == Color.parse(variables["ngn-accent"])
             if app.native_ansi_color:
                 body_style = app.query_one("#body").visual_style.rich_style
                 assert body_style.color is not None and body_style.color.type is ColorType.DEFAULT
