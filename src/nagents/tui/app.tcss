@@ -38,9 +38,11 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #prompt-explain { color: $ngn-assistant; }
 #prompt-review { color: $ngn-tool; }
 #welcome-hint { color: $ngn-muted; height: auto; margin-top: 1; }
-#rail { width: 31; padding: 0 1; border-left: solid $ngn-border; }
+#rail { width: 31; padding: 0 1; background: $ngn-panel; }
+#rail AgentTree { background: transparent; }
 #rail-details { height: auto; max-height: 60%; border: none; padding: 0; }
 #rail-details > CollapsibleTitle { padding: 0; color: $ngn-info; }
+#rail-details > CollapsibleTitle:hover, #rail-details > CollapsibleTitle:focus { background: $ngn-hover; color: $ngn-text; text-style: $ngn-focus-style; }
 #rail-details > Contents { padding: 0; }
 #rail-metadata { height: 10; scrollbar-size: 1 1; }
 #rail Static { height: auto; }
@@ -70,9 +72,9 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #status.warning, #rail-activity.warning { color: $ngn-warning; }
 .turn { height: auto; margin: 0 0 1 0; }
 .turn-label { height: 1; color: $ngn-assistant; text-style: bold; margin-bottom: 1; }
-.user { border-left: solid $ngn-user; padding-left: 1; }
+.user { background: $ngn-panel; padding: 0 2; }
 .user .turn-label { color: $ngn-user; }
-.assistant { border-left: solid $ngn-assistant; padding-left: 1; }
+.assistant { padding-left: 2; }
 .turn Static { height: auto; }
 .turn Markdown { background: transparent; padding: 0; margin: 0; }
 MarkdownH1, MarkdownH2, MarkdownH3, MarkdownH4, MarkdownH5, MarkdownH6 { color: $ngn-heading; border: none; background: transparent; margin: 0 0 1 0; padding: 0; }
@@ -89,6 +91,7 @@ MarkdownBullet { color: $ngn-assistant; }
 .tool-card { height: auto; padding: 0; margin: 0 0 1 0; border: none; border-left: solid $ngn-tool; background: $ngn-panel; }
 .tool-card > CollapsibleTitle { color: $ngn-tool; background: transparent; padding: 0 1; }
 .tool-card > CollapsibleTitle:hover, .tool-card > CollapsibleTitle:focus { background: $ngn-hover; color: $ngn-text; text-style: $ngn-focus-style; }
+.tool-card:focus-within, #rail-details:focus-within { background-tint: transparent; }
 .tool-card > Contents { padding: 1; }
 .tool-card.failed { border-left: solid $ngn-error; }
 .tool-card.failed > CollapsibleTitle { color: $ngn-error; }
@@ -112,7 +115,7 @@ ModalScreen { align: center middle; background: $ngn-overlay; }
 .dialog-actions Button { margin-left: 2; min-width: 14; }
 Button { background: $ngn-panel; color: $ngn-text; border: tall $ngn-border; }
 Button:hover { background: $ngn-hover; }
-Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; }
+Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; background-tint: transparent; }
 #allow { background: $ngn-panel; color: $ngn-success; border: tall $ngn-success; }
 #allow:focus { color: $ngn-text; }
 .choice-dialog { height: 22; }
@@ -149,8 +152,9 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; }
 .device-actions Button { min-width: 10; margin-left: 1; }
 .device-actions { align-horizontal: center; }
 DictationModal { background: $ngn-overlay; }
-DictationModal #dictation-dialog { background: $ngn-panel; color: $ngn-text; border: round $ngn-accent; }
+DictationModal #dictation-dialog { background: $ngn-panel; color: $ngn-text; border: round $ngn-border; }
 DictationModal #dictation-title { color: $ngn-heading; }
 DictationModal #dictation-destination { color: $ngn-info; }
 DictationModal #dictation-status { color: $ngn-tool; }
-DictationModal #dictation-preview { background: $ngn-background; color: $ngn-text; border: tall $ngn-accent; }
+DictationModal #dictation-preview { background: $ngn-background; color: $ngn-text; border: tall $ngn-border; }
+DictationModal #dictation-preview:focus { border: tall $ngn-accent; }

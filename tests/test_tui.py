@@ -889,3 +889,47 @@ def test_background_config_and_visible_tool_states(tmp_path: Path, background: s
             assert app.query_one("#rail-activity").styles.color == Color.parse(variables["ngn-error"])
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("enabled,level", [(True, "full"), (False, "full"), (True, "none")])
+def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path, enabled: bool, level: str) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        backend.config.animations = enabled
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("textual.constants.TEXTUAL_ANIMATIONS", level)
+            app = make_app(backend)
+        expected_motion = enabled and level != "none"
+        assert app.animation_level == (level if enabled else "none")
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            assert app.query_one(Composer).cursor_blink is expected_motion
+            await send(app, pilot, "wait")
+            assert app.busy
+            app._status("Working")
+            app._animate_activity()
+            status = str(app.query_one("#status", Static).content)
+            assert status.endswith("Working")
+            assert (status != "Working") is expected_motion
+            conversation = app.query_one("#conversation", VerticalScroll)
+            conversation.animate("scroll_y", 1, duration=60)
+            await pilot.pause()
+            assert app.animator.is_being_animated(conversation, "scroll_y") is expected_motion
+            await conversation.stop_animation("scroll_y")
+            app._status("Failure", error=True)
+            app._animate_activity()
+            assert str(app.query_one("#status", Static).content) == "Failure"
+            await pilot.press("escape")
+            await idle(app, pilot)
+            app._status("Ready")
+            app._animate_activity()
+            assert str(app.query_one("#status", Static).content) == "Ready"
+
+            model = ModelModal(backend.config.model)
+            await app.push_screen(model)
+            await pilot.pause()
+            assert model.query_one(Input).has_focus
+            assert model.query_one(Input).cursor_blink is expected_motion
+            await model.dismiss()
+
+    asyncio.run(scenario())

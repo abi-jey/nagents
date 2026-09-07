@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
     from textual.binding import BindingType
     from textual.events import Click
+    from textual.events import DescendantFocus
     from textual.events import MouseDown
     from textual.events import Resize
     from textual.events import TextSelected
@@ -124,6 +125,8 @@ class NagentsApp(App[None]):
             raise ValueError("Choose either resume_session or continue_session, not both.")
         super().__init__()
         self.harness = harness
+        if not harness.config.animations:
+            self.animation_level = "none"
         configure_theme(self, harness.config.theme, background=harness.config.theme_background)
         self._resume_session = resume_session
         self._continue_session = continue_session
@@ -218,6 +221,11 @@ class NagentsApp(App[None]):
     def on_resize(self, event: Resize) -> None:
         if self.query("#composer"):
             self._resize_layout(event.size.width, event.size.height)
+
+    def on_descendant_focus(self, event: DescendantFocus) -> None:
+        # Editor blink timers are independent of Textual's scroll animator.
+        if self.animation_level == "none" and isinstance(event.widget, TextArea | Input):
+            event.widget.cursor_blink = False
 
     def _resize_layout(self, width: int, height: int) -> None:
         self.query_one("#rail").display = width > 110
@@ -418,7 +426,9 @@ class NagentsApp(App[None]):
     def _animate_activity(self) -> None:
         if self._shutting_down:
             return
-        animated = self.busy and self.harness.config.animations and not self._status_error
+        animated = (
+            self.busy and self.harness.config.animations and self.animation_level != "none" and not self._status_error
+        )
         frame = (
             activity_frame(self.harness.config.theme, monotonic() - self._activity_started) + " " if animated else ""
         )
