@@ -7,6 +7,7 @@ Handles conversion between our internal types and Gemini REST API format.
 import uuid
 from typing import Any
 
+from ..events import FinishReason
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import AudioContent
 from ..types import ContentPart
@@ -17,6 +18,11 @@ from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
 from ..types import ToolDefinition
+from ._validation import ProtocolError
+from ._validation import list_data
+from ._validation import object_data
+from ._validation import string_data
+from ._validation import tool_arguments
 
 
 def _format_content_part(part: ContentPart) -> dict[str, Any]:
@@ -242,9 +248,39 @@ def format_tools(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     ]
 
 
+def _response_candidate(response: object) -> dict[str, object]:
+    data = object_data(response)
+    if data.get("error") or object_data(data.get("promptFeedback") or {}).get("blockReason"):
+        raise ProtocolError("Gemini reported a generation error or blocked prompt; no tools were released.")
+    candidates = list_data(data.get("candidates", []))
+    if not candidates:
+        return {}
+    if len(candidates) != 1:
+        raise ProtocolError("Gemini returned multiple candidates for a single-candidate request.")
+    candidate = object_data(candidates[0])
+    index = candidate.get("index", 0)
+    if type(index) is not int or index != 0:
+        raise ProtocolError("Gemini returned an unexpected candidate index.")
+    return candidate
+
+
+def parse_finish_reason(response: object) -> FinishReason:
+    reason = _response_candidate(response).get("finishReason")
+    if reason is None:
+        return FinishReason.UNKNOWN
+    reasons = {
+        "STOP": FinishReason.STOP,
+        "MAX_TOKENS": FinishReason.LENGTH,
+        "SAFETY": FinishReason.CONTENT_FILTER,
+    }
+    if string_data(reason) not in reasons:
+        raise ProtocolError("Gemini returned an unsuccessful finish reason; no tools were released.")
+    return reasons[string_data(reason)]
+
+
 def parse_response(
-    response: dict[str, Any],
-) -> tuple[str, list[ToolCall], dict[str, Any] | None]:
+    response: dict[str, object],
+) -> tuple[str, list[ToolCall], dict[str, object] | None]:
     """
     Parse text, tool calls, and usage from Gemini response.
 
@@ -256,39 +292,40 @@ def parse_response(
     """
     text = ""
     tool_calls: list[ToolCall] = []
-    usage = None
+    candidate = _response_candidate(response)
+    if candidate:
+        content = object_data(candidate.get("content") or {})
+        parts = list_data(content.get("parts", []))
 
-    # Get candidates
-    candidates = response.get("candidates") or []
-    if candidates:
-        candidate = candidates[0]
-        content = candidate.get("content") or {}
-        parts = content.get("parts") or []
-
-        for part in parts:
+        for raw_part in parts:
+            part = object_data(raw_part)
             # Extract text
             if "text" in part:
-                text += part["text"]
+                text += string_data(part["text"])
 
             # Extract function calls
             if "functionCall" in part:
-                fc = part["functionCall"]
+                fc = object_data(part["functionCall"])
+                name = string_data(fc.get("name", ""))
+                if not name.strip():
+                    raise ProtocolError("Gemini returned an empty tool name; no tools were released.")
                 metadata: dict[str, str] = {}
                 # Preserve thought signature for multi-turn context continuity
                 # Gemini thinking models (3.x, 2.5) attach thoughtSignature to
                 # functionCall parts; it must be sent back in subsequent turns.
                 if "thoughtSignature" in part:
-                    metadata["thoughtSignature"] = part["thoughtSignature"]
+                    metadata["thoughtSignature"] = string_data(part["thoughtSignature"])
                 tool_calls.append(
                     ToolCall(
                         id=str(uuid.uuid4()),  # Gemini doesn't provide IDs
-                        name=fc.get("name", ""),
-                        arguments=fc.get("args", {}),
+                        name=name,
+                        arguments=tool_arguments(object_data(fc.get("args", {}))),
                         metadata=metadata,
                     )
                 )
 
     # Get usage metadata
-    usage = response.get("usageMetadata")
+    raw_usage = response.get("usageMetadata")
+    usage = object_data(raw_usage) if raw_usage is not None else None
 
     return text, tool_calls, usage

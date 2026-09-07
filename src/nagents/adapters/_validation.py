@@ -67,6 +67,16 @@ def token_usage(value: object, api: str) -> Usage:
             raise ProtocolError("Provider returned invalid token usage.")
         return result
 
+    if api == "gemini":
+        prompt = count(data, "promptTokenCount")
+        completion = count(data, "candidatesTokenCount")
+        return Usage(
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=count(data, "totalTokenCount")
+            if data.get("totalTokenCount") is not None
+            else prompt + completion,
+        )
     if api == "messages":
         cached = count(data, "cache_read_input_tokens")
         prompt = count(data, "input_tokens") + cached + count(data, "cache_creation_input_tokens")
