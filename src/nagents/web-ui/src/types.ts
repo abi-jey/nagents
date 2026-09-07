@@ -29,6 +29,9 @@ export type Approval = {
   description: string;
   preview: string;
   arguments: unknown;
+  task_id: string;
+  task_name: string;
+  depth: number;
 };
 
 export type Decision = "allow" | "deny";

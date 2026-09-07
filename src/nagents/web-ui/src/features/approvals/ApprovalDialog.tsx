@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { preview } from "../../api/events";
+import { CodeBlock } from "../../components/CodeBlock";
 import type { Approval, Decision } from "../../types";
 
 export function ApprovalDialog({
@@ -16,12 +17,12 @@ export function ApprovalDialog({
   cancel: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const deny = useRef<HTMLButtonElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     const element = dialog.current;
     const previous = document.activeElement;
     element?.showModal();
-    deny.current?.focus();
+    heading.current?.focus();
     return () => {
       element?.close();
       if (previous instanceof HTMLElement) previous.focus();
@@ -31,50 +32,78 @@ export function ApprovalDialog({
   return (
     <dialog
       ref={dialog}
+      className="approval-dialog"
       aria-labelledby="approval-title"
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return;
+        const controls = [
+          ...event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), [tabindex="0"]',
+          ),
+        ];
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            document.activeElement === heading.current)
+        ) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) decide("deny");
       }}
     >
-      <div className="eyebrow">Human approval / one call only</div>
-      <h2 id="approval-title">Allow {approval.tool}?</h2>
-      <p>{approval.description}</p>
-      <dl>
-        <dt>Call</dt>
-        <dd>{approval.call_id}</dd>
-      </dl>
-      <pre className="approval-preview">
-        {approval.preview || preview(approval.arguments)}
-      </pre>
-      {approval.preview && (
-        <details>
-          <summary>Tool arguments</summary>
-          <pre>{preview(approval.arguments)}</pre>
-        </details>
-      )}
-      <p className="muted">
-        Review the exact operation. Local tools are not sandboxed. Deny is the
-        default; Escape denies this call.
-      </p>
-      {error && (
-        <p role="alert" className="error-text">
-          {error}
+      <header className="approval-heading">
+        <h2 id="approval-title" ref={heading} tabIndex={-1}>
+          Review <code>{approval.tool}</code>
+        </h2>
+        <p>One call only. Deny is the default.</p>
+      </header>
+      <div className="approval-body">
+        <dl className="request-identity">
+          <dt>Call</dt>
+          <dd>{approval.call_id}</dd>
+          {approval.task_id && (
+            <>
+              <dt>Task</dt>
+              <dd>
+                {approval.task_name} ({approval.task_id}), depth{" "}
+                {approval.depth}
+              </dd>
+            </>
+          )}
+        </dl>
+        <p className="approval-context">{approval.description}</p>
+        <CodeBlock label="Exact inputs" text={preview(approval.arguments)} />
+        {approval.preview && (
+          <CodeBlock label="Proposed change" text={approval.preview} />
+        )}
+        <p className="muted">
+          Review the inputs and proposed change, not just the description. Local
+          tools are not sandboxed. Escape denies this call.
         </p>
-      )}
+        {error && (
+          <p role="alert" className="error-text">
+            {error}
+          </p>
+        )}
+      </div>
       <div className="dialog-actions">
-        <button className="cancel" onClick={cancel}>
-          Stop run
-        </button>
-        <button ref={deny} disabled={busy} onClick={() => decide("deny")}>
+        <button className="deny" disabled={busy} onClick={() => decide("deny")}>
           Deny
         </button>
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() => decide("allow")}
-        >
-          Allow Once
+        <button disabled={busy} onClick={() => decide("allow")}>
+          Allow once
+        </button>
+        <button className="cancel" onClick={cancel}>
+          Stop run
         </button>
       </div>
     </dialog>

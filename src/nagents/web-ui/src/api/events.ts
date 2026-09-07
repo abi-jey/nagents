@@ -6,7 +6,7 @@ export function text(event: WireEvent, key: string): string {
 }
 
 export function preview(value: unknown): string {
-  return value == null
+  return value === undefined
     ? ""
     : typeof value === "string"
       ? value

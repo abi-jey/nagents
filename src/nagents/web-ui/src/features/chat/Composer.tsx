@@ -34,6 +34,7 @@ export function Composer({
       <textarea
         ref={inputRef}
         id="composer"
+        aria-describedby="composer-help"
         placeholder={
           demo
             ? "Ask about the workspace, or try 'demo approval'..."
@@ -56,8 +57,8 @@ export function Composer({
         }}
       />
       <div className="composer-bottom">
-        <span>
-          Enter to send <b>/</b> Shift+Enter for newline
+        <span id="composer-help">
+          Enter to send. Shift+Enter for a new line.
         </span>
         {running ? (
           <button type="button" className="cancel" onClick={cancel}>
@@ -69,7 +70,7 @@ export function Composer({
             className="primary"
             disabled={!canSubmit || !prompt.trim()}
           >
-            Send <span aria-hidden="true">&#8593;</span>
+            Send
           </button>
         )}
       </div>

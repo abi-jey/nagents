@@ -2,18 +2,53 @@ import { preview, text } from "../../api/events.js";
 import type { Snapshot, WireEvent } from "../../types.js";
 
 export type Entry = {
-  kind: "user" | "assistant" | "tool" | "status" | "error";
+  kind: "user" | "assistant" | "tool" | "task" | "status" | "error";
   text: string;
   title?: string;
   callId?: string;
   streaming?: boolean;
+  inputs?: string;
+  result?: string;
+  error?: string;
+  state?: string;
+  durationMs?: number;
+  runId?: string;
+  taskId?: string;
+  parentTaskId?: string;
+  depth?: number;
+  followup?: number;
+  approvalId?: string;
+  approval?: string;
 };
 
 export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
-  if (event.event === "run_finished") {
-    return entries.map((entry) =>
-      entry.streaming ? { ...entry, streaming: false } : entry,
-    );
+  const runId = text(event, "run_id");
+  if (event.event === "run_finished" || event.event === "client_disconnected") {
+    return entries.map((entry) => {
+      if (entry.streaming) return { ...entry, streaming: false };
+      if (
+        ![
+          "Requested",
+          "Running",
+          "Receiving output",
+          "Waiting for approval",
+          "Follow-up requested",
+        ].includes(entry.state || "")
+      )
+        return entry;
+      if (runId && entry.runId !== runId) return entry;
+      const state =
+        event.event === "client_disconnected"
+          ? "Disconnected"
+          : event.status === "cancelled"
+            ? "Cancelled"
+            : event.status === "failed"
+              ? "Interrupted"
+              : event.status === "completed"
+                ? "No result recorded"
+                : entry.state;
+      return { ...entry, state };
+    });
   }
   const streaming = entries.findLastIndex(
     (entry) => entry.kind === "assistant" && entry.streaming,
@@ -46,26 +81,45 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         kind: "tool",
         title: text(event, "name"),
         callId: text(event, "id"),
-        text: preview(event.arguments),
+        inputs: preview(event.arguments),
+        text: "",
+        state: "Requested",
+        runId,
       },
     ];
   }
   if (event.event === "tool_output" || event.event === "tool_result") {
     const id = text(event, "call_id") || text(event, "id");
     const index = entries.findLastIndex(
-      (entry) => entry.kind === "tool" && entry.callId === id,
+      (entry) =>
+        entry.kind === "tool" && entry.callId === id && entry.runId === runId,
     );
-    const output =
+    const update =
       event.event === "tool_output"
-        ? text(event, "text")
-        : preview(event.error || event.result);
+        ? {
+            text: (index >= 0 ? entries[index].text : "") + text(event, "text"),
+            state: "Receiving output",
+          }
+        : {
+            result: preview(event.result),
+            error: text(event, "error"),
+            state: event.saved
+              ? "Recorded result"
+              : event.error
+                ? "Error"
+                : "Completed",
+            durationMs:
+              typeof event.duration_ms === "number"
+                ? event.duration_ms
+                : undefined,
+          };
     if (index >= 0) {
       return entries.map((entry, i) =>
         i === index
           ? {
               ...entry,
               title: text(event, "name") || entry.title,
-              text: entry.text + "\n" + output,
+              ...update,
             }
           : entry,
       );
@@ -75,8 +129,10 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       {
         kind: "tool",
         title: text(event, "name") || text(event, "tool"),
-        text: output,
+        text: "",
         callId: id,
+        runId,
+        ...update,
       },
     ];
   }
@@ -84,22 +140,84 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     return [...entries, { kind: "error", text: text(event, "message") }];
   if (event.event === "notice")
     return [...entries, { kind: "status", text: text(event, "text") }];
+  if (event.event === "approval") {
+    const index = entries.findLastIndex(
+      (entry) =>
+        entry.kind === "tool" &&
+        entry.callId === event.id &&
+        entry.runId === runId,
+    );
+    return entries.map((entry, i) =>
+      i === index
+        ? {
+            ...entry,
+            state: "Waiting for approval",
+            approvalId: text(event, "approval_id"),
+            taskId: text(event, "task_id"),
+          }
+        : entry,
+    );
+  }
+  if (event.event === "approval_closed") {
+    return entries.map((entry) =>
+      entry.approvalId === event.approval_id
+        ? {
+            ...entry,
+            state: "Requested",
+            approval:
+              event.decision === "allow"
+                ? "Allowed once"
+                : event.expired
+                  ? "Expired; denied"
+                  : "Denied",
+          }
+        : entry,
+    );
+  }
   if (
     event.event === "task_started" ||
     event.event === "task_completed" ||
     event.event === "task_message"
   ) {
-    return [
-      ...entries,
-      {
-        kind: "tool",
-        title: `${text(event, "name")} / ${event.event.replace("task_", "")}`,
-        text:
-          text(event, "result") ||
-          text(event, "prompt") ||
-          text(event, "error"),
-      },
-    ];
+    const taskId = text(event, "task_id");
+    const followup = typeof event.followup === "number" ? event.followup : 0;
+    const index = entries.findLastIndex(
+      (entry) =>
+        entry.kind === "task" &&
+        entry.taskId === taskId &&
+        entry.followup === followup &&
+        entry.runId === runId,
+    );
+    const entry: Entry =
+      index >= 0
+        ? { ...entries[index] }
+        : {
+            kind: "task",
+            title: text(event, "name"),
+            text: "",
+            taskId,
+            followup,
+            runId,
+            parentTaskId: text(event, "parent_task_id"),
+            depth: typeof event.depth === "number" ? event.depth : undefined,
+          };
+    if (event.event === "task_completed") {
+      entry.result = text(event, "result");
+      entry.error = text(event, "error");
+      entry.state =
+        event.status === "cancelled"
+          ? "Cancelled"
+          : entry.error || event.status === "failed"
+            ? "Error"
+            : "Completed";
+    } else {
+      entry.inputs = text(event, "prompt");
+      entry.state =
+        event.event === "task_started" ? "Running" : "Follow-up requested";
+    }
+    return index < 0
+      ? [...entries, entry]
+      : entries.map((previous, i) => (i === index ? entry : previous));
   }
   if (
     event.event === "compaction_started" ||
@@ -108,7 +226,15 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
   ) {
     return [
       ...entries,
-      { kind: "status", text: event.event.replaceAll("_", " ") },
+      {
+        kind: "status",
+        text:
+          event.event === "compaction_started"
+            ? "Compacting context"
+            : event.event === "compaction_done"
+              ? "Context compacted"
+              : "Provider rate limit; waiting for its retry",
+      },
     ];
   }
   return entries;
@@ -123,6 +249,7 @@ export function fromHistory(messages: Snapshot["history"]): Entry[] {
         id: message.tool_call_id,
         name: message.name,
         result: message.content,
+        saved: true,
       });
       continue;
     }
@@ -139,5 +266,9 @@ export function fromHistory(messages: Snapshot["history"]): Entry[] {
         arguments: call.arguments,
       });
   }
-  return entries;
+  return entries.map((entry) =>
+    entry.state === "Requested"
+      ? { ...entry, state: "No result recorded" }
+      : entry,
+  );
 }

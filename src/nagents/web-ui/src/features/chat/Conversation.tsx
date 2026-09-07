@@ -1,17 +1,17 @@
 import { useEffect, useRef } from "react";
+import { ExecutionRecord } from "./ExecutionRecord";
+import { MessageContent } from "./MessageContent";
 import type { Entry } from "./transcript";
 
 export function Conversation({
   entries,
   sessionId,
-  busy,
   demo,
   canSubmit,
   submit,
 }: {
   entries: Entry[];
   sessionId: string;
-  busy: boolean;
   demo: boolean;
   canSubmit: boolean;
   submit: (prompt: string) => void;
@@ -31,6 +31,9 @@ export function Conversation({
   return (
     <div
       className="conversation"
+      aria-label="Conversation"
+      role="region"
+      tabIndex={0}
       ref={feed}
       onScroll={() => {
         const element = feed.current;
@@ -43,14 +46,11 @@ export function Conversation({
       <div className="conversation-inner">
         {!entries.length && (
           <section className="welcome">
-            <div className="eyebrow">ngn / coding harness</div>
-            <h1>
-              A little less ceremony.
-              <br />A little more building.
-            </h1>
+            <h2>Start with the workspace</h2>
             <p>
-              Inspect your workspace, follow the tools, and review each proposed
-              action. The same ngn Harness, now in your browser.
+              Ask ngn to inspect a file, explain a problem, or propose a change.
+              Tool calls stay in the transcript so you can review their inputs
+              and results.
             </p>
             {demo ? (
               <>
@@ -64,13 +64,13 @@ export function Conversation({
                     disabled={!canSubmit}
                     onClick={() => submit("Show me this workspace")}
                   >
-                    Inspect workspace <span>&#8599;</span>
+                    Inspect workspace
                   </button>
                   <button
                     disabled={!canSubmit}
                     onClick={() => submit("demo approval")}
                   >
-                    Try an approval <span>&#8599;</span>
+                    Review a demo approval
                   </button>
                 </div>
               </>
@@ -84,28 +84,20 @@ export function Conversation({
         )}
         {entries.map((entry, index) => (
           <article key={index} className={`entry ${entry.kind}`}>
-            {entry.kind === "tool" ? (
-              <details>
-                <summary>
-                  <span className="tool-mark">&#9656;</span>
-                  {entry.title || "Tool activity"}
-                  <span className="detail-hint">details</span>
-                </summary>
-                <pre>{entry.text}</pre>
-              </details>
+            {entry.kind === "tool" || entry.kind === "task" ? (
+              <ExecutionRecord entry={entry} />
             ) : (
               <>
                 <div className="entry-label">
                   {entry.kind === "assistant"
                     ? "ngn"
                     : entry.kind === "user"
-                      ? "you"
-                      : entry.kind}
+                      ? "You"
+                      : entry.kind === "error"
+                        ? "Error"
+                        : "Status"}
                 </div>
-                <div className="entry-content">
-                  {entry.text}
-                  {entry.streaming && busy && <span className="cursor" />}
-                </div>
+                <MessageContent text={entry.text} />
               </>
             )}
           </article>

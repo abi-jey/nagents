@@ -19,6 +19,9 @@ export function useApproval(token: string) {
       description: text(event, "description"),
       preview: text(event, "preview"),
       arguments: event.arguments,
+      task_id: text(event, "task_id"),
+      task_name: text(event, "task_name"),
+      depth: typeof event.depth === "number" ? event.depth : 0,
     };
     current.current = approval;
     setPending(approval);
