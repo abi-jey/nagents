@@ -76,6 +76,8 @@ async for event in agent.run(
 If no `session_id` is provided, a new session is created automatically:
 
 ```python title="auto_session.py"
+from nagents import DoneEvent
+
 async for event in agent.run("Hello"):
     if isinstance(event, DoneEvent):
         print(f"Session ID: {event.session_id}")
@@ -90,28 +92,16 @@ Sessions store:
 
 - [x] **Conversation messages** - User, assistant, tool calls/results
 - [x] **Session metadata** - created_at, updated_at, user_id
-- [x] **System prompt** - At session creation time
+- [x] **Compaction boundary** - Selects the active history after compaction
 
-??? info "Database Schema"
+The agent's `system_prompt` is applied when assembling requests, not stored as
+a session creation field. Supply it again when constructing an agent after a
+restart.
 
-    ```sql
-    CREATE TABLE sessions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT,
-        created_at TIMESTAMP,
-        updated_at TIMESTAMP,
-        system_prompt TEXT
-    );
-
-    CREATE TABLE messages (
-        id INTEGER PRIMARY KEY,
-        session_id TEXT REFERENCES sessions(id),
-        role TEXT,
-        content TEXT,
-        tool_calls TEXT,  -- JSON
-        created_at TIMESTAMP
-    );
-    ```
+The SQLite tables are `v2_sessions` and `v2_messages`, managed by migrations in
+`src/nagents/migrations/sessions.py`. Prefer the [Session API](../api/session.md)
+over copying SQL schemas into application code. `get_history()` respects the
+compaction boundary; it is not a raw transcript export.
 
 ---
 
@@ -143,8 +133,8 @@ stateDiagram-v2
     [*] --> Created: agent.run() with new session_id
     Created --> Active: Messages added
     Active --> Active: More messages
-    Active --> Closed: agent.close()
-    Closed --> [*]
+    Active --> Stored: agent.close()
+    Stored --> Active: agent.run() with same database and ID
 ```
 
 ```python title="lifecycle.py"
@@ -169,13 +159,17 @@ async def main():
 ```
 
 1. Called automatically by Agent, but can be called explicitly.
-2. Also closes the session manager.
+2. Releases the agent's provider resources. Stored sessions remain available;
+   `SessionManager` opens short-lived SQLite connections per operation and has
+   no public `close()` method.
 
 ---
 
 ## Multiple Sessions
 
-Handle multiple concurrent sessions easily:
+Use separate IDs for separate conversations. The following turns are
+sequential; serialize runs for the same session and avoid sharing one live
+agent/provider across concurrent runs:
 
 ```python title="multi_session.py"
 # User A's conversation
@@ -205,21 +199,27 @@ async for event in agent.run(
 
 ## Session Isolation
 
-Each session is completely isolated:
+Each session ID selects a separate conversation history. This is not an
+authorization boundary: applications must enforce access to session IDs, and
+`user_id` is stored metadata rather than an access check.
 
 ```python title="isolation_example.py"
 # Session 1: Set a name
-await run_agent("My name is Alice", session_id="session-1")
+async for event in agent.run("My name is Alice", session_id="session-1"):
+    pass
 
 # Session 2: Different conversation
-await run_agent("My name is Bob", session_id="session-2")
+async for event in agent.run("My name is Bob", session_id="session-2"):
+    pass
 
 # Session 1: Remembers Alice
-await run_agent("What's my name?", session_id="session-1")
+async for event in agent.run("What's my name?", session_id="session-1"):
+    pass
 # Response: "Your name is Alice"
 
 # Session 2: Remembers Bob
-await run_agent("What's my name?", session_id="session-2")
+async for event in agent.run("What's my name?", session_id="session-2"):
+    pass
 # Response: "Your name is Bob"
 ```
 
@@ -231,8 +231,9 @@ Here's a complete example of a session-based chat application:
 
 ```python title="chat_app.py" linenums="1"
 import asyncio
+import os
 from pathlib import Path
-from nagents import Agent, Provider, ProviderType, SessionManager, DoneEvent
+from nagents import Agent, ErrorEvent, Provider, ProviderType, SessionManager, TextChunkEvent
 
 
 async def chat(session_id: str):
@@ -240,8 +241,8 @@ async def chat(session_id: str):
 
     provider = Provider(
         provider_type=ProviderType.OPENAI_COMPATIBLE,
-        api_key="sk-...",
-        model="gpt-4o-mini",
+        api_key=os.environ["OPENAI_API_KEY"],
+        model=os.environ["OPENAI_MODEL"],
     )
 
     session_manager = SessionManager(Path("chat.db"))
@@ -250,23 +251,29 @@ async def chat(session_id: str):
         provider=provider,
         session_manager=session_manager,
         system_prompt="You are a helpful assistant. Be concise.",
+        streaming=True,
     )
 
     print(f"Chat session: {session_id}")
     print("Type 'quit' to exit\n")
 
-    while True:
-        user_input = input("You: ").strip()
-        if user_input.lower() == "quit":
-            break
+    try:
+        while True:
+            user_input = (await asyncio.to_thread(input, "You: ")).strip()
+            if user_input.lower() == "quit":
+                break
+            if not user_input:
+                continue
 
-        print("Assistant: ", end="")
-        async for event in agent.run(user_input, session_id=session_id):
-            if hasattr(event, "chunk"):
-                print(event.chunk, end="", flush=True)
-        print()  # newline
-
-    await agent.close()
+            print("Assistant: ", end="")
+            async for event in agent.run(user_input, session_id=session_id):
+                if isinstance(event, TextChunkEvent):
+                    print(event.chunk, end="", flush=True)
+                elif isinstance(event, ErrorEvent):
+                    print(f"\nError: {event.message}")
+            print()  # newline
+    finally:
+        await agent.close()
     print("\nGoodbye!")
 
 
@@ -277,7 +284,8 @@ if __name__ == "__main__":
     asyncio.run(chat(session_id))
 ```
 
-Usage:
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` to credentials and a model available to
+your account, then run in your project's virtual environment:
 
 ```bash
 # Start a new session

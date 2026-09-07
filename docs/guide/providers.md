@@ -132,7 +132,7 @@ The unified interface makes it easy to switch providers dynamically:
 ```python title="multi_provider.py"
 import os
 from pathlib import Path
-from nagents import Agent, Provider, ProviderType, SessionManager
+from nagents import Agent, ErrorEvent, Provider, ProviderType, SessionManager, TextChunkEvent
 
 
 def get_provider(provider_name: str) -> Provider:
@@ -141,20 +141,20 @@ def get_provider(provider_name: str) -> Provider:
         case "openai":
             return Provider(
                 provider_type=ProviderType.OPENAI_COMPATIBLE,
-                api_key=os.getenv("OPENAI_API_KEY"),
-                model="gpt-4o-mini",
+                api_key=os.environ["OPENAI_API_KEY"],
+                model=os.environ["OPENAI_MODEL"],
             )
         case "anthropic":
             return Provider(
                 provider_type=ProviderType.ANTHROPIC,
-                api_key=os.getenv("ANTHROPIC_API_KEY"),
-                model="claude-3-5-sonnet-20241022",
+                api_key=os.environ["ANTHROPIC_API_KEY"],
+                model=os.environ["ANTHROPIC_MODEL"],
             )
         case "gemini":
             return Provider(
                 provider_type=ProviderType.GEMINI_NATIVE,
-                api_key=os.getenv("GOOGLE_API_KEY"),
-                model="gemini-2.0-flash",
+                api_key=os.environ["GOOGLE_API_KEY"],
+                model=os.environ["GOOGLE_MODEL"],
             )
         case _:
             raise ValueError(f"Unknown provider: {provider_name}")
@@ -167,21 +167,30 @@ async def main():
 
     session_manager = SessionManager(Path("sessions.db"))
 
-    # Same agent code works with any provider!
+    # The same text-only agent interface can use any of these providers.
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
+        streaming=True,
     )
 
-    async for event in agent.run("Hello!"):
-        if hasattr(event, "chunk"):
-            print(event.chunk, end="")
-
-    await agent.close()
+    try:
+        async for event in agent.run("Hello!"):
+            if isinstance(event, TextChunkEvent):
+                print(event.chunk, end="", flush=True)
+            elif isinstance(event, ErrorEvent):
+                print(f"\nError: {event.message}")
+    finally:
+        await agent.close()
 ```
 
+Set the selected provider's API key and `*_MODEL` environment variables before
+calling `main()`. Choose a model available to your account.
+
 !!! success "Provider Agnostic"
-    Your application logic remains the same regardless of which provider you use. This makes it easy to:
+    The text-generation interface is shared, but media, reasoning, batch, and
+    generation-option support depend on the backend and HTTP contract. Your
+    application can use this interface to:
 
     - Switch providers for cost optimization
     - Use different providers for different tasks

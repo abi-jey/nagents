@@ -65,6 +65,7 @@ agent = Agent(
     provider=provider,
     session_manager=session_manager,
     system_prompt="You are a helpful assistant.",  # (1)!
+    streaming=True,
 )
 ```
 
@@ -74,15 +75,17 @@ agent = Agent(
 
 ```python
 import asyncio
+from nagents import TextChunkEvent
 
 
 async def main():
-    async for event in agent.run("What is the capital of France?"):
-        if hasattr(event, "chunk"):
-            print(event.chunk, end="", flush=True)
-    print()  # newline at end
-
-    await agent.close()
+    try:
+        async for event in agent.run("What is the capital of France?"):
+            if isinstance(event, TextChunkEvent):
+                print(event.chunk, end="", flush=True)
+        print()  # newline at end
+    finally:
+        await agent.close()
 
 
 asyncio.run(main())
@@ -96,16 +99,17 @@ Here's a complete, runnable example:
 
 ```python title="basic_agent.py" linenums="1"
 import asyncio
+import os
 from pathlib import Path
-from nagents import Agent, Provider, ProviderType, SessionManager
+from nagents import Agent, ErrorEvent, Provider, ProviderType, SessionManager, TextChunkEvent
 
 
 async def main():
     # 1. Create provider
     provider = Provider(
         provider_type=ProviderType.OPENAI_COMPATIBLE,
-        api_key="sk-...",
-        model="gpt-4o-mini",
+        api_key=os.environ["OPENAI_API_KEY"],
+        model=os.environ["OPENAI_MODEL"],
     )
 
     # 2. Create session manager
@@ -115,20 +119,30 @@ async def main():
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
+        streaming=True,
     )
 
     # 4. Run conversation
-    async for event in agent.run("Hello! What can you help me with?"):
-        if hasattr(event, "chunk"):
-            print(event.chunk, end="", flush=True)
-    print()
-
-    await agent.close()
+    try:
+        async for event in agent.run("Hello! What can you help me with?"):
+            if isinstance(event, TextChunkEvent):
+                print(event.chunk, end="", flush=True)
+            elif isinstance(event, ErrorEvent):
+                print(f"\nError: {event.message}")
+        print()
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` before running the complete example.
+Choose a model available to your account; model names elsewhere on this page
+are illustrative, not a guarantee of current availability. `streaming=True` is
+required for chunk output because agents default to non-streaming. In that
+mode, read the answer from `DoneEvent.final_text` instead.
 
 ---
 
@@ -146,9 +160,9 @@ def get_weather(city: str) -> str:
     return f"The weather in {city} is sunny, 22°C"
 
 
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression."""
-    return str(eval(expression))
+def multiply(a: float, b: float) -> float:
+    """Multiply two numbers."""
+    return a * b
 
 
 async def main():
@@ -158,7 +172,7 @@ async def main():
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
-        tools=[get_weather, calculate],  # (1)!
+        tools=[get_weather, multiply],  # (1)!
     )
 
     async for event in agent.run("What's the weather in Paris?"):
@@ -248,7 +262,7 @@ async for event in agent.run("Hello"):
     | Event | Description |
     |-------|-------------|
     | `TextChunkEvent` | Streaming text chunk |
-    | `TextDoneEvent` | Complete text (non-streaming) |
+    | `TextDoneEvent` | Complete model-response text (also emitted after streaming) |
     | `ToolCallEvent` | Model is calling a tool |
     | `ToolResultEvent` | Tool execution completed |
     | `ErrorEvent` | Error occurred |

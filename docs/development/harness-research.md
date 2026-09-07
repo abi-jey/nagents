@@ -4,6 +4,10 @@ Research date: September 6, 2026. This is a source/documentation comparison, not
 a performance benchmark or a claim that every upstream feature was runtime-tested.
 Upstream default branches and experimental contracts can change.
 
+This page records research and design direction, not a feature-parity promise.
+For implemented behavior and current limitations, use the
+[ngn guide](../guide/ngn.md); the terminal harness remains a source-only release.
+
 ## Findings
 
 | Project | Context and compaction | Extensions | Lesson for nagents |

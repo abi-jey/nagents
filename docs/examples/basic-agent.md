@@ -1,232 +1,185 @@
 # Basic Agent
 
-This example demonstrates how to create a simple conversational agent using nagents.
-
-## Overview
-
-```mermaid
-flowchart LR
-    A[User Input] --> B[Agent]
-    B --> C[Provider]
-    C --> D[LLM API]
-    D --> C
-    C --> B
-    B --> E[Response]
-```
+Create a conversational agent with a `Provider` and a required `SessionManager`.
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` to credentials and a model available to
+your account before running these examples. `Provider` does not read environment
+variables automatically; the examples pass them explicitly.
 
 ## Simple Chat Agent
 
-The most basic agent requires just a provider and a session manager:
-
 ```python title="basic_chat.py" linenums="1"
 import asyncio
+import os
 from pathlib import Path
 
-from nagents import Agent, SessionManager
-from nagents.providers import OpenAIProvider
+from nagents import Agent, DoneEvent, ErrorEvent, Provider, ProviderType, SessionManager, TextChunkEvent
 
 
-async def main():
-    # Initialize the session manager for conversation persistence
-    session_manager = SessionManager(Path("sessions.db"))  # (1)!
-
-    # Create the provider
-    provider = OpenAIProvider(
-        api_key="your-api-key",  # (2)!
-        model="gpt-4o-mini",
-    )
-
-    # Create the agent
+async def main() -> None:
     agent = Agent(
-        provider=provider,
-        session_manager=session_manager,
-        system_prompt="You are a helpful assistant.",  # (3)!
+        provider=Provider(
+            provider_type=ProviderType.OPENAI_COMPATIBLE,
+            api_key=os.environ["OPENAI_API_KEY"],
+            model=os.environ["OPENAI_MODEL"],
+        ),
+        session_manager=SessionManager(Path("sessions.db")),
+        system_prompt="You are a helpful assistant.",
+        streaming=True,
     )
 
-    # Run a simple query
-    async for event in agent.run("Hello! What can you help me with?"):
-        if event.type == "text_delta":
-            print(event.content, end="", flush=True)
-
-    print()  # Newline after streaming
+    try:
+        async for event in agent.run("Hello! What can you help me with?"):
+            if isinstance(event, TextChunkEvent):
+                print(event.chunk, end="", flush=True)
+            elif isinstance(event, ErrorEvent):
+                print(f"\nError: {event.message}")
+            elif isinstance(event, DoneEvent):
+                print(f"\nSession: {event.session_id}")
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-1. The `SessionManager` is **required** - it handles conversation persistence
-2. Use environment variables in production: `os.environ.get("OPENAI_API_KEY")`
-3. The system prompt defines the agent's personality and behavior
+The first `run()` initializes the database and verifies the provider model.
+Initialization failures can raise exceptions before any events are emitted.
+`streaming` defaults to `False`; enable it to receive text chunks. For a
+non-streaming agent, read the completed answer from `DoneEvent.final_text`.
 
 ## Interactive Chat Loop
 
-For a more interactive experience, create a chat loop:
+Reuse a string session ID to retain context. `Agent.run()` creates that session
+if it does not exist; there is no separate `create_session()` call.
 
 ```python title="interactive_chat.py" linenums="1"
 import asyncio
+import os
 from pathlib import Path
+from uuid import uuid4
 
-from nagents import Agent, SessionManager
-from nagents.providers import OpenAIProvider
+from nagents import Agent, ErrorEvent, Provider, ProviderType, SessionManager, TextChunkEvent
 
 
-async def chat():
-    session_manager = SessionManager(Path("sessions.db"))
-    provider = OpenAIProvider(model="gpt-4o-mini")
-
+async def chat() -> None:
     agent = Agent(
-        provider=provider,
-        session_manager=session_manager,
-        system_prompt="You are a friendly assistant. Be concise but helpful.",
+        provider=Provider(
+            provider_type=ProviderType.OPENAI_COMPATIBLE,
+            api_key=os.environ["OPENAI_API_KEY"],
+            model=os.environ["OPENAI_MODEL"],
+        ),
+        session_manager=SessionManager(Path("sessions.db")),
+        system_prompt="Be concise but helpful.",
+        streaming=True,
     )
+    session_id = f"chat-{uuid4().hex}"
+    print(f"Session: {session_id}. Type 'quit' to exit.")
 
-    # Create a session for this conversation
-    session = await session_manager.create_session()  # (1)!
+    try:
+        while True:
+            user_input = (await asyncio.to_thread(input, "You: ")).strip()
+            if user_input.lower() in ("quit", "exit", "q"):
+                break
+            if not user_input:
+                continue
 
-    print("Chat started! Type 'quit' to exit.\n")
-
-    while True:
-        user_input = input("You: ").strip()
-
-        if user_input.lower() in ("quit", "exit", "q"):
-            print("Goodbye!")
-            break
-
-        if not user_input:
-            continue
-
-        print("Assistant: ", end="", flush=True)
-
-        async for event in agent.run(user_input, session_id=session.id):  # (2)!
-            if event.type == "text_delta":
-                print(event.content, end="", flush=True)
-
-        print("\n")
+            print("Assistant: ", end="", flush=True)
+            async for event in agent.run(user_input, session_id=session_id):
+                if isinstance(event, TextChunkEvent):
+                    print(event.chunk, end="", flush=True)
+                elif isinstance(event, ErrorEvent):
+                    print(f"\nError: {event.message}")
+            print()
+    finally:
+        await agent.close()
 
 
 if __name__ == "__main__":
     asyncio.run(chat())
 ```
 
-1. Creating a session allows conversation history to persist across messages
-2. Pass the `session_id` to maintain context between turns
+To resume after restarting the process, reuse the printed ID and the same
+database. Serialize turns for a given session rather than running them in
+parallel.
 
-## Handling Different Event Types
+## Handling Events and Usage
 
-The agent emits various events during execution. Here's how to handle them:
+Use event classes, or compare `event.type` with an `EventType` member, not a
+string. Usage is attached to events, not emitted as a separate `"usage"` event.
+The following fragment assumes the streaming agent above:
 
-=== "Basic Event Handling"
+```python
+from nagents import DoneEvent, ErrorEvent, ReasoningChunkEvent, TextChunkEvent, TextDoneEvent
 
-    ```python
-    async for event in agent.run("Tell me a joke"):
-        match event.type:
-            case "text_delta":
-                print(event.content, end="", flush=True)
-            case "message_complete":
-                print("\n--- Message complete ---")
-            case "error":
-                print(f"Error: {event.error}")
-    ```
+async for event in agent.run("Explain quantum computing"):
+    match event:
+        case TextChunkEvent(chunk=chunk):
+            print(chunk, end="", flush=True)
+        case ReasoningChunkEvent(chunk=chunk):
+            print(f"\n[Reasoning: {chunk}]")
+        case TextDoneEvent(finish_reason=reason):
+            print(f"\nModel response finished: {reason.value}")
+        case DoneEvent(usage=usage):
+            print(f"Tokens: {usage.prompt_tokens} in, {usage.completion_tokens} out")
+        case ErrorEvent(message=message):
+            print(f"Error: {message}")
+```
 
-=== "With Metadata"
-
-    ```python
-    async for event in agent.run("Explain quantum computing"):
-        match event.type:
-            case "text_delta":
-                print(event.content, end="", flush=True)
-            case "usage":
-                print(f"\nTokens used: {event.input_tokens} in, {event.output_tokens} out")
-            case "message_complete":
-                print(f"Stop reason: {event.stop_reason}")
-    ```
-
-=== "Full Event Logging"
-
-    ```python
-    async for event in agent.run("What is Python?"):
-        match event.type:
-            case "text_delta":
-                print(event.content, end="", flush=True)
-            case "thinking_delta":
-                print(f"[Thinking: {event.content}]")
-            case "usage":
-                print(f"\n📊 Usage: {event.input_tokens}→{event.output_tokens} tokens")
-            case "message_complete":
-                print(f"✅ Complete: {event.stop_reason}")
-            case "error":
-                print(f"❌ Error: {event.error}")
-    ```
+Reasoning and usage availability depend on the provider, HTTP contract, and
+model. Do not print both chunks and completed text unless you want to display
+the answer twice. See the [Events Guide](../guide/events.md).
 
 ## Configuration Options
 
-### Agent Parameters
+| Setting | Where to pass it | Description |
+|---------|------------------|-------------|
+| `provider` | `Agent(...)` | Required provider instance |
+| `session_manager` | `Agent(...)` | Required conversation storage |
+| `system_prompt` | `Agent(...)` | Instructions for the agent |
+| `tools` | `Agent(...)` | List of Python callable functions |
+| `streaming` | `Agent(...)` | Enable streaming; defaults to `False` |
+| `max_tool_rounds` | `Agent(...)` | Limit the tool execution loop |
+| `max_tokens`, `temperature` | `GenerationConfig(...)` | Per-run generation settings, subject to model support |
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `provider` | `Provider` | Yes | The LLM provider to use |
-| `session_manager` | `SessionManager` | Yes | Manages conversation sessions |
-| `system_prompt` | `str` | No | Instructions for the agent |
-| `tools` | `list[Tool]` | No | Tools the agent can use |
-| `max_tokens` | `int` | No | Maximum response tokens |
-| `temperature` | `float` | No | Sampling temperature (0-2) |
+```python
+from nagents import DoneEvent, GenerationConfig
 
-### Example with All Options
-
-```python title="configured_agent.py"
-agent = Agent(
-    provider=provider,
-    session_manager=session_manager,
-    system_prompt="""You are a Python expert.
-    - Always provide code examples
-    - Explain concepts clearly
-    - Suggest best practices""",
-    max_tokens=2048,
-    temperature=0.7,
-)
+async for event in agent.run(
+    "Explain Python generators",
+    config=GenerationConfig(max_tokens=2048, temperature=0.7),
+):
+    if isinstance(event, DoneEvent):
+        print(event.final_text)
 ```
 
-## Best Practices
+## Resource and Session Management
 
-!!! tip "Environment Variables"
-    Never hardcode API keys. Use environment variables:
+Always close the agent in `finally` to release provider connections. If you
+stop consuming a run early, explicitly close the iterator as well:
 
-    ```python
-    import os
+```python
+from contextlib import aclosing
+from nagents import ErrorEvent, TextChunkEvent
 
-    provider = OpenAIProvider(
-        api_key=os.environ["OPENAI_API_KEY"],
-        model="gpt-4o-mini",
-    )
-    ```
+async with aclosing(agent.run("Tell me a joke")) as events:
+    async for event in events:
+        if isinstance(event, ErrorEvent):
+            print(event.message)
+            break
+        if isinstance(event, TextChunkEvent):
+            print(event.chunk, end="", flush=True)
+```
 
-!!! tip "Error Handling"
-    Always handle potential errors gracefully:
-
-    ```python
-    try:
-        async for event in agent.run(user_input):
-            if event.type == "error":
-                logging.error(f"Agent error: {event.error}")
-                break
-            # ... handle other events
-    except Exception as e:
-        logging.exception("Unexpected error during agent run")
-    ```
-
-!!! tip "Session Management"
-    For production applications, implement proper session lifecycle management:
-
-    ```python
-    # Clean up old sessions periodically
-    old_sessions = await session_manager.list_sessions(older_than=timedelta(days=30))
-    for session in old_sessions:
-        await session_manager.delete_session(session.id)
-    ```
+For manual session operations, use
+`await session_manager.get_or_create_session(session_id, user_id)` and
+`await session_manager.delete_session(session_id)`. `list_sessions()` returns
+session dictionaries and accepts an optional `user_id`, not an `older_than`
+filter. Apply your application's retention policy to those records before
+deleting anything.
 
 ## Next Steps
 
-- Learn about [Multi-Provider](multi-provider.md) setups for fallback and load balancing
-- Explore [Tool Usage](tool-usage.md) to give your agent capabilities
-- Check out the [Sessions Guide](../guide/sessions.md) for advanced session management
+- Compare models with [Multi-Provider](multi-provider.md) examples
+- Add capabilities with [Tool Usage](tool-usage.md)
+- See the [Sessions Guide](../guide/sessions.md) and [Agent API](../api/agent.md)
