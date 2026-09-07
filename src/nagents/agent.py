@@ -294,6 +294,8 @@ class Agent:
         # Track actual prompt_tokens from API responses per session
         # Maps session_id -> last known prompt_tokens
         self._session_tokens: dict[str, int] = {}
+        # Main-generation usage observed by this agent, not persisted history or compactor billing.
+        self._session_usage: dict[str, TokenUsage] = {}
 
         # Flag to request compaction during run (set by trigger_compaction())
         self._compaction_requested: bool = False
@@ -1215,7 +1217,7 @@ class Agent:
         # Set session ID for HTTP logging
         self.provider.set_session_id(session_id)
 
-        # Track last known usage to use for events without usage data
+        session_usage = self._session_usage.setdefault(session_id, TokenUsage())
         last_usage = Usage()
 
         for round_num in range(self.max_tool_rounds):
@@ -1301,6 +1303,8 @@ class Agent:
             pending_tool_calls: list[ToolCall] = []
             full_text = ""
             has_error = False
+            finish_reason = FinishReason.UNKNOWN
+            last_usage = Usage()
 
             # Copy schemas, not callable owners (which can hold locks or live clients).
             request = ModelRequest(
@@ -1319,34 +1323,21 @@ class Agent:
                 config=request.config,
                 stream=self.streaming,
             ):
-                # Track usage from events that have actual token counts
+                # Providers repeat cumulative snapshots within a generation, not additive deltas.
                 if event.usage.has_usage():
-                    last_usage = Usage(
-                        prompt_tokens=event.usage.prompt_tokens,
-                        completion_tokens=event.usage.completion_tokens,
-                        total_tokens=event.usage.total_tokens,
-                    )
-                    # Store actual prompt_tokens for this session (cumulative input tokens)
+                    session_usage.prompt_tokens += event.usage.prompt_tokens - last_usage.prompt_tokens
+                    session_usage.completion_tokens += event.usage.completion_tokens - last_usage.completion_tokens
+                    session_usage.total_tokens += event.usage.total_tokens - last_usage.total_tokens
+                    last_usage = replace(event.usage)
+                    # Context size remains the latest prompt, not accumulated billing usage.
                     self._session_tokens[session_id] = last_usage.prompt_tokens
-                else:
-                    # Use last known usage for events without usage data
-                    event.usage = Usage(
-                        prompt_tokens=last_usage.prompt_tokens,
-                        completion_tokens=last_usage.completion_tokens,
-                        total_tokens=last_usage.total_tokens,
-                    )
-
-                # For now, session equals current usage (TODO: accumulate across compactions)
-                event.usage.session = TokenUsage(
-                    prompt_tokens=last_usage.prompt_tokens,
-                    completion_tokens=last_usage.completion_tokens,
-                    total_tokens=last_usage.total_tokens,
-                )
+                event.usage = replace(last_usage, session=replace(session_usage))
 
                 if isinstance(event, TextChunkEvent):
                     full_text += event.chunk
                 elif isinstance(event, TextDoneEvent):
                     full_text = event.text
+                    finish_reason = event.finish_reason
                 elif isinstance(event, ToolCallEvent):
                     call = ToolCall(
                         id=event.id,
@@ -1374,16 +1365,8 @@ class Agent:
                         yield DoneEvent(
                             final_text="",
                             session_id=session_id,
-                            usage=Usage(
-                                prompt_tokens=last_usage.prompt_tokens,
-                                completion_tokens=last_usage.completion_tokens,
-                                total_tokens=last_usage.total_tokens,
-                                session=TokenUsage(
-                                    prompt_tokens=last_usage.prompt_tokens,
-                                    completion_tokens=last_usage.completion_tokens,
-                                    total_tokens=last_usage.total_tokens,
-                                ),
-                            ),
+                            finish_reason=FinishReason.UNKNOWN,
+                            usage=replace(last_usage, session=replace(session_usage)),
                         )
                         return
 
@@ -1421,16 +1404,7 @@ class Agent:
                         ):
                             raise ValueError(f"{type(plugin).__name__}.after_tool must preserve tool call id/name")
                     # Attach last known usage info to tool result events
-                    result_event.usage = Usage(
-                        prompt_tokens=last_usage.prompt_tokens,
-                        completion_tokens=last_usage.completion_tokens,
-                        total_tokens=last_usage.total_tokens,
-                        session=TokenUsage(
-                            prompt_tokens=last_usage.prompt_tokens,
-                            completion_tokens=last_usage.completion_tokens,
-                            total_tokens=last_usage.total_tokens,
-                        ),
-                    )
+                    result_event.usage = replace(last_usage, session=replace(session_usage))
                     # Add tool result to history
                     if self.save_tool_outputs and save_path and result_event.error is None:
                         result_content = _save_and_return(result_event, save_path, session_id)
@@ -1468,16 +1442,8 @@ class Agent:
             yield DoneEvent(
                 final_text=full_text,
                 session_id=session_id,
-                usage=Usage(
-                    prompt_tokens=last_usage.prompt_tokens,
-                    completion_tokens=last_usage.completion_tokens,
-                    total_tokens=last_usage.total_tokens,
-                    session=TokenUsage(
-                        prompt_tokens=last_usage.prompt_tokens,
-                        completion_tokens=last_usage.completion_tokens,
-                        total_tokens=last_usage.total_tokens,
-                    ),
-                ),
+                finish_reason=finish_reason,
+                usage=replace(last_usage, session=replace(session_usage)),
             )
             return
 
@@ -1486,30 +1452,13 @@ class Agent:
         yield ErrorEvent(
             message=f"Max tool rounds ({self.max_tool_rounds}) exceeded",
             recoverable=False,
-            usage=Usage(
-                prompt_tokens=last_usage.prompt_tokens,
-                completion_tokens=last_usage.completion_tokens,
-                total_tokens=last_usage.total_tokens,
-                session=TokenUsage(
-                    prompt_tokens=last_usage.prompt_tokens,
-                    completion_tokens=last_usage.completion_tokens,
-                    total_tokens=last_usage.total_tokens,
-                ),
-            ),
+            usage=replace(last_usage, session=replace(session_usage)),
         )
         yield DoneEvent(
             final_text="",
             session_id=session_id,
-            usage=Usage(
-                prompt_tokens=last_usage.prompt_tokens,
-                completion_tokens=last_usage.completion_tokens,
-                total_tokens=last_usage.total_tokens,
-                session=TokenUsage(
-                    prompt_tokens=last_usage.prompt_tokens,
-                    completion_tokens=last_usage.completion_tokens,
-                    total_tokens=last_usage.total_tokens,
-                ),
-            ),
+            finish_reason=FinishReason.UNKNOWN,
+            usage=replace(last_usage, session=replace(session_usage)),
         )
 
     async def _run_batch(
