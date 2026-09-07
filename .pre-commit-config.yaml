@@ -20,5 +20,5 @@ repos:
     rev: v2.3.1
     hooks:
       - id: mypy
-        additional_dependencies: [aiohttp, aiosqlite, pytest, "textual>=8.2.8", "fastapi>=0.100", "uvicorn>=0.24"]
+        additional_dependencies: [aiohttp, aiosqlite, pytest, "httpx>=0.28.1", "textual>=8.2.8", "fastapi>=0.100", "uvicorn>=0.24"]
         args: [--ignore-missing-imports]
