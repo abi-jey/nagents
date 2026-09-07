@@ -9,6 +9,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
 from typing import NoReturn
@@ -26,7 +27,6 @@ from nagents.types import ToolCall
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from collections.abc import Iterator
-    from pathlib import Path
 
     from starlette.types import Message as ASGIMessage
     from starlette.types import Scope
@@ -512,10 +512,25 @@ def test_attachment_download_is_authenticated_and_not_executable(server: ModuleT
     assert request_app(server, "/attachments/missing").status == 404
 
 
+@pytest.mark.parametrize("server", [TOKEN, ""], indirect=True)
+def test_legacy_ui_assets_and_routes_are_removed(server: ModuleType) -> None:
+    assert server.__file__ is not None
+    assert not list((Path(server.__file__).parent / "webui").rglob("*"))
+    headers = (AUTH,) if server.SERVER_TOKEN else ()
+    for path in ("/", "/ui", "/ui/", "/ui/index.html"):
+        result = request_app(server, path, headers=headers)
+        assert result.status == 404
+        assert result.headers["content-type"] == "application/json"
+        assert json.loads(result.body) == {"detail": "Not Found"}
+        assert "location" not in result.headers
+
+
 def test_read_only_routes_and_chat_validation(server: ModuleType) -> None:
-    assert request_app(server, "/").status == 200
-    assert request_app(server, "/ui/index.html").status == 200
+    assert request_app(server, "/logs").status == 200
+    assert request_app(server, "/docs").status == 200
+    assert request_app(server, "/openapi.json").status == 200
     assert json.loads(request_app(server, "/mcp/status").body) == []
-    assert any(tool["name"] == "read_file" for tool in json.loads(request_app(server, "/tools").body))
+    tool_names = {tool["name"] for tool in json.loads(request_app(server, "/tools").body)}
+    assert {"read_file", "run_shell_command", "attach_file", "add_mcp_server", "wake_up_in"} <= tool_names
     assert request_app(server, "/chat", method="POST", body=b"{}").status == 422
     assert not server.SESSIONS_DB.exists()
