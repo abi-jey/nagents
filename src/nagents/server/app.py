@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 from fastapi import FastAPI
 from fastapi import Response
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +50,8 @@ from .scheduler import set_session_context
 from .scheduler import set_wakeup_callback
 from .scheduler import start_wakeup_loop
 from .scheduler import stop_wakeup_loop
+from .security import ServerSecurityMiddleware
+from .security import load_server_token
 from .tools import BASE_TOOLS
 from .tools import _attachments
 from .tools import _collect_pending
@@ -78,14 +79,6 @@ class BufferHandler(logging.Handler):
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(title="Agent Server", version="0.1.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logger = logging.getLogger("nagents.server")
@@ -130,6 +123,9 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
+SERVER_TOKEN = load_server_token()
+app.add_middleware(ServerSecurityMiddleware, token=SERVER_TOKEN)
+
 PROVIDER_TYPE = _env("NAGENTS_LLM_PROVIDER", "openrouter")
 API_KEY = _env("NAGENTS_LLM_API_KEY")
 MODEL = _env("NAGENTS_LLM_MODEL", "moonshotai/kimi-k2.6")
@@ -140,7 +136,8 @@ file attachments, MCP server management, and MCP-provided capabilities (e.g., br
 
 ## Environment
 
-- The filesystem is read-only except for `/data` (persistent) and `/tmp` (ephemeral).
+- File tools run with the server process's filesystem permissions; no application-level sandbox is enforced.
+- Shell commands use Docker. Isolation depends on deployment and daemon privileges, not this server.
 - Custom tools directory: `/data/tools/` — place `.py` files here, they auto-load on the next message.
 - MCP config file: `/data/mcp.json` — JSON lines format, auto-reloads on the next message.
 
@@ -148,7 +145,7 @@ file attachments, MCP server management, and MCP-provided capabilities (e.g., br
 
 ### When to use tools
 - Use `run_shell_command` for system operations: installing packages, running scripts, git commands, checking system state.
-- Use `read_file` / `write_file` / `list_directory` for file operations (writes only work in /data and /tmp).
+- Use `read_file` / `write_file` / `list_directory` for file operations; keep writes in operator-approved directories.
 - Use `attach_file` to share generated output (screenshots, logs, documents) with the user via the UI.
 - Use `add_mcp_server` to add new MCP servers at runtime (e.g., browser automation, filesystem access).
 - Use MCP tools (prefixed with `mcp__`) for specialized capabilities like browser automation.
@@ -168,7 +165,7 @@ file attachments, MCP server management, and MCP-provided capabilities (e.g., br
 - **Don't** run destructive commands (rm -rf, drop tables) without confirming with the user.
 - **Don't** write large files in a single `write_file` call -- split if >1000 lines.
 - **Don't** ignore tool errors -- report them and suggest fixes.
-- **Don't** try to write outside `/data` or `/tmp` -- the filesystem is read-only elsewhere.
+- **Don't** write outside operator-approved directories; `/data` and `/tmp` are conventions, not enforced boundaries.
 
 ## Writing Custom Tools
 
@@ -1285,11 +1282,13 @@ async def get_attachment(attachment_id: str) -> Response:
     a.fetch_count += 1
     a.last_fetched_at = time.time()
 
-    return Response(
-        content=a.path.read_bytes(),
+    # Agent-generated HTML/SVG must not execute with the UI's authenticated origin.
+    return FileResponse(
+        path=a.path,
         media_type=a.content_type,
+        filename=a.path.name,
+        content_disposition_type="attachment",
         headers={
-            "Content-Disposition": f'inline; filename="{a.path.name}"',
             "X-Attachment-Id": a.id,
             "X-Fetch-Count": str(a.fetch_count),
         },
