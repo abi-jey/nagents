@@ -6,8 +6,8 @@ Thank you for your interest in contributing to nagents! This guide will help you
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- [Poetry](https://python-poetry.org/) for dependency management
+- Python `>=3.11, <4.0`
+- [Poetry](https://python-poetry.org/) for the workflow below, or an existing virtual environment with pip
 - Git for version control
 
 ### Development Setup
@@ -20,7 +20,7 @@ Thank you for your interest in contributing to nagents! This guide will help you
     cd nagents
 
     # Install dependencies
-    poetry install
+    poetry install -E dev -E tui -E voice
 
     # Install pre-commit hooks
     poetry run pre-commit install
@@ -37,7 +37,7 @@ Thank you for your interest in contributing to nagents! This guide will help you
     cd nagents
 
     # Create virtual environment and install all dependencies
-    poetry install --with dev,docs  # (1)!
+    poetry install -E dev -E docs -E tui -E voice  # (1)!
 
     # Install pre-commit hooks
     poetry run pre-commit install
@@ -46,13 +46,25 @@ Thank you for your interest in contributing to nagents! This guide will help you
     poetry run pytest -v
 
     # Run type checking
-    poetry run mypy nagents
+    poetry run mypy src/nagents
 
-    # Build documentation locally
-    poetry run mkdocs serve
+    # Build documentation and check warnings
+    poetry run mkdocs build --strict
     ```
 
-    1. The `--with dev,docs` flag installs development and documentation dependencies
+    1. These are package extras from `[project.optional-dependencies]`, not Poetry dependency groups. `dev`, `tui`, and `voice` match the test installation in CI; `docs` adds MkDocs and mkdocstrings.
+
+If you already use a local `.venv`, keep that environment rather than letting
+multiple tools manage it. The equivalent editable install is
+`.venv/bin/python -m pip install -e '.[dev,docs,tui,voice]'`; use `.venv/bin/pytest`,
+`.venv/bin/mypy`, and `.venv/bin/mkdocs` in place of `poetry run` below.
+The build backend is Hatchling, regardless of the environment manager.
+
+!!! important "ngn is source-only"
+    The current terminal harness is not yet a published CLI release. Install
+    this checkout, not an older PyPI build, when testing `ngn`. A matching
+    package version alone does not prove it contains the current CLI. See
+    [ngn Installation](../guide/ngn-installation.md).
 
 ## Development Workflow
 
@@ -108,30 +120,17 @@ poetry run ruff check --fix .
 All code must include type hints. We use [mypy](https://mypy-lang.org/) for type checking:
 
 ```bash
-poetry run mypy nagents
+poetry run mypy src/nagents
 ```
 
 ??? example "Type Hint Examples"
 
     ```python
-    # Function with type hints
-    def process_message(
-        content: str,
-        max_tokens: int | None = None,
-    ) -> AsyncIterator[Event]: ...
+    from nagents import Message
 
 
-    # Class with type hints
-    class Agent:
-        def __init__(
-            self,
-            provider: Provider,
-            session_manager: SessionManager,
-            tools: list[Tool] | None = None,
-        ) -> None:
-            self.provider = provider
-            self.session_manager = session_manager
-            self.tools = tools or []
+    def user_message(content: str) -> Message:
+        return Message(role="user", content=content)
     ```
 
 ### Docstrings
@@ -139,27 +138,21 @@ poetry run mypy nagents
 Use Google-style docstrings:
 
 ```python
-def create_session(
-    self,
-    metadata: dict[str, Any] | None = None,
-) -> Session:
-    """Create a new conversation session.
+def percentage(percent: float, amount: float) -> float:
+    """Calculate a percentage of an amount.
 
     Args:
-        metadata: Optional metadata to attach to the session.
+        percent: Percentage to calculate, such as 15.
+        amount: Original amount.
 
     Returns:
-        The newly created Session object.
-
-    Raises:
-        SessionError: If session creation fails.
+        The calculated portion of the amount.
 
     Example:
-        >>> session = await manager.create_session({"user": "alice"})
-        >>> print(session.id)
-        'sess_abc123'
+        >>> percentage(15, 100)
+        15.0
     """
-    ...
+    return percent * amount / 100
 ```
 
 ## Testing
@@ -174,7 +167,7 @@ poetry run pytest
 poetry run pytest --cov=nagents --cov-report=html
 
 # Run specific test file
-poetry run pytest tests/test_agent.py
+poetry run pytest tests/test_dynamic_tools.py
 
 # Run tests matching a pattern
 poetry run pytest -k "test_session"
@@ -185,98 +178,53 @@ poetry run pytest -v
 
 ### Writing Tests
 
-=== "Unit Tests"
+Tests use ordinary synchronous pytest functions and `asyncio.run()` for async
+scenarios; `pytest-asyncio` is not a declared dependency. Use `tmp_path` for
+databases and synthetic credentials with mocked providers/HTTP, not real API
+keys. `tests/conftest.py` isolates user configuration and data directories.
 
-    ```python title="tests/test_session.py"
-    import pytest
-    from pathlib import Path
-    from nagents import SessionManager
+```python title="tests/test_session_example.py"
+import asyncio
+from pathlib import Path
 
-
-    @pytest.fixture
-    def session_manager(tmp_path: Path) -> SessionManager:
-        """Create a session manager with temporary database."""
-        return SessionManager(tmp_path / "test.db")
+from nagents import Message, SessionManager
 
 
-    async def test_create_session(session_manager: SessionManager):
-        """Test session creation."""
-        session = await session_manager.create_session()
+def test_session_history(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        manager = SessionManager(tmp_path / "test.db")
+        session_id = await manager.get_or_create_session("conversation-1", "user-1")
+        await manager.add_message(session_id, Message(role="user", content="Hello"))
 
-        assert session.id is not None
-        assert session.created_at is not None
+        history = await manager.get_history(session_id)
+        assert len(history) == 1
+        assert history[0].content == "Hello"
+        assert await manager.session_exists(session_id)
 
+    asyncio.run(scenario())
+```
 
-    async def test_session_with_metadata(session_manager: SessionManager):
-        """Test session creation with metadata."""
-        metadata = {"user": "test", "purpose": "testing"}
-        session = await session_manager.create_session(metadata=metadata)
-
-        assert session.metadata == metadata
-    ```
-
-=== "Integration Tests"
-
-    ```python title="tests/test_integration.py"
-    import pytest
-    from pathlib import Path
-    from nagents import Agent, SessionManager
-    from nagents.providers import OpenAIProvider
-
-
-    @pytest.fixture
-    def agent(tmp_path: Path) -> Agent:
-        """Create an agent for testing."""
-        return Agent(
-            provider=OpenAIProvider(model="gpt-4o-mini"),
-            session_manager=SessionManager(tmp_path / "test.db"),
-        )
-
-
-    @pytest.mark.integration
-    async def test_agent_response(agent: Agent):
-        """Test that agent produces a response."""
-        events = []
-
-        async for event in agent.run("Say 'hello'"):
-            events.append(event)
-
-        # Should have at least a text event and completion
-        assert any(e.type == "text_delta" for e in events)
-        assert any(e.type == "message_complete" for e in events)
-    ```
+For an agent test with a fake provider, see `tests/test_dynamic_tools.py`. For
+HTTP-contract fixtures, see `tests/test_gateway_provider.py`. Keep live-service
+experiments explicit and separate from the default test suite.
 
 ### Test Markers
 
-| Marker | Description | Command |
-|--------|-------------|---------|
-| `@pytest.mark.unit` | Unit tests (fast, no external deps) | `pytest -m unit` |
-| `@pytest.mark.integration` | Integration tests (may need API keys) | `pytest -m integration` |
-| `@pytest.mark.slow` | Slow tests | `pytest -m slow` |
+The custom marker currently registered in `tests/conftest.py` is
+`@pytest.mark.requires_posix`. Those tests are automatically skipped on
+non-POSIX hosts. Select them with `poetry run pytest -m requires_posix` or
+exclude them with `poetry run pytest -m "not requires_posix"`.
+
+There are no registered `unit`, `integration`, or `slow` marker groups. Select
+tests by file or `-k` expression instead of assuming those categories exist.
 
 ## Pre-commit Hooks
 
-Pre-commit hooks run automatically on `git commit`:
-
-```yaml title=".pre-commit-config.yaml"
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    hooks:
-      - id: mypy
-```
+After `pre-commit install`, hooks run automatically on `git commit`. The checked-in
+`.pre-commit-config.yaml` is authoritative for hook versions and arguments. It
+includes whitespace, YAML, large-file and merge-conflict checks, Ruff linting
+and formatting, and mypy. In particular, the YAML hook allows MkDocs' Python
+tags; do not replace its configuration with a generic YAML example.
 
 Run hooks manually:
 
@@ -297,8 +245,13 @@ poetry run pre-commit run ruff --all-files
 poetry run mkdocs serve
 
 # Build static docs
-poetry run mkdocs build
+poetry run mkdocs build --strict
 ```
+
+The API reference is generated from this checkout's `src/nagents` using
+mkdocstrings. Keep navigation targets and local links valid, and distinguish
+research/proposals from implemented behavior. Do not infer feature availability
+from a package version or an unverified upstream model name.
 
 ### Documentation Style
 

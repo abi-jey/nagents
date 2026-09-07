@@ -17,13 +17,14 @@ def get_weather(city: str) -> str:
     return f"Weather in {city}: Sunny, 22°C"
 
 
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression.
+def multiply(a: float, b: float) -> float:
+    """Multiply two numbers.
 
     Args:
-        expression: A mathematical expression like "2 + 2" or "10 * 5"
+        a: First number.
+        b: Second number.
     """
-    return str(eval(expression))
+    return a * b
 ```
 
 !!! tip "Tool Documentation Best Practices"
@@ -45,7 +46,7 @@ from nagents import Agent, SessionManager
 agent = Agent(
     provider=provider,
     session_manager=SessionManager(Path("sessions.db")),
-    tools=[get_weather, calculate],
+    tools=[get_weather, multiply],
 )
 ```
 
@@ -62,8 +63,8 @@ sequenceDiagram
 
     User->>Agent: "What's 15 * 7?"
     Agent->>LLM: Send message
-    LLM->>Agent: ToolCall(calculate, {"expression": "15 * 7"})
-    Agent->>Tool: Execute calculate("15 * 7")
+    LLM->>Agent: ToolCall(multiply, {"a": 15, "b": 7})
+    Agent->>Tool: Execute multiply(15, 7)
     Tool->>Agent: "105"
     Agent->>LLM: Tool result: "105"
     LLM->>Agent: "15 * 7 equals 105"

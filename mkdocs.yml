@@ -70,6 +70,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             show_source: true
             show_root_heading: true

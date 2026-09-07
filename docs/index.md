@@ -55,7 +55,7 @@ A lightweight, dependency-free LLM agent framework with direct HTTP-based provid
 ```python title="main.py"
 import asyncio
 from pathlib import Path
-from nagents import Agent, Provider, ProviderType, SessionManager
+from nagents import Agent, ErrorEvent, Provider, ProviderType, SessionManager, TextChunkEvent
 
 
 async def main():
@@ -73,14 +73,18 @@ async def main():
     agent = Agent(
         provider=provider,
         session_manager=session_manager,
+        streaming=True,
     )
 
     # Run a conversation
-    async for event in agent.run("Hello, how are you?"):
-        if hasattr(event, "chunk"):
-            print(event.chunk, end="")
-
-    await agent.close()
+    try:
+        async for event in agent.run("Hello, how are you?"):
+            if isinstance(event, TextChunkEvent):
+                print(event.chunk, end="", flush=True)
+            elif isinstance(event, ErrorEvent):
+                print(f"\nError: {event.message}")
+    finally:
+        await agent.close()
 
 
 asyncio.run(main())
