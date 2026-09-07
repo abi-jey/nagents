@@ -134,11 +134,15 @@ class WebState:
             return False
         pending = Pending(secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future())
         run.pending = pending
+        approved = False
+        expired = False
         try:
             await run.queue.put({"event": "approval", **asdict(request), "approval_id": pending.id, "run_id": run.id})
             # A forgotten tab never leaves an approval open indefinitely.
-            return await asyncio.wait_for(pending.answer, timeout=APPROVAL_TIMEOUT)
+            approved = await asyncio.wait_for(pending.answer, timeout=APPROVAL_TIMEOUT)
+            return approved
         except TimeoutError:
+            expired = True
             await run.queue.put({"event": "notice", "text": "Approval expired and was denied."})
             return False
         finally:
@@ -147,7 +151,14 @@ class WebState:
             run.pending = None
             # The client also clears its dialog on run end or disconnect.
             if not run.task.cancelling():
-                await run.queue.put({"event": "approval_closed", "approval_id": pending.id})
+                await run.queue.put(
+                    {
+                        "event": "approval_closed",
+                        "approval_id": pending.id,
+                        "decision": "allow" if approved else "deny",
+                        "expired": expired,
+                    }
+                )
 
     async def produce(self, run: Run, prompt: str) -> None:
         try:

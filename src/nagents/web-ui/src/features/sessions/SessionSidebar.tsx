@@ -18,12 +18,10 @@ export function SessionSidebar({
   return (
     <aside
       className={`sidebar ${open ? "open" : ""}`}
+      id="session-navigation"
       aria-label="Workspace sessions"
     >
-      <div className="brand">
-        ngn<span>/ local</span>
-      </div>
-      <div className="workspace-label">WORKSPACE</div>
+      <div className="workspace-label">Workspace</div>
       <div className="workspace" title={workspace}>
         {workspace || "Connecting..."}
       </div>
@@ -32,11 +30,9 @@ export function SessionSidebar({
         disabled={disabled}
         onClick={() => select()}
       >
-        + New session
+        New session
       </button>
-      <div className="workspace-label session-label">
-        SESSIONS <span>{sessions.length}</span>
-      </div>
+      <div className="workspace-label session-label">Sessions</div>
       <nav aria-label="Sessions">
         {sessions.map((session) => (
           <button
@@ -53,13 +49,8 @@ export function SessionSidebar({
         ))}
       </nav>
       <div className="sidebar-footer">
-        <span className="local-dot" />
         Loopback only
-        <p>
-          Your workspace. Your tools.
-          <br />
-          Approvals stay in your hands.
-        </p>
+        <p>Shell is not sandboxed.</p>
       </div>
     </aside>
   );

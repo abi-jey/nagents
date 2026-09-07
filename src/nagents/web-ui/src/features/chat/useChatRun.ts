@@ -79,6 +79,10 @@ export function useChatRun(token: string, sessionId: string) {
         );
     } catch (cause) {
       controller.abort();
+      if (started && !finished)
+        setEntries((current) =>
+          appendEvent(current, { event: "client_disconnected" }),
+        );
       setStatus(
         started && !finished
           ? "Disconnected / partial output retained"

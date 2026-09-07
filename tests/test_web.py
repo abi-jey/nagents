@@ -314,6 +314,9 @@ def test_stream_exact_approvals_and_conflicts(tmp_path: Path) -> None:
             ).status_code == 422
             assert (await client.post("/api/approval", json=body, headers=headers)).status_code == 200
             assert (await client.post("/api/approval", json=body, headers=headers)).status_code == 409
+            closed = await stream.event("approval_closed")
+            assert closed["approval_id"] == first["approval_id"] and closed["decision"] == "deny"
+            assert closed["expired"] is False
             second = await stream.event("approval")
             assert second["approval_id"] != first["approval_id"]  # Even if a provider reuses its call ID.
             assert (
@@ -323,6 +326,7 @@ def test_stream_exact_approvals_and_conflicts(tmp_path: Path) -> None:
                     headers=headers,
                 )
             ).status_code == 200
+            assert (await stream.event("approval_closed"))["decision"] == "allow"
             assert (await stream.event("run_finished"))["status"] == "completed"
             await asyncio.wait_for(stream.task, 5)
             assert harness.decisions == [False, True]
@@ -373,6 +377,8 @@ def test_approval_expiry_fails_closed(tmp_path: Path) -> None:
             with patch("nagents.web.app.APPROVAL_TIMEOUT", 0.01):
                 stream = LiveStream(app, headers, harness.session_id, "approval")
                 assert "expired" in str((await stream.event("notice"))["text"])
+                closed = await stream.event("approval_closed")
+                assert closed["decision"] == "deny" and closed["expired"] is True
                 assert (await stream.event("run_finished"))["status"] == "completed"
                 await stream.task
             assert harness.decisions == [False, False]

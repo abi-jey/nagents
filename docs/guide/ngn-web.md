@@ -72,9 +72,17 @@ still stored locally in the Harness data directory.
   decisions are never automatically retried. Reconnect explicitly to reload saved
   history; unfinished output may not have been persisted by the Harness. If another
   connection still owns a run, finish or cancel it before reconnecting.
-- The client displays model and tool output as text, not HTML. Tool details are
-  expandable. Enter sends, Shift+Enter inserts a newline; the approval dialog
-  focuses Deny and traps focus using the native modal dialog.
+- The client displays model and tool output as escaped text, with fenced code
+  shown in keyboard-scrollable code regions. Tool records retain separate inputs,
+  streamed output, final result/error, call identity, and measured duration when
+  provided. Parallel task records retain their IDs and parent/depth information.
+- Missing results are never inferred to be successful. Resumed history labels
+  results as recorded, since live duration/approval/status events are not persisted
+  in the Harness message history.
+- Enter sends and Shift+Enter inserts a newline. Approval dialogs initially focus
+  the review heading, show exact inputs alongside the diff, and keep Deny conspicuous.
+  Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
+  a stream does not steal focus or scroll a reader away from earlier messages.
 - No remote binding, CORS wildcard, authentication/settings editor, voice,
   attachment upload, arbitrary file HTTP access, or direct shell endpoint is
   provided. Only built frontend assets are served. Unknown routes remain 404.
@@ -113,6 +121,8 @@ adds `run_id` to every record. Web lifecycle records are `run_started`, `heartbe
 `approval`, `approval_closed`, and `run_finished` (`completed`, `failed`, or
 `cancelled`). `approval.id` is the Harness call ID; `approval_id` is the fresh web
 nonce. A core `done` is not the transport terminator; wait for `run_finished`.
+`approval_closed` includes the backend's `decision` and `expired` flag so the live
+transcript can retain the actual decision without guessing from tool output.
 Streams are not replayable/resumable. Read saved history to recover, rather than
 automatically replaying a request with side effects.
 

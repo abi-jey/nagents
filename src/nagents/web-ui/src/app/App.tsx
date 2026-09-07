@@ -20,8 +20,8 @@ export function App() {
     }
   }
   async function submit(value?: string) {
-    await client.submit(value);
     composer.current?.focus();
+    await client.submit(value);
   }
 
   return (
@@ -29,36 +29,42 @@ export function App() {
       <a className="skip-link" href="#composer">
         Skip to prompt
       </a>
-      <SessionSidebar
-        workspace={config?.workspace || ""}
-        sessions={sessions.sessions}
-        selected={sessionId}
-        disabled={busy || !!externalRun}
-        open={navOpen}
-        select={(id) => void select(id)}
-      />
       <main>
         <header className="topbar">
           <button
             className="nav-toggle"
             aria-label="Toggle sessions"
             aria-expanded={navOpen}
+            aria-controls="session-navigation"
             onClick={() => setNavOpen(!navOpen)}
           >
             Sessions
           </button>
           <div className="model">
-            <span>{config?.agent || "ngn"}</span>
-            <strong>{config?.model || "local harness"}</strong>
+            <h1>ngn</h1>
+            <span
+              title={
+                config ? `${config.agent}: ${config.model}` : "Local harness"
+              }
+            >
+              {config ? `${config.agent}: ${config.model}` : "Local harness"}
+            </span>
           </div>
           <span className={`mode-badge ${config?.demo ? "demo" : ""}`}>
-            {config?.demo ? "OFFLINE DEMO" : "LOCAL CLIENT"}
+            {config?.demo ? "Offline demo" : "Live provider"}
           </span>
         </header>
+        <SessionSidebar
+          workspace={config?.workspace || ""}
+          sessions={sessions.sessions}
+          selected={sessionId}
+          disabled={busy || !!externalRun}
+          open={navOpen}
+          select={(id) => void select(id)}
+        />
         <Conversation
           entries={chat.entries}
           sessionId={sessionId}
-          busy={busy}
           demo={!!config?.demo}
           canSubmit={canSubmit}
           submit={(value) => void submit(value)}
@@ -81,7 +87,6 @@ export function App() {
             </div>
           )}
           <div className="run-status" role="status">
-            <span className={busy ? "working-dot" : "local-dot"} />
             {chat.status}
           </div>
           <Composer
@@ -96,11 +101,9 @@ export function App() {
             cancel={() => void client.cancel()}
           />
           <div className="bottom-note">
-            {config?.provider || "ngn"} <span>/</span>{" "}
             {config?.demo
-              ? "No paid requests"
-              : "Approvals are per call, never automatic"}{" "}
-            <span>/</span> {sessionId.slice(-8)}
+              ? "No paid requests. Sessions are saved locally."
+              : "Approvals apply to one call. Completed actions are not rolled back."}
           </div>
         </footer>
       </main>
