@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
 
 class HarnessProvider(Provider):
     def __init__(self, config: "HarnessConfig") -> None:
+        if config.api == "completions":
+            raise ValueError(
+                "The coding harness requires conversation roles and tools; the legacy completions API is text-only. "
+                "Use api='chat_completions', 'responses', or 'messages', or use Provider directly with one text prompt."
+            )
         self.harness_config = config
         super().__init__(
             provider_type=PROVIDERS[config.provider],
@@ -34,6 +40,7 @@ class HarnessProvider(Provider):
             model=config.model,
             base_url=config.base_url or None,
             api_version=config.api_version or None,
+            api=config.api,
         )
 
     def credentials(self) -> None:
@@ -41,7 +48,9 @@ class HarnessProvider(Provider):
             return
         key = os.environ.get(self.harness_config.api_key_env, "")
         if not key.strip():
-            raise ValueError(f"Set {self.harness_config.api_key_env} before a live request, or use offline demo mode")
+            raise ValueError(
+                f"Set {self.harness_config.api_key_env} before an API-key request, or use offline demo mode"
+            )
         self.api_key = key
 
     async def verify_model(self, force: bool = False) -> bool:
@@ -65,6 +74,29 @@ class HarnessProvider(Provider):
             return
 
         prompt = next((str(message.content) for message in reversed(messages) if message.role == "user"), "")
+        if prompt.startswith("BACKGROUND TASK NOTIFICATION:"):
+            payload = json.loads(prompt.split("\n", 1)[1])
+            tasks = payload.get("tasks", [])
+            text = "## OFFLINE DEMO / background results\n\nThese are genuine asyncio jobs using scripted offline responses, not model calls.\n\n"
+            text += "\n".join(f"- **{task['name']}**: {task['status']}." for task in tasks)
+            text += "\n\nThe coordinator received the results and resumed through the normal agent loop."
+            for offset in range(0, len(text), 48):
+                await asyncio.sleep(0.01)
+                yield TextChunkEvent(chunk=text[offset : offset + 48])
+            yield TextDoneEvent(text=text)
+            return
+        if (
+            prompt.lower().strip() == "demo subagents"
+            and messages[-1].role != "tool"
+            and any(tool.name == "delegate" for tool in tools or [])
+        ):
+            for topic in ("file layout", "available instructions", "documentation"):
+                yield ToolCallEvent(
+                    id=f"demo-{uuid.uuid4().hex[:12]}",
+                    name="delegate",
+                    arguments={"prompt": f"Offline reviewer: inspect {topic}. Do not modify anything."},
+                )
+            return
         if messages and messages[-1].role != "tool":
             await asyncio.sleep(0.02)
             yield ToolCallEvent(id=f"demo-{uuid.uuid4().hex[:12]}", name="list_files", arguments={"limit": 12})

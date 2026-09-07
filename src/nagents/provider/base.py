@@ -10,11 +10,20 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from enum import Enum
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import cast
+from urllib.parse import urlsplit
 
 from ..adapters import openai as openai_adapter
+from ..adapters._validation import ProtocolError
+from ..adapters._validation import list_data
+from ..adapters._validation import load_object
+from ..adapters._validation import object_data
+from ..adapters._validation import string_data
+from ..adapters._validation import token_usage
 from ..compaction import get_model_context_limit
 from ..compactor import Messages
 from ..compactor import Tokens
@@ -36,8 +45,11 @@ from ..types import Message
 from ..types import RetryConfig
 from ..types import ToolCall
 from ..types import ToolDefinition
+from .gateway import GatewayHTTPClient
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from ..http import HTTPLogger
     from ..realtime import RealtimeConfig
 
@@ -49,6 +61,7 @@ class ProviderType(Enum):
 
     OPENAI_COMPATIBLE = "openai_compatible"  # OpenAI, Gemini-via-compat, Ollama, etc.
     OPENROUTER = "openrouter"  # OpenRouter (OpenAI-compatible with reasoning support)
+    LITELLM = "litellm"  # Self-hosted API-key gateway; requires an explicit base URL
     GEMINI_NATIVE = "gemini_native"  # Native Gemini REST API
     ANTHROPIC = "anthropic"  # Anthropic Claude API
     AZURE_OPENAI_COMPATIBLE_V1 = "azure_openai_compatible_v1"  # Azure OpenAI Service
@@ -82,6 +95,7 @@ class Provider:
         api_version: str | None = None,
         retry_config: RetryConfig | None = None,
         realtime_config: "RealtimeConfig | None" = None,
+        api: str = "auto",
     ):
         """
         Initialize the provider.
@@ -100,6 +114,10 @@ class Provider:
             realtime_config: Optional :class:`~nagents.realtime.RealtimeConfig`
                 for Realtime speech-to-speech sessions. When set, voice sessions
                 reuse the provider's model and this configuration.
+            api: HTTP contract: auto, chat_completions, responses, messages,
+                or completions. Auto preserves native providers and selects
+                chat_completions for LiteLLM and OpenRouter. base_url is an API
+                prefix, not a full generation endpoint.
         """
         self.provider_type = provider_type
         self.api_key = api_key
@@ -107,7 +125,38 @@ class Provider:
         self.api_version = api_version
         self.retry_config = retry_config or RetryConfig()
         self.realtime_config = realtime_config
-        self._http = HTTPClient(timeout=timeout)
+        if api not in {"auto", "chat_completions", "responses", "messages", "completions"}:
+            raise ValueError("api must be auto, chat_completions, responses, messages, or completions")
+        if provider_type == ProviderType.LITELLM and not base_url:
+            raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
+        default_api = "messages" if provider_type == ProviderType.ANTHROPIC else "chat_completions"
+        if provider_type == ProviderType.GEMINI_NATIVE:
+            default_api = "auto"
+        self.api = default_api if api == "auto" else api
+        if (
+            provider_type not in {ProviderType.LITELLM, ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER}
+            and self.api != default_api
+        ):
+            raise ValueError("This provider does not support the selected HTTP API contract")
+        if provider_type == ProviderType.OPENAI_COMPATIBLE and self.api == "messages" and not base_url:
+            raise ValueError("The messages API requires an explicit compatible base_url or an Anthropic provider")
+        if base_url:
+            parsed = urlsplit(base_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or any(char.isspace() for char in base_url)
+            ):
+                raise ValueError("base_url must be an HTTP(S) API prefix")
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError("base_url must not contain credentials, query parameters, or fragments")
+            if parsed.path.rstrip("/").endswith(("/chat/completions", "/responses", "/messages", "/completions")):
+                raise ValueError("base_url must be an API prefix, not a generation endpoint")
+        self._http = (
+            GatewayHTTPClient(timeout=timeout)
+            if provider_type in {ProviderType.LITELLM, ProviderType.OPENROUTER} or api != "auto"
+            else HTTPClient(timeout=timeout)
+        )
         self._model_verified: bool | None = None  # None = not checked, True/False = result
 
         # Validate Azure-specific requirements
@@ -186,7 +235,7 @@ class Provider:
             self._model_verified = True
             return True
         try:
-            if self.provider_type in (ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER):
+            if self.provider_type in (ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER, ProviderType.LITELLM):
                 url = f"{self.base_url}/models"
                 headers = {"Authorization": f"Bearer {self.api_key}"}
 
@@ -245,11 +294,11 @@ class Provider:
                 self._model_verified = False
                 return False
         except HTTPError as e:
-            logger.error(f"HTTP error during model verification: {e}")
+            logger.error("Model verification failed (HTTP %s)", e.status)
             self._model_verified = False
             return False
         except Exception:
-            logger.exception("Unexpected error during model verification")
+            logger.error("Model verification failed")
             self._model_verified = False
             return False
 
@@ -273,7 +322,15 @@ class Provider:
         Returns:
             MediaCapabilities describing supported audio, image, and document formats.
         """
-        return get_media_capabilities(self.provider_type.value, self.model)
+        if self.api == "completions":
+            return MediaCapabilities()
+        if self.api == "responses":
+            # The Responses adapter supports user images, not audio or files.
+            return get_media_capabilities("openai_compatible", "")
+        if self.api == "messages":
+            return get_media_capabilities("anthropic", self.model)
+        provider = "openai_compatible" if self.provider_type == ProviderType.LITELLM else self.provider_type.value
+        return get_media_capabilities(provider, self.model)
 
     def get_default_compact_on(self) -> Tokens | Messages | None:
         """Get the default compaction trigger for this model.
@@ -330,16 +387,19 @@ class Provider:
             async for event in self._with_retry(messages, tools, config, stream):
                 yield event
         except HTTPError as e:
-            logger.error(f"HTTP error during generation: {e}")
+            logger.error("Generation failed (HTTP %s)", e.status)
             yield ErrorEvent(
-                message=str(e),
+                message=f"Provider request failed (HTTP {e.status}); check the API route, model access, credentials, or gateway availability.",
                 code=str(e.status),
                 recoverable=e.is_retryable(),
             )
-        except Exception as e:
-            logger.exception("Unexpected error during generation")
+        except ProtocolError as e:
+            yield ErrorEvent(message=str(e), code="PROVIDER_PROTOCOL_ERROR", recoverable=False)
+        except Exception:
+            logger.error("Provider request failed or returned invalid data")
             yield ErrorEvent(
-                message=str(e),
+                message="Provider request failed, timed out, or returned invalid data; check the API route and request settings.",
+                code="PROVIDER_REQUEST_FAILED",
                 recoverable=False,
             )
 
@@ -351,7 +411,16 @@ class Provider:
         stream: bool,
     ) -> AsyncIterator[Event]:
         """Dispatch to the appropriate provider-specific generator."""
-        if self.provider_type == ProviderType.OPENAI_COMPATIBLE:
+        if self.api == "responses":
+            async for event in self._generate_responses(messages, tools, config, stream):
+                yield event
+        elif self.api == "completions":
+            async for event in self._generate_completions(messages, tools, config, stream):
+                yield event
+        elif self.api == "messages":
+            async for event in self._generate_anthropic(messages, tools, config, stream):
+                yield event
+        elif self.provider_type in {ProviderType.OPENAI_COMPATIBLE, ProviderType.LITELLM}:
             async for event in self._generate_openai(messages, tools, config, stream):
                 yield event
         elif self.provider_type == ProviderType.OPENROUTER:
@@ -392,15 +461,17 @@ class Provider:
         max_retries = self.retry_config.max_retries
 
         for attempt in range(max_retries + 1):
+            emitted = False
             try:
                 async for event in self._dispatch(messages, tools, config, stream):
+                    emitted = True
                     yield event
                 return  # Success — exit retry loop
             except HTTPError as e:
                 is_last_attempt = attempt >= max_retries
-                if not e.is_retryable() or is_last_attempt:
+                if emitted or not e.is_retryable() or is_last_attempt:
                     if attempt > 0:
-                        logger.error(f"HTTP {e.status} failed after {attempt} retries: {e}")
+                        logger.error("HTTP %s failed after %s retries", e.status, attempt)
                     raise  # Re-raise to generate()'s outer except
 
                 delay = self._calculate_delay(e, attempt)
@@ -417,7 +488,7 @@ class Provider:
                     status_code=e.status,
                     message=f"Retrying HTTP {e.status} in {delay}s "
                     f"(attempt {attempt + 1}/{max_retries}): {error_label}",
-                    rate_limit_info=e.get_rate_limit_info(),
+                    rate_limit_info={},
                 )
 
                 await asyncio.sleep(delay)
@@ -434,7 +505,7 @@ class Provider:
         """
         if self.retry_config.respect_retry_after:
             retry_after = error.get_retry_after()
-            if retry_after is not None:
+            if retry_after is not None and retry_after >= 0:
                 return min(retry_after, self.retry_config.max_delay)
 
         # Exponential backoff: 5s, 10s, 20s, ...
@@ -568,7 +639,8 @@ class Provider:
             # V1 Azure OpenAI format - standard OpenAI-compatible endpoint
             # URL: https://{resource}.openai.azure.com/openai/v1/chat/completions
             # Uses Bearer token auth and model in body (like standard OpenAI)
-            url = f"{self.base_url}/v1/chat/completions"
+            prefix = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
+            url = f"{prefix}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -615,23 +687,26 @@ class Provider:
         url: str,
         body: dict[str, Any],
         headers: dict[str, str],
+        text_only: bool = False,
     ) -> AsyncIterator[Event]:
         """Handle streaming OpenAI response."""
         full_text = ""
-        full_reasoning = ""
         tool_accumulator = openai_adapter.StreamingToolCallAccumulator()
         latest_usage = Usage()
         finish_reason = FinishReason.UNKNOWN
         extra: dict[str, Any] = {}
+        completed = False
+        reasoning_details: dict[int, dict[str, Any]] = {}
+        terminal_reason = ""
 
         async for data in self._http.post_stream(url, body, headers):
             if data == "[DONE]":
+                completed = True
                 break
 
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
+            chunk = load_object(data)
+            if chunk.get("error"):
+                raise ProtocolError("Provider stream reported a generation error; no tools were released.")
 
             # Capture extra metadata
             if "id" in chunk:
@@ -644,27 +719,32 @@ class Provider:
             # Handle usage (OpenAI sends this in a separate final chunk with empty choices)
             usage = chunk.get("usage")
             if usage:
-                prompt_details = usage.get("prompt_tokens_details") or {}
-                completion_details = usage.get("completion_tokens_details") or {}
-                latest_usage = Usage(
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=usage.get("completion_tokens", 0),
-                    total_tokens=usage.get("total_tokens", 0),
-                    cached_tokens=prompt_details.get("cached_tokens", 0),
-                    audio_tokens=prompt_details.get("audio_tokens", 0) + completion_details.get("audio_tokens", 0),
-                    reasoning_tokens=completion_details.get("reasoning_tokens", 0),
-                )
+                latest_usage = token_usage(usage, "chat_completions")
 
-            choices = chunk.get("choices") or []
+            choices = list_data(chunk.get("choices") or [])
             if not choices:
                 continue
 
-            choice = choices[0]
-            delta = choice.get("delta") or {}
+            if len(choices) != 1:
+                raise ProtocolError("Provider returned multiple choices for a single-choice request.")
+            choice = object_data(choices[0])
+            delta = object_data(choice.get("delta") or {})
+            if text_only:
+                if delta or choice.get("tool_calls") or choice.get("message"):
+                    raise ProtocolError("The completions endpoint returned non-text output.")
+                delta = {"content": choice.get("text", "")}
+            if terminal_reason and any(
+                delta.get(key)
+                for key in ("content", "refusal", "tool_calls", "reasoning", "reasoning_content", "reasoning_details")
+            ):
+                raise ProtocolError("Provider sent generation data after the terminal choice; no tools were released.")
 
             # Parse finish_reason
             fr = choice.get("finish_reason")
             if fr:
+                if terminal_reason and fr != terminal_reason:
+                    raise ProtocolError("Provider returned inconsistent terminal finish reasons.")
+                terminal_reason = string_data(fr)
                 if fr == "stop":
                     finish_reason = FinishReason.STOP
                 elif fr == "tool_calls":
@@ -673,25 +753,54 @@ class Provider:
                     finish_reason = FinishReason.LENGTH
                 elif fr == "content_filter":
                     finish_reason = FinishReason.CONTENT_FILTER
+                else:
+                    raise ProtocolError(
+                        "Provider stream returned an unsuccessful finish reason; no tools were released."
+                    )
 
             # Handle reasoning content (e.g., from Kimi, DeepSeek, o1 models, Ollama)
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning:
-                full_reasoning += reasoning
-                yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage)
+                yield ReasoningChunkEvent(chunk=string_data(reasoning), usage=latest_usage)
+            for raw_detail in list_data(delta.get("reasoning_details") or []):
+                detail = object_data(raw_detail)
+                index = detail.get("index", 0)
+                if type(index) is not int or not 0 <= index < 1024:
+                    raise ProtocolError("Provider returned an invalid reasoning index.")
+                previous = reasoning_details.setdefault(index, {})
+                for key, value in detail.items():
+                    previous[key] = (
+                        previous.get(key, "") + string_data(value) if key in {"text", "data", "summary"} else value
+                    )
 
             # Handle text content
-            content = delta.get("content")
+            content = delta.get("content") or delta.get("refusal")
             if content:
-                full_text += content
-                yield TextChunkEvent(chunk=content, usage=latest_usage, extra=extra)
+                text = string_data(content)
+                full_text += text
+                yield TextChunkEvent(chunk=text, usage=latest_usage, extra=extra)
 
             # Handle tool calls
             if "tool_calls" in delta:
                 tool_accumulator.add_delta(delta)
 
-        # Emit accumulated tool calls
+        if not completed or finish_reason == FinishReason.UNKNOWN:
+            raise ProtocolError("Provider stream ended before completion; no tools were released.")
         tool_calls = tool_accumulator.get_complete_tool_calls()
+        if tool_calls and finish_reason not in {FinishReason.TOOL_CALLS, FinishReason.STOP}:
+            raise ProtocolError("Provider returned incomplete tool calls; no tools were released.")
+        if finish_reason == FinishReason.TOOL_CALLS and not tool_calls:
+            raise ProtocolError("Provider finished with tools but returned no complete calls.")
+        if tool_calls and reasoning_details:
+            tool_calls[0].metadata["reasoning_details"] = json.dumps(
+                [detail for _, detail in sorted(reasoning_details.items())]
+            )
+        yield TextDoneEvent(
+            text=full_text,
+            usage=latest_usage,
+            finish_reason=FinishReason.TOOL_CALLS if tool_calls else finish_reason,
+            extra=extra,
+        )
         if tool_calls:
             for tc in tool_calls:
                 yield ToolCallEvent(
@@ -703,17 +812,18 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
-        elif full_text:
-            yield TextDoneEvent(text=full_text, usage=latest_usage, finish_reason=finish_reason, extra=extra)
 
     async def _non_stream_openai(
         self,
         url: str,
         body: dict[str, Any],
         headers: dict[str, str],
+        text_only: bool = False,
     ) -> AsyncIterator[Event]:
         """Handle non-streaming OpenAI response."""
         response = await self._http.post_json(url, body, headers)
+        if response.get("error"):
+            raise ProtocolError("Provider reported a generation error; no tools were released.")
 
         choices = response.get("choices") or []
         if not choices:
@@ -722,6 +832,12 @@ class Provider:
 
         choice = choices[0]
         message = choice.get("message") or {}
+        if len(choices) != 1:
+            raise ProtocolError("Provider returned multiple choices for a single-choice request.")
+        if text_only:
+            if message or choice.get("tool_calls"):
+                raise ProtocolError("The completions endpoint returned non-text output.")
+            message = {"content": string_data(choice.get("text"))}
 
         # Parse finish_reason
         finish_reason = FinishReason.UNKNOWN
@@ -734,6 +850,8 @@ class Provider:
             finish_reason = FinishReason.LENGTH
         elif fr == "content_filter":
             finish_reason = FinishReason.CONTENT_FILTER
+        else:
+            raise ProtocolError("Provider returned an unsuccessful finish reason; no tools were released.")
 
         # Parse extra metadata
         extra: dict[str, Any] = {}
@@ -745,19 +863,7 @@ class Provider:
             extra["created"] = response["created"]
 
         # Handle usage with detailed breakdown
-        latest_usage = Usage()
-        usage = response.get("usage")
-        if usage:
-            prompt_details = usage.get("prompt_tokens_details") or {}
-            completion_details = usage.get("completion_tokens_details") or {}
-            latest_usage = Usage(
-                prompt_tokens=usage.get("prompt_tokens", 0),
-                completion_tokens=usage.get("completion_tokens", 0),
-                total_tokens=usage.get("total_tokens", 0),
-                cached_tokens=prompt_details.get("cached_tokens", 0),
-                audio_tokens=prompt_details.get("audio_tokens", 0) + completion_details.get("audio_tokens", 0),
-                reasoning_tokens=completion_details.get("reasoning_tokens", 0),
-            )
+        latest_usage = token_usage(response.get("usage"), "chat_completions")
 
         # Handle reasoning content (from chain-of-thought models, Ollama)
         reasoning = message.get("reasoning_content") or message.get("reasoning")
@@ -765,7 +871,20 @@ class Provider:
             yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage, extra=extra)
 
         # Handle tool calls
-        tool_calls = openai_adapter.parse_tool_calls(choice)
+        tool_calls = [] if text_only else openai_adapter.parse_tool_calls(choice)
+        if tool_calls and finish_reason not in {FinishReason.STOP, FinishReason.TOOL_CALLS}:
+            raise ProtocolError("Provider returned incomplete tool calls; no tools were released.")
+        if finish_reason == FinishReason.TOOL_CALLS and not tool_calls:
+            raise ProtocolError("Provider finished with tools but returned no complete calls.")
+        if tool_calls and message.get("reasoning_details"):
+            tool_calls[0].metadata["reasoning_details"] = json.dumps(list_data(message["reasoning_details"]))
+        content = string_data(message.get("content") or message.get("refusal") or "")
+        yield TextDoneEvent(
+            text=content,
+            usage=latest_usage,
+            finish_reason=FinishReason.TOOL_CALLS if tool_calls else finish_reason,
+            extra=extra,
+        )
         if tool_calls:
             for tc in tool_calls:
                 yield ToolCallEvent(
@@ -777,11 +896,6 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
-        else:
-            # Handle text response
-            content = message.get("content", "")
-            if content:
-                yield TextDoneEvent(text=content, usage=latest_usage, finish_reason=finish_reason, extra=extra)
 
     async def _generate_gemini(
         self,
@@ -930,6 +1044,11 @@ class Provider:
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
+        if self.provider_type != ProviderType.ANTHROPIC:
+            prefix = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
+            url = f"{prefix}/messages"
+            headers.pop("x-api-key")
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         # Format messages (extracts system prompt separately)
         system_prompt, formatted_messages = anthropic_adapter.format_messages(messages)
@@ -938,6 +1057,7 @@ class Provider:
             "model": self.model,
             "messages": formatted_messages,
             "max_tokens": config.max_tokens if config and config.max_tokens else 4096,
+            "stream": stream,
         }
 
         if system_prompt:
@@ -975,73 +1095,106 @@ class Provider:
         tool_accumulator = anthropic_adapter.StreamingToolCallAccumulator()
         current_block_index = 0
         latest_usage = Usage()
+        usage_data: dict[str, Any] = {}
+        finish_reason = FinishReason.UNKNOWN
+        completed = False
+        open_blocks: set[int] = set()
+        seen_blocks: set[int] = set()
 
         async for data in self._http.post_stream(url, body, headers):
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
+            chunk = load_object(data)
 
             event_type = chunk.get("type")
+            if event_type == "error" or chunk.get("error"):
+                raise ProtocolError("Messages stream reported a generation error; no tools were released.")
+            if event_type == "message_stop":
+                completed = True
+                break
 
             if event_type == "content_block_start":
                 # New content block starting
-                current_block_index = chunk.get("index", 0)
-                content_block = chunk.get("content_block", {})
+                index = chunk.get("index", 0)
+                if type(index) is not int or not 0 <= index < 1024 or index in seen_blocks:
+                    raise ProtocolError("Messages returned a duplicate or invalid content block index.")
+                current_block_index = index
+                open_blocks.add(index)
+                seen_blocks.add(index)
+                content_block = object_data(chunk.get("content_block", {}))
                 block_type = content_block.get("type")
 
                 if block_type == "tool_use":
                     # Start of a tool call
                     tool_accumulator.start_tool_call(
                         index=current_block_index,
-                        tool_id=content_block.get("id", ""),
-                        name=content_block.get("name", ""),
+                        tool_id=string_data(content_block.get("id", "")),
+                        name=string_data(content_block.get("name", "")),
+                        initial_input=content_block.get("input"),
                     )
+                elif block_type == "text" and content_block.get("text"):
+                    text = string_data(content_block["text"])
+                    full_text += text
+                    yield TextChunkEvent(chunk=text, usage=latest_usage)
+
+            elif event_type == "content_block_stop":
+                index = chunk.get("index")
+                if type(index) is not int or index not in open_blocks:
+                    raise ProtocolError("Messages stopped an unknown content block.")
+                open_blocks.remove(index)
 
             elif event_type == "content_block_delta":
-                current_block_index = chunk.get("index", 0)
-                delta = chunk.get("delta", {})
+                index = chunk.get("index", 0)
+                if type(index) is not int or index not in open_blocks:
+                    raise ProtocolError("Messages returned a delta outside an open content block.")
+                current_block_index = index
+                delta = object_data(chunk.get("delta", {}))
                 delta_type = delta.get("type")
 
                 if delta_type == "text_delta":
                     # Text content
-                    text = delta.get("text", "")
+                    text = string_data(delta.get("text", ""))
                     if text:
                         full_text += text
                         yield TextChunkEvent(chunk=text, usage=latest_usage)
 
                 elif delta_type == "input_json_delta":
                     # Tool call argument fragment
-                    partial_json = delta.get("partial_json", "")
+                    partial_json = string_data(delta.get("partial_json", ""))
                     tool_accumulator.add_input_delta(current_block_index, partial_json)
 
             elif event_type == "message_delta":
                 # Message-level update (contains usage info at end)
                 usage = chunk.get("usage")
                 if usage:
-                    latest_usage = Usage(
-                        prompt_tokens=usage.get("input_tokens", 0),
-                        completion_tokens=usage.get("output_tokens", 0),
-                        total_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-                    )
+                    usage_data.update(object_data(usage))
+                    latest_usage = token_usage(usage_data, "messages")
+                stop_reason = object_data(chunk.get("delta") or {}).get("stop_reason")
+                if stop_reason:
+                    finish_reason = {
+                        "end_turn": FinishReason.STOP,
+                        "stop_sequence": FinishReason.STOP,
+                        "tool_use": FinishReason.TOOL_CALLS,
+                        "max_tokens": FinishReason.LENGTH,
+                        "refusal": FinishReason.CONTENT_FILTER,
+                    }.get(string_data(stop_reason), FinishReason.UNKNOWN)
 
             elif event_type == "message_start":
                 # Initial message info (may contain usage)
-                message = chunk.get("message", {})
+                message = object_data(chunk.get("message", {}))
                 usage = message.get("usage")
                 if usage:
-                    # Initial input tokens
-                    latest_usage = Usage(
-                        prompt_tokens=usage.get("input_tokens", 0),
-                        completion_tokens=0,
-                        total_tokens=usage.get("input_tokens", 0),
-                    )
+                    usage_data.update(object_data(usage))
+                    latest_usage = token_usage(usage_data, "messages")
 
-        # Parse finish_reason from message_delta
-        finish_reason = FinishReason.UNKNOWN
+        if not completed or open_blocks or finish_reason == FinishReason.UNKNOWN:
+            raise ProtocolError("Messages stream ended before completion; no tools were released.")
 
         # Emit accumulated tool calls
         tool_calls = tool_accumulator.get_complete_tool_calls()
+        if tool_calls and finish_reason != FinishReason.TOOL_CALLS:
+            raise ProtocolError("Messages returned incomplete tool calls; no tools were released.")
+        if finish_reason == FinishReason.TOOL_CALLS and not tool_calls:
+            raise ProtocolError("Messages finished with tools but returned no complete calls.")
+        yield TextDoneEvent(text=full_text, usage=latest_usage, finish_reason=finish_reason)
         if tool_calls:
             for tc in tool_calls:
                 yield ToolCallEvent(
@@ -1052,8 +1205,6 @@ class Provider:
                     finish_reason=FinishReason.TOOL_CALLS,
                     metadata=tc.metadata,
                 )
-        elif full_text:
-            yield TextDoneEvent(text=full_text, usage=latest_usage, finish_reason=finish_reason)
 
     async def _non_stream_anthropic(
         self,
@@ -1065,17 +1216,27 @@ class Provider:
         from ..adapters import anthropic as anthropic_adapter
 
         response = await self._http.post_json(url, body, headers)
+        if response.get("error") or response.get("type") == "error":
+            raise ProtocolError("Messages reported a generation error; no tools were released.")
         text, tool_calls, usage = anthropic_adapter.parse_response(response)
 
         # Parse finish_reason
         finish_reason = FinishReason.UNKNOWN
         stop_reason = response.get("stop_reason")
-        if stop_reason == "end_turn":
+        if stop_reason in {"end_turn", "stop_sequence"}:
             finish_reason = FinishReason.STOP
         elif stop_reason == "tool_use":
             finish_reason = FinishReason.TOOL_CALLS
         elif stop_reason == "max_tokens":
             finish_reason = FinishReason.LENGTH
+        elif stop_reason == "refusal":
+            finish_reason = FinishReason.CONTENT_FILTER
+        else:
+            raise ProtocolError("Messages returned an unsuccessful stop reason; no tools were released.")
+        if tool_calls and finish_reason != FinishReason.TOOL_CALLS:
+            raise ProtocolError("Messages returned incomplete tool calls; no tools were released.")
+        if finish_reason == FinishReason.TOOL_CALLS and not tool_calls:
+            raise ProtocolError("Messages finished with tools but returned no complete calls.")
 
         # Parse extra metadata
         extra: dict[str, Any] = {}
@@ -1085,14 +1246,9 @@ class Provider:
             extra["model"] = response["model"]
 
         # Parse usage
-        latest_usage = Usage()
-        if usage:
-            latest_usage = Usage(
-                prompt_tokens=usage.get("input_tokens", 0),
-                completion_tokens=usage.get("output_tokens", 0),
-                total_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-            )
+        latest_usage = token_usage(usage, "messages")
 
+        yield TextDoneEvent(text=text, usage=latest_usage, finish_reason=finish_reason, extra=extra)
         if tool_calls:
             for tc in tool_calls:
                 yield ToolCallEvent(
@@ -1104,8 +1260,89 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
-        elif text:
-            yield TextDoneEvent(text=text, usage=latest_usage, finish_reason=finish_reason, extra=extra)
+
+    async def _generate_responses(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        config: GenerationConfig | None,
+        stream: bool,
+    ) -> AsyncIterator[Event]:
+        from ..adapters.responses import ResponseAccumulator
+        from ..adapters.responses import format_request
+
+        body = format_request(self.model, messages, tools, config, stream)
+        url = f"{self.base_url}/responses"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if self.provider_type == ProviderType.OPENROUTER:
+            headers["HTTP-Referer"] = "https://github.com/nagents"
+        accumulator = ResponseAccumulator()
+        if stream:
+            async with aclosing(
+                cast("AsyncGenerator[str, None]", self._http.post_stream(url, body, headers))
+            ) as chunks:
+                async for data in chunks:
+                    if data == "[DONE]":
+                        break
+                    events = accumulator.add(load_object(data))
+                    if accumulator.completed:
+                        break
+                    for event in events:
+                        yield event
+            if not accumulator.completed:
+                raise ProtocolError("Responses stream ended before completion; no tools were released.")
+        else:
+            events = accumulator.finish(await self._http.post_json(url, body, headers))
+        for event in events:
+            yield event
+
+    async def _generate_completions(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None,
+        config: GenerationConfig | None,
+        stream: bool,
+    ) -> AsyncIterator[Event]:
+        from ..types import TextContent
+
+        if tools or any(message.tool_calls or message.tool_call_id for message in messages):
+            raise ProtocolError(
+                "The legacy completions API is text-only and does not support tools; use chat_completions, responses, or messages."
+            )
+        if len(messages) != 1 or messages[0].role != "user":
+            raise ProtocolError(
+                "The legacy completions API requires exactly one user prompt; system instructions and conversation history cannot be flattened safely."
+            )
+        content = messages[0].content
+        if isinstance(content, str):
+            prompt = content
+        elif isinstance(content, list) and all(isinstance(part, TextContent) for part in content):
+            prompt = "".join(part.text for part in content if isinstance(part, TextContent))
+        else:
+            raise ProtocolError("The legacy completions API accepts text only; multimodal input is unsupported.")
+        body: dict[str, object] = {"model": self.model, "prompt": prompt, "stream": stream}
+        # LiteLLM 1.100.0 fails to serialize usage-only legacy stream chunks
+        # (MockValSer). Omit the optional opt-in, but still parse supplied usage.
+        if stream and self.provider_type != ProviderType.LITELLM:
+            body["stream_options"] = {"include_usage": True}
+        if config:
+            if config.reasoning or config.thinking_config:
+                raise ProtocolError("The legacy completions API does not support reasoning configuration.")
+            for name in ("temperature", "max_tokens", "top_p", "stop"):
+                value = getattr(config, name)
+                if value is not None:
+                    body[name] = value
+        # Text completions share the chat stream envelope but never chat roles.
+        url = f"{self.base_url}/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if self.provider_type == ProviderType.OPENROUTER:
+            headers["HTTP-Referer"] = "https://github.com/nagents"
+        if stream:
+            async for event in self._stream_openai(url, body, headers, text_only=True):
+                yield event
+        else:
+            async for event in self._non_stream_openai(url, body, headers, text_only=True):
+                yield event
 
     async def close(self) -> None:
         """Close the provider and release resources."""

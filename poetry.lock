@@ -368,7 +368,7 @@ description = "Foreign Function Interface for Python calling C code."
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\""
+markers = "extra == \"dev\" or extra == \"voice\""
 files = [
     {file = "cffi-2.1.1-cp310-cp310-macosx_10_15_x86_64.whl", hash = "sha256:baed1e86cc735622097354b9d1281406caf42ff42a886d29faa8e8d1630333be"},
     {file = "cffi-2.1.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:ca82be1a1d406ecfe1d25dc16cb33488e5a16bf4438c9fb590484ea29d92478b"},
@@ -1917,7 +1917,7 @@ description = "Fundamental package for array computing in Python"
 optional = true
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "python_version < \"3.15\" and extra == \"dev\""
+markers = "python_version == \"3.11\" and extra == \"dev\""
 files = [
     {file = "numpy-2.4.6-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:0280e0356c0829a18d9de1cb7eee50ec22ca639878d7240307ca0943d73cd2c4"},
     {file = "numpy-2.4.6-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:110f8b71aacb688ec69062bb7f6938a0f8acb01b7c1c4beb453c65b6d234584d"},
@@ -2000,7 +2000,7 @@ description = "Fundamental package for array computing in Python"
 optional = true
 python-versions = ">=3.12"
 groups = ["main"]
-markers = "python_version >= \"3.15\" and extra == \"dev\""
+markers = "python_version >= \"3.12\" and extra == \"dev\""
 files = [
     {file = "numpy-2.5.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:14e373cfc6387177e8409dac3c7159be8eb05cd77096cd7c950268b86f62831c"},
     {file = "numpy-2.5.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4bbd96c833ecc8cc069ce518078fc8c60cb9cbfb0fea5b7a803ad65035596d03"},
@@ -2306,7 +2306,7 @@ description = "C parser in Python"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"dev\" and implementation_name != \"PyPy\""
+markers = "(extra == \"dev\" or extra == \"voice\") and implementation_name != \"PyPy\""
 files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
@@ -2789,7 +2789,7 @@ description = "Play and Record Sound with Python"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"dev\""
+markers = "extra == \"dev\" or extra == \"voice\""
 files = [
     {file = "sounddevice-0.5.6-py3-none-any.whl", hash = "sha256:de099612311ad81e55d31ccbd83f43ea6bf4d87b48f9b6ea55a1fbcde0eee4e0"},
     {file = "sounddevice-0.5.6-py3-none-macosx_10_6_x86_64.macosx_10_6_universal2.whl", hash = "sha256:e3aef00ad8b1d1740eb66d9a7671eab88a4d2b8fa4ab33498d742e63b65c309c"},
@@ -3100,12 +3100,13 @@ multidict = ">=4.0"
 propcache = ">=0.2.1"
 
 [extras]
-dev = ["fastapi", "mypy", "numpy", "pre-commit", "pydantic", "pytest", "pytest-cov", "python-dotenv", "ruff", "sounddevice"]
+dev = ["fastapi", "mypy", "numpy", "numpy", "pre-commit", "pydantic", "pytest", "pytest-cov", "python-dotenv", "ruff", "sounddevice"]
 docs = ["mkdocs", "mkdocs-material", "mkdocstrings"]
 server = ["fastapi", "pydantic", "uvicorn"]
 tui = ["textual"]
+voice = ["sounddevice"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11, <4.0"
-content-hash = "cdd42f78f9f51e95432bce05b7c35fc08baa78f510a0f4b874a216540722f045"
+content-hash = "ec9caeef8f68746612389354dbe0f26334dc21fd35f8f9e3ec92eb56bb9c5d26"

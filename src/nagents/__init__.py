@@ -165,6 +165,9 @@ from .media import IMAGE_MIME_TYPES
 from .media import MediaCapabilities
 from .media import get_media_capabilities
 from .media import transcode_audio_to_wav
+from .provider import DEFAULT_CODEX_MODEL
+from .provider import CodexCredentials
+from .provider import CodexProvider
 from .provider import Provider
 from .provider import ProviderType
 from .realtime import DEFAULT_REALTIME_MODEL
@@ -208,6 +211,7 @@ from .types import ToolDefinition
 
 __all__ = [
     "AUDIO_MIME_TYPES",
+    "DEFAULT_CODEX_MODEL",
     "DEFAULT_COMPACTOR",
     "DEFAULT_COMPACT_PROMPT",
     "DEFAULT_REALTIME_MODEL",
@@ -236,6 +240,8 @@ __all__ = [
     "BatchToolCall",
     "BytesAudioInput",
     "BytesAudioOutput",
+    "CodexCredentials",
+    "CodexProvider",
     "CompactionDoneEvent",
     "CompactionRequest",
     "CompactionResult",

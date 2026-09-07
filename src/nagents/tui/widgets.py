@@ -7,19 +7,27 @@ from typing import TYPE_CHECKING
 from typing import ClassVar
 
 from rich.markup import escape
-from rich.syntax import Syntax
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.highlight import highlight
 from textual.message import Message
 from textual.widgets import Collapsible
 from textual.widgets import Markdown
 from textual.widgets import Static
 from textual.widgets import TextArea
+from textual.widgets.markdown import MarkdownFence
+
+from .themes import CodeTheme
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from textual.app import ComposeResult
     from textual.binding import BindingType
+    from textual.content import Content
+    from textual.events import Key
     from textual.events import Paste
+    from textual.widgets.markdown import MarkdownBlock
 
 OUTPUT_LIMIT = 16_000
 
@@ -37,8 +45,10 @@ def format_value(value: object) -> str:
 
 class Composer(TextArea):
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("enter", "submit", show=False, priority=True),
-        Binding("ctrl+j,alt+enter", "newline", show=False),
+        Binding("enter", "submit", show=False),
+        Binding("shift+enter,ctrl+j,alt+enter", "newline", show=False),
+        Binding("tab", "tab", show=False),
+        Binding("shift+tab", "tab_reverse", show=False),
     ]
 
     class Submitted(Message):
@@ -46,18 +56,51 @@ class Composer(TextArea):
             super().__init__()
             self.text = text
 
-    def __init__(self) -> None:
+    class TabPressed(Message):
+        def __init__(self, reverse: bool = False) -> None:
+            super().__init__()
+            self.reverse = reverse
+
+    def __init__(self, complete: Callable[[str], bool]) -> None:
         super().__init__(id="composer", placeholder="Ask anything, or / for commands", highlight_cursor_line=False)
+        self.complete = complete
         self.prompt_history: list[str] = []
         self.history_index = 0
         self.draft = ""
 
     def action_submit(self) -> None:
-        if self.text.strip():
-            self.post_message(self.Submitted(self.text))
+        if self.complete("insert"):
+            return
+        self.post_message(self.Submitted(self.text))
+
+    def action_tab(self) -> None:
+        if not self.complete("tab"):
+            self.post_message(self.TabPressed())
+
+    def action_tab_reverse(self) -> None:
+        if not self.complete("tab"):
+            self.post_message(self.TabPressed(reverse=True))
 
     def action_newline(self) -> None:
         self.replace("\n", *self.selection, maintain_selection_offset=False)
+
+    def on_key(self, event: Key) -> None:
+        # Keep editing shortcuts in the same queue as printable input. App-level
+        # binding dispatch can otherwise reorder a fast burst of terminal keys.
+        actions = {
+            "enter": self.action_submit,
+            "shift+enter": self.action_newline,
+            "ctrl+j": self.action_newline,
+            "alt+enter": self.action_newline,
+            "tab": self.action_tab,
+            "shift+tab": self.action_tab_reverse,
+            "up": self.action_cursor_up,
+            "down": self.action_cursor_down,
+        }
+        if event.key in actions:
+            event.stop()
+            event.prevent_default()
+            actions[event.key]()
 
     def on_paste(self, event: Paste) -> None:
         # TextArea inserts the entire paste; don't bubble it back to App for forwarding.
@@ -71,6 +114,8 @@ class Composer(TextArea):
         self.draft = ""
 
     def action_cursor_up(self, select: bool = False) -> None:
+        if not select and self.complete("up"):
+            return
         if not select and self.selection.is_empty and self.cursor_location == (0, 0) and self.history_index > 0:
             if self.history_index == len(self.prompt_history):
                 self.draft = self.text
@@ -81,6 +126,8 @@ class Composer(TextArea):
             super().action_cursor_up(select)
 
     def action_cursor_down(self, select: bool = False) -> None:
+        if not select and self.complete("down"):
+            return
         end = (self.document.line_count - 1, len(self.document.lines[-1]))
         if (
             not select
@@ -97,11 +144,22 @@ class Composer(TextArea):
             super().action_cursor_down(select)
 
 
+class CodeFence(MarkdownFence):
+    @classmethod
+    def highlight(cls, code: str, language: str, ansi: bool = False, dark: bool = False) -> Content:
+        return highlight(code, language=language or "text", theme=CodeTheme)
+
+
+class ConversationMarkdown(Markdown):
+    def get_block_class(self, block_name: str) -> type[MarkdownBlock]:
+        return CodeFence if block_name in {"fence", "code_block"} else super().get_block_class(block_name)
+
+
 class Turn(Vertical):
     def __init__(self, role: str, text: str = "") -> None:
         super().__init__(classes=f"turn {role}")
         self.role = role
-        self.body = Markdown(text, open_links=False) if role == "assistant" else Static(text, markup=False)
+        self.body = ConversationMarkdown(text, open_links=False) if role == "assistant" else Static(text, markup=False)
 
     def compose(self) -> ComposeResult:
         yield Static("YOU" if self.role == "user" else "ngn", classes="turn-label", markup=False)
@@ -114,7 +172,7 @@ class ToolCard(Collapsible):
         self.tool = tool
         self.output_text = ""
         self.arguments = Static(
-            Syntax(bounded(format_value(arguments)), "json", background_color="default", word_wrap=True),
+            highlight(bounded(format_value(arguments)), language="json", theme=CodeTheme),
             classes="tool-arguments",
         )
         self.output = Static("Waiting for output", markup=False, classes="tool-output")
@@ -127,7 +185,7 @@ class ToolCard(Collapsible):
             title=escape(f"{tool}  /  running"),
             collapsed_symbol=">",
             expanded_symbol="v",
-            classes="tool-card",
+            classes="tool-card running",
         )
 
     def append_output(self, text: str) -> None:
@@ -135,17 +193,17 @@ class ToolCard(Collapsible):
         self.output.update(self.output_text)
 
     def set_arguments(self, arguments: object) -> None:
-        self.arguments.update(
-            Syntax(bounded(format_value(arguments)), "json", background_color="default", word_wrap=True)
-        )
+        self.arguments.update(highlight(bounded(format_value(arguments)), language="json", theme=CodeTheme))
 
     def finish(self, result: object, error: str | None, duration_ms: float) -> None:
         state = "error" if error else "complete"
         duration = f"  {duration_ms / 1000:.2f}s" if duration_ms > 0 else ""
         self.title = escape(f"{self.tool}  /  {state}{duration}")
+        self.remove_class("running", "cancelled")
         self.set_class(bool(error), "failed")
+        self.set_class(not error, "complete")
         if isinstance(result, dict) and isinstance(result.get("diff"), str):
-            self.diff.update(Syntax(bounded(result["diff"]), "diff", background_color="default", word_wrap=True))
+            self.diff.update(highlight(bounded(result["diff"]), language="diff", theme=CodeTheme))
             self.diff.display = True
             result = {key: value for key, value in result.items() if key != "diff"}
         if error:
@@ -158,3 +216,5 @@ class ToolCard(Collapsible):
 
     def cancel(self) -> None:
         self.title = escape(f"{self.tool}  /  cancelled")
+        self.remove_class("running", "complete", "failed")
+        self.add_class("cancelled")

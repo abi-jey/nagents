@@ -5,13 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from typing import ClassVar
 
-from rich.syntax import Syntax
 from rich.text import Text
 from textual import on
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.containers import Vertical
 from textual.containers import VerticalScroll
+from textual.highlight import highlight
 from textual.screen import ModalScreen
 from textual.widgets import Button
 from textual.widgets import Input
@@ -19,6 +19,8 @@ from textual.widgets import OptionList
 from textual.widgets import Static
 from textual.widgets.option_list import Option
 
+from .commands import SlashOptions
+from .themes import CodeTheme
 from .widgets import format_value
 
 if TYPE_CHECKING:
@@ -42,12 +44,10 @@ class ApprovalModal(ModalScreen[bool]):
                 yield Static(self.request.tool, classes="approval-tool", markup=False)
                 yield Static(self.request.description, markup=False)
                 yield Static("EXACT ARGUMENTS", classes="section-label", markup=False)
-                yield Static(
-                    Syntax(format_value(self.request.arguments), "json", word_wrap=True, background_color="default")
-                )
+                yield Static(highlight(format_value(self.request.arguments), language="json", theme=CodeTheme))
                 if self.request.preview:
                     yield Static("PROPOSED CHANGE / PREVIEW", classes="section-label", markup=False)
-                    yield Static(Syntax(self.request.preview, "diff", word_wrap=True, background_color="default"))
+                    yield Static(highlight(self.request.preview, language="diff", theme=CodeTheme))
             yield Static("Only this request. Nothing is allowed by default.", classes="dialog-hint", markup=False)
             with Horizontal(classes="dialog-actions"):
                 yield Button("Deny", id="deny")
@@ -76,7 +76,7 @@ class ChoiceModal(ModalScreen[str]):
         with Vertical(classes="dialog choice-dialog"):
             yield Static(self.heading, classes="dialog-title", markup=False)
             yield Input(placeholder="Type to filter", id="filter")
-            yield OptionList(id="choices")
+            yield SlashOptions(id="choices")
             yield Static("Up/down select   Enter open   Esc back", classes="dialog-hint", markup=False)
 
     def on_mount(self) -> None:

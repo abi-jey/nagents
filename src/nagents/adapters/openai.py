@@ -17,6 +17,10 @@ from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
 from ..types import ToolDefinition
+from ._validation import ProtocolError
+from ._validation import list_data
+from ._validation import string_data
+from ._validation import tool_arguments
 
 
 def _format_content_part(part: ContentPart) -> dict[str, Any]:
@@ -102,8 +106,7 @@ def format_messages(messages: list[Message]) -> list[dict[str, Any]]:
             result.append(formatted)
             continue
 
-        # Convert developer role to assistant for better compatibility
-        role = msg.role if msg.role != "developer" else "assistant"
+        role = msg.role
         formatted = {"role": role}
 
         # Format content (handles str, list[ContentPart], or None)
@@ -128,6 +131,9 @@ def format_messages(messages: list[Message]) -> list[dict[str, Any]]:
                 }
                 for tc in msg.tool_calls
             ]
+            for tc in msg.tool_calls:
+                if "reasoning_details" in tc.metadata:
+                    formatted["reasoning_details"] = list_data(json.loads(tc.metadata["reasoning_details"]))
 
         # Tool call ID (for tool result messages)
         if msg.tool_call_id:
@@ -203,21 +209,19 @@ def parse_tool_calls(choice: dict[str, Any]) -> list[ToolCall]:
     message = choice.get("message") or {}
     tool_calls_data = message.get("tool_calls") or []
 
-    result = []
+    result: list[ToolCall] = []
     for tc in tool_calls_data:
         func = tc.get("function", {})
         args_str = func.get("arguments", "{}")
 
-        # Parse arguments from JSON string
-        try:
-            arguments = json.loads(args_str) if isinstance(args_str, str) else args_str
-        except json.JSONDecodeError:
-            arguments = {"raw": args_str}
+        arguments = tool_arguments(args_str)
+        if not tc.get("id") or not func.get("name") or any(call.id == tc["id"] for call in result):
+            raise ProtocolError("Provider returned invalid or duplicate tool identities; no tools were released.")
 
         result.append(
             ToolCall(
-                id=tc.get("id", ""),
-                name=func.get("name", ""),
+                id=string_data(tc.get("id", "")),
+                name=string_data(func.get("name", "")),
                 arguments=arguments,
             )
         )
@@ -289,6 +293,8 @@ class StreamingToolCallAccumulator:
 
         for tc in tc_deltas:
             idx = tc.get("index", 0)
+            if type(idx) is not int or not 0 <= idx < 1024:
+                raise ProtocolError("Provider returned an invalid tool index.")
 
             if idx not in self._tool_calls:
                 self._tool_calls[idx] = {
@@ -301,14 +307,16 @@ class StreamingToolCallAccumulator:
 
             # Accumulate id
             if tc.get("id"):
-                current["id"] = tc["id"]
+                if current["id"] and current["id"] != tc["id"]:
+                    raise ProtocolError("Provider changed a streamed tool call ID.")
+                current["id"] = string_data(tc["id"])
 
             # Accumulate function data
             func = tc.get("function", {})
             if func.get("name"):
-                current["name"] = func["name"]
+                current["name"] += string_data(func["name"])
             if func.get("arguments"):
-                current["arguments"] += func["arguments"]
+                current["arguments"] += string_data(func["arguments"])
 
         return None
 
@@ -319,22 +327,20 @@ class StreamingToolCallAccumulator:
         Returns:
             List of complete ToolCall objects
         """
-        result = []
+        result: list[ToolCall] = []
         for idx in sorted(self._tool_calls.keys()):
             tc = self._tool_calls[idx]
-            if tc["id"] and tc["name"]:
-                try:
-                    arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                except json.JSONDecodeError:
-                    arguments = {"raw": tc["arguments"]}
-
-                result.append(
-                    ToolCall(
-                        id=tc["id"],
-                        name=tc["name"],
-                        arguments=arguments,
-                    )
+            if not tc["id"] or not tc["name"] or any(call.id == tc["id"] for call in result):
+                raise ProtocolError(
+                    "Provider returned incomplete or duplicate tool identities; no tools were released."
                 )
+            result.append(
+                ToolCall(
+                    id=tc["id"],
+                    name=tc["name"],
+                    arguments=tool_arguments(tc["arguments"]),
+                )
+            )
         return result
 
     def clear(self) -> None:

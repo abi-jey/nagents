@@ -1,0 +1,18 @@
+#slash-menu {
+    display: none;
+    height: auto;
+    background: $ngn-panel;
+    color: $ngn-text;
+    border-left: solid $ngn-accent;
+    margin-bottom: 1;
+    padding: 0 1;
+}
+#slash-options { height: auto; padding: 0; border: none; background: $ngn-panel; scrollbar-size: 1 1; }
+#slash-options > .option-list--option-highlighted {
+    background: $ngn-selection;
+    color: $ngn-accent;
+    text-style: $ngn-focus-style;
+}
+#slash-options > .option-list--option-hover { background: $ngn-hover; }
+#slash-hint { height: 1; color: $ngn-muted; text-overflow: ellipsis; }
+#queue-status { display: none; height: 1; color: $ngn-warning; text-overflow: ellipsis; }

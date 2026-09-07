@@ -63,6 +63,7 @@ _CREDENTIALS = {
     "credentials",
     "credentials.json",
     "credentials.toml",
+    "auth.json",
     "secrets",
     "secrets.json",
     "secrets.toml",
@@ -127,12 +128,17 @@ class HarnessExecutor(ToolExecutor):
         try:
             tool = self._registry.get(call.name)
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)
+            if call.name == "delegate" and not self.harness.can_delegate:
+                raise PermissionError("Delegation is disabled at the configured subagent depth limit")
             if self.harness.config.demo and (
-                not builtin or call.name not in {"list_files", "find", "read_file", "search", "skill", "demo_preview"}
+                not builtin
+                or call.name not in {"list_files", "find", "read_file", "search", "skill", "demo_preview", "delegate"}
             ):
                 raise PermissionError("OFFLINE DEMO: writes, shell, and custom tools are disabled")
             if self.harness.mode == "reviewer" and (not builtin or call.name in {"edit", "write", "shell"}):
                 raise PermissionError("reviewer profile denies edits, shell, and custom tools")
+            if self.harness._is_subagent and not builtin:
+                raise PermissionError("Subagents do not support custom plugin/tool execution")
             if tool is not None:
                 _validate(call.arguments, tool.parameters)
                 if tool.func is not None:
@@ -204,6 +210,9 @@ class CodingTools:
                 raise PermissionError(f"Protected path component: {part}")
         if absolute.is_relative_to(self.harness.config.data_dir):
             raise PermissionError("Harness session storage is not accessible to file tools")
+        auth_directory = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth"
+        if absolute.is_relative_to(auth_directory.expanduser().resolve()):
+            raise PermissionError("OAuth credential storage is not accessible to file tools")
         current = self.root
         for part in relative.parts:
             current = current / part

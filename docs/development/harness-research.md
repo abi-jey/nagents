@@ -58,6 +58,17 @@ Python-extensible harness behavior.
 
 ## Primary sources
 
+The Grok Bot design articles distinguish state-driven avatars from orchestration:
+idle, thinking, working, waiting, blocked, and done are visual lifecycle states.
+Actual collaboration is asynchronous messaging between agents with separate
+role context. Some notch/cursor-companion animations are explicitly exploratory
+prototypes, not shipped interaction modes. For ngn, a future team view should
+render real task events rather than simulate peer collaboration the backend does
+not support. Color themes and collaboration views are separate concerns.
+
+- [Grok Bot avatar/presence design](https://x.ai/news/designing-grok-bot)
+- [Grok Bot design prototypes](https://x.ai/bot/guides/designing-grok-bot-with-grok-bot)
+- [Grok Bot async collaboration](https://docs.x.ai/grok-bot/chat-and-collaboration)
 - [OpenCode plugin documentation](https://opencode.ai/docs/plugins/)
 - [OpenCode actual plugin types](https://github.com/anomalyco/opencode/blob/dev/packages/plugin/src/index.ts)
 - [OpenCode agents](https://opencode.ai/docs/agents/)

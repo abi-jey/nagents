@@ -10,6 +10,7 @@ from nagents.cli import _parser
 from nagents.cli import _plain
 from nagents.cli import main
 from nagents.events import TextChunkEvent
+from nagents.harness import TaskMessage
 
 
 def test_options_work_before_and_after_subcommand() -> None:
@@ -29,6 +30,14 @@ def test_json_event_schema() -> None:
     assert record["event"] == "text_chunk"
     assert record["schema_version"] == 1
     assert record["chunk"] == "hello"
+
+
+def test_human_task_message_json_retains_hierarchy() -> None:
+    record = _event_record(TaskMessage("task", "calm finch", "Follow up", parent_task_id="parent", depth=2))
+    assert record["event"] == "task_message"
+    assert record["schema_version"] == 1
+    assert record["parent_task_id"] == "parent" and record["depth"] == 2
+    assert record["prompt"] == "Follow up"
 
 
 def test_invalid_workspace_is_actionable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

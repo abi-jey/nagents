@@ -25,9 +25,13 @@ PROVIDERS.update(
     azure=ProviderType.AZURE_OPENAI_COMPATIBLE,
 )
 
+THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
+API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
+THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
+
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "ngn"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn"
 
 
 @dataclass
@@ -56,25 +60,65 @@ class HarnessConfig:
     max_tool_rounds: int = 30
     profiles: dict[str, AgentProfile] = field(default_factory=dict)
     diagnostics: tuple[str, ...] = ()
+    auth: str = "auto"
+    theme: str = "terminal"
+    animations: bool = True
+    submit_mode: str = "queue"
+    tab_action: str = "agent"
+    api: str = "auto"
+    max_subagent_depth: int = 2
+    theme_background: str = "auto"
+    dictation_enabled: bool = False
+    dictation_model: str = "gpt-4o-mini-transcribe"
+    dictation_base_url: str = "https://api.openai.com/v1"
+    dictation_api_key_env: str = "OPENAI_API_KEY"
+    dictation_language: str = ""
+    dictation_max_seconds: int = 120
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
         self.data_dir = self.data_dir.expanduser().resolve()
+        if self.theme not in THEME_NAMES:
+            raise ValueError(f"theme must be one of: {', '.join(THEME_NAMES)}")
+        if self.theme_background not in THEME_BACKGROUNDS:
+            raise ValueError(f"theme_background must be one of: {', '.join(THEME_BACKGROUNDS)}")
+        if type(self.animations) is not bool:
+            raise ValueError("animations must be a boolean")
+        if self.submit_mode not in {"queue", "interrupt"}:
+            raise ValueError("submit_mode must be queue or interrupt")
+        if self.tab_action not in {"agent", "complete", "focus"}:
+            raise ValueError("tab_action must be agent, complete, or focus")
         if self.provider not in PROVIDERS:
             raise ValueError(f"Unknown provider {self.provider!r}; choose from {', '.join(sorted(PROVIDERS))}")
+        if self.api not in API_NAMES:
+            raise ValueError(f"api must be one of: {', '.join(API_NAMES)}")
+        if self.provider == "litellm" and not self.base_url:
+            raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
+        if self.auth not in {"auto", "api-key", "chatgpt"}:
+            raise ValueError("auth must be auto, api-key, or chatgpt")
+        if self.auth == "chatgpt" and (
+            self.provider not in {"openai", "openai_compatible"} or self.base_url or self.api != "auto"
+        ):
+            raise ValueError(
+                "ChatGPT login requires the default OpenAI provider endpoint, without base_url or api overrides"
+            )
         if not self.model.strip():
             raise ValueError("model must not be empty")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
             raise ValueError("api_key_env must be an environment variable name, not a literal secret")
         if self.base_url:
             url = urlsplit(self.base_url)
-            if url.scheme not in {"http", "https"} or not url.hostname:
+            if (
+                url.scheme not in {"http", "https"}
+                or not url.hostname
+                or any(char.isspace() or ord(char) < 32 for char in self.base_url)
+            ):
                 raise ValueError("base_url must be an HTTP(S) URL")
             if url.username or url.password or url.query or url.fragment:
                 raise ValueError("base_url must not contain credentials, query parameters, or fragments")
         for name, profile in self.profiles.items():
-            if name in {"build", "reviewer"}:
-                raise ValueError("Built-in build/reviewer profiles cannot be overridden")
+            if name in {"agent", "build", "reviewer"}:
+                raise ValueError("Built-in agent/build/reviewer profiles cannot be overridden")
             if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or profile.mode not in {"build", "reviewer"}:
                 raise ValueError(f"Invalid profile {name!r}: mode must be build or reviewer")
         self.profile(self.agent)
@@ -86,28 +130,71 @@ class HarnessConfig:
             raise ValueError("max_file_bytes must be between 1024 and 4194304 bytes")
         if not 1 <= self.max_tool_rounds <= 1000:
             raise ValueError("max_tool_rounds must be between 1 and 1000")
+        if type(self.max_subagent_depth) is not int or not 0 <= self.max_subagent_depth <= 8:
+            raise ValueError("max_subagent_depth must be an integer between 0 and 8 (root depth is 0)")
+        if type(self.dictation_enabled) is not bool:
+            raise ValueError("dictation_enabled must be a boolean")
+        if not self.dictation_model.strip():
+            raise ValueError("dictation_model must not be empty")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.dictation_api_key_env):
+            raise ValueError("dictation_api_key_env must be an environment variable name, not a literal secret")
+        url = urlsplit(self.dictation_base_url)
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.hostname
+            or any(char.isspace() or ord(char) < 32 for char in self.dictation_base_url)
+        ):
+            raise ValueError("dictation_base_url must be an HTTP(S) URL")
+        if url.username or url.password or url.query or url.fragment:
+            raise ValueError("dictation_base_url must not contain credentials, query parameters, or fragments")
+        if self.dictation_language and not re.fullmatch(r"[a-z]{2}", self.dictation_language):
+            raise ValueError("dictation_language must be empty (auto-detect) or a two-letter lowercase language code")
+        if type(self.dictation_max_seconds) is not int or not 1 <= self.dictation_max_seconds <= 300:
+            raise ValueError("dictation_max_seconds must be an integer between 1 and 300")
 
     def profile(self, name: str) -> AgentProfile:
+        if name == "agent":
+            return AgentProfile(mode="build")
         if name in {"build", "reviewer"}:
             return AgentProfile(mode=name)
         if name not in self.profiles:
-            raise ValueError(f"Unknown agent profile {name!r}; available: build, reviewer, {', '.join(self.profiles)}")
+            raise ValueError(
+                f"Unknown agent profile {name!r}; available: agent, build, reviewer, {', '.join(self.profiles)}"
+            )
         return self.profiles[name]
 
 
 def load_config(workspace: Path, config_path: Path | None = None, *, trust_project: bool = False) -> HarnessConfig:
     """Load trusted config only; never import plugins or read credential values."""
     config = HarnessConfig(workspace=workspace, trust_project=trust_project)
-    strings = {"provider", "model", "base_url", "api_key_env", "agent", "api_version"}
-    integers = {"max_output", "max_file_bytes", "max_tool_rounds"}
-    allowed = strings | integers | {"plugins", "demo", "data_dir", "shell_timeout", "profiles"}
-    for key in strings | {"data_dir", "demo", "shell_timeout"} | integers:
+    strings = {
+        "provider",
+        "model",
+        "base_url",
+        "api_key_env",
+        "agent",
+        "api_version",
+        "auth",
+        "theme",
+        "submit_mode",
+        "tab_action",
+        "api",
+        "theme_background",
+        "dictation_model",
+        "dictation_base_url",
+        "dictation_api_key_env",
+        "dictation_language",
+    }
+    integers = {"max_output", "max_file_bytes", "max_tool_rounds", "max_subagent_depth", "dictation_max_seconds"}
+    booleans = {"demo", "animations", "dictation_enabled"}
+    allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles"}
+    for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
         if env_value is None:
             continue
-        if key == "demo":
+        if key in booleans:
             if env_value.lower() not in {"true", "false", "1", "0"}:
-                raise ValueError("NGN_DEMO must be true/false or 1/0")
+                raise ValueError(f"NGN_{key.upper()} must be true/false or 1/0")
             setattr(config, key, env_value.lower() in {"true", "1"})
         elif key in integers:
             setattr(config, key, int(env_value))
@@ -116,7 +203,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         else:
             setattr(config, key, Path(env_value) if key == "data_dir" else env_value)
 
-    user = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "ngn/config.toml"
+    user = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn/config.toml"
     project = config.workspace / ".ngn/config.toml"
     explicit = config_path.expanduser().resolve() if config_path is not None else None
     paths = [user]
@@ -161,9 +248,9 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             elif key == "shell_timeout":
                 if type(value) not in {int, float}:
                     raise ValueError(f"{path}: shell_timeout must be a number")
-            elif key == "demo":
+            elif key in booleans:
                 if type(value) is not bool:
-                    raise ValueError(f"{path}: demo must be a boolean")
+                    raise ValueError(f"{path}: {key} must be a boolean")
             elif key == "plugins":
                 if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                     raise ValueError(f"{path}: plugins must be an array of 'path.py:setup' or 'module:setup' strings")

@@ -27,13 +27,21 @@ from .events import ToolCallEvent
 from .events import ToolResultEvent
 from .harness import Harness
 from .harness import load_config
+from .harness.config import API_NAMES
+from .harness.config import THEME_BACKGROUNDS
+from .harness.config import THEME_NAMES
 from .harness.types import ApprovalRequest
 from .harness.types import HarnessEvent
 from .harness.types import Notice
+from .harness.types import TaskCompleted
+from .harness.types import TaskMessage
+from .harness.types import TaskStarted
 from .harness.types import ToolOutput
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from .harness.auth import DeviceAuthorization
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,8 +51,43 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--provider", help="Provider name, for example openai, anthropic, or gemini")
     common.add_argument("--model", "-m", help="Provider model ID")
     common.add_argument("--base-url", help="Provider API endpoint")
+    common.add_argument("--api", choices=API_NAMES, help="Provider HTTP API (default: provider-specific auto)")
     common.add_argument("--api-key-env", help="Environment variable containing the API key, never the key itself")
-    common.add_argument("--agent", "-a", help="Agent profile (build or reviewer by default)")
+    common.add_argument("--auth", choices=("auto", "api-key", "chatgpt"), help="Authentication method (default: auto)")
+    common.add_argument("--agent", "-a", help="Agent profile (built-ins: agent, build, reviewer)")
+    common.add_argument(
+        "--max-subagent-depth",
+        type=int,
+        help="Delegation depth: 0 disables, 2 permits children and grandchildren (default)",
+    )
+    common.add_argument(
+        "--theme", choices=THEME_NAMES, help="Terminal appearance (default: terminal inherits terminal colors)"
+    )
+    common.add_argument("--no-animations", action="store_false", dest="animations", help="Disable activity animation")
+    common.add_argument(
+        "--theme-background",
+        choices=THEME_BACKGROUNDS,
+        help="Use preset background (theme), inherited terminal background (terminal), or preset default (auto)",
+    )
+    common.add_argument(
+        "--dictation",
+        action=argparse.BooleanOptionalAction,
+        dest="dictation_enabled",
+        help="Enable opt-in /dictate microphone transcription (never records automatically)",
+    )
+    common.add_argument("--dictation-model", help="Transcription API model, separate from the coding model")
+    common.add_argument("--dictation-base-url", help="OpenAI-compatible transcription API base URL")
+    common.add_argument("--dictation-api-key-env", help="Environment variable containing the transcription API key")
+    common.add_argument("--dictation-language", help="Two-letter transcription language, or empty for auto-detect")
+    common.add_argument("--dictation-max-seconds", type=int, help="Maximum recording duration (1-300, default: 120)")
+    common.add_argument(
+        "--submit-mode", choices=("queue", "interrupt"), help="New prompts while working: queue or interrupt-and-send"
+    )
+    common.add_argument(
+        "--tab-action",
+        choices=("agent", "complete", "focus"),
+        help="Tab cycles agents (default), completes commands, or moves focus",
+    )
     common.add_argument("--plugin", action="append", help="Explicitly trust and load a Python path.py:setup extension")
     common.add_argument(
         "--trust-project", action="store_true", help="Trust this project's .ngn/config.toml and its code"
@@ -68,6 +111,13 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Emit versioned JSON Lines events; approvals fail closed")
     run.add_argument("prompt", nargs="*", help="Prompt text, or - to read from standard input")
     commands.add_parser("sessions", parents=[common], help="List this workspace's saved sessions")
+    login = commands.add_parser("login", parents=[common], help="Sign in to OpenAI with a ChatGPT device code")
+    method = login.add_mutually_exclusive_group()
+    method.add_argument(
+        "--status", action="store_true", help="Show local OpenAI login status, without a network request"
+    )
+    method.add_argument("--device-auth", action="store_true", help="Use device-code login (the default)")
+    commands.add_parser("logout", parents=[common], help="Remove ngn's saved OpenAI login from this machine")
     commands.add_parser(
         "doctor", parents=[common], help="Show configuration and extension diagnostics without an LLM call"
     )
@@ -92,9 +142,16 @@ def _json_default(value: object) -> object:
 def _event_record(event: HarnessEvent) -> dict[str, object]:
     record: dict[str, object] = asdict(event)
     record["schema_version"] = 1
-    record["event"] = (
-        event.type.value if isinstance(event, Event) else ("tool_output" if isinstance(event, ToolOutput) else "notice")
-    )
+    if isinstance(event, Event):
+        record["event"] = event.type.value
+    else:
+        record["event"] = {
+            ToolOutput: "tool_output",
+            Notice: "notice",
+            TaskStarted: "task_started",
+            TaskCompleted: "task_completed",
+            TaskMessage: "task_message",
+        }[type(event)]
     return record
 
 
@@ -139,6 +196,26 @@ async def _prepare(harness: Harness, args: argparse.Namespace) -> None:
 
 async def _headless(harness: Harness, args: argparse.Namespace) -> int:
     try:
+        if args.command == "login":
+            if args.status:
+                print(_plain(harness.auth_status() if harness.config.demo else harness.openai_auth.status()))
+                return 0
+
+            async def show_code(authorization: DeviceAuthorization) -> None:
+                print("\nSign in with ChatGPT / Codex using device authorization.")
+                print("Enable device-code login in your ChatGPT security or workspace settings if required.")
+                print(_plain(f"\nOpen: {authorization.verification_url}"))
+                print(_plain(f"Code: {authorization.user_code}"), flush=True)
+                print("\nOnly continue if you initiated this login in ngn. Do not share the code.")
+                print("Waiting for approval (up to 15 minutes). Ctrl+C cancels.", flush=True)
+
+            await harness.login(show_code)
+            print(_plain(f"Signed in. {harness.auth_status()}\nModel: {harness.config.model}"))
+            return 0
+        if args.command == "logout":
+            await harness.logout()
+            print("Removed ngn's local OpenAI login. Other clients and remote sessions were not changed.")
+            return 0
         await _prepare(harness, args)
         if args.command == "doctor":
             print(_plain(harness.describe()))
@@ -186,12 +263,22 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 elif isinstance(event, TextDoneEvent) and not compacting:
                     if not streamed:
                         print(_plain(event.text), end="", flush=True)
+                    if event.text:
+                        print(flush=True)
                     streamed = False
                 elif isinstance(event, ToolCallEvent):
                     print(_plain(f"\n[{event.name}]"), file=sys.stderr)
                     streamed = False
                 elif isinstance(event, ToolOutput):
                     print(_plain(event.text), end="", file=sys.stderr, flush=True)
+                elif isinstance(event, TaskStarted):
+                    print(_plain(f"[Subagent {event.name} started: {event.task_id}]"), file=sys.stderr)
+                elif isinstance(event, TaskCompleted):
+                    print(
+                        _plain(f"[Subagent {event.name}: {'failed' if event.error else 'completed'}]"), file=sys.stderr
+                    )
+                elif isinstance(event, TaskMessage):
+                    print(_plain(f"[Human follow-up to {event.name}]\n{event.prompt}"), file=sys.stderr)
                 elif isinstance(event, ToolResultEvent):
                     if event.error:
                         print(_plain(f"[{event.name}: {event.error}]"), file=sys.stderr)
@@ -202,7 +289,7 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 elif isinstance(event, Notice):
                     print(_plain(event.text), file=sys.stderr)
                 elif isinstance(event, DoneEvent) and not compacting:
-                    print()
+                    print(flush=True)
                     print(_plain(f"Session: {harness.session_id}"), file=sys.stderr)
         return 1 if failed else 0
     finally:
@@ -223,7 +310,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         overrides = {
             name: getattr(args, name)
-            for name in ("provider", "model", "base_url", "api_key_env", "agent", "demo")
+            for name in (
+                "provider",
+                "model",
+                "base_url",
+                "api_key_env",
+                "agent",
+                "demo",
+                "auth",
+                "theme",
+                "animations",
+                "submit_mode",
+                "tab_action",
+                "api",
+                "max_subagent_depth",
+                "theme_background",
+                "dictation_enabled",
+                "dictation_model",
+                "dictation_base_url",
+                "dictation_api_key_env",
+                "dictation_language",
+                "dictation_max_seconds",
+            )
             if hasattr(args, name)
         }
         if hasattr(args, "plugin"):
@@ -248,26 +356,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             if error.name not in {"textual", "rich"}:
                 raise
             raise ValueError(
-                "The TUI extra is not installed. Install nagents[tui] or run poetry install -E tui."
+                "The TUI extra is not installed. From this source checkout, run poetry install -E tui "
+                "or uv pip install -e '.[tui]' in the intended environment."
             ) from error
 
         # Defer initialization and resuming to the app's event loop; asyncio locks,
         # plugin clients, and subprocess resources must not cross event loops.
-        app = NagentsApp(harness)
-        if getattr(args, "resume", "") or getattr(args, "continue_session", False):
-            original_initialize = harness.initialize
-
-            async def initialize_and_resume() -> None:
-                harness.initialize = original_initialize  # type: ignore[method-assign]
-                await original_initialize()
-                if getattr(args, "resume", ""):
-                    await harness.resume(args.resume)
-                else:
-                    sessions = await harness.list_sessions()
-                    if sessions:
-                        await harness.resume(sessions[0].id)
-
-            harness.initialize = initialize_and_resume  # type: ignore[method-assign]
+        app = NagentsApp(
+            harness,
+            resume_session=getattr(args, "resume", ""),
+            continue_session=getattr(args, "continue_session", False),
+        )
         logging.basicConfig(level=logging.WARNING)
         app.run()
         return 0

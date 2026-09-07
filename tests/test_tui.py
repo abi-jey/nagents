@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import cast
 
 import pytest
+from textual.color import Color
 from textual.containers import VerticalScroll
 from textual.events import Paste
 from textual.widgets import Button
@@ -24,9 +26,12 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.events import Usage
 from nagents.harness import Harness
+from nagents.harness.commands import CommandRegistry
+from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.types import ApprovalRequest
 from nagents.harness.types import HarnessEvent
+from nagents.harness.types import Notice
 from nagents.harness.types import SessionInfo
 from nagents.harness.types import ToolOutput
 from nagents.tui import NagentsApp
@@ -47,6 +52,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from textual.pilot import Pilot
+
+    from nagents.harness.auth import DeviceAuthorization
 
 
 class FakeHarness:
@@ -73,6 +80,10 @@ class FakeHarness:
         self.new_count = 0
         self.describe_count = 0
         self.fail_model = False
+        self._busy = ""
+        self.tools = SimpleNamespace(skills={})
+        self.tasks = SimpleNamespace(list=lambda: [])
+        self.commands = CommandRegistry(cast("Harness", self))
 
     async def deny(self, request: ApprovalRequest) -> bool:
         return False
@@ -82,6 +93,9 @@ class FakeHarness:
 
     async def history(self) -> list[Message]:
         return self.messages
+
+    async def task_history(self, task_id: str, limit: int = 100) -> list[Message]:
+        return []
 
     async def run(self, prompt: str) -> AsyncIterator[HarnessEvent]:
         self.prompts.append(prompt)
@@ -143,6 +157,15 @@ class FakeHarness:
         self.describe_count += 1
         return "Workspace context\nPlugins: none\n[red]not markup[/red]"
 
+    def auth_status(self) -> str:
+        return "OFFLINE DEMO" if self.config.demo else "API key from environment (checked on send)"
+
+    async def login(self, show_code: Callable[[DeviceAuthorization], Awaitable[None]]) -> None:
+        raise RuntimeError("Login is not configured in this test")
+
+    async def logout(self) -> None:
+        return None
+
     async def close(self) -> None:
         assert not self.running, "Backend closed before the run was awaited"
         self.closed = True
@@ -155,7 +178,7 @@ def make_app(backend: FakeHarness) -> NagentsApp:
 async def idle(app: NagentsApp, pilot: Pilot[None]) -> None:
     for _ in range(150):
         await pilot.pause(0.01)
-        if not app.busy:
+        if not app.busy and (not app._queued_prompts or app._queue_paused):
             return
     raise AssertionError("Backend task did not become idle")
 
@@ -290,7 +313,8 @@ def test_cancel_resend_and_duplicate_guard(tmp_path: Path) -> None:
             assert backend.running
             await send(app, pilot, "next draft")
             assert backend.prompts == ["wait"]
-            assert app.query_one(Composer).text == "next draft"
+            assert app.query_one(Composer).text == ""
+            assert list(app._queued_prompts) == ["next draft"]
             await pilot.press("escape")
             await idle(app, pilot)
             assert backend.cancelled
@@ -359,6 +383,8 @@ def test_commands_models_profiles_and_errors(tmp_path: Path) -> None:
             assert isinstance(app.screen, ChoiceModal)
             app.screen.query_one(Input).value = "profile"
             await pilot.pause()
+            await pilot.press("enter")
+            assert app.query_one(Composer).text == "/agent "
             await pilot.press("enter")
             assert isinstance(app.screen, ChoiceModal)
             app.screen.query_one(Input).value = "reviewer"
@@ -548,6 +574,8 @@ def test_palette_arrow_keys_and_new_session_option(tmp_path: Path) -> None:
             await send(app, pilot, "/")
             assert isinstance(app.screen, ChoiceModal)
             await pilot.press("down", "enter")
+            assert app.query_one(Composer).text == "/new "
+            await pilot.press("enter")
             await idle(app, pilot)
             assert backend.new_count == 1
             await pilot.press("ctrl+l")
@@ -701,5 +729,100 @@ def test_tool_ids_are_scoped_to_a_run_and_saved_errors_stay_errors(tmp_path: Pat
             await idle(app, pilot)
             assert len(app.query(ToolCard)) == 3
             assert list(app.query(ToolCard))[-1] is not first
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("continue_session", [False, True])
+def test_initial_resume_precedes_history_once(tmp_path: Path, continue_session: bool) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        app = NagentsApp(
+            cast("Harness", backend),
+            resume_session="" if continue_session else "selected-id",
+            continue_session=continue_session,
+        )
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            assert backend.resumed == ["saved-1" if continue_session else "selected-id"]
+            assert [item.source for item in app.query(Markdown)] == ["Resumed answer"]
+            await app._initialize()
+            await send(app, pilot, "another prompt")
+            await idle(app, pilot)
+            assert len(backend.resumed) == 1
+
+    asyncio.run(scenario())
+
+
+def test_initial_resume_options_are_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="either"):
+        NagentsApp(cast("Harness", FakeHarness(tmp_path)), resume_session="session", continue_session=True)
+
+
+@pytest.mark.parametrize("selected", ["agent", "audit"])
+def test_agent_picker_includes_named_profiles(tmp_path: Path, selected: str) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        backend.config.profiles["audit"] = AgentProfile(mode="reviewer", instructions="Do not show profile internals")
+        app = make_app(backend)
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            await send(app, pilot, "/agent")
+            assert isinstance(app.screen, ChoiceModal)
+            assert app.screen.choices[:3] == [
+                ("build", "build  /  build"),
+                ("agent", "agent  /  build"),
+                ("reviewer", "reviewer  /  reviewer"),
+            ]
+            assert ("audit", "audit  /  reviewer") in app.screen.choices
+            app.screen.query_one(Input).value = selected
+            await pilot.pause()
+            await pilot.press("enter")
+            await idle(app, pilot)
+            assert backend.config.agent == selected
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("background", ["auto", "terminal", "theme"])
+def test_background_config_and_visible_tool_states(tmp_path: Path, background: str) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        backend.config.theme = "ember"
+        backend.config.theme_background = background
+        app = make_app(backend)
+        async with app.run_test(size=(132, 38)) as pilot:
+            await idle(app, pilot)
+            assert app.native_ansi_color is (background == "terminal")
+            variables = app.get_css_variables()
+            for state, token in (
+                ("running", "tool"),
+                ("complete", "success"),
+                ("failed", "error"),
+                ("cancelled", "warning"),
+            ):
+                card = ToolCard(state, "subagent / audit")
+                await app._add(card)
+                if state == "complete":
+                    card.finish("Reviewed", None, 100)
+                elif state == "failed":
+                    card.finish(None, "Unavailable", 100)
+                elif state == "cancelled":
+                    card.cancel()
+                await pilot.pause()
+                assert card.has_class(state)
+                assert card.query_one("CollapsibleTitle").styles.color == Color.parse(variables[f"ngn-{token}"])
+            await app._event(Notice("Review before applying."))
+            await app._event(Notice("Retry limit reached.", level="warning"))
+            await pilot.pause()
+            warning = app.query_one(".notice.warning", Static)
+            assert str(warning.content) == "Warning: Retry limit reached."
+            assert warning.styles.color == Color.parse(variables["ngn-warning"])
+            app._status("Running", state="working")
+            await pilot.pause()
+            assert app.query_one("#status").styles.color == Color.parse(variables["ngn-tool"])
+            app._status("Failure", error=True)
+            await pilot.pause()
+            assert app.query_one("#rail-activity").styles.color == Color.parse(variables["ngn-error"])
 
     asyncio.run(scenario())
