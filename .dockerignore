@@ -1,0 +1,17 @@
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!dockerfiles/
+!dockerfiles/Runtime.Dockerfile
+!src/
+!src/**
+**/.env
+**/.env.*
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.vite
+**/.cache
+**/*.tsbuildinfo
+src/nagents/web/static
