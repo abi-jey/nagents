@@ -21,8 +21,9 @@ across providers and HTTP contracts. This reference follows the current source.
 
 ## Codex Authentication
 
-`CodexProvider` is a separate authenticated transport. For the source-only
-CLI's login workflow and limitations, see [ngn](../guide/ngn.md).
+`CodexProvider` is a separate authenticated transport. For the CLI's login
+workflow and limitations, see [ngn](../guide/ngn.md) and
+[release availability](../guide/ngn-installation.md#release-availability).
 
 ::: nagents.CodexCredentials
 

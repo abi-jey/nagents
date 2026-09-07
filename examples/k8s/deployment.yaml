@@ -2,6 +2,8 @@
 # service, and ts-serve ingress). Secrets are NOT included (never commit keys).
 #
 # Prerequisites (run once):
+#   Create the nagents namespace first if absent: kubectl create namespace nagents
+#
 #   1. LLM/API keys from your dotenv file:
 #        kubectl create secret generic nagents-secrets \
 #          --from-env-file=.env -n nagents
@@ -11,6 +13,16 @@
 #        kubectl get secret ghcr-pull-secret -n base -o json | \
 #          jq '.metadata = {"name": "ghcr-pull-secret", "namespace": "nagents"}' | \
 #          kubectl apply -f -
+#
+#   3. Server access token (generate outside the repository; never commit it):
+#        token_file="$(mktemp /tmp/nagents-server-token.XXXXXX)"
+#        .venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32), end="")' > "$token_file"
+#        kubectl create secret generic nagents-server-auth -n nagents \
+#          --from-file=NAGENTS_SERVER_TOKEN="$token_file"
+#        rm -- "$token_file"
+#      Restart the deployment after token rotation. See docs/guide/server.md.
+#      Pin a reviewed hardened image before applying: v0.5.0 and older images
+#      do not enforce this token; an unverified :latest tag is not sufficient.
 #
 # Apply everything:
 #   kubectl apply -f examples/k8s/deployment.yaml
@@ -79,6 +91,13 @@ spec:
             - secretRef:
                 name: nagents-secrets
           env:
+            - name: NAGENTS_SERVER_HOST
+              value: "0.0.0.0"
+            - name: NAGENTS_SERVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nagents-server-auth
+                  key: NAGENTS_SERVER_TOKEN
             - name: NAGENTS_LLM_PROVIDER
               value: "openrouter"
             - name: NAGENTS_LLM_API_KEY

@@ -6,7 +6,8 @@ Upstream default branches and experimental contracts can change.
 
 This page records research and design direction, not a feature-parity promise.
 For implemented behavior and current limitations, use the
-[ngn guide](../guide/ngn.md); the terminal harness remains a source-only release.
+[ngn guide](../guide/ngn.md) and
+[release availability](../guide/ngn-installation.md#release-availability).
 
 ## Findings
 
