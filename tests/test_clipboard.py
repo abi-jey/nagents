@@ -165,7 +165,10 @@ def test_mouse_input_burst_copies_final_selection(tmp_path: Path, editor: bool) 
                 MouseUp(None, x + 5, y, 0, 0, 1, False, False, False),
             ):
                 app.post_message(event)
-            await pilot.pause()
+            # Raw messages and deferred refresh callbacks drain on separate ticks.
+            async with asyncio.timeout(2):
+                while not app.clipboard:
+                    await pilot.pause()
             assert app.clipboard == ("alpha" if editor else "alpha "), (
                 source.selected_text if isinstance(source, Composer) else app.screen.get_selected_text(),
                 app._mouse_selection_editor,
@@ -185,7 +188,9 @@ def test_code_selection_copies_code_without_highlight_markup(tmp_path: Path) -> 
             fence = app.query_one("MarkdownFence")
             app.screen.selections = {fence.query_one("#code-content"): Selection(None, None)}
             app.screen.post_message(TextSelected())
-            await pilot.pause()
+            async with asyncio.timeout(2):
+                while not app.clipboard:
+                    await pilot.pause()
             assert "def greet():\n    return 'hello'" in app.clipboard
             assert "\x1b" not in app.clipboard and "```" not in app.clipboard
 
