@@ -97,10 +97,18 @@ still stored locally in the Harness data directory.
 This is a **trusted local-user tool, not a sandbox or multi-user service**. Other
 processes/users with access to your loopback interface may access it. Do not expose
 the standalone server through a reverse proxy, public tunnel, port forward, or
-shared remote desktop. An administrator-managed private tailnet deployment needs
-an additional authentication and proxy boundary; see the
-[private deployment guide](ngn-web-deployment.md). That setup retains the loopback
-binding and is not a general remote-access mode.
+shared remote desktop. For administrator-managed **password-free Tailscale access**,
+see the [private deployment guide](ngn-web-deployment.md). That setup keeps ngn on
+same-pod loopback behind nginx, uses HTTPS without Funnel or NodePort exposure,
+and is not a general remote-access mode. Tailscale ACLs/grants and trusted cluster
+networking are the access boundary: everyone who can reach the Service shares
+the trusted-user workspace, sessions, and approvals, with no multi-user isolation.
+ClusterIP is not public Internet exposure, but cluster clients can also reach it
+and forge headers. Host/HTTPS Origin, fetch-metadata checks, and the per-process
+CSRF token protect browser requests, not against malicious authorized network
+clients that can obtain the bootstrap token. nginx strips incoming Authorization
+headers before forwarding to ngn; there is no web login prompt.
+
 Live approved shell/custom tools can access the host with your account's rights.
 Closing the web server does not remove saved conversations or undo approved edits.
 
@@ -147,7 +155,7 @@ The frontend is organized by responsibility within `src/nagents/web-ui/src/`:
   hook, and a tested transcript reducer/history adapter.
 - `features/sessions/` owns session transport/state and session navigation.
 - `features/approvals/` owns the exact pending decision and its accessible modal.
-- `api/` contains authenticated HTTP transport and tested NDJSON parsing.
+- `api/` contains HTTP transport with the per-process CSRF token and tested NDJSON parsing.
 - `types.ts` defines shared backend contracts; `main.tsx` only mounts the app.
 
 The Vite output contract is `../web/static` relative to `src/nagents/web-ui/`.
