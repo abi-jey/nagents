@@ -198,7 +198,8 @@ spec:
                 exit 1
               fi
               if [ ! -e "$marker" ]; then
-                entries=$(ls -A /state)
+                # A fixed sentinel cannot disappear when filenames contain newlines.
+                entries=$(find /state -mindepth 1 -maxdepth 1 -printf x -quit)
                 if [ -n "$entries" ]; then
                   printf '%s\n' 'Refusing a non-empty state directory not initialized by this deployment.' >&2
                   exit 1
