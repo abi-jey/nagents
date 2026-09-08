@@ -1,0 +1,445 @@
+# Public ngn React deployment TEMPLATE; render privately before validation/apply.
+# Review secret preparation, live validation, and cutover before applying.
+# See ../../docs/guide/ngn-web-deployment.md before applying. No secrets here.
+# This file never changes the existing nagents Deployment, Service, or Ingress.
+# Substitute ONLY NGN_WEB_HOST, NGN_LEGACY_HOST, NGN_NODE, NGN_STATE_PATH.
+# Bare envsubst would corrupt nginx variables and the init container's shell.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ngn-web-local
+  labels:
+    app: ngn-web
+spec:
+  capacity:
+    # Binding size only: hostPath does not enforce a 5 GiB filesystem quota.
+    storage: 5Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: nagents
+    name: ngn-web-state
+  hostPath:
+    path: "${NGN_STATE_PATH}"
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - "${NGN_NODE}"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ngn-web-state
+  namespace: nagents
+  labels:
+    app: ngn-web
+spec:
+  storageClassName: ""
+  volumeName: ngn-web-local
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngn-web-config
+  namespace: nagents
+  labels:
+    app: ngn-web
+data:
+  config.toml: |
+    provider = "openai"
+    auth = "chatgpt"
+    api = "auto"
+    data_dir = "/state/sessions"
+    # No endpoint, API key, or model override: Harness selects its Codex default.
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    # Request errors can contain URLs; do not log them, even for rejected requests.
+    error_log /dev/null;
+    events {
+        worker_connections 256;
+    }
+    http {
+        access_log off;
+        server_tokens off;
+        client_body_temp_path /tmp/client_temp;
+        proxy_temp_path /tmp/proxy_temp;
+        fastcgi_temp_path /tmp/fastcgi_temp;
+        uwsgi_temp_path /tmp/uwsgi_temp;
+        scgi_temp_path /tmp/scgi_temp;
+        client_max_body_size 64k;
+        client_body_timeout 60s;
+        send_timeout 3600s;
+
+        # Match raw Host, not nginx's normalized/fallback $host. Anchored,
+        # case-sensitive PCRE quoting keeps substituted dots literal.
+        # One regex per map also permits identical primary/legacy hosts.
+        map $http_host $ngn_host_allowed {
+            default 0;
+            ~^(?:\Q${NGN_WEB_HOST}\E|\Q${NGN_LEGACY_HOST}\E)$ 1;
+        }
+        # An Origin must be HTTPS and belong to THIS request's external Host.
+        # The two approved hosts are not interchangeable origins.
+        map "$http_host|$http_origin" $ngn_origin_allowed {
+            default 0;
+            ~^(?:\Q${NGN_WEB_HOST}\E\|(?:https://\Q${NGN_WEB_HOST}\E)?|\Q${NGN_LEGACY_HOST}\E\|(?:https://\Q${NGN_LEGACY_HOST}\E)?)$ 1;
+        }
+        map $http_origin $ngn_upstream_origin {
+            "" "";
+            default "http://127.0.0.1:8765";
+        }
+
+        server {
+            listen 8080 default_server;
+            # The default server also handles the optional alias via the maps.
+            server_name ${NGN_WEB_HOST};
+
+            # Return-only rewrite checks run before auth and upstream rewriting.
+            if ($ngn_host_allowed = 0) { return 403; }
+            if ($ngn_origin_allowed = 0) { return 403; }
+            if ($args != "") { return 400; }
+
+            auth_basic "ngn private web";
+            auth_basic_user_file /etc/nginx/access/htpasswd;
+            add_header Cache-Control "no-store" always;
+            add_header X-Content-Type-Options "nosniff" always;
+
+            # Constant proxy health only; never bootstrap, credentials, or data.
+            location = /readyz {
+                auth_basic off;
+                default_type text/plain;
+                return 200 "ready\n";
+            }
+
+            # All UI, API, and asset paths inherit Basic auth. No query auth.
+            location / {
+                proxy_pass http://127.0.0.1:8765;
+                proxy_http_version 1.1;
+                proxy_set_header Host "127.0.0.1:8765";
+                proxy_set_header Origin $ngn_upstream_origin;
+                proxy_set_header Authorization "";
+                proxy_set_header Proxy-Authorization "";
+                proxy_set_header Connection "";
+                # Sec-Fetch-Site and X-Ngn-Token pass through unchanged so the
+                # backend still enforces fetch metadata and per-process tokens.
+                proxy_buffering off;
+                proxy_request_buffering off;
+                proxy_cache off;
+                proxy_max_temp_file_size 0;
+                proxy_next_upstream off;
+                proxy_connect_timeout 5s;
+                proxy_read_timeout 3600s;
+                proxy_send_timeout 3600s;
+                proxy_redirect off;
+            }
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngn-web
+  namespace: nagents
+  labels:
+    app: ngn-web
+spec:
+  replicas: 1
+  # SQLite and the rotating credential store must have exactly one owner.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ngn-web
+  template:
+    metadata:
+      labels:
+        app: ngn-web
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/hostname: "${NGN_NODE}"
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        # Deliberately no fsGroup: OpenAIAuth requires 0700 dirs / 0600 files.
+      initContainers:
+        - name: initialize-state
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:2950b00b4488d5a7c64da3310f79642ff214977ca57bd16495fcf0dc5e08068f
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              marker=/state/.ngn-web-state
+              if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
+                printf '%s\n' 'Refusing an unsafe ngn state marker.' >&2
+                exit 1
+              fi
+              if [ ! -e "$marker" ]; then
+                entries=$(ls -A /state)
+                if [ -n "$entries" ]; then
+                  printf '%s\n' 'Refusing a non-empty state directory not initialized by this deployment.' >&2
+                  exit 1
+                fi
+                # Record ownership before setup so a partial startup can retry.
+                printf '%s\n' 'ngn-web-state-v1' > "$marker"
+              fi
+              if [ "$(stat -c %h "$marker")" != 1 ]; then
+                printf '%s\n' 'Refusing a hard-linked ngn state marker.' >&2
+                exit 1
+              fi
+              chown 1000:1000 "$marker"
+              chmod 0600 "$marker"
+              # Only fixed private paths, never recursive chown of workspace files.
+              for directory in /state /state/home /state/config /state/workspace /state/sessions /state/data /state/data/ngn /state/data/ngn/auth; do
+                if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+                  printf '%s\n' 'Refusing unsafe ngn state directory.' >&2
+                  exit 1
+                fi
+                mkdir -p "$directory"
+                chown 1000:1000 "$directory"
+                chmod 0700 "$directory"
+              done
+              credential=/state/data/ngn/auth/openai.json
+              if [ -L "$credential" ] || { [ -e "$credential" ] && [ ! -f "$credential" ]; }; then
+                printf '%s\n' 'Refusing unsafe ngn credential destination.' >&2
+                exit 1
+              fi
+              if [ ! -e "$credential" ]; then
+                if [ ! -s /seed/openai.json ]; then
+                  printf '%s\n' 'No saved ngn credential: provide ngn-web-codex-seed/openai.json for first startup.' >&2
+                  exit 1
+                fi
+                # Dereference the projected Secret only here. Atomically install
+                # a regular private file that OpenAIAuth can refresh in place.
+                temporary=$(mktemp /state/data/ngn/auth/.seed-XXXXXXXX)
+                trap 'rm -f "$temporary"' EXIT
+                install -o 1000 -g 1000 -m 0600 /seed/openai.json "$temporary"
+                mv -T "$temporary" "$credential"
+              fi
+              if [ "$(stat -c %h "$credential")" != 1 ]; then
+                printf '%s\n' 'Refusing hard-linked ngn credential destination.' >&2
+                exit 1
+              fi
+              # Preserve existing renewed contents, including when seed is absent.
+              chown 1000:1000 "$credential"
+              chmod 0600 "$credential"
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: codex-seed
+              mountPath: /seed
+              readOnly: true
+      containers:
+        - name: ngn
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:2950b00b4488d5a7c64da3310f79642ff214977ca57bd16495fcf0dc5e08068f
+          imagePullPolicy: IfNotPresent
+          # Override the image's legacy-server CMD; never bind ngn remotely.
+          command:
+            - ngn
+          args:
+            - serve
+            - --host
+            - "127.0.0.1"
+            - --port
+            - "8765"
+            - --workspace
+            - /state/workspace
+            - --config
+            - /etc/ngn/config.toml
+          workingDir: /state/workspace
+          env:
+            - name: HOME
+              value: /state/home
+            - name: XDG_DATA_HOME
+              value: /state/data
+            - name: XDG_CONFIG_HOME
+              value: /state/config
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command:
+                - curl
+                - -fsS
+                - --max-time
+                - "2"
+                - -o
+                - /dev/null
+                - http://127.0.0.1:8765/api/bootstrap
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: config
+              mountPath: /etc/ngn
+              readOnly: true
+            - name: ngn-tmp
+              mountPath: /tmp
+        - name: nginx
+          image: nginxinc/nginx-unprivileged@sha256:442753882674b49ae2c1de83ed67896131c0777f56df5005e356e62bc3f7e7ce
+          imagePullPolicy: IfNotPresent
+          # Bypass entrypoint scripts that modify the image's default config.
+          command:
+            - nginx
+          args:
+            - -g
+            - "daemon off;"
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: "${NGN_WEB_HOST}"
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: web-access
+              mountPath: /etc/nginx/access
+              readOnly: true
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: ngn-web-state
+        - name: config
+          configMap:
+            name: ngn-web-config
+        - name: codex-seed
+          secret:
+            secretName: ngn-web-codex-seed
+            optional: true
+            defaultMode: 0400
+            items:
+              - key: openai.json
+                path: openai.json
+        - name: web-access
+          secret:
+            secretName: ngn-web-access
+            # Readable by uid 101, mounted only in nginx; no fsGroup needed.
+            defaultMode: 0444
+            items:
+              - key: htpasswd
+                path: htpasswd
+        - name: ngn-tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: nginx-tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngn-web
+  namespace: nagents
+  labels:
+    app: ngn-web
+spec:
+  type: ClusterIP
+  selector:
+    app: ngn-web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ngn-web
+  namespace: nagents
+  labels:
+    app: ngn-web
+spec:
+  # Cluster-specific ts-serve operator, NOT the official Tailscale operator.
+  # It owns ngn-web-ts; NGN_WEB_HOST must match its private HTTPS hostname.
+  ingressClassName: ts-serve
+  defaultBackend:
+    service:
+      name: ngn-web
+      port:
+        number: 8080

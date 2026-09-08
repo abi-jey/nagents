@@ -95,8 +95,12 @@ still stored locally in the Harness data directory.
   provided. Only built frontend assets are served. Unknown routes remain 404.
 
 This is a **trusted local-user tool, not a sandbox or multi-user service**. Other
-processes/users with access to your loopback interface may access it. Do not put it
-behind a reverse proxy, public tunnel, port forward, or shared remote desktop.
+processes/users with access to your loopback interface may access it. Do not expose
+the standalone server through a reverse proxy, public tunnel, port forward, or
+shared remote desktop. An administrator-managed private tailnet deployment needs
+an additional authentication and proxy boundary; see the
+[private deployment guide](ngn-web-deployment.md). That setup retains the loopback
+binding and is not a general remote-access mode.
 Live approved shell/custom tools can access the host with your account's rights.
 Closing the web server does not remove saved conversations or undo approved edits.
 
