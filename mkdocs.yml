@@ -87,6 +87,7 @@ nav:
       - ngn Installation: guide/ngn-installation.md
       - ngn Configuration: guide/ngn-configuration.md
       - ngn Local Web Client: guide/ngn-web.md
+      - Private Web Deployment: guide/ngn-web-deployment.md
       - Legacy API Server: guide/server.md
       - Providers: guide/providers.md
       - Tools: guide/tools.md
