@@ -3,10 +3,12 @@
 This reusable example is for an explicitly owner-approved, single-user deployment
 of the React client in [ngn serve](ngn-web.md), not a new remote mode or a deployment
 of the legacy `nagents.server`. It is a narrowly scoped exception to the local
-client's normal "do not reverse proxy" guidance. The unchanged LocalOnly backend still binds
-**127.0.0.1:8765**; the authenticated nginx sidecar is the additional trust boundary.
-Anyone with the web password and tailnet access has the same trusted-user powers,
-sessions, and per-call approvals. This is not multi-user isolation or a sandbox.
+client's normal "do not reverse proxy" guidance. The unchanged LocalOnly backend
+still binds **127.0.0.1:8765** behind a same-pod nginx sidecar.
+**Access is password-free.** Tailscale ACLs/grants and trusted cluster networking
+are the access boundary. Everyone allowed to reach the Service shares the same
+trusted-user workspace, sessions, and per-call approvals. This is not multi-user
+isolation or a sandbox.
 
 The public template is [examples/k8s/ngn-web.yaml](https://github.com/abi-jey/nagents/blob/main/examples/k8s/ngn-web.yaml).
 The deployment administrator is responsible for secret handling, reviewing the
@@ -79,10 +81,10 @@ the repository, never a generated file inside it.
 ## Topology And Boundary
 
 ```text
-Tailnet browser, HTTPS + HTTP Basic (user ngn)
+Tailnet browser, HTTPS, access governed by Tailscale ACLs/grants
   -> custom ts-serve Ingress ngn-web (TLS terminates here)
   -> ClusterIP Service ngn-web:8080
-  -> nginx sidecar: exact external Host/Origin + Basic authentication
+  -> nginx sidecar: exact external Host/HTTPS Origin checks, no login prompt
   -> same-pod HTTP 127.0.0.1:8765: unchanged ngn serve / LocalOnly
 ```
 
@@ -104,23 +106,28 @@ Tailnet browser, HTTPS + HTTP Basic (user ngn)
 - After validation, nginx rewrites upstream Host to `127.0.0.1:8765` and a nonempty
   accepted Origin to `http://127.0.0.1:8765`. An absent Origin stays absent; the
   backend still requires it for POST. `Sec-Fetch-Site` and `X-Ngn-Token` pass
-  unchanged. Basic `Authorization` and `Proxy-Authorization` never reach ngn.
-- All UI, API, and assets require Basic authentication. Only `/readyz` is an
-  unauthenticated constant response, with no application data. Query parameters
-  are rejected, never used for authentication. Both containers must be ready:
+  unchanged. Incoming `Authorization` and `Proxy-Authorization` headers are
+  stripped before forwarding to ngn.
+- UI, assets, and `GET /api/bootstrap` are password-free. Other API endpoints still
+  require the app's per-process `X-Ngn-Token` CSRF token, not a user login.
+  `/readyz` is a constant response with no application data. Query parameters are
+  rejected, never used for authentication. Both containers must be ready:
   nginx probes use an allowed Host, and the app's exec probe discards bootstrap
   output instead of exposing its per-process token.
-- TLS and tailnet admission are the operator's responsibility. The backend hop
-  from ts-serve to nginx is cluster HTTP, not end-to-end TLS. This assumes trusted
-  nodes/cluster networking and appropriate tailnet ACLs. Never browse the Service
-  directly or send the Basic password over plaintext HTTP.
+- TLS and tailnet admission are the operator's responsibility. Use the tailnet
+  HTTPS URL; the hop from ts-serve to nginx is cluster HTTP, not end-to-end TLS.
+  ClusterIP is not public Internet exposure, but clients with cluster connectivity
+  can also reach the Service, forge allowed Host/Origin/fetch-metadata headers,
+  and obtain the bootstrap token. These checks protect browsers, not against
+  malicious authorized network clients. Tailscale ACLs/grants control the tailnet
+  entry point; they do not restrict this direct cluster path.
 - nginx disables access and request-error logging because URLs may contain
   accidental secrets; ngn already disables access logging. NDJSON buffering,
   caching, and upstream retries are off, timeouts are one hour, and request bodies
   are limited to 64 KiB. Do not enable request/debug logs to troubleshoot auth.
 
 **Live validation gate:** confirm the custom ts-serve proxy preserves the external
-Host and Origin, as well as Authorization, `Sec-Fetch-Site`, and `X-Ngn-Token`, and
+Host and Origin, as well as `Sec-Fetch-Site` and `X-Ngn-Token`, and
 streams NDJSON without buffering. A proxy that overwrites Host/Origin cannot be
 made safe by simply trusting forwarded headers or disabling LocalOnly checks.
 Resolve that incompatibility with the cluster administrator before any cutover. The Ingress does
@@ -165,8 +172,8 @@ the seed on restart; the seed volume is optional to allow its later deletion.
 
 The application is uid/gid 1000, nginx uid/gid 101; both are non-root with read-only
 root filesystems, no added capabilities, no privilege escalation, and separate
-temporary `emptyDir` volumes. No service-account token is mounted. nginx sees only
-its config and password hash, **never the state PVC or Codex credential**. The
+temporary `emptyDir` volumes. No service-account token is mounted. nginx mounts its
+config and temporary volume, **never the state PVC or Codex credential**. The
 application's tools still run with its own PVC/network access and are not a
 hostile-code sandbox. `replicas: 1` plus `Recreate` avoids overlapping owners in
 ordinary rollouts; ReadWriteOnce is not a single-process lock. Do not autoscale,
@@ -196,12 +203,7 @@ exact loopback/workspace/config flags. Both images are pinned by digest.
    Its `emptyDir` data is lost on pod replacement. Do not apply the old example,
    restart, scale, delete, or prune those resources while preparing the new UI.
 3. Use the administrator-managed `nagents/ghcr-pull-secret`. No registry credential
-   is included here. Prepare `nagents/ngn-web-access`, key `htpasswd`, containing exactly
-   the user `ngn` with an nginx-compatible password hash, preferably bcrypt.
-   Generate a distinct strong web password in a private file outside Git; do not
-   use a Codex/OAuth token. Provide the password-file path to the user,
-   not its contents. Never put the password in a manifest, command argument, log,
-   URL, or chat transcript. The plaintext password is not the Secret's value.
+   is included in the template.
 4. Stop use of the local TUI/other clients with the authorized source credential
    before copying the **ngn OpenAIAuth stored JSON**, not another client's
    auth format, into `nagents/ngn-web-codex-seed`, key `openai.json`. Do not inspect
@@ -210,9 +212,10 @@ exact loopback/workspace/config flags. Both images are pinned by digest.
    copied credential a transfer of ownership, not safe simultaneous local/web
    login sharing. Do not restart the old copy; a return to local use requires a
    reviewed transfer of the latest store or a fresh login.
-5. Verify operator tailnet ACLs, private HTTPS (no Funnel), header forwarding,
-   streaming behavior, and the node storage/backup assumptions. The basic-auth
-   secret and one-time seed are administrator-managed and intentionally absent from the
+5. Review Tailscale ACLs/grants and which cluster clients can reach the Service;
+   all must be trusted with the shared workspace and approvals. Verify private
+   HTTPS (no Funnel), header forwarding, streaming, and node storage/backups.
+   The one-time seed is administrator-managed and intentionally absent from the
    manifest. Kubernetes Secret storage/access must be protected by the cluster.
 
 Non-persisting API validation, allowed before live approval, uses the **private
@@ -227,9 +230,9 @@ kubectl --context '<your-context>' apply --dry-run=server \
 
 A dry-run does not create the node directory, bind storage, check image contents,
 read/import credentials, run containers, or exercise the Tailscale proxy. Local
-nginx tests must use dummy auth only and no model credential, host Docker socket
-inside a container, or private-image pull. Run repository checks in the Python
-virtual environment, including `.venv/bin/pre-commit run --all-files`; new
+proxy/init tests must use dummy data only, no actual model credentials, no host
+Docker socket inside a container, and no private-image pull. Run repository checks
+in the Python virtual environment, including `.venv/bin/pre-commit run --all-files`; new
 untracked files also need explicit `--files` checks before they are staged.
 
 ## Validation And Cutover
@@ -243,14 +246,16 @@ PV, PVC, ConfigMap, Deployment, Service, and **new** Ingress. Validate in order:
    for config diagnostics; no `nginx -T`, Secret dumps, bootstrap-body dumps, or
    credential content in logs/review output. Check file types, ownership, and
    modes without reading the credential.
-2. From a tailnet browser, the new HTTPS URL presents a valid certificate and
-   challenges for Basic auth before any UI/assets/bootstrap data. No password,
-   wrong password, or another username must fail. Obtain the private password-file
-   path from the administrator; do not paste passwords into terminal command lines.
-3. Valid authentication and the same host's exact HTTPS Origin work. Foreign or
+2. From an allowed tailnet browser, the new HTTPS URL presents a valid certificate
+   and opens without a password prompt. Without an `Authorization` header,
+   `GET /`, known built assets, and `GET /api/bootstrap` return 200 with no
+   `WWW-Authenticate` header. Do not print the bootstrap token. Confirm that
+   incoming `Authorization` headers are stripped before reaching the backend.
+3. Requests with the same host's exact HTTPS Origin work. Foreign or
    `null` origins, HTTP origins, mismatched allowed-host pairs, unknown Hosts,
    `Sec-Fetch-Site: cross-site`, query parameters, POST without Origin, oversized
-   bodies, and missing/invalid per-process API tokens fail. Verify both configured
+   bodies, and API requests with missing/invalid `X-Ngn-Token` fail, including POST;
+   bootstrap remains the token-free exception. Verify both configured
    host/origin pairs in isolated proxy tests; do not repoint the old Ingress just
    to test its hostname. `/readyz` alone is not evidence that the app works.
 4. Validate React assets, bootstrap, session creation/resume, incremental NDJSON,
@@ -266,7 +271,7 @@ PV, PVC, ConfigMap, Deployment, Service, and **new** Ingress. Validate in order:
 6. For migration only, after all gates pass, separately repoint the existing
    `nagents` Ingress backend to `ngn-web:8080`. This mutation is **not included in
    the manifest**. The new nginx already accepts
-   `https://<NGN_LEGACY_HOST>`; repeat HTTPS/auth/origin/stream validation
+   `https://<NGN_LEGACY_HOST>`; repeat HTTPS/password-free access/origin/stream validation
    there. Retire the old UI exposure, but preserve the old Deployment, Service,
    API pod, and its data. Both hostnames expose the same single-user Harness.
 
@@ -282,8 +287,5 @@ new deployment. After cutover, any decision to restore the old Ingress backend
 requires administrator review because that re-exposes the old UI. Never roll back by
 deleting legacy pods or retained state. ConfigMap edits require a controlled
 restart of only `ngn-web` because nginx uses a subPath config mount and does not
-reload automatically. Password-hash Secret rotation uses a directory projection;
-allow Kubernetes propagation, then verify the new password works and the old
-password fails without printing either. Avoid restarting active runs just to
-rotate a web password. Codex credential renewal remains owned by the app, not by
+reload automatically. Codex credential renewal remains owned by the app, not by
 reapplying the original seed.
