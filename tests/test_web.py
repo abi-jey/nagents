@@ -520,13 +520,19 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
         async with client_app(tmp_path, config=config) as (app, client, headers, harnesses):
             harness = harnesses[0]
             assert isinstance(harness, ControlledHarness)
+            before = (await client.get("/api/settings", headers=headers)).json()
+            provider = harness.agent.provider
             stream = LiveStream(app, headers, harness.session_id, "approval")
             try:
                 pending = await stream.event("approval")
-                with patch.object(harness.agent.provider, "get_model_list", AsyncMock(return_value=[])):
+                with patch.object(provider, "get_model_list", AsyncMock(return_value=[])) as get:
                     response = await client.get("/api/models", headers=headers)
                     assert response.status_code == 200 and response.json()["models"] == []
+                    get.assert_awaited_once_with()
+                assert harness.agent.provider is provider and provider.model == before["values"]["model"]
+                assert (await client.get("/api/settings", headers=headers)).json() == before
                 assert not stream.task.done() and not harness.decisions
+                assert (await client.get("/api/bootstrap")).json()["active_run_id"] == pending["run_id"]
                 decision = await client.post(
                     "/api/approval",
                     json={
@@ -538,9 +544,23 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
                     headers=headers,
                 )
                 assert decision.status_code == 200
-                await stream.event("approval_closed")
-            finally:
+                closed = await stream.event("approval_closed")
+                assert closed["approval_id"] == pending["approval_id"] and closed["decision"] == "deny"
+                # The scripted harness asks twice. Drain and join the cancelled run
+                # before disconnecting, so its second approval cannot race a closed send.
+                cancelled = await client.post("/api/cancel", json={"run_id": pending["run_id"]}, headers=headers)
+                assert cancelled.status_code == 200
+                assert (await stream.event("run_finished"))["status"] == "cancelled"
+                await asyncio.wait_for(stream.task, 5)
+                assert harness.stopped.is_set() and harness.decisions == [False]
+                assert (await client.get("/api/bootstrap")).json()["active_run_id"] == ""
                 await stream.disconnect()
+            finally:
+                if not stream.task.done():
+                    stream.task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait_for(stream.task, 5)
+        assert harness.closed
 
     asyncio.run(check())
 
