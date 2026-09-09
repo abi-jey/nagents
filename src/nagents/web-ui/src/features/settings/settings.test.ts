@@ -62,15 +62,40 @@ test("profiles come from the server and only nonempty profile models preset the 
   assert.equal(parseDraft(draft, []).ok, false);
 });
 
-test("shell timeout accepts positive decimals through 600 seconds", () => {
-  for (const shell_timeout of ["0.001", ".5", "30.25", "600", "600.0"]) {
+test("shell timeout accepts positive decimals and exponents through 600 seconds", () => {
+  for (const shell_timeout of ["0.001", ".5", "30.25", "600", "600.0", "1e-7", "1E+2", "6e2"]) {
     const parsed = parseDraft({ ...createDraft(values), shell_timeout }, reply.profiles);
     assert.equal(parsed.ok && parsed.values.shell_timeout, Number(shell_timeout));
   }
 });
 
-test("shell timeout rejects zero, out-of-range, and non-decimal input", () => {
-  for (const shell_timeout of ["", " ", "0", "-1", "600.01", "Infinity", "NaN", "1e2", "0x20", "30s", "1,5", "+3"]) {
+test("a saved decimal timeout remains valid for a later model-only save", () => {
+  const saved = parseDraft(
+    { ...createDraft(values), shell_timeout: "0.0000001" },
+    reply.profiles,
+  );
+  assert.ok(saved.ok);
+  const returned = createDraft(saved.values);
+  assert.equal(returned.shell_timeout, "1e-7");
+  assert.deepEqual(parseDraft(returned, reply.profiles), saved);
+  assert.deepEqual(
+    parseDraft({ ...returned, model: "changed-model" }, reply.profiles),
+    { ok: true, values: { ...saved.values, model: "changed-model" } },
+  );
+});
+
+test("backend timeout values round-trip including the smallest positive number", () => {
+  for (const shell_timeout of [Number.MIN_VALUE, 1e-308, 1e-7, 1e-6, 0.5, 600]) {
+    const returned = { ...values, shell_timeout };
+    assert.deepEqual(parseDraft(createDraft(returned), reply.profiles), {
+      ok: true,
+      values: returned,
+    });
+  }
+});
+
+test("shell timeout rejects zero, out-of-range, and malformed numeric input", () => {
+  for (const shell_timeout of ["", " ", "0", "-1", "600.01", "Infinity", "NaN", "0x20", "30s", "1,5", "+3", "1e", "1e+", "1e--2", "1e2.5", "6.001e2", "1e999", "1e-999", "0e2", "-1e-7"]) {
     const parsed = parseDraft({ ...createDraft(values), shell_timeout }, reply.profiles);
     assert.ok(!parsed.ok && parsed.errors.shell_timeout, shell_timeout);
   }
