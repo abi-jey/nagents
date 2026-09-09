@@ -1,6 +1,7 @@
 """Single-Harness HTTP adapter with an owning, cancellable NDJSON response."""
 
 import asyncio
+import copy
 import json
 import secrets
 from collections.abc import AsyncIterator
@@ -40,6 +41,9 @@ from . import built_assets
 from . import local_authority
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
+from .settings import SettingsInput
+from .settings import SettingsRevision
+from .settings import WebSettings
 
 if TYPE_CHECKING:
     from starlette.types import Receive
@@ -91,6 +95,8 @@ class Run:
 
 
 class WebState:
+    settings: WebSettings
+
     def __init__(self, harness: Harness) -> None:
         self.harness = harness
         self.active: Run | None = None
@@ -250,10 +256,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nonlocal state
-        harness = harness_factory(config)
+        harness = harness_factory(copy.deepcopy(config))
         state = WebState(harness)
         try:
             await harness.initialize()
+            state.settings = WebSettings(harness)
+            await state.settings.load()
             if resume_session:
                 await harness.resume(resume_session)
             elif continue_session:
@@ -289,11 +297,27 @@ def create_app(
             "token": token,
             "workspace": str(state.harness.workspace),
             "provider": state.harness.config.provider,
-            "model": state.harness.agent.provider.model,
-            "agent": state.harness.config.agent,
+            "model": state.settings.values.model,
+            "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
             "active_run_id": state.active.id if state.active is not None else "",
         }
+
+    @app.get("/api/settings")
+    async def settings() -> dict[str, object]:
+        return state.settings.snapshot()
+
+    @app.post("/api/settings")
+    async def save_settings(body: SettingsInput) -> dict[str, object]:
+        with state.idle():
+            await state.settings.change(body.revision, body.values)
+            return state.settings.snapshot()
+
+    @app.post("/api/settings/reset")
+    async def reset_settings(body: SettingsRevision) -> dict[str, object]:
+        with state.idle():
+            await state.settings.change(body.revision, state.settings.defaults, reset=True)
+            return state.settings.snapshot()
 
     @app.get("/api/sessions")
     async def sessions() -> dict[str, object]:

@@ -186,6 +186,20 @@ Secret reuse. The pinned amd64 application image includes the React assets and
 Codex client; `command: [ngn]` overrides its legacy default CMD with `serve` and the
 exact loopback/workspace/config flags. Both images are pinned by digest.
 
+The web runtime settings API stores its versioned `ngn_web_settings` row in the
+existing workspace SQLite database under `/state/sessions` on this same PVC.
+Model, profile, and bounded tool/runtime limits therefore survive pod/image
+replacement while the PVC and resolved workspace path remain unchanged. No writable
+ConfigMap mount, new volume, credential copy, or image-layer write is needed.
+Startup captures trusted configuration defaults after initial Codex model resolution,
+then applies the saved override. Reset deletes the override so future trusted
+defaults take effect. Provider/API routing, credentials, plugins, trust, and storage
+paths remain administrator-controlled and cannot be edited through this API.
+Malformed/unsupported saved settings or a removed saved profile fail web startup
+closed. Stop the application and have the administrator repair or remove only the
+settings row, never delete the session database or auth store as a workaround.
+See [runtime settings](ngn-web.md#runtime-settings) for the API and conflict rules.
+
 ## Operator Preflight
 
 1. Review the public template, its private render, and the live plan. Select

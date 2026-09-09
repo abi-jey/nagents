@@ -100,14 +100,15 @@ class ControlledHarness(Harness):
 
 @asynccontextmanager
 async def client_app(
-    tmp_path: Path, *, controlled: bool = True
+    tmp_path: Path, *, controlled: bool = True, config: HarnessConfig | None = None
 ) -> AsyncIterator[tuple["FastAPI", httpx.AsyncClient, dict[str, str], list[Harness]]]:
     assets = tmp_path / "static"
     assets.mkdir(exist_ok=True)
     (assets / "assets").mkdir(exist_ok=True)
     (assets / "index.html").write_text('<div id="root"></div><script src="/assets/app.js"></script>')
     (assets / "assets" / "app.js").write_text("// test asset")
-    config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", demo=True)
+    if config is None:
+        config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", demo=True)
     harnesses: list[Harness] = []
 
     def factory(config: HarnessConfig) -> Harness:
