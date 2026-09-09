@@ -98,7 +98,7 @@ export function parseDraft(
     const value = Number(raw);
     const timeout = limit.key === "shell_timeout";
     const validNumber = timeout
-      ? /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw) && Number.isFinite(value)
+      ? /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw) && Number.isFinite(value)
       : /^\d+$/.test(raw) && Number.isSafeInteger(value);
     if (
       !validNumber ||
