@@ -161,6 +161,7 @@ export function useSettings({
   }
 
   return {
+    token,
     open,
     snapshot,
     draft,
