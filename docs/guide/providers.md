@@ -35,6 +35,12 @@ ChatGPT/Codex OAuth catalogs are separate connections, not interchangeable ways
 to use a subscription. Never pass a Codex OAuth token as `Provider.api_key`, or
 send it to an OpenAI-compatible endpoint. Use the separate `CodexProvider` and
 the [existing ngn login flow](ngn.md#openai-device-login) for subscription access.
+Its `get_model_list()` fetches picker-visible `slug` IDs from the fixed Codex
+catalog using a fresh credential snapshot. `supported_in_api: false` does not
+exclude an OAuth model. See the [Codex API example and pinned contract](../api/provider.md#codex-authentication)
+for authentication, visibility validation, and compatibility limits. This follows
+the official Codex client, not a stable public API guarantee; manual entry remains
+available without changing login or billing mode.
 
 ---
 

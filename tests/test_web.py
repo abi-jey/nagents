@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from aiohttp import web
 from starlette.requests import ClientDisconnect
 
 from nagents.cli import _parser
@@ -28,6 +29,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.tools import CodingTools
 from nagents.harness.types import HarnessEvent
+from nagents.provider import CodexCredentials
 from nagents.provider import CodexProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
@@ -36,6 +38,7 @@ from nagents.web import built_assets
 from nagents.web import local_authority
 from nagents.web import serve
 from nagents.web.app import create_app
+from tests.test_codex_provider import endpoint as codex_endpoint
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -346,6 +349,84 @@ def test_models_guards_and_demo_never_dispatch(tmp_path: Path) -> None:
                 response = await client.get("/api/models", headers=headers)
                 assert response.status_code == 501 and "demo" in response.json()["detail"]
                 get.assert_not_called()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("outcome", ["success", "invalid-catalog", "upstream-auth", "missing-credentials"])
+def test_models_real_codex_catalog_with_configured_openai(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    monkeypatch.setenv("TEST_CATALOG_KEY", "fake-unused-api-key")
+
+    async def check() -> None:
+        paths: list[str] = []
+
+        async def handle(request: web.Request) -> web.Response:
+            paths.append(request.path)
+            assert request.path == "/backend-api/codex/models"
+            assert request.headers["Authorization"] == "Bearer fake-codex-oauth"
+            if outcome == "upstream-auth":
+                return web.Response(status=401, text="SECRET-upstream-detail")
+            if outcome == "invalid-catalog":
+                return web.json_response({"models": [{"slug": "SECRET-invalid-model"}]})
+            return web.json_response(
+                {
+                    "models": [
+                        {
+                            "slug": "synthetic-codex-a",
+                            "display_name": "Synthetic Codex A",
+                            "visibility": "list",
+                            "supported_in_api": False,
+                            "priority": 1,
+                            "base_instructions": "SECRET-instructions",
+                        }
+                    ]
+                }
+            )
+
+        config = HarnessConfig(
+            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+        )
+        async with (
+            codex_endpoint(monkeypatch, handle),
+            client_app(tmp_path, config=config) as (_, client, headers, harnesses),
+        ):
+            harness = harnesses[0]
+            original = harness.agent.provider
+            callback = AsyncMock(return_value=CodexCredentials("fake-codex-oauth", "fixture-account"))
+            if outcome == "missing-credentials":
+                callback.side_effect = RuntimeError("SECRET-credential-detail")
+            provider = CodexProvider(callback, model=original.model)
+            harness.agent.provider = provider
+            try:
+                with patch.object(harness.openai_auth, "status", return_value="Fixture login status"):
+                    before = (await client.get("/api/settings", headers=headers)).json()
+                    callback.assert_not_called()
+                    response = await client.get("/api/models", headers=headers)
+                    assert response.status_code == (200 if outcome == "success" else 502)
+                    if outcome == "success":
+                        assert response.json() == {"models": ["synthetic-codex-a"], "source": "codex"}
+                    else:
+                        assert isinstance(response.json()["detail"], str)
+                    assert "SECRET" not in response.text
+                    assert (await client.get("/api/settings", headers=headers)).json() == before
+                    assert provider.model == original.model and harness.config.provider == "openai"
+                    assert paths == ([] if outcome == "missing-credentials" else ["/backend-api/codex/models"])
+                    callback.assert_awaited_once_with()
+                    saved = await client.post(
+                        "/api/settings",
+                        json={
+                            "revision": before["revision"],
+                            "values": {**before["values"], "model": "manual-codex-model"},
+                        },
+                        headers=headers,
+                    )
+                    assert saved.status_code == 200 and provider.model == "manual-codex-model"
+                    callback.assert_awaited_once_with()
+            finally:
+                harness.agent.provider = original
+                await provider.close()
 
     asyncio.run(check())
 
