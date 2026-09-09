@@ -7,6 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
@@ -21,7 +22,11 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.exceptions import ModelListError
+from nagents.http import HTTPLogger
+from nagents.provider import Provider
 from nagents.provider import codex
+from nagents.provider import gateway
 from nagents.provider.codex import DEFAULT_CODEX_MODEL
 from nagents.provider.codex import CodexCredentials
 from nagents.provider.codex import CodexProvider
@@ -53,14 +58,33 @@ async def credentials() -> CodexCredentials:
 
 def test_catalog_cannot_inherit_api_key_route() -> None:
     async def scenario() -> None:
-        callback = AsyncMock(side_effect=AssertionError("Catalog contract is not implemented"))
+        callback = AsyncMock(side_effect=credentials)
         async with CodexProvider(callback) as provider:
-            with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
+            with (
+                patch.object(GatewayHTTPClient, "get_json", AsyncMock(return_value={"models": []})) as get,
+                patch.object(
+                    Provider, "get_model_list", AsyncMock(side_effect=AssertionError("No API-key route"))
+                ) as api_key,
+            ):
                 assert await provider.verify_model() is True
-                with pytest.raises(NotImplementedError):
-                    await provider.get_model_list()
                 get.assert_not_called()
                 callback.assert_not_called()
+                assert await provider.get_model_list() == []
+                get.assert_awaited_once_with(
+                    "https://chatgpt.com/backend-api/codex/models?client_version=0.153.4",
+                    {
+                        "Authorization": f"Bearer {ACCESS}",
+                        "Accept": "application/json",
+                        "ChatGPT-Account-Id": "account-123",
+                        "x-openai-internal-codex-residency": "eu",
+                        "originator": "ngn",
+                        "User-Agent": codex.USER_AGENT,
+                    },
+                )
+                callback.assert_awaited_once_with()
+                api_key.assert_not_called()
+                assert provider.model == DEFAULT_CODEX_MODEL and provider.is_model_verified is True
+                assert provider.base_url == codex.CODEX_ENDPOINT
 
     asyncio.run(scenario())
 
@@ -130,6 +154,7 @@ async def endpoint(
     await site.start()
     url = f"http://127.0.0.1:{runner.addresses[0][1]}/backend-api/codex/responses"
     monkeypatch.setattr(codex, "CODEX_ENDPOINT", url)
+    monkeypatch.setattr(codex, "CODEX_MODELS_ENDPOINT", url.removesuffix("/responses") + "/models")
     try:
         yield url
     finally:
@@ -140,6 +165,302 @@ async def endpoint(
 def isolate_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+
+def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:1")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "")
+
+    async def scenario() -> None:
+        current = CodexCredentials(ACCESS, "account-123", "eu")
+        callback = AsyncMock(return_value=current)
+        observed: list[dict[str, str]] = []
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def handle(request: web.Request) -> web.Response:
+            assert request.method == "GET" and request.path == "/backend-api/codex/models"
+            assert dict(request.query) == {"client_version": "0.153.4"}
+            assert request.headers["Accept"] == "application/json"
+            assert request.headers["originator"] == "ngn" and request.headers["User-Agent"] == codex.USER_AGENT
+            assert (
+                not {"Cookie", "x-api-key", "OpenAI-Organization", "OpenAI-Project", "x-openai-internal-codex-fedramp"}
+                & request.headers.keys()
+            )
+            observed.append(dict(request.headers))
+            started.set()
+            await release.wait()
+            return web.json_response(
+                {
+                    "models": [
+                        {
+                            "slug": "synthetic-codex-z",
+                            "visibility": "list",
+                            "supported_in_api": False,
+                            "priority": 20,
+                            "display_name": "Synthetic Codex Z",
+                            "base_instructions": ACCESS,
+                        },
+                        {"slug": "hidden", "visibility": "hide"},
+                        {"slug": "none", "visibility": "none"},
+                        {"slug": "synthetic-codex-a", "visibility": "list", "supported_in_api": True, "priority": 1},
+                        {"slug": "synthetic-codex-z", "visibility": "list"},
+                        {"slug": "  exact spelling  ", "visibility": "list", "account_metadata": ACCESS},
+                    ],
+                    "private_metadata": ACCESS,
+                },
+                headers={"Set-Cookie": "fixture=not-a-real-cookie; Path=/"},
+            )
+
+        async with endpoint(monkeypatch, handle), CodexProvider(callback, model="selected-model") as provider:
+            provider.api_key = "api-key-must-not-be-used"
+            http_logger = Mock(spec=HTTPLogger)
+            provider.set_http_logger(http_logger)
+            first = asyncio.create_task(provider.get_model_list())
+            try:
+                await asyncio.wait_for(started.wait(), 5)
+                current.access_token = ACCESS + "-rotated"
+                current.account_id = "account-456"
+                current.residency = "us"
+                release.set()
+                expected = ["synthetic-codex-z", "synthetic-codex-a", "  exact spelling  "]
+                assert await first == expected
+                assert await provider.get_model_list() == expected
+                assert callback.await_count == 2 and len(observed) == 2
+                assert observed[0]["Authorization"] == f"Bearer {ACCESS}"
+                assert observed[0]["ChatGPT-Account-Id"] == "account-123"
+                assert observed[0]["x-openai-internal-codex-residency"] == "eu"
+                assert observed[1]["Authorization"] == f"Bearer {ACCESS}-rotated"
+                assert observed[1]["ChatGPT-Account-Id"] == "account-456"
+                assert observed[1]["x-openai-internal-codex-residency"] == "us"
+                assert provider.model == "selected-model" and provider.is_model_verified is None
+                assert provider.base_url == codex.CODEX_ENDPOINT
+                assert not http_logger.mock_calls
+            finally:
+                release.set()
+                await first
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("residency", ["", "no_constraint"])
+def test_catalog_omits_optional_account_and_residency_headers(monkeypatch: pytest.MonkeyPatch, residency: str) -> None:
+    async def scenario() -> None:
+        async def handle(request: web.Request) -> web.Response:
+            assert "ChatGPT-Account-Id" not in request.headers
+            assert "x-openai-internal-codex-residency" not in request.headers
+            return web.json_response({"models": [{"slug": "hidden", "visibility": "hide"}]})
+
+        async with (
+            endpoint(monkeypatch, handle),
+            CodexProvider(AsyncMock(return_value=CodexCredentials(ACCESS, residency=residency))) as provider,
+        ):
+            assert await provider.get_model_list() == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "",
+        "https://api.openai.com/v1",
+        "https://chatgpt.com/backend-api/codex/models",
+        "https://example.invalid/custom",
+        "https://user:secret@example.invalid/v1",
+    ],
+)
+def test_catalog_invalid_configuration_rejected_before_credentials(base_url: str) -> None:
+    async def scenario() -> None:
+        callback = AsyncMock(side_effect=AssertionError("No callback for invalid configuration"))
+        async with CodexProvider(callback) as provider:
+            provider.base_url = base_url
+            with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
+                with pytest.raises(ModelListError, match="fixed endpoint"):
+                    await provider.get_model_list()
+                callback.assert_not_called()
+                get.assert_not_called()
+                assert provider.base_url == base_url
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        CodexCredentials(""),
+        CodexCredentials("bad\ntoken"),
+        CodexCredentials("x" * 65537),
+        CodexCredentials(ACCESS, "bad/account"),
+        CodexCredentials(ACCESS, "a" * 257),
+        CodexCredentials(ACCESS, residency="bad\nresidency"),
+        CodexCredentials(ACCESS, residency="r" * 65),
+    ],
+)
+def test_catalog_invalid_credentials_rejected_without_http(snapshot: CodexCredentials) -> None:
+    async def scenario() -> None:
+        async with CodexProvider(AsyncMock(return_value=snapshot)) as provider:
+            with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
+                with pytest.raises(ModelListError, match="/login") as error:
+                    await provider.get_model_list()
+                assert ACCESS not in str(error.value)
+                get.assert_not_called()
+
+    asyncio.run(scenario())
+
+
+def test_catalog_credential_failure_and_cancellation_are_safe() -> None:
+    async def scenario() -> None:
+        callback = AsyncMock(side_effect=RuntimeError(ACCESS))
+        async with CodexProvider(callback) as provider:
+            with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
+                with pytest.raises(ModelListError) as error:
+                    await provider.get_model_list()
+                assert ACCESS not in str(error.value) and error.value.__suppress_context__
+                callback.side_effect = asyncio.CancelledError
+                with pytest.raises(asyncio.CancelledError):
+                    await provider.get_model_list()
+                get.assert_not_called()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        [],
+        {"data": []},
+        {"models": None},
+        {"models": {}},
+        {"models": [None]},
+        {"models": ["model"]},
+        {"error": {"message": ACCESS}},
+        {"models": [], "error": {"message": ACCESS}},
+        {"models": [{"slug": "model"}]},
+        {"models": [{"slug": "model", "visibility": None}]},
+        {"models": [{"slug": "model", "visibility": "unknown"}]},
+        {"models": [{"slug": "model", "visibility": []}]},
+        {"models": [{"visibility": "list"}]},
+        {"models": [{"slug": 1, "visibility": "list"}]},
+        {"models": [{"slug": "", "visibility": "list"}]},
+        {"models": [{"slug": "  ", "visibility": "list"}]},
+        {"models": [{"slug": "bad\x00id", "visibility": "list"}]},
+        {"models": [{"slug": "bad\x7fid", "visibility": "list"}]},
+        {"models": [{"slug": "bad\u202eid", "visibility": "list"}]},
+        {"models": [{"slug": "bad\ud800id", "visibility": "list"}]},
+        {"models": [{"slug": "", "visibility": "hide"}]},
+    ],
+)
+def test_catalog_malformed_data_is_not_an_empty_success(
+    monkeypatch: pytest.MonkeyPatch, body: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def scenario() -> None:
+        async def handle(request: web.Request) -> web.Response:
+            return web.json_response(body)
+
+        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+            with pytest.raises(ModelListError) as error:
+                await provider.get_model_list()
+            assert ACCESS not in str(error.value) + caplog.text
+            assert provider.is_model_verified is None and provider.model == DEFAULT_CODEX_MODEL
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("body", [b"not-json", b"\xff", b'{"models":[],"models":[]}', b'{"models":[],"extra":NaN}'])
+def test_catalog_invalid_json_is_sanitized(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+    async def scenario() -> None:
+        async def handle(request: web.Request) -> web.Response:
+            return web.Response(body=body)
+
+        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+            with pytest.raises(ModelListError):
+                await provider.get_model_list()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308, 401, 403, 429, 500])
+def test_catalog_http_errors_redacted_without_redirect_or_fallback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: int
+) -> None:
+    async def scenario() -> None:
+        paths: list[str] = []
+
+        async def handle(request: web.Request) -> web.Response:
+            paths.append(request.path)
+            return web.Response(
+                status=status, text=ACCESS, reason=ACCESS, headers={"Location": "/credential-sink", "Secret": ACCESS}
+            )
+
+        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+            http_logger = Mock(spec=HTTPLogger)
+            provider.set_http_logger(http_logger)
+            with pytest.raises(ModelListError) as error:
+                await provider.get_model_list()
+            assert paths == ["/backend-api/codex/models"]
+            assert ACCESS not in str(error.value) + caplog.text and error.value.__suppress_context__
+            assert not http_logger.mock_calls
+
+    asyncio.run(scenario())
+
+
+def test_catalog_body_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gateway, "MAX_RESPONSE_BYTES", 128)
+
+    async def scenario() -> None:
+        async def handle(request: web.Request) -> web.StreamResponse:
+            response = web.StreamResponse()
+            await response.prepare(request)
+            await response.write(
+                json.dumps(
+                    {"models": [{"slug": "model", "visibility": "list", "base_instructions": "x" * 256}]}
+                ).encode()
+            )
+            return response
+
+        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+            with pytest.raises(ModelListError):
+                await provider.get_model_list()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_catalog_timeout_and_cancellation_close_connection(monkeypatch: pytest.MonkeyPatch, cancel: bool) -> None:
+    async def scenario() -> None:
+        started, disconnected, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def handle(request: web.Request) -> web.StreamResponse:
+            response = web.StreamResponse()
+            await response.prepare(request)
+            await response.write(b'{"models":[')
+            started.set()
+            while not release.is_set():
+                if request.transport is None or request.transport.is_closing():
+                    disconnected.set()
+                    break
+                await asyncio.sleep(0.01)
+            return response
+
+        async with endpoint(monkeypatch, handle), CodexProvider(credentials, timeout=2) as provider:
+            task = asyncio.create_task(provider.get_model_list())
+            try:
+                await asyncio.wait_for(started.wait(), 5)
+                if cancel:
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                else:
+                    with pytest.raises(ModelListError):
+                        await task
+                await asyncio.wait_for(disconnected.wait(), 5)
+            finally:
+                release.set()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("streaming", [False, True])

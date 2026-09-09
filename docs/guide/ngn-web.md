@@ -239,12 +239,18 @@ contains only `models` (an array of IDs) and `source`: `codex` for an active
 be named `openai` while the active connection is Codex.
 
 Offline demo and unsupported connections return HTTP **501** with a safe string
-`detail`. Codex catalog discovery is currently explicitly unsupported pending a
-verified upstream catalog contract; its existing login and generation still work.
-Missing provider credentials, upstream errors, timeouts, and invalid
+`detail`. OpenAI-compatible API-key connections and Codex OAuth have separate
+catalog implementations. Missing provider credentials, upstream errors, timeouts, and invalid
 catalog data return HTTP **502**, not browser-authentication HTTP 401. A valid
 empty upstream catalog returns HTTP 200 with `models: []`. Failures never supply
 a fake or cached catalog, expose upstream exceptions, or change the provider.
+
+Codex returns only picker-visible model IDs, including those marked
+`supported_in_api: false`; that field does not indicate OAuth unavailability.
+Its fixed catalog request uses compatibility version `0.153.4` while retaining
+ngn's own client identity. This follows the [official Codex client contract](../api/provider.md#codex-authentication),
+not a stable public OpenAI REST guarantee. The existing backend login/refresh
+flow and private deployment's selected authentication mode are unchanged.
 
 Discovery does not change the selected model, settings values, persisted row,
 revision, or browser draft, and it does not take over a running task or approval.

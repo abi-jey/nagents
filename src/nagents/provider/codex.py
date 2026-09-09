@@ -1,6 +1,6 @@
-"""ChatGPT subscription OAuth transport for Codex's Responses API.
+"""ChatGPT subscription OAuth transport for Codex generation and model discovery.
 
-This is not an API-key provider. Credentials only go to the fixed Codex endpoint;
+This is not an API-key provider. Credentials only go to fixed Codex endpoints;
 base Provider HTTP logging, endpoint configuration, and retries are not used.
 Tools are released only after a validated completed response, never from a
 partially received stream. GenerationConfig.reasoning.enabled requests an auto
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from dataclasses import field
 from importlib.metadata import PackageNotFoundError
@@ -20,6 +21,7 @@ from typing import cast
 
 import aiohttp
 
+from ..adapters._validation import list_data
 from ..events import ErrorEvent
 from ..events import FinishReason
 from ..events import ReasoningChunkEvent
@@ -27,11 +29,13 @@ from ..events import TextChunkEvent
 from ..events import TextDoneEvent
 from ..events import ToolCallEvent
 from ..events import Usage
+from ..exceptions import ModelListError
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
 from .base import Provider
 from .base import ProviderType
+from .gateway import GatewayHTTPClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -46,6 +50,10 @@ if TYPE_CHECKING:
 
 DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
+CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models"
+# Catalog protocol compatibility, not ngn's version or client identity.
+# Verified against openai/codex rust-v0.153.4 (3d2ee51ca2d5).
+CODEX_MODELS_CLIENT_VERSION = "0.153.4"
 try:
     USER_AGENT = f"ngn/{version('nagents')}"
 except PackageNotFoundError:
@@ -228,7 +236,7 @@ def _usage(value: object) -> Usage:
 
 
 class CodexProvider(Provider):
-    """Responses streaming with per-request OAuth credentials, no model discovery.
+    """Responses streaming and explicit model discovery with per-request OAuth.
 
     verify_model does not assert account entitlement; the Responses service does.
     No automatic retry/replay follows authentication, rate-limit, or stream errors.
@@ -250,7 +258,74 @@ class CodexProvider(Provider):
         return True
 
     async def get_model_list(self) -> list[str]:
-        raise NotImplementedError("Codex model discovery is not implemented; enter a model ID manually.")
+        """Fetch picker-visible Codex model IDs using the current OAuth snapshot.
+
+        This follows the official Codex client's catalog contract, not the public
+        OpenAI API-key catalog. It is fresh, read-only, and independent of model
+        verification. Failures raise ModelListError without upstream data; there
+        is no API-key fallback or entitlement guarantee.
+        """
+        if self.base_url != CODEX_ENDPOINT:
+            raise ModelListError("Codex model discovery requires its fixed endpoint; custom URLs are unsupported.")
+        try:
+            credentials = await self._credentials()
+            # Capture all routing fields before any further await, even when the
+            # callback returns a mutable credentials object shared with its caller.
+            access_token, account_id, residency = (
+                credentials.access_token,
+                credentials.account_id,
+                credentials.residency,
+            )
+            if not access_token or not re.fullmatch(r"[\x21-\x7e]{1,65536}", access_token):
+                raise ValueError
+            if account_id and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", account_id):
+                raise ValueError
+            if residency and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", residency):
+                raise ValueError
+        except Exception:
+            raise ModelListError("ChatGPT credentials are unavailable; sign in again with /login.") from None
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "originator": "ngn",
+            "User-Agent": USER_AGENT,
+        }
+        if account_id:
+            headers["ChatGPT-Account-Id"] = account_id
+        if residency and residency != "no_constraint":
+            headers["x-openai-internal-codex-residency"] = residency
+        try:
+            client = GatewayHTTPClient(timeout=self._model_list_timeout)
+            async with client:
+                response = await client.get_json(
+                    f"{CODEX_MODELS_ENDPOINT}?client_version={CODEX_MODELS_CLIENT_VERSION}", headers
+                )
+        except Exception:
+            raise ModelListError(
+                "Codex model discovery failed; check service availability and your ChatGPT login."
+            ) from None
+        if "error" in response or not isinstance(response.get("models"), list):
+            raise ModelListError("Codex returned an invalid model catalog.")
+        models: list[str] = []
+        seen: set[str] = set()
+        for item in list_data(response["models"]):
+            if not isinstance(item, dict):
+                raise ModelListError("Codex returned an invalid model entry.")
+            model_id, visibility = item.get("slug"), item.get("visibility")
+            if (
+                not isinstance(model_id, str)
+                or not model_id.strip()
+                or any(unicodedata.category(char).startswith("C") for char in model_id)
+            ):
+                raise ModelListError("Codex returned an invalid model ID.")
+            # Visibility is required by the pinned upstream ModelInfo struct.
+            if not isinstance(visibility, str) or visibility not in {"list", "hide", "none"}:
+                raise ModelListError("Codex returned invalid model visibility.")
+            # supported_in_api is not an OAuth availability filter.
+            if visibility == "list" and model_id not in seen:
+                models.append(model_id)
+                seen.add(model_id)
+        return models
 
     async def generate(
         self,

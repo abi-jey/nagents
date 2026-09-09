@@ -90,6 +90,8 @@ ngn login --status
 ```
 
 ```python
+import asyncio
+
 from nagents import CodexProvider, ModelListError
 from nagents.harness.auth import OpenAIAuth
 
@@ -104,15 +106,43 @@ async def codex_models() -> None:
                 print("Keep or enter your Codex model ID manually.")
     finally:
         await auth.close()
+
+
+asyncio.run(codex_models())
 ```
 
-Codex catalog discovery is currently explicitly unsupported in this checkout
-pending a verified upstream catalog contract. Its override raises
-`NotImplementedError` without requesting credentials or making HTTP requests; it
-never inherits the API-key `/models` route. Codex generation and login are
-unchanged. `CodexProvider.verify_model()` remains local and does not prove account
-entitlement or request a catalog. `OpenAIAuth.credentials` remains the per-request
-credential/refresh callback for the existing OAuth transport, not a copied token.
+Codex discovery uses the fixed
+`https://chatgpt.com/backend-api/codex/models?client_version=0.153.4` route.
+`0.153.4` is a **catalog protocol compatibility version**, pinned to the official
+Codex `rust-v0.153.4` client, not the ngn package version. Requests still identify
+the application honestly as `originator: ngn` and `User-Agent: ngn/<package-version>`.
+
+Each fetch obtains one current `OpenAIAuth.credentials` snapshot and uses its
+access token, optional account ID, and optional residency together. It never
+copies the OAuth token into `Provider.api_key`, derives a catalog route from a
+custom URL, or falls back to the OpenAI API-key service. Changing the Codex
+provider's `base_url` rejects discovery before requesting credentials. Login,
+refresh, and generation behavior are unchanged; no additional account-routing
+features are inferred from geolocation or other metadata.
+
+The response must contain a `models` array of objects with valid `slug` and
+`visibility` fields. Only `visibility: "list"` contributes an ID; `"hide"` and
+`"none"` are excluded. Missing, null, or unknown visibility is an error, matching
+the pinned struct's required enum rather than guessing a default. Models with
+`supported_in_api: false` **remain eligible for OAuth discovery**. IDs retain
+upstream order (no priority sorting), with duplicates removed; descriptions,
+instructions, account metadata, and other extra fields are not returned.
+
+The catalog uses the same bounded, redirect-free, cookie-free, non-logging
+transport limits described above. There is no catalog cache or pagination.
+`CodexProvider.verify_model()` remains local and does not prove account
+entitlement or request a catalog. This is an **official Codex client contract,
+not a stable public OpenAI REST API guarantee**. `ModelListError` and manual model
+entry remain important if that contract or account access changes.
+
+Pinned upstream sources: [catalog route and query](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/codex-api/src/endpoint/models.rs#L31-L78),
+[required model fields](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/openai_models.rs#L390-L402),
+and [picker visibility](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/openai_models.rs#L880-L883).
 
 ::: nagents.CodexCredentials
 
