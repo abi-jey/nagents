@@ -12,6 +12,7 @@ from nagents.events import Event
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.exceptions import ModelListError
 from nagents.extensions import CompactionResult
 from nagents.provider import Provider
 from nagents.types import Message
@@ -58,6 +59,17 @@ class HarnessProvider(Provider):
         # The actual generation endpoint is authoritative; startup stays local.
         self.credentials()
         return True
+
+    async def get_model_list(self) -> list[str]:
+        if self.harness_config.demo:
+            raise NotImplementedError("Model discovery is unavailable in offline demo mode; enter a model ID manually.")
+        try:
+            self.credentials()
+        except Exception:
+            raise ModelListError(
+                "API-key credentials are unavailable; configure your provider key before discovery."
+            ) from None
+        return await super().get_model_list()
 
     async def generate(
         self,

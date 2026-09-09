@@ -146,6 +146,7 @@ from .events import ToolCallEvent
 from .events import ToolResultEvent
 from .events import ToolResultType
 from .events import Usage
+from .exceptions import ModelListError
 from .exceptions import NagentsError
 from .exceptions import ToolHallucinationError
 from .extensions import AgentPlugin
@@ -272,6 +273,7 @@ __all__ = [
     "MediaCapabilities",
     "Message",
     "Messages",
+    "ModelListError",
     "ModelRequest",
     "NagentsError",
     "NullAudioOutput",

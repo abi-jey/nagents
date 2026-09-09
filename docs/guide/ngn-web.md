@@ -37,6 +37,33 @@ OAuth credentials stay on the backend. Configure credentials through the existin
 CLI/environment, not the browser. Textual is not required. The existing `server`
 extra also supplies the HTTP dependencies, but the applications are independent.
 
+### Your Own Connection
+
+Model discovery uses the backend's **active provider**, not browser-supplied
+credentials or a browser-selected endpoint. It never changes authentication or
+billing mode. Keep an existing private deployment's ChatGPT/Codex login; enabling
+catalog discovery does not require switching it to an OpenAI Platform API key.
+
+For your own installation, choose your own connection deliberately:
+
+- **OpenAI Platform API key:** set `OPENAI_API_KEY` securely in the backend
+  environment using your own key, then run `ngn serve --provider openai --auth
+  api-key --model gpt-4.1`. Platform API usage and billing are separate from a
+  ChatGPT subscription. Never put key values into browser settings, URLs, or Git.
+- **ChatGPT/Codex login:** run `ngn login --device-auth`, approve only the code you
+  requested, and use `ngn login --status` to check the saved login. Then run
+  `ngn serve --provider openai --auth chatgpt`, with the default endpoint and
+  `api = "auto"`. Interactive `/login` remains available in the terminal client.
+  Use your own eligible ChatGPT account; protected credential storage currently
+  requires POSIX. See [device login](ngn.md#openai-device-login) for limitations.
+
+The API-key and Codex catalogs are not interchangeable, and discovery never falls
+back between them. In particular, a Codex OAuth access token is **not** an OpenAI
+API key. Login/refresh remains on the backend; the browser receives only model
+IDs and a non-secret source label. Administrator-managed containers use their
+existing backend credential environment/store, not credentials supplied by a web
+visitor. This does not add multi-user account isolation to a shared deployment.
+
 ### Frontend Build
 
 The React/TypeScript source and npm lockfile live in `src/nagents/web-ui/`.
@@ -129,6 +156,7 @@ the configured authority) and `Content-Type: application/json`.
 | --- | --- |
 | `GET bootstrap` | Non-secret workspace/model/profile/demo info, token, active run ID |
 | `GET settings` | Committed runtime values, startup defaults, profiles, revision, persistence and safe connection status; readable during a run |
+| `GET models` | Explicit fresh discovery from the active provider; `{models: string[], source: string}`; read-only, including during a run |
 | `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
 | `POST settings/reset` | `{revision}` restores startup defaults and deletes the saved override; idle only |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
@@ -168,7 +196,7 @@ read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
 POST requires all seven values. Unknown fields, numeric strings, booleans used as
 numbers, and nonfinite numbers are rejected with HTTP 422. Changing profile selects
 its trusted instructions/mode, but the explicitly submitted model takes precedence
-over that profile's model. Model IDs are free text: GET/save never query a model
+over that profile's model. Model IDs are free text: settings GET/save never query a model
 catalog or test entitlement. A later provider request may reject an unavailable ID.
 Permission ceilings and per-call approvals remain enforced. Existing sessions,
 history, provider credentials, and tools are retained. New children inherit the
@@ -199,6 +227,32 @@ An administrator must stop ngn and repair or remove **only** the `ngn_web_settin
 row in the affected database; preserve session history and credential storage.
 The API cannot edit provider routing, authentication, plugins, trust, paths, demo
 mode, arbitrary files, or Python configuration.
+
+### Model Discovery
+
+`GET /api/models` is an explicit request, never a startup, bootstrap, or settings
+read side effect. It accepts no query parameters and uses the same `X-Ngn-Token`,
+Host, Origin, and fetch-metadata guards as other API reads. A successful response
+contains only `models` (an array of IDs) and `source`: `codex` for an active
+`CodexProvider`, otherwise the actual `ProviderType.value` such as
+`openai_compatible`, `openrouter`, or `litellm`. The configured provider can still
+be named `openai` while the active connection is Codex.
+
+Offline demo and unsupported connections return HTTP **501** with a safe string
+`detail`. Codex catalog discovery is currently explicitly unsupported pending a
+verified upstream catalog contract; its existing login and generation still work.
+Missing provider credentials, upstream errors, timeouts, and invalid
+catalog data return HTTP **502**, not browser-authentication HTTP 401. A valid
+empty upstream catalog returns HTTP 200 with `models: []`. Failures never supply
+a fake or cached catalog, expose upstream exceptions, or change the provider.
+
+Discovery does not change the selected model, settings values, persisted row,
+revision, or browser draft, and it does not take over a running task or approval.
+Selecting and saving a model remains a separate settings action. Manual model-ID
+entry continues to work when discovery fails or is unsupported. IDs do not prove
+capabilities or entitlement; a later generation request remains authoritative.
+This endpoint and the library method are source-checkout features, not part of
+the published `v0.5.0` web/API surface.
 
 ## Development Checks
 

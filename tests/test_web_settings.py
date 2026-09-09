@@ -5,6 +5,7 @@ import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import aiosqlite
@@ -89,6 +90,36 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "/api/settings", json={"revision": body["revision"], "values": body["values"]}, headers=headers
                 )
                 assert saved.status_code == 200
+
+    asyncio.run(check())
+
+
+def test_catalog_read_preserves_saved_row_and_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_CATALOG_KEY", "fake-api-key")
+
+    async def check() -> None:
+        config = replace(configuration(tmp_path), demo=False, auth="api-key", api_key_env="TEST_CATALOG_KEY")
+        async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+            harness = harnesses[0]
+            initial = (await client.get("/api/settings", headers=headers)).json()
+            saved = await client.post(
+                "/api/settings",
+                json={"revision": initial["revision"], "values": {**initial["values"], "model": "manual-model"}},
+                headers=headers,
+            )
+            assert saved.status_code == 200
+            before = saved.json()
+            async with aiosqlite.connect(harness.agent.session.db_path) as db:
+                rows = list(await db.execute_fetchall("SELECT * FROM ngn_web_settings"))
+                assert len(rows) == 1
+                with patch.object(
+                    harness.agent.provider, "get_model_list", AsyncMock(return_value=["different-model"])
+                ):
+                    response = await client.get("/api/models", headers=headers)
+                    assert response.status_code == 200 and response.json()["models"] == ["different-model"]
+                assert (await client.get("/api/settings", headers=headers)).json() == before
+                assert list(await db.execute_fetchall("SELECT * FROM ngn_web_settings")) == rows
+            assert harness.config.model == harness.agent.provider.model == "manual-model"
 
     asyncio.run(check())
 

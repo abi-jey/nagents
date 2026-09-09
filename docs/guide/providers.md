@@ -9,6 +9,32 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 | OpenAI | `ProviderType.OPENAI_COMPATIBLE` | OpenAI API and compatible services |
 | Anthropic | `ProviderType.ANTHROPIC` | Anthropic Claude API |
 | Google | `ProviderType.GEMINI_NATIVE` | Google Gemini API |
+| OpenRouter | `ProviderType.OPENROUTER` | OpenAI-compatible API with OpenRouter identification |
+| LiteLLM | `ProviderType.LITELLM` | API-key gateway with an explicit API prefix |
+
+## Discover Model IDs
+
+The current source checkout adds `await provider.get_model_list() -> list[str]`;
+the published `v0.5.0` release does not include this method. See the
+[Provider API example](../api/provider.md#explicit-model-discovery) for a complete
+async example using your own `OPENAI_API_KEY` environment variable.
+
+Discovery is explicit and fresh. It does not select a model, alter configuration,
+or generate a response. OpenAI-compatible, OpenRouter, and LiteLLM connections
+query their configured API prefix plus `/models`, using their own API key. A
+custom service must implement the conventional `data` array with string `id`
+fields. Keep a manual model-ID input: unsupported discovery raises
+`NotImplementedError`, and missing credentials, upstream failures, or malformed
+catalogs raise `ModelListError`. An empty list means a valid empty catalog, not a
+fallback after a failure. Native Gemini, Anthropic, and Azure discovery is not
+implemented by this method; their existing verification behavior is unchanged.
+
+Catalog IDs are not capability or entitlement guarantees. The generation service
+can reject a listed model or accept an unlisted one. API-key catalogs and
+ChatGPT/Codex OAuth catalogs are separate connections, not interchangeable ways
+to use a subscription. Never pass a Codex OAuth token as `Provider.api_key`, or
+send it to an OpenAI-compatible endpoint. Use the separate `CodexProvider` and
+the [existing ngn login flow](ngn.md#openai-device-login) for subscription access.
 
 ---
 

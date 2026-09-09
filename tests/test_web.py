@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import httpx
@@ -21,10 +22,15 @@ from nagents.cli import main
 from nagents.events import DoneEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
+from nagents.exceptions import ModelListError
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
+from nagents.harness.provider import HarnessProvider
 from nagents.harness.tools import CodingTools
 from nagents.harness.types import HarnessEvent
+from nagents.provider import CodexProvider
+from nagents.provider import Provider
+from nagents.provider import ProviderType
 from nagents.types import Message as SessionMessage
 from nagents.web import built_assets
 from nagents.web import local_authority
@@ -272,6 +278,188 @@ def test_security_boundary_and_static_paths(tmp_path: Path) -> None:
             ).status_code == 422
             assert (await client.get("/api/bootstrap?token=do-not-log")).status_code == 400
             assert (await client.options("/api/run", headers=headers)).status_code == 405
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("source", ["codex", "openai_compatible", "openrouter", "litellm"])
+def test_models_uses_active_provider_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str) -> None:
+    monkeypatch.setenv("TEST_CATALOG_KEY", "fake-web-api-key")
+
+    async def check() -> None:
+        config = HarnessConfig(
+            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+        )
+        with patch.object(
+            HarnessProvider, "get_model_list", AsyncMock(side_effect=AssertionError("No startup discovery"))
+        ) as startup:
+            async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+                harness = harnesses[0]
+                before = (await client.get("/api/settings", headers=headers)).json()
+                startup.assert_not_called()
+                original = harness.agent.provider
+                callback = AsyncMock(side_effect=AssertionError("No live credentials in web dispatch test"))
+                provider = (
+                    CodexProvider(callback, model=original.model)
+                    if source == "codex"
+                    else Provider(ProviderType(source), "fake-key", original.model, base_url="http://127.0.0.1:1")
+                )
+                harness.agent.provider = provider
+                try:
+                    with (
+                        patch.object(
+                            provider, "get_model_list", AsyncMock(return_value=["fixture-a", "fixture-b"])
+                        ) as get,
+                        patch.object(harness.openai_auth, "status", return_value="Fixture login status"),
+                    ):
+                        before = (await client.get("/api/settings", headers=headers)).json()
+                        response = await client.get("/api/models", headers=headers)
+                        assert response.status_code == 200
+                        assert response.json() == {"models": ["fixture-a", "fixture-b"], "source": source}
+                        assert response.headers["cache-control"] == "no-store"
+                        get.assert_awaited_once_with()
+                        assert (await client.get("/api/settings", headers=headers)).json() == before
+                        assert provider.model == original.model and harness.config.provider == "openai"
+                        assert harness.agent.provider is provider
+                        callback.assert_not_called()
+                finally:
+                    harness.agent.provider = original
+                    await provider.close()
+
+    asyncio.run(check())
+
+
+def test_models_guards_and_demo_never_dispatch(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path) as (_, client, headers, harnesses):
+            with patch.object(harnesses[0].agent.provider, "get_model_list", AsyncMock()) as get:
+                for bad_headers in (
+                    {},
+                    {"Origin": URL},
+                    {**headers, "X-Ngn-Token": "wrong"},
+                    {**headers, "Host": "evil.test"},
+                    {**headers, "Origin": "https://evil.test"},
+                    {**headers, "Sec-Fetch-Site": "cross-site"},
+                ):
+                    assert (await client.get("/api/models", headers=bad_headers)).status_code == 403
+                assert (await client.get("/api/models?base_url=secret", headers=headers)).status_code == 400
+                response = await client.get("/api/models", headers=headers)
+                assert response.status_code == 501 and "demo" in response.json()["detail"]
+                get.assert_not_called()
+
+    asyncio.run(check())
+
+
+def test_models_captures_provider_during_inflight_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_CATALOG_KEY", "fake-web-api-key")
+
+    async def check() -> None:
+        config = HarnessConfig(
+            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+        )
+        async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+            harness = harnesses[0]
+            provider = harness.agent.provider
+            started, release = asyncio.Event(), asyncio.Event()
+
+            async def catalog() -> list[str]:
+                started.set()
+                await release.wait()
+                return ["captured-provider-model"]
+
+            replacement = CodexProvider(AsyncMock(side_effect=AssertionError("No OAuth credentials requested")))
+            with (
+                patch.object(provider, "get_model_list", catalog),
+                patch.object(replacement, "get_model_list", AsyncMock()) as other,
+            ):
+                task = asyncio.create_task(client.get("/api/models", headers=headers))
+                try:
+                    await asyncio.wait_for(started.wait(), 5)
+                    harness.agent.provider = replacement
+                    release.set()
+                    response = await task
+                    assert response.json() == {"models": ["captured-provider-model"], "source": "openai_compatible"}
+                    assert harness.agent.provider is replacement
+                    other.assert_not_called()
+                finally:
+                    release.set()
+                    await task
+                    harness.agent.provider = provider
+                    await replacement.close()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    "failure,status",
+    [
+        (NotImplementedError("SECRET"), 501),
+        (ModelListError("SECRET"), 502),
+        (ValueError("SECRET-key"), 502),
+        (RuntimeError("SECRET-upstream-body"), 502),
+    ],
+)
+def test_model_failure_safe_and_manual_settings_still_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception, status: int
+) -> None:
+    monkeypatch.setenv("TEST_CATALOG_KEY", "fake-web-api-key")
+
+    async def check() -> None:
+        config = HarnessConfig(
+            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+        )
+        async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+            before = (await client.get("/api/settings", headers=headers)).json()
+            provider = harnesses[0].agent.provider
+            with patch.object(provider, "get_model_list", AsyncMock(side_effect=failure)) as get:
+                response = await client.get("/api/models", headers=headers)
+                assert response.status_code == status and isinstance(response.json()["detail"], str)
+                assert "SECRET" not in response.text
+                assert (await client.get("/api/settings", headers=headers)).json() == before
+                assert provider.model == before["values"]["model"]
+                saved = await client.post(
+                    "/api/settings",
+                    json={"revision": before["revision"], "values": {**before["values"], "model": "manual-model"}},
+                    headers=headers,
+                )
+                assert saved.status_code == 200 and saved.json()["values"]["model"] == "manual-model"
+                assert provider.model == "manual-model"
+                get.assert_awaited_once_with()
+
+    asyncio.run(check())
+
+
+def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_CATALOG_KEY", "fake-web-api-key")
+
+    async def check() -> None:
+        config = HarnessConfig(
+            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+        )
+        async with client_app(tmp_path, config=config) as (app, client, headers, harnesses):
+            harness = harnesses[0]
+            assert isinstance(harness, ControlledHarness)
+            stream = LiveStream(app, headers, harness.session_id, "approval")
+            try:
+                pending = await stream.event("approval")
+                with patch.object(harness.agent.provider, "get_model_list", AsyncMock(return_value=[])):
+                    response = await client.get("/api/models", headers=headers)
+                    assert response.status_code == 200 and response.json()["models"] == []
+                assert not stream.task.done() and not harness.decisions
+                decision = await client.post(
+                    "/api/approval",
+                    json={
+                        "run_id": pending["run_id"],
+                        "approval_id": pending["approval_id"],
+                        "call_id": pending["id"],
+                        "decision": "deny",
+                    },
+                    headers=headers,
+                )
+                assert decision.status_code == 200
+                await stream.event("approval_closed")
+            finally:
+                await stream.disconnect()
 
     asyncio.run(check())
 
