@@ -654,13 +654,25 @@ def test_real_harness_demo_approval_and_resume(tmp_path: Path, allow: bool) -> N
         async with app.run_test(size=(100, 30)) as pilot:
             await idle(app, pilot)
             await send(app, pilot, "demo approval")
-            for _ in range(150):
-                await pilot.pause(0.02)
-                if isinstance(app.screen, ApprovalModal):
-                    break
+            async with asyncio.timeout(5):
+                while True:
+                    await pilot.pause(0.02)
+                    if isinstance(app.screen, ApprovalModal) and app.screen.is_mounted:
+                        # A screen can be current before its controls are mounted and laid out.
+                        buttons = list(app.screen.query("#allow, #deny").results(Button))
+                        if len(buttons) == 2 and all(
+                            button.is_mounted
+                            and button.is_on_screen
+                            and button.visible
+                            and not button.disabled
+                            and button.region
+                            and app.screen.get_widget_at(*button.region.offset)[0] is button
+                            for button in buttons
+                        ):
+                            break
             assert isinstance(app.screen, ApprovalModal)
             assert app.screen.request.tool == "demo_preview"
-            await pilot.click("#allow" if allow else "#deny")
+            assert await pilot.click("#allow" if allow else "#deny")
             await idle(app, pilot)
             answers = [item.source for item in app.query(Markdown)]
             assert len(answers) == 1
