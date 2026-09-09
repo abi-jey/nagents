@@ -249,6 +249,9 @@ class CodexProvider(Provider):
         self._model_verified = True
         return True
 
+    async def get_model_list(self) -> list[str]:
+        raise NotImplementedError("Codex model discovery is not implemented; enter a model ID manually.")
+
     async def generate(
         self,
         messages: list[Message],

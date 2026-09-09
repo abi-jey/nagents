@@ -9,6 +9,10 @@ class NagentsError(Exception):
     pass
 
 
+class ModelListError(NagentsError):
+    """Model discovery failed. Messages exclude credentials and upstream data."""
+
+
 class ToolHallucinationError(NagentsError):
     """
     Raised when the LLM tries to call a tool that doesn't exist.

@@ -36,6 +36,7 @@ from nagents.cli import _json_default
 from nagents.events import ErrorEvent
 from nagents.harness import Harness
 from nagents.harness.types import ApprovalRequest
+from nagents.provider import CodexProvider
 
 from . import built_assets
 from . import local_authority
@@ -306,6 +307,25 @@ def create_app(
     @app.get("/api/settings")
     async def settings() -> dict[str, object]:
         return state.settings.snapshot()
+
+    @app.get("/api/models")
+    async def models() -> dict[str, object]:
+        provider = state.harness.agent.provider
+        if state.harness.config.demo:
+            raise HTTPException(501, "Model discovery is unavailable in offline demo mode. Enter a model ID manually.")
+        try:
+            model_ids = await provider.get_model_list()
+            source = "codex" if isinstance(provider, CodexProvider) else provider.provider_type.value
+        except NotImplementedError:
+            raise HTTPException(
+                501, "Model discovery is not supported by this connection. Enter a model ID manually."
+            ) from None
+        except Exception:
+            raise HTTPException(
+                502,
+                "Model discovery failed. Check backend credentials and provider availability, or enter a model ID manually.",
+            ) from None
+        return {"models": model_ids, "source": source}
 
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:

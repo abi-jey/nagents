@@ -9,6 +9,8 @@ Supports:
 import asyncio
 import json
 import logging
+import math
+import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from enum import Enum
@@ -36,6 +38,7 @@ from ..events import TextChunkEvent
 from ..events import TextDoneEvent
 from ..events import ToolCallEvent
 from ..events import Usage
+from ..exceptions import ModelListError
 from ..http import HTTPClient
 from ..http import HTTPError
 from ..media import MediaCapabilities
@@ -158,6 +161,7 @@ class Provider:
             else HTTPClient(timeout=timeout)
         )
         self._model_verified: bool | None = None  # None = not checked, True/False = result
+        self._model_list_timeout = min(timeout, 30.0) if math.isfinite(timeout) and timeout > 0 else 30.0
 
         # Validate Azure-specific requirements
         if provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1 and not base_url:
@@ -203,6 +207,71 @@ class Provider:
         """
         self._http.set_session_id(session_id)
 
+    async def get_model_list(self) -> list[str]:
+        """Fetch model IDs explicitly, without changing the model or verification cache.
+
+        OpenAI-compatible, OpenRouter, and LiteLLM providers use GET on the
+        configured API prefix plus /models. IDs retain upstream order and spelling;
+        duplicates are removed. An empty catalog is valid, not a fallback on error.
+
+        Raises:
+            NotImplementedError: Discovery is not implemented for this provider.
+            ModelListError: Credentials, configuration, transport, or catalog data
+                are invalid. Upstream bodies and credentials are never included.
+
+        Catalog membership does not guarantee generation access or capabilities.
+        Each call makes a fresh bounded request, with no redirects or raw logging.
+        """
+        if self.provider_type not in {ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER, ProviderType.LITELLM}:
+            raise NotImplementedError(
+                "Model discovery is not implemented for this provider; enter a model ID manually."
+            )
+        try:
+            # base_url is mutable: validate the current prefix before sending a key.
+            prefix = self.base_url
+            parsed = urlsplit(prefix)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or any(char.isspace() or unicodedata.category(char).startswith("C") for char in prefix)
+                or parsed.path.rstrip("/").endswith(("/chat/completions", "/responses", "/messages", "/completions"))
+            ):
+                raise ValueError
+            if not self.api_key.strip():
+                raise ValueError
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            if self.provider_type == ProviderType.OPENROUTER:
+                headers["HTTP-Referer"] = "https://github.com/nagents"
+            # A short-lived secure transport also isolates catalogs from generation
+            # cookies, loggers, and the ordinary HTTPClient's redirect behavior.
+            client = GatewayHTTPClient(timeout=self._model_list_timeout)
+            async with client:
+                response = await client.get_json(f"{prefix.rstrip('/')}/models", headers)
+        except Exception:
+            raise ModelListError(
+                "Model discovery failed; check provider configuration, credentials, and availability."
+            ) from None
+        if "error" in response or not isinstance(response.get("data"), list):
+            raise ModelListError("Provider returned an invalid model catalog.")
+        models: list[str] = []
+        seen: set[str] = set()
+        for item in list_data(response["data"]):
+            model_id = item.get("id") if isinstance(item, dict) else None
+            if (
+                not isinstance(model_id, str)
+                or not model_id.strip()
+                or any(unicodedata.category(char).startswith("C") for char in model_id)
+            ):
+                raise ModelListError("Provider returned an invalid model ID.")
+            if model_id not in seen:
+                models.append(model_id)
+                seen.add(model_id)
+        return models
+
     async def verify_model(self, force: bool = False) -> bool:
         """Verify that the specified model exists in model list endpoint.
 
@@ -213,14 +282,14 @@ class Provider:
             True if the model is found, False otherwise.
 
         Note:
-            Anthropic doesn't have a models list endpoint, so verification
-            is skipped for that provider and always returns True.
+            Verification is not implemented here for Anthropic or Azure;
+            those providers continue to return True without a catalog request.
         """
         # Return cached result if available and not forcing re-verification
         if not force and self._model_verified is not None:
             return self._model_verified
 
-        # Anthropic and Azure don't have a models list endpoint
+        # Preserve local verification for Anthropic and Azure.
         if self.provider_type == ProviderType.ANTHROPIC:
             logger.info(f"Skipping model verification for Anthropic (model: {self.model})")
             self._model_verified = True
@@ -236,17 +305,7 @@ class Provider:
             return True
         try:
             if self.provider_type in (ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER, ProviderType.LITELLM):
-                url = f"{self.base_url}/models"
-                headers = {"Authorization": f"Bearer {self.api_key}"}
-
-                # OpenRouter also accepts an HTTP-Referer header for identification
-                if self.provider_type == ProviderType.OPENROUTER:
-                    headers["HTTP-Referer"] = "https://github.com/nagents"
-
-                response = await self._http.get_json(url, headers)
-                model_count = len(response.get("data", []))
-                logger.info(f"Model list response: {model_count} models available")
-                models = [m["id"] for m in response.get("data", [])]
+                models = await self.get_model_list()
 
                 # Check for exact match first
                 if self.model in models:
@@ -261,7 +320,7 @@ class Provider:
                     self._model_verified = True
                     return True
 
-                logger.warning(f"Model '{self.model}' not found in provider. Available models: {models[:10]}...")
+                logger.warning("Selected model not found in provider catalog")
                 self._model_verified = False
                 return False
             else:  # GEMINI_NATIVE
@@ -1399,6 +1458,9 @@ class PlaceholderProvider(Provider):
     async def verify_model(self, force: bool = False) -> bool:
         self._raise_placeholder_error()
         raise AssertionError("unreachable")
+
+    async def get_model_list(self) -> list[str]:
+        raise NotImplementedError("Model discovery is unavailable until PlaceholderProvider is replaced.")
 
     async def generate(
         self,

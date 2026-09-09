@@ -6,6 +6,8 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
 from aiohttp import web
@@ -23,6 +25,7 @@ from nagents.provider import codex
 from nagents.provider.codex import DEFAULT_CODEX_MODEL
 from nagents.provider.codex import CodexCredentials
 from nagents.provider.codex import CodexProvider
+from nagents.provider.gateway import GatewayHTTPClient
 from nagents.types import AudioContent
 from nagents.types import DocumentContent
 from nagents.types import GenerationConfig
@@ -46,6 +49,20 @@ ACCESS = "fake-codex-access-secret"
 
 async def credentials() -> CodexCredentials:
     return CodexCredentials(ACCESS, "account-123", "eu")
+
+
+def test_catalog_cannot_inherit_api_key_route() -> None:
+    async def scenario() -> None:
+        callback = AsyncMock(side_effect=AssertionError("Catalog contract is not implemented"))
+        async with CodexProvider(callback) as provider:
+            with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
+                assert await provider.verify_model() is True
+                with pytest.raises(NotImplementedError):
+                    await provider.get_model_list()
+                get.assert_not_called()
+                callback.assert_not_called()
+
+    asyncio.run(scenario())
 
 
 def call_item(arguments: str = '{"value":"hello"}') -> dict[str, object]:
