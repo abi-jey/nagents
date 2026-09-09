@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
+import { useSettings } from "../features/settings/useSettings";
 
 export function useClient() {
   const sessions = useSessions();
@@ -30,6 +31,13 @@ export function useClient() {
       setBusy(false);
     }
   }
+
+  const settings = useSettings({
+    token: sessions.config?.token || "",
+    blocked: busy || !!sessions.externalRun || !!chat.approval.pending,
+    operate,
+    accept: sessions.acceptSettings,
+  });
 
   async function connect() {
     await operate(async () => {
@@ -89,5 +97,5 @@ export function useClient() {
     }
   }
 
-  return { sessions, chat, busy, error, connect, select, submit, cancel };
+  return { sessions, chat, settings, busy, error, connect, select, submit, cancel };
 }
