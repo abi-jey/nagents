@@ -113,8 +113,9 @@ asyncio.run(codex_models())
 
 Codex discovery uses the fixed
 `https://chatgpt.com/backend-api/codex/models?client_version=0.153.4` route.
-`0.153.4` is a **catalog protocol compatibility version**, pinned to the official
-Codex `rust-v0.153.4` client, not the ngn package version. Requests still identify
+The query and `version` header both use `0.153.4` as a **catalog protocol
+compatibility version**, pinned to the official Codex `rust-v0.153.4` client, not
+the ngn package version. Requests still identify
 the application honestly as `originator: ngn` and `User-Agent: ngn/<package-version>`.
 
 Each fetch obtains one current `OpenAIAuth.credentials` snapshot and uses its

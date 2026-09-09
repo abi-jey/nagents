@@ -75,6 +75,7 @@ def test_catalog_cannot_inherit_api_key_route() -> None:
                     {
                         "Authorization": f"Bearer {ACCESS}",
                         "Accept": "application/json",
+                        "version": "0.153.4",
                         "ChatGPT-Account-Id": "account-123",
                         "x-openai-internal-codex-residency": "eu",
                         "originator": "ngn",
@@ -182,6 +183,7 @@ def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypa
         async def handle(request: web.Request) -> web.Response:
             assert request.method == "GET" and request.path == "/backend-api/codex/models"
             assert dict(request.query) == {"client_version": "0.153.4"}
+            assert request.headers["version"] == "0.153.4"
             assert request.headers["Accept"] == "application/json"
             assert request.headers["originator"] == "ngn" and request.headers["User-Agent"] == codex.USER_AGENT
             assert (

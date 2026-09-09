@@ -287,6 +287,7 @@ class CodexProvider(Provider):
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
+            "version": CODEX_MODELS_CLIENT_VERSION,
             "originator": "ngn",
             "User-Agent": USER_AGENT,
         }
