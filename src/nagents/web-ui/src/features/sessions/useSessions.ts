@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { request } from "../../api/client";
 import type { Bootstrap, Session, Snapshot } from "../../types";
+import type { SettingsReply } from "../settings/types";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
@@ -43,6 +44,19 @@ export function useSessions() {
     setSessions(snapshot.sessions);
   }
 
+  function acceptSettings(reply: SettingsReply) {
+    // Settings must not reload history, switch sessions, or clear partial output.
+    setConfig(
+      (current) =>
+        current && {
+          ...current,
+          model: reply.values.model,
+          agent: reply.values.agent,
+          provider: reply.connection.provider,
+        },
+    );
+  }
+
   return {
     config,
     sessions,
@@ -51,6 +65,7 @@ export function useSessions() {
     connect,
     select,
     refresh,
+    acceptSettings,
     invalidate: () => setSessionId(""),
   };
 }

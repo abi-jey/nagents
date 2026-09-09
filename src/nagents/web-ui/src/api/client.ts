@@ -1,3 +1,13 @@
+export class RequestError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "RequestError";
+  }
+}
+
 export async function request(
   path: string,
   token = "",
@@ -19,8 +29,9 @@ export async function request(
     const error = (await response.json().catch(() => ({}))) as {
       detail?: string;
     };
-    throw new Error(
+    throw new RequestError(
       error.detail || `Local request failed (${response.status}).`,
+      response.status,
     );
   }
   return response;

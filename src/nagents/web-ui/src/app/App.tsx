@@ -3,6 +3,7 @@ import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
 import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
+import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { useClient } from "./useClient";
 
 export function App() {
@@ -50,6 +51,14 @@ export function App() {
               {config ? `${config.agent}: ${config.model}` : "Local harness"}
             </span>
           </div>
+          <button
+            className="settings-trigger"
+            disabled={!config || busy || !!externalRun || !!chat.approval.pending}
+            onClick={client.settings.show}
+            aria-haspopup="dialog"
+          >
+            Settings
+          </button>
           <span className={`mode-badge ${config?.demo ? "demo" : ""}`}>
             {config?.demo ? "Offline demo" : "Live provider"}
           </span>
@@ -107,6 +116,7 @@ export function App() {
           </div>
         </footer>
       </main>
+      {client.settings.open && <SettingsDialog settings={client.settings} />}
       {chat.approval.pending && (
         <ApprovalDialog
           key={chat.approval.pending.approval_id}
