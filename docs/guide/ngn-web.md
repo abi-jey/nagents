@@ -90,7 +90,7 @@ still stored locally in the Harness data directory.
   the review heading, show exact inputs alongside the diff, and keep Deny conspicuous.
   Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
   a stream does not steal focus or scroll a reader away from earlier messages.
-- No remote binding, CORS wildcard, authentication/settings editor, voice,
+- No remote binding, CORS wildcard, authentication/endpoint editor, voice,
   attachment upload, arbitrary file HTTP access, or direct shell endpoint is
   provided. Only built frontend assets are served. Unknown routes remain 404.
 
@@ -128,6 +128,9 @@ the configured authority) and `Content-Type: application/json`.
 | Method / Path | Purpose |
 | --- | --- |
 | `GET bootstrap` | Non-secret workspace/model/profile/demo info, token, active run ID |
+| `GET settings` | Committed runtime values, startup defaults, profiles, revision, persistence and safe connection status; readable during a run |
+| `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
+| `POST settings/reset` | `{revision}` restores startup defaults and deletes the saved override; idle only |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
@@ -144,6 +147,58 @@ nonce. A core `done` is not the transport terminator; wait for `run_finished`.
 transcript can retain the actual decision without guessing from tool output.
 Streams are not replayable/resumable. Read saved history to recover, rather than
 automatically replaying a request with side effects.
+
+### Runtime Settings
+
+Settings responses contain `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
+an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`), and
+read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
+`defaults` contain exactly these fields:
+
+| Field | Accepted Values |
+| --- | --- |
+| `model` | Trimmed, nonblank provider model ID, at most 200 characters, without control characters |
+| `agent` | An existing built-in or trusted configured profile name |
+| `shell_timeout` | Finite number greater than 0 and at most 600 seconds |
+| `max_output` | Integer, 1,024 through 1,048,576 **bytes of tool output**, not model tokens |
+| `max_file_bytes` | Integer, 1,024 through 4,194,304 bytes |
+| `max_tool_rounds` | Integer, 1 through 1,000 |
+| `max_subagent_depth` | Integer, 0 through 8; root depth is 0 |
+
+POST requires all seven values. Unknown fields, numeric strings, booleans used as
+numbers, and nonfinite numbers are rejected with HTTP 422. Changing profile selects
+its trusted instructions/mode, but the explicitly submitted model takes precedence
+over that profile's model. Model IDs are free text: GET/save never query a model
+catalog or test entitlement. A later provider request may reject an unavailable ID.
+Permission ceilings and per-call approvals remain enforced. Existing sessions,
+history, provider credentials, and tools are retained. New children inherit the
+current model; retained children keep their prior state under the existing child
+continuation contract.
+
+Mutations reject HTTP 409 during a run, approval, or another mutation, or when the
+submitted revision is stale. Reload before retrying; do not automatically overwrite
+another tab's settings. Reads expose only the last committed snapshot, including
+during a save. Error `detail` is a safe string, never raw request/provider data.
+
+The versioned `ngn_web_settings` singleton row lives in the **existing workspace
+session SQLite database**, resolved by the Harness under `data_dir`. It stores only
+the seven approved values and revision, not credentials or the full configuration.
+The override applies across sessions and web-server restarts for that resolved
+workspace. One process must own the workspace; this is not multi-process settings
+synchronization. ConfigMap/TOML, CLI, profile and initial authentication/model
+resolution establish startup defaults **before** the saved override is applied.
+Reset deletes the row, so later restarts use any newly changed trusted defaults.
+The CLI/TUI do not load this web-only override.
+
+A save joins its local SQLite transaction even if its HTTP request is cancelled;
+on failure, live config, model, round limit and instructions are restored. If the
+connection is lost, reload to determine whether the save committed before retrying.
+Invalid JSON, unsupported versions, invalid values, or a removed saved profile block
+web startup rather than silently restoring potentially more permissive defaults.
+An administrator must stop ngn and repair or remove **only** the `ngn_web_settings`
+row in the affected database; preserve session history and credential storage.
+The API cannot edit provider routing, authentication, plugins, trust, paths, demo
+mode, arbitrary files, or Python configuration.
 
 ## Development Checks
 
