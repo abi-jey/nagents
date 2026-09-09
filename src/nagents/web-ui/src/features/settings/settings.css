@@ -125,6 +125,51 @@
   background: var(--surface-control);
   cursor: not-allowed;
 }
+.settings-model-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.settings-model-controls input {
+  flex: 1 1 220px;
+  width: 0;
+}
+.settings-model-controls button {
+  flex: 0 0 auto;
+}
+.settings-model-catalog {
+  margin-top: 14px;
+}
+.settings-model-results {
+  max-height: 180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding: 4px;
+  margin: 8px 0 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border-control);
+  border-radius: 4px;
+  background: var(--surface-output);
+}
+.settings-model-results li + li {
+  border-top: 1px solid var(--border-group);
+}
+.settings-model-results button {
+  display: block;
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.settings-model-results button[aria-current="true"] {
+  background: var(--surface-control);
+  box-shadow: inset 2px 0 var(--focus);
+}
 .settings-limits {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -213,6 +258,9 @@
   .settings-field select {
     min-height: 44px;
     font-size: 16px;
+  }
+  .settings-model-results button {
+    min-height: 44px;
   }
 }
 @media (max-width: 480px) {

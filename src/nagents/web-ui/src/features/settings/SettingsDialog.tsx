@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { executionLimits } from "./draft";
+import { ModelField } from "./ModelField";
 import type { useSettings } from "./useSettings";
 import "./settings.css";
 
@@ -236,32 +237,14 @@ export function SettingsDialog({
                     </p>
                   )}
                 </div>
-                <div className="settings-field">
-                  <label htmlFor="settings-model">Model ID</label>
-                  <input
-                    id="settings-model"
-                    type="text"
-                    value={draft.model}
-                    autoComplete="off"
-                    spellCheck={false}
-                    required
-                    aria-describedby={`settings-model-help${errors.model ? " settings-model-error" : ""}`}
-                    aria-invalid={!!errors.model}
-                    onChange={(event) =>
-                      settings.update("model", event.target.value)
-                    }
-                  />
-                  <p id="settings-model-help">
-                    Exact model ID for the current connection, up to 200
-                    characters. Model availability and account access are not
-                    checked here.
-                  </p>
-                  {errors.model && (
-                    <p id="settings-model-error" className="error-text">
-                      {errors.model}
-                    </p>
-                  )}
-                </div>
+                {/* A new connection replaces and aborts discovery, not the draft. */}
+                <ModelField
+                  key={JSON.stringify([settings.token, snapshot.connection])}
+                  token={settings.token}
+                  model={draft.model}
+                  error={errors.model}
+                  update={(model) => settings.update("model", model)}
+                />
               </fieldset>
               <fieldset
                 className="settings-group"
