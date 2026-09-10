@@ -95,10 +95,13 @@ still stored locally in the Harness data directory.
 
 - One local app instance owns one Harness on one async lifespan/event loop. Runs
   and session mutations conflict explicitly with HTTP 409; nothing is secretly
-  queued. Another tab cannot submit into a different selected session by accident.
+  queued by a competing user request. Scheduled wakeups wait for an idle boundary.
+  Another tab cannot submit into a different selected session by accident.
 - Closing the stream, navigating away, cancelling, or shutting down cancels and
-  joins the run and its child tools. Pending approvals fail closed. Completed
-  actions are **not rolled back**.
+  joins an ordinary request-owned run and its child tools. Pending approvals fail
+  closed. A previously accepted timer from a completed run does not require an
+  open browser; see [Scheduled Wakeups](#scheduled-wakeups). Completed actions
+  are **not rolled back**.
 - Approvals apply to an exact run, call ID, and fresh approval nonce. Only the
   active pending approval may be decided; stale, duplicate, or unknown decisions
   fail. An unanswered approval expires after five minutes and is denied.
@@ -109,10 +112,16 @@ still stored locally in the Harness data directory.
 - The client displays model and tool output as escaped text, with fenced code
   shown in keyboard-scrollable code regions. Tool records retain separate inputs,
   streamed output, final result/error, call identity, and measured duration when
-  provided. Parallel task records retain their IDs and parent/depth information.
+  provided. Nested tasks are grouped by their actual parent task IDs, not their
+  names or event arrival order. Later activations retain separate execution
+  evidence beneath the same task identity. Child approval decisions stay with
+  that child's call, even when another agent uses the same call ID.
 - Missing results are never inferred to be successful. Resumed history labels
   results as recorded, since live duration/approval/status events are not persisted
-  in the Harness message history.
+  in the Harness message history. Same-process reloads also show the retained task
+  tree's latest known state, not a reconstructed activation timeline. Saved
+  background context is collapsed and inspectable rather than shown as a fresh
+  user command. A server restart does not restore task handles from that text.
 - Enter sends and Shift+Enter inserts a newline. Approval dialogs initially focus
   the review heading, show exact inputs alongside the diff, and keep Deny conspicuous.
   Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
@@ -160,6 +169,7 @@ the configured authority) and `Content-Type: application/json`.
 | `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
 | `POST settings/reset` | `{revision}` restores startup defaults and deletes the saved override; idle only |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
+| `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
 | `POST run` | `{session_id, prompt}` starts an owning NDJSON response |
@@ -175,6 +185,58 @@ nonce. A core `done` is not the transport terminator; wait for `run_finished`.
 transcript can retain the actual decision without guessing from tool output.
 Streams are not replayable/resumable. Read saved history to recover, rather than
 automatically replaying a request with side effects.
+
+### Scheduled Wakeups
+
+The web Harness provides `schedule_wakeup`, with `wake_up_in` retained as the
+historical tool name. This is a native Harness tool, not the legacy server's
+global scheduler. For example, an agent can call:
+
+```python
+schedule_wakeup(minutes=5, reason="Check the earlier result and report back.")
+```
+
+`seconds`, `minutes`, `hours`, and `days` are additive, finite, nonnegative
+numbers. Their sum must be greater than zero and no more than seven days. The
+reason must contain 1 to 2,000 characters. The tool immediately acknowledges a
+one-shot timer with an ID and due time; it does not sleep inside a tool call or
+keep the original HTTP response open. The delay starts at acceptance, not when
+the current model turn finishes. A due timer waits for the next safe idle
+boundary rather than interrupting a model request, tool block, or approval.
+
+The timer belongs to the scheduling agent and its original root conversation.
+A root timer works without children. A child timer resumes the retained child
+conversation; its result notifies its **immediate parent**. If that parent has
+finished, an eligible retained parent is restarted in its own conversation and
+reports its synthesis upward. Main observes the task lifecycle, but a grandchild
+result is not independently injected into every ancestor's model context.
+Unavailable or cancelled parents fail explicitly rather than silently rerouting
+the result to Main. Notifications remain untrusted user-role data, not system
+instructions or extra results for an already acknowledged tool call.
+
+Execution is serialized with user runs, session changes, and settings writes.
+Changing the selected session never redirects a wakeup into that conversation.
+Automatic runs preserve permission ceilings and do not grant unattended file
+writes, shell execution, or custom-tool approval. Scheduling is not permission
+to perform a later privileged operation. Root-owned execution budgets still
+apply to automatic child/parent activations; human follow-up counters are
+separate. The scheduler also bounds pending timers and automatic activation
+chains to prevent unbounded self-scheduling.
+
+**Timers and child continuation handles are process-local.** They are cancelled
+on server shutdown, pod restart, or deployment replacement; they are not durable
+cron jobs. Persisted conversations and settings do not restore pending timers.
+Do not schedule a critical reminder here that must survive a restart. Frontends
+without a lifecycle-owned scheduler, including the ordinary CLI/TUI, reject the
+tool rather than falsely acknowledging an unavailable service.
+
+The browser reads session-scoped background activity while idle. Scheduling,
+firing, notification delivery, and actual parent activation are distinct records;
+a successful scheduling call does not mean the wakeup has fired. The activity
+buffer is bounded and process-local. A gap is reported explicitly, not filled
+with invented success or an automatic replay of a prompt. Ordinary request
+streams remain non-replayable. Saved history is still the recovery path for
+persisted conversation text, not a durable event or timer log.
 
 ### Runtime Settings
 
