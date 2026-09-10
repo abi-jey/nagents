@@ -133,7 +133,18 @@ class HarnessExecutor(ToolExecutor):
                 raise PermissionError("Delegation is disabled at the configured subagent depth limit")
             if self.harness.config.demo and (
                 not builtin
-                or call.name not in {"list_files", "find", "read_file", "search", "skill", "demo_preview", "delegate"}
+                or call.name
+                not in {
+                    "list_files",
+                    "find",
+                    "read_file",
+                    "search",
+                    "skill",
+                    "demo_preview",
+                    "delegate",
+                    "schedule_wakeup",
+                    "wake_up_in",
+                }
             ):
                 raise PermissionError("OFFLINE DEMO: writes, shell, and custom tools are disabled")
             if self.harness.mode == "reviewer" and (not builtin or call.name in {"edit", "write", "shell"}):
@@ -190,12 +201,54 @@ class CodingTools:
             self.write,
             self.shell,
             self.skill,
+            self.schedule_wakeup,
         ):
             self.harness.agent.register_tool(function)
             self.builtins[function.__name__] = function
+        self.harness.agent.register_tool(self.schedule_wakeup, name="wake_up_in")
+        self.builtins["wake_up_in"] = self.schedule_wakeup
         if self.harness.config.demo:
             self.harness.agent.register_tool(self.demo_preview)
             self.builtins["demo_preview"] = self.demo_preview
+
+    async def schedule_wakeup(
+        self,
+        seconds: float = 0,
+        minutes: float = 0,
+        hours: float = 0,
+        days: float = 0,
+        reason: str = "",
+    ) -> dict[str, str]:
+        """Schedule this conversation to resume later, without waiting here.
+
+        Delays are additive, nonnegative, and total more than zero and at most
+        seven days. Supply a nonblank reason of at most 2000 characters. Requires
+        a lifecycle-owned scheduler; timers and child handles are process-local,
+        not restored after restart. Waking never grants tool approvals.
+        """
+        values = (seconds, minutes, hours, days)
+        for value in values:
+            if type(value) not in (int, float) or not 0 <= value <= 604800 or not math.isfinite(value):
+                raise ValueError("Delays must be finite nonnegative numbers totaling at most seven days")
+        delay = math.fsum(value * scale for value, scale in zip(values, (1, 60, 3600, 86400), strict=True))
+        if not 0 < delay <= 604800:
+            raise ValueError("Total wake-up delay must be greater than zero and at most seven days")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
+            raise ValueError("Wake-up reason must contain 1 to 2000 characters and not be blank")
+        handler = self.harness.tasks.root.harness.wakeup_handler
+        if handler is None:
+            raise RuntimeError("Wake-up scheduler is unavailable in this client; no wake-up was scheduled")
+        self.harness.tasks._check_active()
+        try:
+            result = await handler(self.harness._task_id, delay, reason.strip())
+        except Exception:
+            raise RuntimeError("Wake-up could not be scheduled; no successful acknowledgement is available") from None
+        # A callback swallowing cancellation must not restart the model loop.
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError
+        self.harness.tasks._check_active()
+        return result
 
     def _check_storage(self, info: os.stat_result) -> None:
         auth_directory = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth"

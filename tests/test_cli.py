@@ -11,6 +11,10 @@ from nagents.cli import _plain
 from nagents.cli import main
 from nagents.events import TextChunkEvent
 from nagents.harness import TaskMessage
+from nagents.harness.types import ApprovalRequest
+from nagents.harness.types import TaskCompleted
+from nagents.harness.types import TaskNotification
+from nagents.harness.types import TaskStarted
 
 
 def test_options_work_before_and_after_subcommand() -> None:
@@ -38,6 +42,48 @@ def test_human_task_message_json_retains_hierarchy() -> None:
     assert record["schema_version"] == 1
     assert record["parent_task_id"] == "parent" and record["depth"] == 2
     assert record["prompt"] == "Follow up"
+
+
+def test_task_activation_and_notification_wire_contract() -> None:
+    for event in (
+        TaskStarted(
+            "child", "calm finch", "Wake", "parent", "parent-session", "child-session", 2, "agent", 1, 3, "wakeup"
+        ),
+        TaskCompleted(
+            "child",
+            "calm finch",
+            "Result",
+            "",
+            "parent",
+            "parent-session",
+            "child-session",
+            2,
+            "agent",
+            1,
+            "completed",
+            3,
+            "wakeup",
+        ),
+    ):
+        record = _event_record(event)
+        assert record["event"] in {"task_started", "task_completed"}
+        assert record["activation"] == 3 and record["trigger"] == "wakeup"
+        assert record["followup"] == 1 and record["parent_task_id"] == "parent"
+    notification = TaskNotification("notice-1", "child", "", "calm finch", "Main", "completion", "Result")
+    assert _event_record(notification) == {
+        "event": "task_notification",
+        "schema_version": 1,
+        "notification_id": "notice-1",
+        "source_task_id": "child",
+        "recipient_task_id": "",
+        "source_name": "calm finch",
+        "recipient_name": "Main",
+        "cause": "completion",
+        "text": "Result",
+    }
+    assert TaskStarted("child", "name", "prompt").activation == 0
+    assert TaskCompleted("child", "name", "result").trigger == "delegation"
+    assert ApprovalRequest("call", "write", "Create", {}, "", "child", "name", 2, 3).activation == 3
 
 
 def test_invalid_workspace_is_actionable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

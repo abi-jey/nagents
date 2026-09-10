@@ -16,8 +16,10 @@ from .types import Notice
 from .types import SessionInfo
 from .types import TaskCompleted
 from .types import TaskMessage
+from .types import TaskNotification
 from .types import TaskStarted
 from .types import ToolOutput
+from .types import WakeupHandler
 
 __all__ = [
     "ApprovalHandler",
@@ -35,7 +37,9 @@ __all__ = [
     "TaskCompleted",
     "TaskInfo",
     "TaskMessage",
+    "TaskNotification",
     "TaskStarted",
     "ToolOutput",
+    "WakeupHandler",
     "load_config",
 ]
