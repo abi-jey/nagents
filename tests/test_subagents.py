@@ -1097,7 +1097,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
     asyncio.run(scenario())
 
 
-def test_manual_descendant_followup_reaches_active_ancestor_and_root(
+def test_manual_descendant_followup_reaches_immediate_parent_not_root_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
@@ -1124,10 +1124,17 @@ def test_manual_descendant_followup_reaches_active_ancestor_and_root(
             release_ancestor.set()
             events = await asyncio.wait_for(task, 5)
             ancestor = next(info for info in harness.tasks.list() if info.depth == 1)
-            for history in (await harness.history(), await harness.task_history(ancestor.id)):
-                assert_balanced(history)
-                assert any("Human to grandchild" in str(note.content) for note in notifications(history))
-                assert any("Result 3" in str(note.content) for note in notifications(history))
+            parent_history = await harness.task_history(ancestor.id)
+            root_history = await harness.history()
+            assert_balanced(parent_history)
+            assert_balanced(root_history)
+            assert any("Human to grandchild" in str(note.content) for note in notifications(parent_history))
+            assert any("Result 3" in str(note.content) for note in notifications(parent_history))
+            assert not any(
+                "Human to grandchild" in str(note.content) or "Result 3" in str(note.content)
+                for note in notifications(root_history)
+            )
+            assert any("Result 1" in str(note.content) for note in notifications(root_history))
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 3
         finally:
             release_ancestor.set()

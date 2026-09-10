@@ -35,6 +35,7 @@ from .harness.types import HarnessEvent
 from .harness.types import Notice
 from .harness.types import TaskCompleted
 from .harness.types import TaskMessage
+from .harness.types import TaskNotification
 from .harness.types import TaskStarted
 from .harness.types import ToolOutput
 
@@ -154,6 +155,7 @@ def _event_record(event: HarnessEvent) -> dict[str, object]:
             TaskStarted: "task_started",
             TaskCompleted: "task_completed",
             TaskMessage: "task_message",
+            TaskNotification: "task_notification",
         }[type(event)]
     return record
 
@@ -282,6 +284,8 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                     )
                 elif isinstance(event, TaskMessage):
                     print(_plain(f"[Human follow-up to {event.name}]\n{event.prompt}"), file=sys.stderr)
+                elif isinstance(event, TaskNotification):
+                    print(_plain(f"[{event.cause}: {event.source_name} -> {event.recipient_name}]"), file=sys.stderr)
                 elif isinstance(event, ToolResultEvent):
                     if event.error:
                         print(_plain(f"[{event.name}: {event.error}]"), file=sys.stderr)

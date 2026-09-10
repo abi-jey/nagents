@@ -40,6 +40,8 @@ from .types import ApprovalRequest
 from .types import HarnessEvent
 from .types import Notice
 from .types import SessionInfo
+from .types import TaskCompleted
+from .types import TaskMessage
 
 if TYPE_CHECKING:
     from nagents.events import CompactionDoneEvent
@@ -49,6 +51,7 @@ if TYPE_CHECKING:
     from .auth import DeviceAuthorization
     from .config import HarnessConfig
     from .types import ApprovalHandler
+    from .types import WakeupHandler
 
 
 async def _deny(request: ApprovalRequest) -> bool:
@@ -84,6 +87,7 @@ class Harness:
         self.subagent_depth = 0
         self._task_id = ""
         self._task_name = ""
+        self._activation = 0
         self._permission_ceiling = "build"
         self._approval_lock = asyncio.Lock()
         self._owns_auth = True
@@ -94,6 +98,7 @@ class Harness:
         scope = hashlib.sha256(str(self.workspace).encode("utf-8")).hexdigest()[:32]
         self.session_id = f"ngn-{uuid.uuid4().hex[:16]}"
         self.approval_handler: ApprovalHandler = _deny
+        self.wakeup_handler: WakeupHandler | None = None
         self.instructions: dict[str, str] = {}
         self.diagnostics: list[str] = list(config.diagnostics)
         self.loaded_plugins: list[str] = []
@@ -166,6 +171,9 @@ class Harness:
             "Follow applicable AGENTS.md instructions; nested instructions take precedence for their subtree. "
             "A reviewer may inspect and report only: no writes, shell, or custom tools. "
             "Report what actually ran; never claim tests or edits succeeded without tool evidence.\n"
+            "Use schedule_wakeup (legacy alias wake_up_in) for a delayed self-follow-up only when the client supplies a scheduler. "
+            "It acknowledges immediately; timers and task handles are process-local and do not survive restart. "
+            "Scheduling and waking grant no additional tool permissions.\n"
         )
         if profile.instructions:
             base += f"\nTrusted profile instructions:\n{profile.instructions}\n"
@@ -184,7 +192,8 @@ class Harness:
                 "and 8 total child executions across the entire tree per root user run, including human follow-ups. "
                 f"Your depth is {self.subagent_depth}; delegation stops at depth {self.config.max_subagent_depth}. "
                 "Full quotas fail immediately, never wait for a slot. Jobs do not survive cancellation or process restart; "
-                "closed child conversations continue only on explicit human follow-up, never by replaying old acknowledgements.\n"
+                "closed child conversations may resume for a human follow-up, scheduled wake-up, or immediate child's completion, "
+                "never by replaying old acknowledgements. Results go to the immediate parent, whose synthesis propagates upward.\n"
             )
         else:
             base += "\nYou cannot delegate at this depth. Continue your own task using your permitted tools.\n"
@@ -312,6 +321,7 @@ class Harness:
             self._task_id,
             self._task_name,
             self.subagent_depth,
+            self._activation,
         )
         async with root._approval_lock:
             if self._closed or root._closed:
@@ -331,6 +341,23 @@ class Harness:
 
     async def run(self, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
         async with aclosing(self._run(prompt)) as events:
+            async for event in events:
+                yield event
+
+    async def wake(self, prompt: str, *, task_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
+        """Automatically activate this root or a retained child, without a budget reset.
+
+        The lifecycle owner must serialize this with other runs and select the
+        originating root session. Consume or close the iterator to own cleanup.
+        Busy runs reject; no timer, background consumer, or durable replay is created here.
+        """
+        if self._is_subagent:
+            raise PermissionError("Wake-ups must be submitted to the root harness")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16_000:
+            raise ValueError("Wake-up prompt must contain 1 to 16000 characters and not be blank")
+        if task_id:
+            self.tasks._lookup(task_id)
+        async with aclosing(self._run(prompt, task_id=task_id, trigger="wakeup")) as events:
             async for event in events:
                 yield event
 
@@ -357,7 +384,14 @@ class Harness:
         """Read detached child messages without resuming it; see tasks.history()."""
         return await self.tasks.history(task_id, limit)
 
-    async def _run(self, prompt: str, *, task_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
+    async def _run(
+        self,
+        prompt: str,
+        *,
+        task_id: str = "",
+        trigger: str = "human",
+        notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
+    ) -> AsyncGenerator[HarnessEvent, None]:
         """Stream the same core Agent.run, merging bounded live tool output.
 
         Consumers ending early must close the iterator (``contextlib.aclosing``).
@@ -385,16 +419,19 @@ class Harness:
             session_id = self.session_id
 
             async def produce() -> None:
-                self.tasks.begin(session_id, reset_budget=not self._is_subagent and not task_id)
-                message = prompt
+                self.tasks.begin(session_id, reset_budget=not self._is_subagent and not task_id and trigger == "human")
+                message: str | None = prompt
                 final: DoneEvent | None = None
                 try:
                     if task_id:
-                        self.tasks.continue_task(task_id, prompt)
-                        notification = await self.tasks.notification(wait_for_tasks=True)
-                        assert notification is not None
-                        message = notification
-                    while True:
+                        self.tasks.continue_task(task_id, prompt, trigger=trigger)
+                        message = await self.tasks.notification(wait_for_tasks=True)
+                    elif notifications:
+                        self.tasks._ready.extend(notifications)
+                        message = await self.tasks.notification()
+                    elif trigger == "wakeup":
+                        message = await self.tasks.wakeup_notification(prompt)
+                    while message is not None:
                         failed = False
                         async with aclosing(
                             self.agent.run(message, session_id=session_id, user_id="harness")

@@ -19,6 +19,7 @@ class ApprovalRequest:
     task_id: str = ""
     task_name: str = ""
     depth: int = 0
+    activation: int = 0
 
 
 @dataclass
@@ -52,6 +53,8 @@ class TaskStarted:
     depth: int = 1
     profile: str = "agent"
     followup: int = 0
+    activation: int = 0
+    trigger: str = "delegation"
 
 
 @dataclass
@@ -67,6 +70,8 @@ class TaskCompleted:
     profile: str = "agent"
     followup: int = 0
     status: Literal["running", "completed", "failed", "cancelled"] = "completed"
+    activation: int = 0
+    trigger: str = "delegation"
 
 
 @dataclass
@@ -84,5 +89,19 @@ class TaskMessage:
     followup: int = 1
 
 
-HarnessEvent = Event | ToolOutput | Notice | TaskStarted | TaskCompleted | TaskMessage
+@dataclass
+class TaskNotification:
+    """An untrusted notification delivered at the recipient's model-run boundary."""
+
+    notification_id: str
+    source_task_id: str
+    recipient_task_id: str
+    source_name: str
+    recipient_name: str
+    cause: Literal["completion", "wakeup"]
+    text: str
+
+
+HarnessEvent = Event | ToolOutput | Notice | TaskStarted | TaskCompleted | TaskMessage | TaskNotification
 ApprovalHandler = Callable[[ApprovalRequest], Awaitable[bool]]
+WakeupHandler = Callable[[str, float, str], Awaitable[dict[str, str]]]
