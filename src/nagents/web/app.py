@@ -16,11 +16,13 @@ from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import Annotated
 from typing import Literal
 
 import anyio
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi import Path as PathParameter
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -45,6 +47,10 @@ from .security import LocalOnly
 from .settings import SettingsInput
 from .settings import SettingsRevision
 from .settings import WebSettings
+from .settings import _join
+from .wakeups import Chain
+from .wakeups import Wakeup
+from .wakeups import Wakeups
 
 if TYPE_CHECKING:
     from starlette.types import Receive
@@ -93,6 +99,8 @@ class Run:
     task: asyncio.Task[None] = field(init=False)
     pending: Pending | None = None
     outcome: str = "completed"
+    background: bool = False
+    chain: Chain = field(default_factory=Chain)
 
 
 class WebState:
@@ -102,7 +110,9 @@ class WebState:
         self.harness = harness
         self.active: Run | None = None
         self.mutating = False
+        self.wakeups = Wakeups(lambda: self.active is None and not self.mutating, self.wake)
         harness.approval_handler = self.approve
+        harness.wakeup_handler = self.schedule
 
     @contextmanager
     def idle(self) -> Iterator[None]:
@@ -113,12 +123,15 @@ class WebState:
             yield
         finally:
             self.mutating = False
+            self.wakeups.changed.set()
 
     async def snapshot(self) -> dict[str, object]:
         # Only the currently selected, workspace-checked session can be read.
         history = await self.harness.history()
         return {
             "session_id": self.harness.session_id,
+            "activity_cursor": self.wakeups.cursor,
+            "retained_tasks": [asdict(info) for info in self.harness.tasks.list()],
             "sessions": [asdict(session) for session in await self.harness.list_sessions()],
             "history": [
                 {
@@ -138,6 +151,19 @@ class WebState:
     async def approve(self, request: ApprovalRequest) -> bool:
         run = self.active
         if run is None or run.pending is not None or run.task.cancelling():
+            return False
+        if run.background:
+            self.publish(
+                run,
+                {
+                    "event": "notice",
+                    "text": "Unattended approval was denied; no action was taken.",
+                    "task_id": request.task_id,
+                    "activation": request.activation,
+                    "call_id": request.id,
+                    "tool": request.tool,
+                },
+            )
             return False
         pending = Pending(secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future())
         run.pending = pending
@@ -162,14 +188,34 @@ class WebState:
                     {
                         "event": "approval_closed",
                         "approval_id": pending.id,
+                        "task_id": request.task_id,
+                        "activation": request.activation,
+                        "call_id": request.id,
                         "decision": "allow" if approved else "deny",
                         "expired": expired,
                     }
                 )
 
-    async def produce(self, run: Run, prompt: str) -> None:
+    async def schedule(self, task_id: str, delay: float, reason: str) -> dict[str, str]:
+        run = self.active
+        if run is None or run.task.cancelling() or run.task.done() or run.session_id != self.harness.session_id:
+            raise RuntimeError("Wakeups require an active run in their originating session")
+        return self.wakeups.schedule(run.session_id, run.id, run.chain, task_id, delay, reason)
+
+    def publish(self, run: Run, record: dict[str, object]) -> None:
+        record = {**record, "schema_version": 1, "run_id": run.id, "session_id": run.session_id}
+        self.wakeups.publish(record)
+
+    async def produce(self, run: Run, prompt: str, *, task_id: str = "") -> None:
+        async def send(record: dict[str, object]) -> None:
+            if run.background:
+                self.publish(run, record)
+            else:
+                await run.queue.put(record)
+
         try:
-            async with aclosing(self.harness.run(prompt)) as events:
+            source = self.harness.wake(prompt, task_id=task_id) if run.background else self.harness.run(prompt)
+            async with aclosing(source) as events:
                 async for event in events:
                     if isinstance(event, ErrorEvent):
                         run.outcome = "failed"
@@ -180,35 +226,75 @@ class WebState:
                         }
                     else:
                         record = _event_record(event)
-                    await run.queue.put(record)
+                    await send(record)
         except asyncio.CancelledError:
             run.outcome = "cancelled"
+            self.wakeups.cancel(run.chain)
             raise
         except Exception:
             run.outcome = "failed"
-            await run.queue.put({"event": "error", "message": "Run failed. Completed actions were not rolled back."})
+            await send({"event": "error", "message": "Run failed. Completed actions were not rolled back."})
         finally:
             if run.pending is not None and not run.pending.answer.done():
                 run.pending.answer.set_result(False)
             run.pending = None
 
-    async def stop(self, run: Run) -> None:
+    async def wake(self, wakeup: Wakeup) -> None:
+        # tick() checks idle and claims the timer without yielding. Own the slot
+        # before session I/O, including restoration after cancellation or failure.
+        run = Run(wakeup.session_id, background=True, chain=wakeup.chain)
+        self.active = run
+        self.publish(run, {"event": "run_started"})
+        run.task = asyncio.create_task(self._wake(run, wakeup), name=f"ngn-web-{run.id}")
+        try:
+            await _join(run.task)
+        except asyncio.CancelledError:
+            run.outcome = "cancelled"
+            self.wakeups.cancel(run.chain)
+        finally:
+            if run.outcome != "completed":
+                self.wakeups.lifecycle(wakeup, "cancelled" if run.outcome == "cancelled" else "failed", run_id=run.id)
+            self.publish(run, {"event": "run_finished", "status": run.outcome})
+            if self.active is run:
+                self.active = None
+            self.wakeups.changed.set()
+
+    async def _wake(self, run: Run, wakeup: Wakeup) -> None:
+        previous = self.harness.session_id
+        try:
+            await self.harness.resume(wakeup.session_id)
+            self.wakeups.lifecycle(wakeup, "fired", run_id=run.id)
+            await self.produce(run, wakeup.reason, task_id=wakeup.task_id)
+        except Exception:
+            run.outcome = "failed"
+            self.publish(run, {"event": "error", "message": "Wakeup failed. Completed actions were not rolled back."})
+        finally:
+            # Restore the already workspace-checked selection without cancellable
+            # database I/O. The run owns the mutation slot until this completes.
+            self.harness.session_id = previous
+            self.harness.tools.read_hashes.clear()
+
+    async def stop(self, run: Run, *, cancel: bool = True) -> None:
         # Starlette's disconnect cancellation is level-triggered. Shield the join,
         # not execution, so Harness iterator/tool cleanup completes on its loop.
         with anyio.CancelScope(shield=True):
+            if cancel:
+                self.wakeups.cancel(run.chain)
             if not run.task.done() and not run.task.cancelling():
                 run.outcome = "cancelled"
                 run.task.cancel()
             with suppress(asyncio.CancelledError):
-                await run.task
+                await _join(run.task)
             if self.active is run:
                 self.active = None
+            self.wakeups.changed.set()
 
 
 class RunResponse(StreamingResponse):
     def __init__(self, state: WebState, run: Run) -> None:
         self.state = state
         self.run = run
+        self.finished = False
         super().__init__(self.events(), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
     async def events(self) -> AsyncIterator[str]:
@@ -216,7 +302,11 @@ class RunResponse(StreamingResponse):
 
         def line(record: dict[str, object]) -> str:
             return (
-                json.dumps({**record, "schema_version": 1, "run_id": run.id}, default=_json_default, ensure_ascii=True)
+                json.dumps(
+                    {**record, "schema_version": 1, "run_id": run.id, "session_id": run.session_id},
+                    default=_json_default,
+                    ensure_ascii=True,
+                )
                 + "\n"
             )
 
@@ -230,13 +320,14 @@ class RunResponse(StreamingResponse):
             else:
                 yield line(record)
         yield line({"event": "run_finished", "status": run.outcome, "session_id": run.session_id})
+        self.finished = True
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         try:
             await super().__call__(scope, receive, send)
         finally:
             # Covers disconnect before the first body byte, not just generator exit.
-            await self.state.stop(self.run)
+            await self.state.stop(self.run, cancel=not self.finished)
 
 
 def create_app(
@@ -269,10 +360,13 @@ def create_app(
                 sessions = await harness.list_sessions()
                 if sessions:
                     await harness.resume(sessions[0].id)
+            state.wakeups.start()
             yield
         finally:
+            state.wakeups.shutdown()
             if state.active is not None:
                 await state.stop(state.active)
+            await state.wakeups.close()
             await harness.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -302,7 +396,21 @@ def create_app(
             "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
             "active_run_id": state.active.id if state.active is not None else "",
+            "active_session_id": state.active.session_id if state.active is not None else "",
+            "active_run_background": state.active.background if state.active is not None else False,
         }
+
+    @app.get("/api/activity/{session_id}/{after}")
+    async def activity(
+        session_id: Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")],
+        after: Annotated[int, PathParameter(ge=0, le=2**53 - 1)],
+    ) -> dict[str, object]:
+        if session_id not in {session.id for session in await state.harness.list_sessions()}:
+            raise HTTPException(404, "Session not found in this workspace.")
+        active = state.active
+        return state.wakeups.activity(
+            session_id, after, active.id if active and active.session_id == session_id else ""
+        )
 
     @app.get("/api/settings")
     async def settings() -> dict[str, object]:
