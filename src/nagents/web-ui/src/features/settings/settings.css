@@ -1,6 +1,10 @@
 .settings-trigger {
   flex-shrink: 0;
 }
+.settings-trigger:not(:disabled) {
+  color: var(--accent-violet);
+  border-color: color-mix(in srgb, var(--accent-violet) 55%, var(--border-group));
+}
 .settings-dialog {
   width: min(680px, calc(100% - 24px));
   max-height: calc(100dvh - 24px);
@@ -30,6 +34,7 @@
   font-size: 21px;
   line-height: 1.4;
   font-weight: 550;
+  color: var(--accent-violet);
 }
 .settings-heading h2:focus,
 .settings-confirmation h3:focus,
@@ -88,6 +93,7 @@
   padding: 0 8px 0 0;
   font-size: 14px;
   font-weight: 600;
+  color: var(--accent-teal);
 }
 .settings-field + .settings-field {
   margin-top: 16px;

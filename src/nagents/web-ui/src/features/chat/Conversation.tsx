@@ -7,6 +7,13 @@ import {
   type TranscriptItem,
 } from "./transcript.js";
 
+function taskAccent(id: string): number {
+  let hash = 0;
+  for (const character of id)
+    hash = (Math.imul(hash, 31) + character.charCodeAt(0)) >>> 0;
+  return hash % 6;
+}
+
 function TranscriptItems({
   items,
   names,
@@ -46,6 +53,7 @@ function TranscriptItems({
           key={`task:${task.id}`}
           className="task-thread"
           data-task-id={task.id}
+          data-accent={taskAccent(task.id)}
           data-parent-task-id={task.parentId}
           data-record-key={`task:${task.id}`}
           id={`task-${task.id}`}
