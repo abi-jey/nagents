@@ -179,6 +179,13 @@ hostile-code sandbox. `replicas: 1` plus `Recreate` avoids overlapping owners in
 ordinary rollouts; ReadWriteOnce is not a single-process lock. Do not autoscale,
 force-delete/recreate a running owner, or attach a second application to this PVC.
 
+The web Harness's `schedule_wakeup` timers are **process-local**, unlike saved
+conversations, settings, and credentials. A pod restart or image rollout cancels
+pending timers and drops retained child continuation handles. Check for active
+runs and pending wakeups before maintenance; do not describe a successful PVC
+restart test as proof that timers survived. These timers can execute without an
+open browser while the server remains running, but are not durable cron jobs.
+
 Config is secret-free: `provider = "openai"`, `auth = "chatgpt"`, `api = "auto"`,
 `data_dir = "/state/sessions"`. Omitting `model` lets the Harness replace its normal
 default with its Codex default. There is no API-key/endpoint injection or legacy

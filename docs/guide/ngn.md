@@ -272,9 +272,19 @@ untrusted background notification, and the parent automatically runs again to
 consider them. If children are still working, the harness waits for their results
 without holding a model request open. The UI shows each child's task and response;
 `/tasks` opens the current-session conversation inspector. Headless JSON includes
-`task_started`, `task_message`, and `task_completed` events, with a final `done`
-only after the group settles. Task events include parent/child session IDs,
-parent task ID, depth, profile, and follow-up number.
+`task_started`, `task_message`, `task_completed`, and `task_notification` events,
+with a final `done` only after the group settles. Task lifecycle events include
+parent/child session IDs, parent task ID, depth, profile, follow-up number,
+activation number, and trigger. Notification records identify the actual source
+and recipient; they do not themselves assert that another execution completed.
+
+Nested completion notifications target the **immediate parent**. Main can observe
+all task lifecycle events without receiving every grandchild result as a separate
+model instruction. When an eligible retained child is continued after its parent
+has finished, that parent is reactivated in its own conversation, synthesizes
+the update, and reports upward. Cancelled or unavailable ancestors are not
+silently bypassed. Automatic activations have their own activation number and
+trigger; they do not count as human follow-ups or reset the root execution budget.
 
 This preserves provider protocol rules: the delegation call has exactly one
 matching tool result (the started acknowledgement). Late completion is not a
@@ -314,6 +324,12 @@ Tasks are process-local, not durable jobs or persistent Bot identities. Cancelli
 or closing a run cancels and awaits its children; undelivered notifications are
 discarded, and task outcomes are not replayed after restart. Child transcripts
 remain in local storage but do not clutter the ordinary session picker.
+
+The [web client](ngn-web.md#scheduled-wakeups) additionally owns a process-local
+timer service for `schedule_wakeup` (historical name: `wake_up_in`). It resumes the
+scheduling root or child without keeping a browser request open. Ordinary
+CLI/TUI instances do not own that service and reject timer requests explicitly.
+Timers do not survive a server or pod restart.
 
 ### Agent tree and follow-ups
 
