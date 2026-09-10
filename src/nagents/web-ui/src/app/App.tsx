@@ -12,7 +12,8 @@ export function App() {
   const { config, sessionId, externalRun } = sessions;
   const [navOpen, setNavOpen] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
-  const canSubmit = !!config && !!sessionId && !busy && !externalRun;
+  const canSubmit =
+    !!config && !!sessionId && !busy && !externalRun && !sessions.activityOnly;
 
   async function select(id?: string) {
     if (await client.select(id)) {
@@ -53,7 +54,9 @@ export function App() {
           </div>
           <button
             className="settings-trigger"
-            disabled={!config || busy || !!externalRun || !!chat.approval.pending}
+            disabled={
+              !config || busy || !!externalRun || !!chat.approval.pending
+            }
             onClick={client.settings.show}
             aria-haspopup="dialog"
           >
@@ -72,6 +75,7 @@ export function App() {
           select={(id) => void select(id)}
         />
         <Conversation
+          key={`${sessionId}:${chat.transcriptVersion}`}
           entries={chat.entries}
           sessionId={sessionId}
           demo={!!config?.demo}
@@ -79,11 +83,13 @@ export function App() {
           submit={(value) => void submit(value)}
         />
         <footer className="composer-area">
-          {(error || externalRun) && (
+          {(error || externalRun || sessions.activityOnly) && (
             <div role="alert" className="error-banner">
               <span>
                 {error ||
-                  "Another connection owns the active run. Finish or cancel it before changing sessions."}
+                  (externalRun
+                    ? "Another connection owns the active run. Finish or cancel it before changing sessions."
+                    : "Connected during a background run. Earlier conversation is not loaded; reconnect when idle to load it.")}
               </span>
               {externalRun && (
                 <button onClick={() => void client.cancel()}>
@@ -97,7 +103,15 @@ export function App() {
           )}
           <div className="run-status" role="status">
             {chat.status}
+            {!!chat.pendingWakeups &&
+              `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}`}
           </div>
+          {chat.activityError && (
+            <p className="activity-warning" role="status">
+              Background activity unavailable: {chat.activityError} Read-only
+              polling will retry.
+            </p>
+          )}
           <Composer
             inputRef={composer}
             prompt={chat.prompt}

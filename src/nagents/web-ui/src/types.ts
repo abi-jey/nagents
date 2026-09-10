@@ -6,11 +6,33 @@ export type Bootstrap = {
   agent: string;
   demo: boolean;
   active_run_id: string;
+  active_session_id?: string;
+  active_run_background?: boolean;
 };
 
 export type Session = { id: string; title: string; updated_at: string };
+export type RetainedTask = {
+  id: string;
+  name: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  result: string;
+  error: string;
+  session_id: string;
+  prompt: string;
+  child_session_id: string;
+  parent_task_id: string;
+  parent_session_id: string;
+  depth: number;
+  profile: string;
+  mode: string;
+  followups: number;
+  activation: number;
+  trigger: "delegation" | "human" | "wakeup" | "notification";
+};
 export type Snapshot = {
   session_id: string;
+  activity_cursor?: number;
+  retained_tasks: RetainedTask[];
   sessions: Session[];
   history: {
     role: string;
@@ -32,7 +54,24 @@ export type Approval = {
   task_id: string;
   task_name: string;
   depth: number;
+  activation: number;
 };
 
 export type Decision = "allow" | "deny";
 export type WireEvent = { event: string; [key: string]: unknown };
+
+export type PendingWakeup = {
+  wakeup_id: string;
+  task_id: string;
+  due_at: string;
+  reason: string;
+};
+
+export type ActivityReply = {
+  session_id: string;
+  cursor: number;
+  events: WireEvent[];
+  active_run_id: string;
+  pending_wakeups: PendingWakeup[];
+  truncated: boolean;
+};

@@ -179,6 +179,7 @@ main {
   overflow-y: auto;
   min-height: 0;
   scroll-padding: 16px;
+  overflow-anchor: none;
 }
 .conversation:focus-visible {
   outline-offset: -3px;
@@ -246,6 +247,11 @@ main {
   font-size: 12px;
   line-height: 1.65;
 }
+.entry.status[data-level="warning"] {
+  padding-left: 12px;
+  border-left: 2px solid var(--state-pending);
+  color: var(--state-pending);
+}
 .entry.error {
   padding-left: 12px;
   border-left: 2px solid var(--state-error);
@@ -255,7 +261,8 @@ main {
   color: inherit;
 }
 .entry.tool,
-.entry.task {
+.entry.task,
+.entry.context {
   margin-bottom: 10px;
 }
 .execution-record {
@@ -264,7 +271,7 @@ main {
 .execution-record > summary {
   cursor: pointer;
   padding: 10px 4px;
-  min-height: 40px;
+  min-height: 44px;
   font-size: 13px;
 }
 .execution-record > summary::marker {
@@ -288,6 +295,7 @@ main {
   flex-shrink: 0;
 }
 .execution-state[data-state="Error"],
+.execution-state[data-state="Failed"],
 .execution-state[data-state="Interrupted"] {
   color: var(--state-error);
 }
@@ -353,6 +361,72 @@ code {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.65;
+}
+.task-thread {
+  min-width: 0;
+  margin: 16px 0;
+  border-left: 1px solid var(--border-group);
+  scroll-margin-top: 16px;
+}
+.retained-tasks {
+  min-width: 0;
+  border-top: 1px solid var(--border-group);
+  margin: 24px 0;
+  padding-top: 18px;
+}
+.task-thread > details > summary {
+  min-height: 44px;
+  padding: 10px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.task-contents {
+  padding: 4px 0 0 14px;
+  min-width: 0;
+}
+.record-identity {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.entry.notification,
+.entry.wakeup {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border-control);
+  min-width: 0;
+}
+.entry.notification .entry-label {
+  overflow-wrap: anywhere;
+}
+.entry.notification .entry-content,
+.entry.wakeup .entry-content {
+  font-size: 13px;
+}
+.activity-announcement {
+  position: sticky;
+  height: 0;
+  top: 8px;
+  z-index: 1;
+  text-align: right;
+}
+.activity-announcement button {
+  position: absolute;
+  right: 0;
+  top: 0;
+  max-width: 100%;
+}
+.activity-warning {
+  font-size: 12px;
+  color: var(--state-pending);
+  overflow-wrap: anywhere;
+}
+.record-note a {
+  color: var(--focus);
+  overflow-wrap: anywhere;
 }
 .composer-area {
   grid-column: 2;
@@ -603,6 +677,15 @@ button.deny:hover:not(:disabled) {
   }
   .execution-detail {
     padding-inline: 3px;
+  }
+  .task-contents {
+    padding-inline-start: 8px;
+  }
+  .task-thread .task-thread .task-thread .task-contents {
+    padding-inline-start: 0;
+  }
+  .task-thread .task-thread .task-thread .task-thread {
+    border-left: 0;
   }
   .request-identity {
     column-gap: 8px;

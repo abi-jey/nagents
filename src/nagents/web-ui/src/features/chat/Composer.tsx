@@ -25,7 +25,7 @@ export function Composer({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        submit();
+        if (canSubmit) submit();
       }}
     >
       <label htmlFor="composer" className="sr-only">

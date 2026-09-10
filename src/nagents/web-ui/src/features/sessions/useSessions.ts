@@ -8,10 +8,16 @@ export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
   const [externalRun, setExternalRun] = useState("");
+  const [activityCursor, setActivityCursor] = useState(0);
+  const [activityOnly, setActivityOnly] = useState(false);
+  const [initialBackgroundRunId, setInitialBackgroundRunId] = useState("");
 
   function accept(snapshot: Snapshot): Snapshot {
     setSessions(snapshot.sessions);
     setSessionId(snapshot.session_id);
+    setActivityCursor(snapshot.activity_cursor || 0);
+    setActivityOnly(false);
+    setInitialBackgroundRunId("");
     return snapshot;
   }
 
@@ -19,6 +25,23 @@ export function useSessions() {
     setSessionId("");
     const data = (await (await request("bootstrap")).json()) as Bootstrap;
     setConfig(data);
+    if (
+      data.active_run_id &&
+      data.active_run_background &&
+      data.active_session_id
+    ) {
+      setExternalRun("");
+      const snapshot = accept({
+        session_id: data.active_session_id,
+        sessions: [],
+        history: [],
+        retained_tasks: [],
+        activity_cursor: 0,
+      });
+      setActivityOnly(true);
+      setInitialBackgroundRunId(data.active_run_id);
+      return snapshot;
+    }
     setExternalRun(data.active_run_id);
     if (data.active_run_id) return;
     return accept(
@@ -62,6 +85,9 @@ export function useSessions() {
     sessions,
     sessionId,
     externalRun,
+    activityCursor,
+    activityOnly,
+    initialBackgroundRunId,
     connect,
     select,
     refresh,
