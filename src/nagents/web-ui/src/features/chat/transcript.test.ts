@@ -62,24 +62,28 @@ test("a new run never appends to a cancelled partial response", () => {
 });
 
 test("saved tool results rejoin their call rather than duplicating activity", () => {
-  const entries = fromHistory([
-    {
-      role: "assistant",
-      content: "",
-      name: "",
-      tool_call_id: "",
-      tool_calls: [
-        { id: "one", name: "read_file", arguments: { path: "example" } },
-      ],
-    },
-    {
-      role: "tool",
-      content: "saved result",
-      name: "read_file",
-      tool_call_id: "one",
-      tool_calls: [],
-    },
-  ]);
+  const entries = fromHistory({
+    session_id: "saved-session",
+    retained_tasks: [],
+    history: [
+      {
+        role: "assistant",
+        content: "",
+        name: "",
+        tool_call_id: "",
+        tool_calls: [
+          { id: "one", name: "read_file", arguments: { path: "example" } },
+        ],
+      },
+      {
+        role: "tool",
+        content: "saved result",
+        name: "read_file",
+        tool_call_id: "one",
+        tool_calls: [],
+      },
+    ],
+  });
   assert.equal(entries.length, 1);
   assert.equal(entries[0].result, "saved result");
   assert.equal(entries[0].state, "Recorded result");

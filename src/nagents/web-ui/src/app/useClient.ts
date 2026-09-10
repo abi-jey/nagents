@@ -5,8 +5,14 @@ import { useSettings } from "../features/settings/useSettings";
 
 export function useClient() {
   const sessions = useSessions();
-  const chat = useChatRun(sessions.config?.token || "", sessions.sessionId);
-  const [busy, setBusy] = useState(false);
+  const chat = useChatRun(
+    sessions.config?.token || "",
+    sessions.sessionId,
+    sessions.activityCursor,
+    sessions.initialBackgroundRunId,
+  );
+  const [operating, setBusy] = useState(false);
+  const busy = operating || !!chat.backgroundRunId;
   const [error, setError] = useState("");
   const occupied = useRef(false);
 
@@ -35,7 +41,8 @@ export function useClient() {
   const settings = useSettings({
     token: sessions.config?.token || "",
     blocked: busy || !!sessions.externalRun || !!chat.approval.pending,
-    operate,
+    operate: (action) =>
+      chat.backgroundRunId ? Promise.resolve(false) : operate(action),
     accept: sessions.acceptSettings,
   });
 
@@ -58,7 +65,8 @@ export function useClient() {
   }, []);
 
   async function select(id = "") {
-    if (!sessions.config || sessions.externalRun) return false;
+    if (!sessions.config || sessions.externalRun || chat.backgroundRunId)
+      return false;
     return operate(async () => {
       chat.loadHistory(await sessions.select(id));
     });
@@ -68,7 +76,9 @@ export function useClient() {
     if (
       !sessions.config ||
       !sessions.sessionId ||
+      sessions.activityOnly ||
       sessions.externalRun ||
+      chat.backgroundRunId ||
       !value.trim()
     )
       return;
@@ -97,5 +107,15 @@ export function useClient() {
     }
   }
 
-  return { sessions, chat, settings, busy, error, connect, select, submit, cancel };
+  return {
+    sessions,
+    chat,
+    settings,
+    busy,
+    error,
+    connect,
+    select,
+    submit,
+    cancel,
+  };
 }

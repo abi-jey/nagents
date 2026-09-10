@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
-import { preview } from "../../api/events";
-import { CodeBlock } from "../../components/CodeBlock";
+import { preview } from "../../api/events.js";
+import { CodeBlock } from "../../components/CodeBlock.js";
 import type { Approval, Decision } from "../../types";
 
 export function ApprovalDialog({
@@ -75,7 +75,7 @@ export function ApprovalDialog({
               <dt>Task</dt>
               <dd>
                 {approval.task_name} ({approval.task_id}), depth{" "}
-                {approval.depth}
+                {approval.depth}, activation {approval.activation}
               </dd>
             </>
           )}
