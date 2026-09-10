@@ -87,6 +87,45 @@ function renderedParents(html: string) {
   return parents;
 }
 
+test("task colors stay tied to identity across ordering, activation and restored state", () => {
+  const ids = ["A", "B", "C", "D", "E", "F"];
+  const entries = reduce(...ids.map((id) => started(id)));
+  function accents(entries: Entry[]) {
+    const html = markup(entries);
+    return new Map(
+      [...html.matchAll(/data-task-id="([^"]+)" data-accent="([0-5])"/g)].map(
+        (match) => [match[1], match[2]] as const,
+      ),
+    );
+  }
+  const initial = accents(entries);
+  assert.equal(initial.size, ids.length);
+  assert.equal(new Set(initial.values()).size, 6);
+  assert.deepEqual(accents([...entries].reverse()), initial);
+  assert.deepEqual(
+    accents(entries.reduce(
+      (next, entry) => appendEvent(next, completed(entry.taskId!)),
+      entries,
+    )),
+    initial,
+  );
+  assert.deepEqual(
+    accents(reduce(...ids.map((id) => started(id, "", "later", 2)))),
+    initial,
+  );
+  assert.deepEqual(
+    accents(entries.map((entry) => ({
+      ...entry,
+      recorded: true,
+      state: "Recorded result",
+      runId: undefined,
+    }))),
+    initial,
+  );
+  assert.match(markup(entries), /Agent A/);
+  assert.match(markup(entries), /Running/);
+});
+
 test("rendered task identities nest Main > A > B with independent siblings and root chronology", () => {
   const entries = reduce(
     { event: "user_message", text: "First main request" },
