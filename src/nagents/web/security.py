@@ -20,6 +20,7 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "microphone=(self), camera=()",
     "Content-Security-Policy": (
         "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
         "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
@@ -80,6 +81,17 @@ class LocalOnly:
         if method == "POST":
             if headers.getlist("origin") != [origin]:
                 await reject(403, "An exact same-origin Origin header is required.")
+                return
+            if path == "/api/dictation/transcribe":
+                if [value.lower() for value in headers.getlist("content-type")] != ["audio/wav"]:
+                    await reject(415, "Use audio/wav for the recording upload.")
+                    return
+                if headers.getlist("content-encoding"):
+                    await reject(415, "Content-Encoding is not supported for recordings.")
+                    return
+                # The route acquires the idle slot before reading, then counts
+                # actual bytes under its captured configuration and a deadline.
+                await self.app(scope, receive, secure_send)
                 return
             if headers.get("content-type", "").lower() not in {"application/json", "application/json; charset=utf-8"}:
                 await reject(415, "Use application/json.")

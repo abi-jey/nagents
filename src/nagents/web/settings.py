@@ -1,6 +1,7 @@
 """Allowlisted workspace settings; no credentials or trusted configuration writes."""
 
 import asyncio
+import copy
 import secrets
 from typing import TYPE_CHECKING
 
@@ -12,13 +13,21 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
+from nagents.harness.dictation import BYTES_PER_SECOND
+from nagents.harness.dictation import SAMPLE_RATE
+from nagents.harness.dictation import DictationError
+from nagents.harness.dictation import VoiceDictation
+
 if TYPE_CHECKING:
     from nagents.harness import Harness
+    from nagents.harness.config import HarnessConfig
 
 MAX_SETTINGS_BYTES = 16384
 
 
-class SettingsValues(BaseModel):
+class _SettingsValuesV1(BaseModel):
+    """The original persisted schema, kept strict for deliberate v1 migration."""
+
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False, frozen=True)
 
     model: str = Field(min_length=1, max_length=200)
@@ -38,6 +47,18 @@ class SettingsValues(BaseModel):
             return value.strip()
         return value
 
+
+class SettingsValues(_SettingsValuesV1):
+    dictation_enabled: bool
+    dictation_model: str = Field(min_length=1, max_length=200)
+    dictation_language: str = Field(pattern=r"^(?:[a-z]{2})?$")
+    dictation_max_seconds: int = Field(ge=1, le=300)
+
+    @field_validator("dictation_model", mode="before")
+    @classmethod
+    def dictation_model_id(cls, value: object) -> object:
+        return cls.model_id(value)
+
     @classmethod
     def current(cls, harness: "Harness") -> "SettingsValues":
         config = harness.config
@@ -49,6 +70,10 @@ class SettingsValues(BaseModel):
             max_file_bytes=config.max_file_bytes,
             max_tool_rounds=config.max_tool_rounds,
             max_subagent_depth=config.max_subagent_depth,
+            dictation_enabled=config.dictation_enabled,
+            dictation_model=config.dictation_model,
+            dictation_language=config.dictation_language,
+            dictation_max_seconds=config.dictation_max_seconds,
         )
 
     def apply(self, harness: "Harness") -> None:
@@ -97,11 +122,57 @@ class WebSettings:
     def __init__(self, harness: "Harness") -> None:
         self.harness = harness
         # Construct only after initialize(), including initial Codex resolution.
+        # Web preferences never mutate the administrator's opt-in, ceiling or
+        # routing. Each restart captures the current trusted configuration anew.
+        self._dictation_admin = copy.deepcopy(harness.config)
         self.defaults = SettingsValues.current(harness)
         self.values = self.defaults
         self.effective_mode = harness.mode
         self.revision = secrets.token_hex(32)
         self.persisted = False
+
+    def dictation_config(self) -> "HarnessConfig":
+        """Detached service configuration using only committed web preferences."""
+        config = copy.deepcopy(self._dictation_admin)
+        values = self.values
+        config.dictation_enabled = config.dictation_enabled and values.dictation_enabled and not config.demo
+        config.dictation_model = values.dictation_model
+        config.dictation_language = values.dictation_language
+        config.dictation_max_seconds = min(values.dictation_max_seconds, config.dictation_max_seconds)
+        return config
+
+    def dictation_snapshot(self) -> dict[str, object]:
+        """Safe local readiness projection; no device probing or provider I/O."""
+        config = self.dictation_config()
+        available = False
+        if not self._dictation_admin.dictation_enabled:
+            status = "Dictation is disabled by the administrator. Ask them to enable dictation and restart ngn."
+        elif config.demo:
+            status = "Dictation is unavailable in demo mode. Restart without --demo."
+        elif not config.dictation_enabled:
+            status = "Dictation is disabled in web settings. Enable it and save settings to use voice input."
+        else:
+            try:
+                VoiceDictation(config).check_ready()
+            except DictationError as error:
+                status = str(error)
+            else:
+                available = True
+                status = "Dictation is ready. Transcription uses a separate API key and API billing."
+        return {
+            "enabled": config.dictation_enabled,
+            "available": available,
+            "admin_enabled": self._dictation_admin.dictation_enabled,
+            "status": status,
+            "api_key_env": config.dictation_api_key_env,
+            "max_seconds": config.dictation_max_seconds,
+            "max_bytes": config.dictation_max_seconds * BYTES_PER_SECOND + 4096,
+            "sample_rate": SAMPLE_RATE,
+            "channels": 1,
+            "sample_width": 2,
+            "content_type": "audio/wav",
+            "revision": self.revision,
+        }
 
     def snapshot(self) -> dict[str, object]:
         config = self.harness.config
@@ -115,6 +186,7 @@ class WebSettings:
             "revision": self.revision,
             "persisted": self.persisted,
             "effective_mode": self.effective_mode,
+            "dictation": self.dictation_snapshot(),
             "connection": {
                 "provider": config.provider,
                 "api": config.api,
@@ -154,14 +226,20 @@ class WebSettings:
                 version, payload, revision = row
                 if (
                     type(version) is not int
-                    or version != 1
+                    or version not in {1, 2}
                     or not isinstance(payload, str)
                     or not isinstance(revision, str)
                     or len(revision) != 64
                     or any(char not in "0123456789abcdef" for char in revision)
                 ):
                     raise ValueError("Invalid saved settings")
-                values = SettingsValues.model_validate_json(payload)
+                if version == 1:
+                    legacy = _SettingsValuesV1.model_validate_json(payload)
+                    # Only the four new preferences come from trusted startup
+                    # defaults. Reject malformed/extra v1 fields before combining.
+                    values = SettingsValues.model_validate({**self.defaults.model_dump(), **legacy.model_dump()})
+                else:
+                    values = SettingsValues.model_validate_json(payload)
                 self.validate(values)
                 with self.harness.operation("load web settings"):
                     values.apply(self.harness)
@@ -203,8 +281,8 @@ class WebSettings:
                     await db.execute("DELETE FROM ngn_web_settings WHERE id = 1")
                 else:
                     await db.execute(
-                        "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, 1, ?, ?) "
-                        "ON CONFLICT(id) DO UPDATE SET version = 1, values_json = excluded.values_json, "
+                        "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, 2, ?, ?) "
+                        "ON CONFLICT(id) DO UPDATE SET version = 2, values_json = excluded.values_json, "
                         "revision = excluded.revision",
                         (payload, revision),
                     )
