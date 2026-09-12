@@ -3,11 +3,14 @@
   "compilerOptions": {
     "noEmit": false,
     "allowImportingTsExtensions": false,
+    "allowJs": true,
     "outDir": ".test-build"
   },
   "include": [
     "src/api/*.ts",
     "src/features/chat/transcript*.ts",
-    "src/features/settings/*.ts"
+    "src/features/settings/*.ts",
+    "src/features/dictation/*.ts",
+    "src/features/dictation/pcm-worklet.js"
   ]
 }

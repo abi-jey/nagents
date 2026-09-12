@@ -1,4 +1,4 @@
-import type { Ref } from "react";
+import type { ReactNode, Ref } from "react";
 
 export function Composer({
   inputRef,
@@ -10,6 +10,7 @@ export function Composer({
   running,
   submit,
   cancel,
+  dictation,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -20,6 +21,7 @@ export function Composer({
   running: boolean;
   submit: () => void;
   cancel: () => void;
+  dictation?: ReactNode;
 }) {
   return (
     <form
@@ -56,6 +58,7 @@ export function Composer({
           }
         }}
       />
+      {dictation}
       <div className="composer-bottom">
         <span id="composer-help">
           Enter to send. Shift+Enter for a new line.

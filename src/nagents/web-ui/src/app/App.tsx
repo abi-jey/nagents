@@ -4,16 +4,18 @@ import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
+import { DictationControls } from "../features/dictation/DictationControls";
+import "../features/dictation/dictation.css";
 import { useClient } from "./useClient";
 
 export function App() {
   const client = useClient();
-  const { chat, sessions, busy, error } = client;
+  const { chat, sessions, busy, error, dictation } = client;
   const { config, sessionId, externalRun } = sessions;
   const [navOpen, setNavOpen] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
   const canSubmit =
-    !!config && !!sessionId && !busy && !externalRun && !sessions.activityOnly;
+    !!config && !!sessionId && !busy && !externalRun && !sessions.activityOnly && !dictation.unfinished;
 
   async function select(id?: string) {
     if (await client.select(id)) {
@@ -55,7 +57,7 @@ export function App() {
           <button
             className="settings-trigger"
             disabled={
-              !config || busy || !!externalRun || !!chat.approval.pending
+              !config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished
             }
             onClick={client.settings.show}
             aria-haspopup="dialog"
@@ -70,7 +72,7 @@ export function App() {
           workspace={config?.workspace || ""}
           sessions={sessions.sessions}
           selected={sessionId}
-          disabled={busy || !!externalRun}
+          disabled={busy || !!externalRun || dictation.unfinished}
           open={navOpen}
           select={(id) => void select(id)}
         />
@@ -117,11 +119,26 @@ export function App() {
             prompt={chat.prompt}
             setPrompt={chat.setPrompt}
             demo={!!config?.demo}
-            disabled={!config || !!externalRun}
+            disabled={!config}
             canSubmit={canSubmit}
             running={busy && !!chat.runId}
             submit={() => void submit()}
             cancel={() => void client.cancel()}
+            dictation={
+              <DictationControls
+                state={dictation.state}
+                config={config?.dictation}
+                unsupported={dictation.unsupported}
+                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open}
+                start={client.startDictation}
+                stop={dictation.controller.stop}
+                cancel={() => dictation.controller.cancel()}
+                transcribe={() => void dictation.controller.transcribe()}
+                edit={dictation.controller.edit}
+                insert={() => { if (client.insertDictation()) composer.current?.focus({ preventScroll: true }); }}
+                settings={client.settings.show}
+              />
+            }
           />
           <div className="bottom-note">
             {config?.demo

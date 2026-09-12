@@ -4,6 +4,7 @@ import { RequestError } from "../../api/client.js";
 import { createDraft, parseDraft, selectProfile } from "./draft.js";
 import { readSettings, resetSettings, saveSettings, settingsFailure } from "./transport.js";
 import type { SettingsReply, SettingsValues } from "./types.js";
+import { dictationConfig } from "../dictation/testFixtures.js";
 
 const values: SettingsValues = {
   model: "startup-model",
@@ -13,6 +14,10 @@ const values: SettingsValues = {
   max_file_bytes: 1048576,
   max_tool_rounds: 100,
   max_subagent_depth: 2,
+  dictation_enabled: false,
+  dictation_model: "gpt-4o-mini-transcribe",
+  dictation_language: "",
+  dictation_max_seconds: 60,
 };
 const reply: SettingsReply = {
   values,
@@ -25,6 +30,7 @@ const reply: SettingsReply = {
   persisted: false,
   effective_mode: "build",
   connection: { provider: "mock", api: "responses", auth_status: "configured" },
+  dictation: dictationConfig,
 };
 
 test("settings drafts round-trip exact API keys and numeric values", () => {

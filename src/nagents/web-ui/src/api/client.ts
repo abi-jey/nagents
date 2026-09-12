@@ -25,6 +25,27 @@ export async function request(
     credentials: "same-origin",
     signal,
   });
+  return checked(response);
+}
+
+export async function requestBinary(
+  path: string,
+  token: string,
+  body: Blob,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+): Promise<Response> {
+  return checked(await fetch(`/api/${path}`, {
+    method: "POST",
+    headers: { ...headers, "X-Ngn-Token": token, "Content-Type": body.type },
+    body,
+    cache: "no-store",
+    credentials: "same-origin",
+    signal,
+  }));
+}
+
+async function checked(response: Response): Promise<Response> {
   if (!response.ok) {
     const error = (await response.json().catch(() => ({}))) as {
       detail?: string;

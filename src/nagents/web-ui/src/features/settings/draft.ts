@@ -1,6 +1,8 @@
 import type { SettingsProfile, SettingsValues } from "./types.js";
 
-export type SettingsDraft = { [Key in keyof SettingsValues]: string };
+export type SettingsDraft = {
+  [Key in keyof SettingsValues]: SettingsValues[Key] extends boolean ? boolean : string;
+};
 export type DraftErrors = Partial<Record<keyof SettingsValues, string>>;
 
 export const executionLimits = [
@@ -55,6 +57,10 @@ export function createDraft(values: SettingsValues): SettingsDraft {
     max_file_bytes: String(values.max_file_bytes),
     max_tool_rounds: String(values.max_tool_rounds),
     max_subagent_depth: String(values.max_subagent_depth),
+    dictation_enabled: values.dictation_enabled,
+    dictation_model: values.dictation_model,
+    dictation_language: values.dictation_language,
+    dictation_max_seconds: String(values.dictation_max_seconds),
   };
 }
 
@@ -81,6 +87,10 @@ export function parseDraft(
     max_file_bytes: 0,
     max_tool_rounds: 0,
     max_subagent_depth: 0,
+    dictation_enabled: draft.dictation_enabled,
+    dictation_model: draft.dictation_model.trim(),
+    dictation_language: draft.dictation_language,
+    dictation_max_seconds: Number(draft.dictation_max_seconds.trim()),
   };
   if (
     !values.model ||
@@ -93,6 +103,17 @@ export function parseDraft(
   if (!profiles.some((profile) => profile.name === draft.agent)) {
     errors.agent = "Choose a profile provided by this server.";
   }
+  if (typeof draft.dictation_enabled !== "boolean")
+    errors.dictation_enabled = "Choose whether dictation is enabled.";
+  if (!values.dictation_model || [...values.dictation_model].length > 200 ||
+      /[\p{C}\p{Z}]/u.test(draft.dictation_model.replaceAll(" ", "")))
+    errors.dictation_model = "Enter a transcription model ID of 1 to 200 printable characters.";
+  if (!/^(?:[a-z]{2})?$/.test(draft.dictation_language))
+    errors.dictation_language = "Use two lowercase language letters, such as en, or leave blank for automatic detection.";
+  if (!/^\d+$/.test(draft.dictation_max_seconds.trim()) ||
+      !Number.isSafeInteger(values.dictation_max_seconds) ||
+      values.dictation_max_seconds < 1 || values.dictation_max_seconds > 300)
+    errors.dictation_max_seconds = "Enter a whole number from 1 to 300 seconds. The administrator's ceiling also applies.";
   for (const limit of executionLimits) {
     const raw = draft[limit.key].trim();
     const value = Number(raw);

@@ -1,3 +1,5 @@
+import type { DictationConfig } from "../dictation/types.js";
+
 export type SettingsValues = {
   model: string;
   agent: string;
@@ -6,6 +8,10 @@ export type SettingsValues = {
   max_file_bytes: number;
   max_tool_rounds: number;
   max_subagent_depth: number;
+  dictation_enabled: boolean;
+  dictation_model: string;
+  dictation_language: string;
+  dictation_max_seconds: number;
 };
 
 export type SettingsProfile = {
@@ -22,4 +28,5 @@ export type SettingsReply = {
   persisted: boolean;
   effective_mode: "build" | "reviewer";
   connection: { provider: string; api: string; auth_status: string };
+  dictation: DictationConfig;
 };

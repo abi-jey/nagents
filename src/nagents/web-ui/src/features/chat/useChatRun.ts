@@ -1,4 +1,5 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type SetStateAction } from "react";
+import { insertDraft } from "../dictation/draft";
 import { request } from "../../api/client";
 import { pollActivity } from "../../api/activity";
 import { readEvents, text } from "../../api/events";
@@ -18,7 +19,24 @@ export function useChatRun(
   initialBackgroundRunId: string,
 ) {
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPromptState] = useState("");
+  const latestPrompt = useRef("");
+  // Keep functional draft updates synchronous even between React renders, so a
+  // transcription insertion never replaces typing that occurred while waiting.
+  function setPrompt(update: SetStateAction<string>) {
+    latestPrompt.current = typeof update === "function" ? update(latestPrompt.current) : update;
+    setPromptState(latestPrompt.current);
+  }
+  function insertDictation(text: string): string {
+    let error = "";
+    setPrompt((current) => {
+      const result = insertDraft(current, text, sessionId);
+      if (result.ok) return result.prompt;
+      error = result.error;
+      return current;
+    });
+    return error;
+  }
   const [runId, setRunId] = useState("");
   const [status, setStatus] = useState("Connecting to local harness");
   const [background, setBackground] = useState({ sessionId: "", runId: "" });
@@ -183,6 +201,7 @@ export function useChatRun(
     entries,
     prompt,
     setPrompt,
+    insertDictation,
     runId: runId || backgroundRunId,
     backgroundRunId,
     activityError,

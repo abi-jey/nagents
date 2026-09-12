@@ -122,6 +122,22 @@
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
+.dictation-settings > .settings-field {
+  margin-top: 16px;
+}
+.settings-field .settings-checkbox {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-height: 44px;
+}
+.settings-checkbox input {
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  accent-color: var(--accent-violet);
+}
 .settings-field [aria-invalid="true"] {
   border-color: var(--state-error);
 }
