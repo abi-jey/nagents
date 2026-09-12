@@ -42,6 +42,7 @@ from nagents.provider import CodexProvider
 
 from . import built_assets
 from . import local_authority
+from .dictation import WebDictation
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 from .settings import SettingsInput
@@ -110,6 +111,7 @@ class WebState:
         self.harness = harness
         self.active: Run | None = None
         self.mutating = False
+        self.dictation = WebDictation()
         self.wakeups = Wakeups(lambda: self.active is None and not self.mutating, self.wake)
         harness.approval_handler = self.approve
         harness.wakeup_handler = self.schedule
@@ -364,10 +366,27 @@ def create_app(
             yield
         finally:
             state.wakeups.shutdown()
-            if state.active is not None:
-                await state.stop(state.active)
-            await state.wakeups.close()
-            await harness.close()
+
+            async def close_resources() -> None:
+                try:
+                    if state.active is not None:
+                        await state.stop(state.active)
+                finally:
+                    try:
+                        await state.wakeups.close()
+                    finally:
+                        try:
+                            await state.dictation.close()
+                        finally:
+                            await harness.close()
+
+            cleanup = asyncio.create_task(close_resources())
+            try:
+                # Observe lifespan cancellation without cancelling cleanup. Only
+                # the final join is shielded, so AnyIO cancellation also escapes.
+                await asyncio.wait({cleanup})
+            finally:
+                await _join(cleanup)
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token)
@@ -395,6 +414,7 @@ def create_app(
             "model": state.settings.values.model,
             "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
+            "dictation": state.settings.dictation_snapshot(),
             "active_run_id": state.active.id if state.active is not None else "",
             "active_session_id": state.active.session_id if state.active is not None else "",
             "active_run_background": state.active.background if state.active is not None else False,
@@ -477,6 +497,18 @@ def create_app(
             state.active = active
             active.task = asyncio.create_task(state.produce(active, body.prompt), name=f"ngn-web-{active.id}")
         return RunResponse(state, active)
+
+    @app.post("/api/dictation/transcribe")
+    async def transcribe(request: Request) -> dict[str, str]:
+        # Admission, session/revision checks and the detached configuration
+        # snapshot are atomic before the first await (and before any body read).
+        with state.idle():
+            if request.headers.getlist("x-ngn-session") != [state.harness.session_id]:
+                raise HTTPException(409, "The selected session changed. Reconnect before recording again.")
+            if request.headers.getlist("x-ngn-settings-revision") != [state.settings.revision]:
+                raise HTTPException(409, "Settings changed. Reload settings before recording again.")
+            config = state.settings.dictation_config()
+            return await state.dictation.transcribe(request, config)
 
     @app.post("/api/cancel")
     async def cancel(body: RunInput) -> dict[str, str]:

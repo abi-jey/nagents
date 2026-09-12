@@ -40,6 +40,10 @@ class DictationError(RuntimeError):
     """Safe user-facing failure; never includes backend exceptions or response bodies."""
 
 
+class DictationInputError(DictationError):
+    """Invalid supplied audio, distinct from setup and upstream failures."""
+
+
 class _InputStream(Protocol):
     def start(self) -> None: ...
 
@@ -269,7 +273,9 @@ class VoiceDictation:
         """
         self._check_idle()
         if not isinstance(audio, bytes) or not 44 < len(audio) <= self.max_seconds * BYTES_PER_SECOND + 4096:
-            raise DictationError("Supply bounded WAV bytes, not a path: 16 kHz mono PCM16 within the recording limit.")
+            raise DictationInputError(
+                "Supply bounded WAV bytes, not a path: 16 kHz mono PCM16 within the recording limit."
+            )
         try:
             with wave.open(BytesIO(audio), "rb") as wav:
                 frames = wav.getnframes()
@@ -286,7 +292,7 @@ class VoiceDictation:
                     raise ValueError
                 audio = _wav(pcm)
         except Exception:
-            raise DictationError(
+            raise DictationInputError(
                 "Invalid or truncated WAV. Supply 16 kHz mono PCM16 audio within the recording limit."
             ) from None
         task = self._upload_task = asyncio.create_task(self._upload(audio))
