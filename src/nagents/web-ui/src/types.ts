@@ -13,7 +13,22 @@ export type Bootstrap = {
   active_run_background?: boolean;
 };
 
-export type Session = { id: string; title: string; updated_at: string };
+export type Session = {
+  id: string; title: string; updated_at: string;
+  parent_session_id?: string;
+  active_run_id?: string;
+  status?: string;
+};
+export type ActiveRun = {
+  id: string;
+  status: string;
+  session_id?: string;
+  events?: WireEvent[];
+  records?: WireEvent[];
+  message_id?: string;
+  pending_approvals?: WireEvent[];
+  approval?: WireEvent | Record<string, never>;
+};
 export type RetainedTask = {
   id: string;
   name: string;
@@ -37,8 +52,13 @@ export type Snapshot = {
   activity_cursor?: number;
   retained_tasks: RetainedTask[];
   sessions: Session[];
+  active_run?: ActiveRun | null;
+  active_run_id?: string;
+  active_session_id?: string;
   history: {
     role: string;
+    message_id?: string;
+    source?: unknown;
     content: string;
     name: string;
     tool_call_id: string;

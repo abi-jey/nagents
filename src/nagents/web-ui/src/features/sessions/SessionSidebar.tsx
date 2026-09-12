@@ -5,6 +5,7 @@ export function SessionSidebar({
   sessions,
   selected,
   disabled,
+  newDisabled = disabled,
   open,
   select,
 }: {
@@ -12,6 +13,7 @@ export function SessionSidebar({
   sessions: Session[];
   selected: string;
   disabled: boolean;
+  newDisabled?: boolean;
   open: boolean;
   select: (id?: string) => void;
 }) {
@@ -27,7 +29,7 @@ export function SessionSidebar({
       </div>
       <button
         className="new-session"
-        disabled={disabled}
+        disabled={disabled || newDisabled}
         onClick={() => select()}
       >
         New session
@@ -44,6 +46,7 @@ export function SessionSidebar({
             title={`${session.title} · Updated ${session.updated_at.slice(0, 10)}`}
           >
             <span>{session.title}</span>
+            {session.active_run_id && <small>Working</small>}
             <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
           </button>
         ))}

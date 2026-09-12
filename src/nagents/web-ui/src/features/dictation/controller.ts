@@ -62,6 +62,19 @@ export class DictationController {
       this.cancel("Dictation cancelled when leaving the page. Your draft is kept.");
   };
 
+  refreshToken = (token: string) => {
+    // Rotation changes authentication for the next explicit upload, not capture
+    // ownership or its original settings revision. Never restart an upload.
+    if (token && this.context && token !== this.context.token)
+      this.context = { ...this.context, token };
+  };
+
+  interrupt = () => {
+    // A completed review has no microphone or network work left to interrupt.
+    if (this.active && this.state.phase !== "review")
+      this.cancel("Dictation interrupted by active work. Your draft is kept.");
+  };
+
   private fail(cause: unknown) {
     this.cancel("");
     this.receive({ phase: "error", message: dictationFailure(cause) });

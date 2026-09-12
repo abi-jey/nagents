@@ -126,14 +126,22 @@ export function TranscriptItems({
                   ? names.get(entry.taskId) || entry.taskId
                   : "ngn"
                 : entry.kind === "user"
-                  ? "You"
+                  ? entry.origin ? "User" : "You"
                   : entry.kind === "error"
                     ? "Error"
                     : entry.kind === "followup"
                       ? `Human follow-up ${entry.followup}`
-                      : "Status"}
+                       : "Status"}
+              {entry.origin && <span className="origin-badge">{entry.origin}</span>}
+              {entry.queued && <span className="origin-badge">Queued / awaiting confirmation</span>}
             </div>
             <MessageContent text={entry.text} />
+            {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}
+              open={disclosures.get(`source:${entry.id}`) ?? false} onToggle={(event) => toggle(`source:${entry.id}`, event.currentTarget.open)}>
+              <summary>{entry.channelContext ? "Channel context (unverified)" : "Message provenance"}</summary>
+              {entry.channelContext && <p>This context comes from message text; its channel origin is not verified.</p>}
+              <pre tabIndex={0}>{entry.provenance}</pre>
+            </details>}
           </>
         )}
       </article>
@@ -222,7 +230,7 @@ export function Conversation({
   }, [sessionId]);
   useLayoutEffect(() => {
     const last = entries.at(-1);
-    if (last?.kind === "user" && last.id !== lastUser.current) {
+    if (last?.kind === "user" && !last.origin && last.id !== lastUser.current) {
       stickToBottom.current = true;
       lastUser.current = last.id;
     }
@@ -248,7 +256,9 @@ export function Conversation({
     }
     lastActivity.current = activity;
     setAnnouncement(
-      latestActivity?.kind === "notification"
+      latestActivity?.kind === "user"
+        ? `New user message${latestActivity.origin ? ` from ${latestActivity.origin}` : ""}.`
+        : latestActivity?.kind === "notification"
         ? `Notification delivered from ${latestActivity.sourceName} to ${latestActivity.taskName}.`
         : latestActivity?.level === "warning"
           ? latestActivity.text
@@ -306,7 +316,7 @@ export function Conversation({
                 setNewActivity(false);
               }}
             >
-              New task activity
+              {latestActivity?.kind === "user" ? "New message" : "New task activity"}
             </button>
           )}
         </div>

@@ -1,0 +1,28 @@
+.channels-trigger { flex-shrink: 0; }
+.channels-trigger:not(:disabled) {
+  color: var(--accent-teal);
+  border-color: color-mix(in srgb, var(--accent-teal) 55%, var(--border-group));
+}
+.channels-dialog .settings-heading h2 { color: var(--accent-teal); }
+.channel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.channel-grid .settings-field { margin: 0; }
+.channel-path { display: block; overflow-wrap: anywhere; font-size: 13px; margin: 6px 0 10px; }
+.channel-command { overflow: auto; max-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--surface-output); padding: 8px; }
+.channel-install { padding-bottom: 10px; }
+.channel-secret-state { color: var(--accent-amber); font-size: 12px; margin-left: 8px; }
+.channel-options { margin-top: 8px; }
+.channel-options > .settings-field:last-child { margin-bottom: 8px; }
+.channels-dialog .channel-field-help > summary { min-height: 28px; padding: 4px 0; font-size: 12px; }
+.channel-field-help code { font-size: 12px; }
+.channels-dialog .settings-field textarea {
+  width: 100%; min-width: 0; resize: vertical; min-height: 60px; padding: 6px 8px;
+  border: 1px solid var(--border-control); border-radius: 4px;
+  background: var(--surface-output); color: var(--text-reading); font: 13px/1.5 monospace;
+}
+.channel-state ul { font-size: 13px; padding-left: 20px; overflow-wrap: anywhere; }
+.origin-badge { color: var(--accent-amber); border: 1px solid var(--border-group); border-radius: 3px; padding: 1px 5px; margin-left: 8px; font-size: 11px; font-weight: 400; }
+.channel-provenance { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.channel-provenance > summary { cursor: pointer; padding: 6px 0; }
+.channel-provenance pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; background: var(--surface-output); padding: 8px; }
+@media (max-width: 480px) { .channel-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .channels-dialog .channel-field-help > summary { min-height: 44px; padding: 10px 0; } }

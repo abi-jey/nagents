@@ -14,7 +14,7 @@ export function useApproval(token: string) {
     const approval = {
       run_id: text(event, "run_id"),
       approval_id: text(event, "approval_id"),
-      call_id: text(event, "id"),
+      call_id: text(event, "call_id") || text(event, "id"),
       tool: text(event, "tool"),
       description: text(event, "description"),
       preview: text(event, "preview"),
