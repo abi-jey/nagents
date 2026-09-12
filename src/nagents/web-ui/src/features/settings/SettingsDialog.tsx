@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { executionLimits } from "./draft";
-import { ModelField } from "./ModelField";
-import { DictationSettings } from "./DictationSettings";
+import { executionLimits } from "./draft.js";
+import { ModelField } from "./ModelField.js";
+import { DictationSettings } from "./DictationSettings.js";
 import type { useSettings } from "./useSettings";
-import "./settings.css";
+import { revealAncestors } from "../../components/disclosures.js";
 
 export function SettingsDialog({
   settings,
@@ -56,9 +56,9 @@ export function SettingsDialog({
         if (event.key !== "Tab") return;
         const controls = [
           ...event.currentTarget.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]',
+            'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]',
           ),
-        ];
+        ].filter((control) => control.getClientRects().length > 0);
         const first = controls[0];
         const last = controls.at(-1);
         if (!first) {
@@ -93,9 +93,11 @@ export function SettingsDialog({
           if (confirmation) return;
           await settings.save();
           requestAnimationFrame(() => {
-            dialog.current
-              ?.querySelector<HTMLElement>('[aria-invalid="true"]')
-              ?.focus();
+            const invalid = dialog.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
+            if (invalid && dialog.current) {
+              revealAncestors(invalid, dialog.current);
+              invalid.focus();
+            }
           });
         }}
       >
@@ -229,8 +231,7 @@ export function SettingsDialog({
                     ))}
                   </select>
                   <p id="settings-agent-help">
-                    Profiles come from the server. Choosing one presets its
-                    model when provided; you can then override the model below.
+                    Server profiles preset their model; you can override it below.
                   </p>
                   {errors.agent && (
                     <p id="settings-agent-error" className="error-text">
@@ -247,49 +248,6 @@ export function SettingsDialog({
                   update={(model) => settings.update("model", model)}
                 />
               </fieldset>
-              <fieldset
-                className="settings-group"
-                disabled={disabled || !!confirmation}
-              >
-                <legend>Execution limits</legend>
-                <div className="settings-limits">
-                  {executionLimits.map((limit) => (
-                    <div className="settings-field" key={limit.key}>
-                      <label htmlFor={`settings-${limit.key}`}>
-                        {limit.label}
-                      </label>
-                      <div className="settings-number">
-                        <input
-                          id={`settings-${limit.key}`}
-                          type="text"
-                          inputMode={
-                            limit.key === "shell_timeout" ? "decimal" : "numeric"
-                          }
-                          autoComplete="off"
-                          spellCheck={false}
-                          required
-                          value={draft[limit.key]}
-                          aria-describedby={`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`}
-                          aria-invalid={!!errors[limit.key]}
-                          onChange={(event) =>
-                            settings.update(limit.key, event.target.value)
-                          }
-                        />
-                        <span aria-hidden="true">{limit.unit}</span>
-                      </div>
-                      <p id={`settings-${limit.key}-help`}>{limit.help}</p>
-                      {errors[limit.key] && (
-                        <p
-                          id={`settings-${limit.key}-error`}
-                          className="error-text"
-                        >
-                          {errors[limit.key]}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </fieldset>
               <DictationSettings
                 config={snapshot.dictation}
                 draft={draft}
@@ -297,46 +255,66 @@ export function SettingsDialog({
                 disabled={disabled || !!confirmation}
                 update={settings.update}
               />
-              <section
-                className="settings-connection"
-                aria-labelledby="settings-connection-title"
-              >
-                <h3 id="settings-connection-title">
-                  Current connection <span>Read-only</span>
-                </h3>
-                <dl>
-                  <dt>Provider</dt>
-                  <dd>{snapshot.connection.provider}</dd>
-                  <dt>API</dt>
-                  <dd>{snapshot.connection.api}</dd>
-                  <dt>Auth status</dt>
-                  <dd>{snapshot.connection.auth_status}</dd>
-                  <dt>Effective permissions</dt>
-                  <dd>{snapshot.effective_mode}</dd>
-                </dl>
-                <p>
-                  Current saved permissions are shown, not unsaved profile
-                  changes. Connection credentials, plugins, storage, and trust
-                  remain server-managed.
-                </p>
-              </section>
-              <section
-                className="settings-reset"
-                aria-labelledby="settings-reset-title"
-              >
-                <h3 id="settings-reset-title">Startup defaults</h3>
-                <p>
-                  Reset removes saved overrides from workspace data, not just
-                  this draft.
-                </p>
-                <button
-                  type="button"
-                  disabled={disabled || settings.needsRefresh || !!confirmation}
-                  onClick={() => setConfirmation("reset")}
-                >
-                  Reset to startup defaults
-                </button>
-              </section>
+              <details className="settings-disclosure">
+                <summary>Execution limits</summary>
+                <fieldset className="settings-group" disabled={disabled || !!confirmation}>
+                  <legend className="sr-only">Execution limits</legend>
+                  <div className="settings-limits">
+                    {executionLimits.map((limit) => (
+                      <div className="settings-field" key={limit.key}>
+                        <label htmlFor={`settings-${limit.key}`}>{limit.label}</label>
+                        <div className="settings-number">
+                          <input
+                            id={`settings-${limit.key}`}
+                            type="text"
+                            inputMode={limit.key === "shell_timeout" ? "decimal" : "numeric"}
+                            autoComplete="off"
+                            spellCheck={false}
+                            required
+                            value={draft[limit.key]}
+                            aria-describedby={`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`}
+                            aria-invalid={!!errors[limit.key]}
+                            onChange={(event) => settings.update(limit.key, event.target.value)}
+                          />
+                          <span aria-hidden="true">{limit.unit}</span>
+                        </div>
+                        <p id={`settings-${limit.key}-help`}>{limit.help}</p>
+                        {errors[limit.key] && (
+                          <p id={`settings-${limit.key}-error`} className="error-text">{errors[limit.key]}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </fieldset>
+              </details>
+              <details className="settings-disclosure">
+                <summary>Connection and startup defaults</summary>
+                <section className="settings-connection" aria-labelledby="settings-connection-title">
+                  <h3 id="settings-connection-title">Current connection <span>Read-only</span></h3>
+                  <dl>
+                    <dt>Provider</dt><dd>{snapshot.connection.provider}</dd>
+                    <dt>API</dt><dd>{snapshot.connection.api}</dd>
+                    <dt>Auth status</dt><dd>{snapshot.connection.auth_status}</dd>
+                    <dt>Effective permissions</dt><dd>{snapshot.effective_mode}</dd>
+                  </dl>
+                  <p>
+                    Current saved permissions are shown, not unsaved profile
+                    changes. Connection credentials, plugins, storage, and trust
+                    remain server-managed.
+                  </p>
+                </section>
+                <section className="settings-reset" aria-labelledby="settings-reset-title">
+                  <h3 id="settings-reset-title">Startup defaults</h3>
+                  <p>Reset removes saved overrides from workspace data, not just this draft.</p>
+                  <button
+                    type="button"
+                    disabled={disabled || settings.needsRefresh || !!confirmation}
+                    onClick={() => setConfirmation("reset")}
+                  >
+                    Reset to startup defaults
+                  </button>
+                </section>
+              </details>
             </>
           )}
         </div>

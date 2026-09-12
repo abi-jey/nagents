@@ -116,6 +116,9 @@ still stored locally in the Harness data directory.
   names or event arrival order. Later activations retain separate execution
   evidence beneath the same task identity. Child approval decisions stay with
   that child's call, even when another agent uses the same call ID.
+  Task branches, the retained registry, and notification payloads start collapsed
+  to keep the conversation visible. Expand a record for its full identifiers,
+  inputs, results, and errors; explicit expansion choices survive live updates.
 - Missing results are never inferred to be successful. Resumed history labels
   results as recorded, since live duration/approval/status events are not persisted
   in the Harness message history. Same-process reloads also show the retained task
@@ -247,6 +250,8 @@ persisted conversation text, not a durable event or timer log.
 ### Microphone Dictation
 
 Use the microphone control in the composer to record on **your browser's device**.
+The mic shares the Send toolbar; recording and review controls appear only when
+needed. The composer's **?** disclosure contains keyboard and microphone help.
 Stop to transcribe, review or edit the returned text, and choose **Insert into
 draft**. The existing draft is preserved; insertion appends to the latest draft,
 including text typed while transcription was running. Only the normal **Send**

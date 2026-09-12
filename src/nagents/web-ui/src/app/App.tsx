@@ -4,8 +4,9 @@ import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
-import { DictationControls } from "../features/dictation/DictationControls";
+import { DictationControls, DictationReview } from "../features/dictation/DictationControls";
 import "../features/dictation/dictation.css";
+import "../features/settings/settings.css";
 import { useClient } from "./useClient";
 
 export function App() {
@@ -16,6 +17,8 @@ export function App() {
   const composer = useRef<HTMLTextAreaElement>(null);
   const canSubmit =
     !!config && !!sessionId && !busy && !externalRun && !sessions.activityOnly && !dictation.unfinished;
+  const runStatus = chat.status + (chat.pendingWakeups
+    ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
 
   async function select(id?: string) {
     if (await client.select(id)) {
@@ -40,9 +43,10 @@ export function App() {
             aria-label="Toggle sessions"
             aria-expanded={navOpen}
             aria-controls="session-navigation"
+            title="Sessions"
             onClick={() => setNavOpen(!navOpen)}
           >
-            Sessions
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
           </button>
           <div className="model">
             <h1>ngn</h1>
@@ -56,16 +60,19 @@ export function App() {
           </div>
           <button
             className="settings-trigger"
+            aria-label="Settings"
+            title="Settings"
             disabled={
               !config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished
             }
             onClick={client.settings.show}
             aria-haspopup="dialog"
           >
-            Settings
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /><path d="M7 3v4M13 8v4M8 13v4" /></svg>
+            <span className="desktop-label">Settings</span>
           </button>
-          <span className={`mode-badge ${config?.demo ? "demo" : ""}`}>
-            {config?.demo ? "Offline demo" : "Live provider"}
+          <span className={`mode-badge ${config?.demo ? "demo" : ""}`} title={config?.demo ? "Offline demo" : "Live provider"}>
+            {config?.demo ? "Demo" : "Live"}
           </span>
         </header>
         <SessionSidebar
@@ -103,11 +110,6 @@ export function App() {
               )}
             </div>
           )}
-          <div className="run-status" role="status">
-            {chat.status}
-            {!!chat.pendingWakeups &&
-              `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}`}
-          </div>
           {chat.activityError && (
             <p className="activity-warning" role="status">
               Background activity unavailable: {chat.activityError} Read-only
@@ -124,6 +126,19 @@ export function App() {
             running={busy && !!chat.runId}
             submit={() => void submit()}
             cancel={() => void client.cancel()}
+            status={
+              <span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>
+                {runStatus}
+              </span>
+            }
+            review={
+              <DictationReview
+                state={dictation.state}
+                edit={dictation.controller.edit}
+                insert={() => { if (client.insertDictation()) composer.current?.focus({ preventScroll: true }); }}
+                cancel={() => dictation.controller.cancel()}
+              />
+            }
             dictation={
               <DictationControls
                 state={dictation.state}
@@ -134,17 +149,10 @@ export function App() {
                 stop={dictation.controller.stop}
                 cancel={() => dictation.controller.cancel()}
                 transcribe={() => void dictation.controller.transcribe()}
-                edit={dictation.controller.edit}
-                insert={() => { if (client.insertDictation()) composer.current?.focus({ preventScroll: true }); }}
                 settings={client.settings.show}
               />
             }
           />
-          <div className="bottom-note">
-            {config?.demo
-              ? "No paid requests. Sessions are saved locally."
-              : "Approvals apply to one call. Completed actions are not rolled back."}
-          </div>
         </footer>
       </main>
       {client.settings.open && <SettingsDialog settings={client.settings} />}

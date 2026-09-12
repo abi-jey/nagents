@@ -45,11 +45,14 @@ export function ModelField({
               : "Fetch models"}
         </button>
       </div>
-      <p id="settings-model-help">
-        Exact model ID for the current connection, up to 200 characters. You can
-        always enter an ID, even if it is not listed. A catalog is not a guarantee
-        of compatibility with the current API, tools, or account access.
-      </p>
+      <details className="settings-help">
+        <summary>Model guidance</summary>
+        <p id="settings-model-help">
+          Exact model ID for the current connection, up to 200 characters. You can
+          always enter an ID, even if it is not listed. A catalog is not a guarantee
+          of compatibility with the current API, tools, or account access.
+        </p>
+      </details>
       {error && (
         <p id="settings-model-error" className="error-text">
           {error}
@@ -60,7 +63,7 @@ export function ModelField({
         role="status"
         aria-live="polite"
         aria-atomic="true"
-        className={catalog.error ? "error-text" : ""}
+        className={catalog.error ? "error-text" : !catalog.attempted ? "sr-only" : ""}
       >
         {modelCatalogStatus(catalog)}
       </p>

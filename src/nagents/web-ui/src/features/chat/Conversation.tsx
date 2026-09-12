@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ExecutionRecord } from "./ExecutionRecord.js";
 import { MessageContent } from "./MessageContent.js";
+import { ActivityRecord } from "./ActivityRecord.js";
+import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import {
   groupTranscript,
   type Entry,
@@ -14,7 +16,7 @@ function taskAccent(id: string): number {
   return hash % 6;
 }
 
-function TranscriptItems({
+export function TranscriptItems({
   items,
   names,
   disclosures,
@@ -33,17 +35,23 @@ function TranscriptItems({
           className="retained-tasks"
           aria-label="Retained task registry"
         >
-          <h2 className="entry-label">Retained tasks</h2>
-          <p className="record-note">
-            Latest registry state at reload, with subsequent live activity.
-            Earlier activations and timings are not reconstructed.
-          </p>
-          <TranscriptItems
-            items={item.items}
-            names={names}
-            disclosures={disclosures}
-            toggle={toggle}
-          />
+          <details
+            data-disclosure-key={`registry:${item.id}`}
+            open={disclosures.get(`registry:${item.id}`) ?? false}
+            onToggle={(event) => toggle(`registry:${item.id}`, event.currentTarget.open)}
+          >
+            <summary>Retained tasks</summary>
+            <p className="record-note">
+              Latest registry state at reload, with subsequent live activity.
+              Earlier activations and timings are not reconstructed.
+            </p>
+            <TranscriptItems
+              items={item.items}
+              names={names}
+              disclosures={disclosures}
+              toggle={toggle}
+            />
+          </details>
         </section>
       );
     if (item.kind === "thread") {
@@ -59,20 +67,16 @@ function TranscriptItems({
           id={`task-${task.id}`}
         >
           <details
-            open={disclosures.get(`task:${task.id}`) ?? true}
+            data-disclosure-key={`task:${task.id}`}
+            open={disclosures.get(`task:${task.id}`) ?? false}
             onToggle={(event) =>
               toggle(`task:${task.id}`, event.currentTarget.open)
             }
           >
             <summary>
               <span className="execution-summary">
-                <span className="execution-name">
+                <span className="execution-name" title={task.name}>
                   {task.name}
-                  <small className="record-identity">Task {task.id}</small>
-                  <small className="record-identity">
-                    {task.issue ||
-                      `Parent: ${task.parentId ? names.get(task.parentId) || task.parentId : "Main"}`}
-                  </small>
                 </span>
                 <span className="execution-state" data-state={task.state}>
                   {task.state}
@@ -80,6 +84,10 @@ function TranscriptItems({
               </span>
             </summary>
             <div className="task-contents">
+              <p className="record-identity"><strong>{task.name}</strong><br />Task {task.id}<br />
+                {task.issue || `Parent: ${task.parentId ? names.get(task.parentId) || task.parentId : "Main"}`}
+                {task.parentId && <><br />Parent task ID: {task.parentId}</>}
+              </p>
               <TranscriptItems
                 items={task.items}
                 names={names}
@@ -107,38 +115,9 @@ function TranscriptItems({
             open={disclosures.get(entry.id) ?? false}
             toggle={(open) => toggle(entry.id, open)}
           />
-        ) : entry.kind === "notification" ? (
-          <>
-            <div className="entry-label">
-              Notification delivered: {entry.sourceName} to {entry.taskName}
-              <small
-                className="record-identity"
-                title="Delivery and recipient activation are separate events."
-              >
-                {entry.cause === "wakeup" ? "Wake-up" : "Completion"}{" "}
-                notification
-              </small>
-            </div>
-            <MessageContent text={entry.text} />
-          </>
-        ) : entry.kind === "wakeup" ? (
-          <>
-            <div className="execution-summary">
-              <span className="execution-name">
-                Wake-up
-                <small className="record-identity">{entry.wakeupId}</small>
-              </span>
-              <span className="execution-state" data-state={entry.state}>
-                {entry.state}
-              </span>
-            </div>
-            {entry.dueAt && (
-              <p className="record-note">
-                Due <time dateTime={entry.dueAt}>{entry.dueAt}</time>
-              </p>
-            )}
-            <MessageContent text={entry.text} />
-          </>
+        ) : entry.kind === "notification" || entry.kind === "wakeup" ? (
+          <ActivityRecord entry={entry} open={disclosures.get(entry.id) ?? false}
+            toggle={(open) => toggle(entry.id, open)} />
         ) : (
           <>
             <div className="entry-label">
@@ -182,11 +161,13 @@ export function Conversation({
   const [announcement, setAnnouncement] = useState("");
   const [disclosures, setDisclosures] = useState(new Map<string, boolean>());
   function toggle(key: string, open: boolean) {
-    setDisclosures((current) => {
-      if ((current.get(key) ?? key.startsWith("task:")) === open)
-        return current;
-      return new Map(current).set(key, open);
-    });
+    setDisclosures((current) => rememberDisclosure(current, key, open));
+  }
+  function reveal(target: HTMLElement) {
+    if (!feed.current) return;
+    const keys = revealAncestors(target, feed.current);
+    setDisclosures((current) => keys.reduce((next, key) => rememberDisclosure(next, key, true), current));
+    target.scrollIntoView({ block: "start" });
   }
   const lastActivity = useRef(0);
   const lastUser = useRef("");
@@ -289,6 +270,14 @@ export function Conversation({
       role="region"
       tabIndex={0}
       ref={feed}
+      onClick={(event) => {
+        const href = (event.target as Element).closest("a")?.getAttribute("href");
+        if (!href?.startsWith("#task-")) return;
+        const target = document.getElementById(decodeURIComponent(href.slice(1)));
+        if (target && feed.current?.contains(target)) {
+          reveal(target);
+        }
+      }}
       onScroll={() => {
         const element = feed.current;
         if (element)
@@ -300,6 +289,7 @@ export function Conversation({
       }}
     >
       <div className="conversation-inner">
+        <h2 className="sr-only">Conversation</h2>
         <div
           className="activity-announcement"
           role="status"
@@ -312,13 +302,7 @@ export function Conversation({
               type="button"
               onClick={() => {
                 const target = activityTarget();
-                let ancestor = target?.parentElement;
-                while (ancestor && ancestor !== feed.current) {
-                  if (ancestor instanceof HTMLDetailsElement)
-                    ancestor.open = true;
-                  ancestor = ancestor.parentElement;
-                }
-                target?.scrollIntoView({ block: "start" });
+                if (target) reveal(target);
                 setNewActivity(false);
               }}
             >
