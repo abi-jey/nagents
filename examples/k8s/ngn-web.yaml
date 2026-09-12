@@ -64,7 +64,9 @@ data:
     auth = "chatgpt"
     api = "auto"
     data_dir = "/state/sessions"
-    # No endpoint, API key, or model override: Harness selects its Codex default.
+    # Chat still uses the Codex default; transcription has a separate API key.
+    dictation_enabled = true
+    dictation_api_key_env = "NGN_TRANSCRIPTION_API_KEY"
   nginx.conf: |
     worker_processes 1;
     pid /tmp/nginx.pid;
@@ -117,32 +119,41 @@ data:
             add_header Cache-Control "no-store" always;
             add_header X-Content-Type-Options "nosniff" always;
 
+            # Shared by both proxy locations, including the bounded audio upload.
+            proxy_http_version 1.1;
+            proxy_set_header Host "127.0.0.1:8765";
+            proxy_set_header Origin $ngn_upstream_origin;
+            proxy_set_header Authorization "";
+            proxy_set_header Proxy-Authorization "";
+            proxy_set_header Connection "";
+            # Sec-Fetch-Site, X-Ngn-Token, and transcription session/revision
+            # headers pass through unchanged for backend validation.
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_cache off;
+            proxy_max_temp_file_size 0;
+            proxy_next_upstream off;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_redirect off;
+
             # Constant proxy health only; never bootstrap, credentials, or data.
             location = /readyz {
                 default_type text/plain;
                 return 200 "ready\n";
             }
 
+            # Only this exact route accepts a larger body. ngn additionally
+            # validates WAV format, actual bytes, duration, and one-upload capacity.
+            location = /api/dictation/transcribe {
+                client_max_body_size 10m;
+                proxy_pass http://127.0.0.1:8765;
+            }
+
             # The backend still checks fetch metadata and per-process API tokens.
             location / {
                 proxy_pass http://127.0.0.1:8765;
-                proxy_http_version 1.1;
-                proxy_set_header Host "127.0.0.1:8765";
-                proxy_set_header Origin $ngn_upstream_origin;
-                proxy_set_header Authorization "";
-                proxy_set_header Proxy-Authorization "";
-                proxy_set_header Connection "";
-                # Sec-Fetch-Site and X-Ngn-Token pass through unchanged so the
-                # backend still enforces fetch metadata and per-process tokens.
-                proxy_buffering off;
-                proxy_request_buffering off;
-                proxy_cache off;
-                proxy_max_temp_file_size 0;
-                proxy_next_upstream off;
-                proxy_connect_timeout 5s;
-                proxy_read_timeout 3600s;
-                proxy_send_timeout 3600s;
-                proxy_redirect off;
             }
         }
     }
@@ -296,6 +307,14 @@ spec:
               value: /state/data
             - name: XDG_CONFIG_HOME
               value: /state/config
+            # Optional at startup: Settings reports a missing transcription key.
+            # This variable is not used for the Codex chat connection.
+            - name: NGN_TRANSCRIPTION_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ngn-web-transcription
+                  key: api-key
+                  optional: true
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
