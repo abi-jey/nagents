@@ -126,9 +126,11 @@ still stored locally in the Harness data directory.
   the review heading, show exact inputs alongside the diff, and keep Deny conspicuous.
   Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
   a stream does not steal focus or scroll a reader away from earlier messages.
-- No remote binding, CORS wildcard, authentication/endpoint editor, voice,
-  attachment upload, arbitrary file HTTP access, or direct shell endpoint is
-  provided. Only built frontend assets are served. Unknown routes remain 404.
+- No remote binding, CORS wildcard, authentication/endpoint editor,
+  attachment upload into chat, arbitrary file HTTP access, or direct shell
+  endpoint is provided. The separate [dictation upload](#microphone-dictation)
+  produces editable text. Only built frontend assets are served. Unknown routes
+  remain 404.
 
 This is a **trusted local-user tool, not a sandbox or multi-user service**. Other
 processes/users with access to your loopback interface may access it. Do not expose
@@ -150,8 +152,10 @@ Closing the web server does not remove saved conversations or undo approved edit
 
 HTTP requests enforce the exact Host and Origin, reject cross-site fetches, and
 require a random per-process token on API reads and mutations (except the
-same-origin bootstrap). Mutations also require JSON and an Origin header; bodies
-are limited to 64 KiB and prompts to 32,000 characters. The token is held in browser
+same-origin bootstrap). Mutations require an Origin header. Ordinary mutations
+require JSON and remain limited to 64 KiB; prompts are limited to 32,000 characters.
+Only the exact dictation route accepts bounded WAV audio instead of JSON.
+The token is held in browser
 memory, never a URL or local storage. Responses are non-cacheable, frame embedding
 is blocked, and no third-party scripts/fonts are loaded.
 
@@ -159,7 +163,8 @@ is blocked, and no third-party scripts/fonts are loaded.
 
 All paths are under `/api`. API clients first GET `bootstrap`, then send its token
 in `X-Ngn-Token`. POST requests also need `Origin: http://127.0.0.1:8765` (matching
-the configured authority) and `Content-Type: application/json`.
+the configured authority) and `Content-Type: application/json`, except for the
+explicit WAV transcription contract below.
 
 | Method / Path | Purpose |
 | --- | --- |
@@ -175,6 +180,7 @@ the configured authority) and `Content-Type: application/json`.
 | `POST run` | `{session_id, prompt}` starts an owning NDJSON response |
 | `POST cancel` | `{run_id}` cancels/joins exactly that active run |
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
+| `POST dictation/transcribe` | Bounded raw `audio/wav` recording; returns `{text}` without starting a chat run |
 
 The run stream uses the CLI's normalized `schema_version: 1` event names and
 adds `run_id` to every record. Web lifecycle records are `run_started`, `heartbeat`,
@@ -238,6 +244,84 @@ with invented success or an automatic replay of a prompt. Ordinary request
 streams remain non-replayable. Saved history is still the recovery path for
 persisted conversation text, not a durable event or timer log.
 
+### Microphone Dictation
+
+Use the microphone control in the composer to record on **your browser's device**.
+Stop to transcribe, review or edit the returned text, and choose **Insert into
+draft**. The existing draft is preserved; insertion appends to the latest draft,
+including text typed while transcription was running. Only the normal **Send**
+action sends that text to the coding model. Recording, transcription, and draft
+insertion never start a chat run automatically.
+
+Microphone access requires HTTPS or loopback, browser permission, and Web Audio /
+AudioWorklet support. Permission is requested only after an explicit mic action.
+The browser creates 16 kHz, mono, PCM16 WAV audio; no container microphone, host
+audio-device mount, `voice` extra, PortAudio, or FFmpeg installation is needed.
+If the browser cannot record, ordinary text input remains usable.
+
+Recording has a configured duration cap. Reaching it stops capture and waits for
+an explicit transcription action. Cancel/discard stops capture and releases its
+tracks; navigating away or changing the connection also invalidates pending work.
+Microphone cancellation and **Stop run** are separate controls. Cancelled or late
+responses never replace a new session's draft. Transcription uploads are not
+automatically retried: cancellation cannot recall audio already received by the
+transcription provider.
+
+#### Connection And Configuration
+
+Transcription uses a **separate OpenAI Platform API key**, not the Codex login or
+chat-provider credentials as a fallback. The chat connection can remain Codex.
+The default transcription model is `gpt-4o-mini-transcribe`. Model selection here
+is independent of chat-model discovery and requires a compatible file-transcription
+model supporting JSON output and, when supplied, the singular `language` parameter.
+
+Inject the transcription key into the backend's environment using your secret
+management tooling, then select its variable name without putting the key in
+TOML, browser settings, URLs, or the image:
+
+```bash
+ngn serve --dictation \
+  --dictation-api-key-env NGN_TRANSCRIPTION_API_KEY \
+  --dictation-model gpt-4o-mini-transcribe \
+  --dictation-max-seconds 120
+```
+
+This assumes `NGN_TRANSCRIPTION_API_KEY` has already been supplied to the process.
+The existing `NGN_DICTATION_*` defaults and trusted TOML options also work with
+`serve`. The backend endpoint defaults to `https://api.openai.com/v1`; endpoint
+and API-key-variable selection remain administrator-managed. See the
+[deployment guide](ngn-web-deployment.md#transcription-credentials) for a runtime
+Kubernetes Secret reference.
+
+The **Dictation** section in Settings controls the enabled preference, model,
+language, and recording duration. These preferences persist with workspace
+settings. They cannot override an administrator's disabled service or maximum
+duration. Missing credentials and demo mode are reported clearly without opening
+the microphone or making a provider request. No provider credential is returned
+to the browser.
+
+#### Upload Contract
+
+`POST /api/dictation/transcribe` accepts only a raw `audio/wav` body and also
+requires `X-Ngn-Session` for the selected root conversation and
+`X-Ngn-Settings-Revision` for the recording's captured settings revision. Stale
+session/settings requests conflict rather than silently using a different
+conversation or transcription configuration.
+
+One admitted upload/transcription owns the operation slot. Competing runs,
+uploads, settings saves, and session mutations conflict; due wakeups wait for
+the slot to become idle. Admission occurs before buffering the recording.
+The backend counts actual received bytes, validates PCM format and duration,
+and rebuilds WAV data without ancillary metadata before the provider upload.
+The limit is `effective_seconds * 32000 + 4096` bytes, with at most 300 seconds.
+Ordinary JSON endpoints retain their separate 64 KiB limit.
+
+Audio is handled in bounded memory, not written as a workspace file or added to
+conversation history. Provider requests have bounded time and response sizes,
+use only the configured transcription credential, and do not follow redirects
+or retry automatically. Returned text remains an unsent draft. Oversized draft
+insertion is rejected with both texts retained rather than silently truncated.
+
 ### Runtime Settings
 
 Settings responses contain `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
@@ -254,8 +338,12 @@ read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
 | `max_file_bytes` | Integer, 1,024 through 4,194,304 bytes |
 | `max_tool_rounds` | Integer, 1 through 1,000 |
 | `max_subagent_depth` | Integer, 0 through 8; root depth is 0 |
+| `dictation_enabled` | Boolean preference; effective only when the administrator permits dictation |
+| `dictation_model` | Trimmed, nonblank compatible transcription model ID, at most 200 printable characters |
+| `dictation_language` | Empty for automatic detection, or a two-letter lowercase language code |
+| `dictation_max_seconds` | Integer, 1 through 300; effective recording duration is capped by the administrator's startup limit |
 
-POST requires all seven values. Unknown fields, numeric strings, booleans used as
+POST requires all eleven values. Unknown fields, numeric strings, booleans used as
 numbers, and nonfinite numbers are rejected with HTTP 422. Changing profile selects
 its trusted instructions/mode, but the explicitly submitted model takes precedence
 over that profile's model. Model IDs are free text: settings GET/save never query a model
@@ -272,13 +360,28 @@ during a save. Error `detail` is a safe string, never raw request/provider data.
 
 The versioned `ngn_web_settings` singleton row lives in the **existing workspace
 session SQLite database**, resolved by the Harness under `data_dir`. It stores only
-the seven approved values and revision, not credentials or the full configuration.
+the approved preferences and revision, not credentials or the full configuration.
 The override applies across sessions and web-server restarts for that resolved
 workspace. One process must own the workspace; this is not multi-process settings
 synchronization. ConfigMap/TOML, CLI, profile and initial authentication/model
 resolution establish startup defaults **before** the saved override is applied.
 Reset deletes the row, so later restarts use any newly changed trusted defaults.
 The CLI/TUI do not load this web-only override.
+
+Existing version-1 rows are validated against the original seven-field schema
+and receive dictation defaults from trusted startup configuration. New saves
+write version 2 with all eleven preferences. Existing chat preferences and
+revision checks are retained; arbitrary unknown fields or versions are not
+accepted as a migration shortcut.
+
+After a version-2 save, an older image that only understands version 1 cannot
+load that row. Roll back with a compatible image or use administrator-reviewed
+settings-row recovery; preserve the session database and credential store.
+
+Bootstrap and settings responses also include a non-secret `dictation` capability
+projection: effective `enabled`/`available`, `admin_enabled`, safe `status`, the
+API-key variable name, effective duration/byte limits, PCM format, and the current
+settings `revision`. The credential value and writable routing are never included.
 
 A save joins its local SQLite transaction even if its HTTP request is cancelled;
 on failure, live config, model, round limit and instructions are restored. If the
