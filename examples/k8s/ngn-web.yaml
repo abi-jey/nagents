@@ -194,7 +194,7 @@ spec:
         # Deliberately no fsGroup: OpenAIAuth requires 0700 dirs / 0600 files.
       initContainers:
         - name: initialize-state
-          image: ghcr.io/abi-jey/nagents/agent-server@sha256:b16155c1e9f3f0fa26dbc84d7d7ba4adfe2322d2ee834cee81daf69e771ad57e
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:2def52cc2843d1b7d599b91029b8a83c6e36bc97c4d71eae489dcb5eef578d50
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -284,7 +284,7 @@ spec:
               readOnly: true
       containers:
         - name: ngn
-          image: ghcr.io/abi-jey/nagents/agent-server@sha256:b16155c1e9f3f0fa26dbc84d7d7ba4adfe2322d2ee834cee81daf69e771ad57e
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:2def52cc2843d1b7d599b91029b8a83c6e36bc97c4d71eae489dcb5eef578d50
           imagePullPolicy: IfNotPresent
           # Override the image's legacy-server CMD; never bind ngn remotely.
           command:
