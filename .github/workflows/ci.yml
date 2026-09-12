@@ -9,6 +9,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      publish_alpha:
+        description: 'Publish a tested feature-branch alpha to PyPI'
+        required: false
+        default: false
+        type: boolean
       publish_dev:
         description: 'Publish dev release to PyPI'
         required: false
@@ -47,6 +52,18 @@ jobs:
 
       - name: Run pre-commit
         run: pre-commit run --all-files
+
+      - name: Validate alpha release request
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
+        env:
+          REF: ${{ github.ref }}
+          BUMP: ${{ inputs.version_bump }}
+          PUBLISH_DEV: ${{ inputs.publish_dev }}
+        run: |
+          case "$REF" in refs/heads/*) ;; *) exit 1 ;; esac
+          test "$REF" != refs/heads/main
+          test "$BUMP" = none
+          test "$PUBLISH_DEV" = false
 
   # =============================================================================
   # LINUX TESTS
@@ -187,7 +204,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install toml
+        run: pip install toml packaging
 
       - name: Bump version
         id: bump
@@ -195,6 +212,7 @@ jobs:
           import toml
           import subprocess
           import os
+          from packaging.version import Version
 
           bump_type = "${{ inputs.version_bump }}"
 
@@ -205,8 +223,7 @@ jobs:
               config = toml.load(f)
 
           current = config['project']['version']
-          parts = current.split('.')
-          major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2].split('-')[0].split('.dev')[0])
+          major, minor, patch = Version(current).release
 
           if bump_type == 'major':
               major += 1
@@ -301,6 +318,10 @@ jobs:
       - name: Install build tools
         run: pip install build hatch
 
+      - name: Stamp feature alpha version
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
+        run: python .github/scripts/alpha_version.py
+
       - name: Build wheel and sdist
         run: python -m build
 
@@ -345,7 +366,8 @@ jobs:
       always() &&
       needs.build.result == 'success' &&
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) ||
-       github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none' && needs.bump-version.result == 'success')
+       github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none' && needs.bump-version.result == 'success' ||
+       github.event_name == 'workflow_dispatch' && inputs.publish_alpha)
     permissions:
       packages: write
     env:
@@ -354,11 +376,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
       - name: Pull latest changes (for bump workflow)
-        if: github.event_name == 'workflow_dispatch'
-        run: git pull --rebase origin main || true
+        if: github.event_name == 'workflow_dispatch' && needs.bump-version.result == 'success'
+        run: git fetch origin main && git checkout --detach FETCH_HEAD
+
+      - uses: actions/setup-python@v5
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
+        with:
+          python-version: '3.12'
+
+      - name: Stamp the same feature alpha as the tested distribution
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
+        run: python .github/scripts/alpha_version.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -378,6 +409,7 @@ jobs:
           tags: |
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=alpha-${{ github.run_number }}-${{ github.run_attempt }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_alpha }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=v${{ needs.bump-version.outputs.version }},enable=${{ needs.bump-version.result == 'success' }}
 
@@ -402,6 +434,7 @@ jobs:
     if: |
       always() &&
       needs.build.result == 'success' &&
+      !inputs.publish_alpha &&
       (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'))
     environment:
       name: pypi-stable
@@ -489,6 +522,31 @@ jobs:
           name: v${{ steps.version.outputs.version }}
           body_path: release_notes.md
           files: dist/*
+
+  # =============================================================================
+  # FEATURE-BRANCH ALPHAS (same tested SHA and built artifacts, no branch changes)
+  # =============================================================================
+  publish-alpha:
+    name: Publish Feature Alpha
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish_alpha && needs.build.result == 'success' }}
+    environment:
+      name: pypi-alpha
+      url: https://pypi.org/project/nagents/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish tested alpha artifacts
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
 
   # =============================================================================
   # PUBLISH & RELEASE (Dev)

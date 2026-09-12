@@ -92,6 +92,7 @@ nav:
       - Providers: guide/providers.md
       - Tools: guide/tools.md
       - Sessions: guide/sessions.md
+      - Channels and Listening: guide/channels.md
       - Compaction: guide/compaction.md
       - Events: guide/events.md
       - Batch Processing: guide/batch.md
@@ -105,6 +106,7 @@ nav:
       - Types: api/types.md
       - Events: api/events.md
       - Session: api/session.md
+      - Channels: api/channels.md
       - Tools: api/tools.md
       - Batch: api/batch.md
   - Development:

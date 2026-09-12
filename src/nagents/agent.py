@@ -7,8 +7,11 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 from collections.abc import AsyncIterator
+from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
+from contextlib import aclosing
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import replace
 from enum import Enum
@@ -16,11 +19,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Literal
+from typing import Protocol
+from typing import Self
+from typing import runtime_checkable
 
 from .batch import BatchClient
 from .batch import BatchConfig
 from .batch import BatchRequest
 from .batch import BatchStatus
+from .channels.types import Channel
+from .channels.types import ChannelEventHandler
+from .channels.types import discard_event
 from .compaction import estimate_messages_tokens
 from .compaction import format_messages_as_text
 from .compaction import get_model_context_limit
@@ -85,6 +94,24 @@ class _CompactorNotSet:
 _COMPACTOR_NOT_SET = _CompactorNotSet()
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _AsyncClosable(Protocol):
+    async def aclose(self) -> None: ...
+
+
+async def _join_cleanup(task: asyncio.Task[None]) -> None:
+    """Finish shared cleanup before propagating cancellation of its caller."""
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancelled = error
+    task.result()
+    if cancelled is not None:
+        raise cancelled
 
 
 class UnsupportedAudioBehavior(Enum):
@@ -303,6 +330,16 @@ class Agent:
         self._initialized = False
         self._http_logger: FileHTTPLogger | None = None
         self._batch_client: BatchClient | None = None
+        self._channels: dict[str, Channel] = {}
+        self._channel_listening = False
+        self._channel_listener_task: asyncio.Task[None] | None = None
+        self._channel_execution_task: asyncio.Task[None] | None = None
+        self._active_runs = 0
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._closing = False
+        # Retain the completed task for idempotent close until resources are reused.
+        self._close_task: asyncio.Task[None] | None = None
+        self._close_provider = provider
 
         # Set up HTTP logging if log_file is provided
         if log_file:
@@ -369,10 +406,12 @@ class Agent:
         Raises:
             ValueError: If model verification fails
         """
+        self._check_closing()
         if self._initialized:
             logger.debug("Agent already initialized")
             return
 
+        self._close_task = None
         # Initialize session manager
         await self.session.initialize()
         logger.debug("Session manager initialized")
@@ -407,6 +446,101 @@ class Agent:
             description: Optional override for description
         """
         return self.tool_registry.register(func, name, description)
+
+    def add_channel(self, channel: Channel) -> Self:
+        """Attach a connector without opening it; return this agent for chaining.
+
+        All attached channels feed the same explicit session supplied to listen().
+        Connector names identify outbound targets and must be unique and stable.
+        """
+        self._check_closing()
+        if self._channel_listening:
+            raise RuntimeError("Cannot add channels while listening")
+        if not isinstance(channel, Channel):
+            raise TypeError("Expected a Channel connector")
+        if not isinstance(channel.name, str) or not channel.name.strip():
+            raise ValueError("Channel name must not be blank")
+        if channel.name in self._channels:
+            raise ValueError(f"Channel name already attached: {channel.name}")
+        self._channels[channel.name] = channel
+        return self
+
+    async def listen(
+        self,
+        session_id: str,
+        *,
+        user_id: str = "channels",
+        inbox_limit: int = 1000,
+        on_event: ChannelEventHandler = discard_event,
+    ) -> None:
+        """Receive all attached channels into one persistent agent identity.
+
+        Incoming events enter a durable inbox and execute serially. The model
+        chooses outgoing messages using channel tools; final response text is
+        only observed locally through on_event. Cancel this coroutine to stop,
+        or close the agent from another task. Queued events survive restart;
+        interrupted executions are not automatically replayed.
+
+        The listener owns this Agent until shutdown. Independent run(), compact(),
+        and session mutations are rejected during that time. This is text mode;
+        batch execution is unsupported. Use one process per session database.
+        """
+        from .channels.runtime import ChannelRuntime
+
+        self._check_closing()
+        if self._channel_listening or self._active_runs:
+            raise RuntimeError("Agent is already executing or listening")
+        if self.batch:
+            raise ValueError("Channel listeners require text execution, not batch mode")
+        if not self._channels:
+            raise ValueError("Attach at least one channel before listening")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("An explicit nonblank session_id is required for the agent identity")
+        if any(name != channel.name for name, channel in self._channels.items()):
+            raise ValueError("An attached channel changed its name")
+        runtime = ChannelRuntime(self, tuple(self._channels.values()), session_id, user_id, inbox_limit)
+        self._close_task = None
+        self._channel_listening = True
+        self._channel_listener_task = asyncio.current_task()
+        try:
+            await runtime.listen(on_event=on_event)
+        finally:
+            self._channel_listening = False
+            self._channel_listener_task = None
+            self._channel_execution_task = None
+
+    def _check_closing(self, *, allow_cleanup: bool = False) -> None:
+        if self._closing and not (allow_cleanup and asyncio.current_task() in self._cleanup_tasks):
+            raise RuntimeError("Agent is closing; wait for resource cleanup before starting new work")
+
+    def _check_channel_access(self, *, allow_cleanup: bool = False) -> None:
+        self._check_closing(allow_cleanup=allow_cleanup)
+        task = asyncio.current_task()
+        if self._channel_listening and task is not self._channel_execution_task and task not in self._cleanup_tasks:
+            raise RuntimeError("The channel listener owns this Agent; submit input through its channels")
+
+    async def _finish_cleanup(self, operation: Awaitable[None]) -> None:
+        """Track each cleanup task, including nested trusted run cleanup."""
+
+        async def cleanup() -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            self._cleanup_tasks.add(task)
+            try:
+                await operation
+            finally:
+                self._cleanup_tasks.discard(task)
+
+        await _join_cleanup(asyncio.create_task(cleanup()))
+
+    @asynccontextmanager
+    async def _closing_events(self, events: AsyncIterator[Event]) -> AsyncIterator[AsyncIterator[Event]]:
+        """Close provider iterators when supported, without narrowing their API."""
+        try:
+            yield events
+        finally:
+            if isinstance(events, _AsyncClosable):
+                await self._finish_cleanup(events.aclose())
 
     def realtime_session(
         self,
@@ -1020,6 +1154,16 @@ class Agent:
             print(f"Compacted: {result.original_message_count} -> {result.new_message_count}")
             print(f"Summary: {result.summary_text[:100]}...")
         """
+        self._check_channel_access()
+        # Manual compaction can use the provider without calling initialize().
+        self._close_task = None
+        self._active_runs += 1
+        try:
+            return await self._compact_session(session_id)
+        finally:
+            self._active_runs -= 1
+
+    async def _compact_session(self, session_id: str) -> "CompactionDoneEvent":
         if not await self.session.session_exists(session_id):
             raise ValueError(f"Session '{session_id}' not found")
 
@@ -1093,6 +1237,29 @@ class Agent:
         Consumers must serialize runs/compaction for the same session and close
         the iterator explicitly when stopping consumption early.
         """
+        self._check_channel_access()
+        self._active_runs += 1
+        try:
+            async with aclosing(
+                self._run_interaction(
+                    user_message, session_id, user_id, config, auto_commit=auto_commit, log_file=log_file
+                )
+            ) as events:
+                async for event in events:
+                    yield event
+        finally:
+            self._active_runs -= 1
+
+    async def _run_interaction(
+        self,
+        user_message: str | list[ContentPart] | Message | None,
+        session_id: str | None,
+        user_id: str,
+        config: GenerationConfig | None,
+        *,
+        auto_commit: bool | None,
+        log_file: Path | str | None,
+    ) -> AsyncGenerator[Event, None]:
         if user_message is None:
             self._check_extension_mode("voice")
             async for event in self._run_voice(auto_commit=auto_commit, log_file=log_file):
@@ -1152,16 +1319,7 @@ class Agent:
                 if errors:
                     raise BaseExceptionGroup("Agent run cleanup failed", errors)
 
-            cleanup_task = asyncio.create_task(cleanup())
-            cancelled: asyncio.CancelledError | None = None
-            while not cleanup_task.done():
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError as error:
-                    cancelled = error
-            cleanup_task.result()
-            if cancelled is not None:
-                raise cancelled
+            await self._finish_cleanup(cleanup())
 
     async def _repair_tool_calls(self, session_id: str) -> None:
         """Close interrupted tool blocks without assuming whether side effects ran."""
@@ -1309,58 +1467,61 @@ class Agent:
                 if not isinstance(request, ModelRequest):
                     raise TypeError(f"{type(plugin).__name__}.before_model must return ModelRequest")
 
-            async for event in self.provider.generate(
-                messages=request.messages,
-                tools=request.tools or None,
-                config=request.config,
-                stream=self.streaming,
-            ):
-                # Providers repeat cumulative snapshots within a generation, not additive deltas.
-                if event.usage.has_usage():
-                    session_usage.prompt_tokens += event.usage.prompt_tokens - last_usage.prompt_tokens
-                    session_usage.completion_tokens += event.usage.completion_tokens - last_usage.completion_tokens
-                    session_usage.total_tokens += event.usage.total_tokens - last_usage.total_tokens
-                    last_usage = replace(event.usage)
-                    # Context size remains the latest prompt, not accumulated billing usage.
-                    self._session_tokens[session_id] = last_usage.prompt_tokens
-                event.usage = replace(last_usage, session=replace(session_usage))
+            async with self._closing_events(
+                self.provider.generate(
+                    messages=request.messages,
+                    tools=request.tools or None,
+                    config=request.config,
+                    stream=self.streaming,
+                )
+            ) as events:
+                async for event in events:
+                    # Providers repeat cumulative snapshots within a generation, not additive deltas.
+                    if event.usage.has_usage():
+                        session_usage.prompt_tokens += event.usage.prompt_tokens - last_usage.prompt_tokens
+                        session_usage.completion_tokens += event.usage.completion_tokens - last_usage.completion_tokens
+                        session_usage.total_tokens += event.usage.total_tokens - last_usage.total_tokens
+                        last_usage = replace(event.usage)
+                        # Context size remains the latest prompt, not accumulated billing usage.
+                        self._session_tokens[session_id] = last_usage.prompt_tokens
+                    event.usage = replace(last_usage, session=replace(session_usage))
 
-                if isinstance(event, TextChunkEvent):
-                    full_text += event.chunk
-                elif isinstance(event, TextDoneEvent):
-                    full_text = event.text
-                    finish_reason = event.finish_reason
-                elif isinstance(event, ToolCallEvent):
-                    call = ToolCall(
-                        id=event.id,
-                        name=event.name,
-                        arguments=deepcopy(event.arguments),
-                        metadata=deepcopy(event.metadata),
-                    )
-                    if not call.id or not call.name or any(tc.id == call.id for tc in pending_tool_calls):
-                        raise ValueError("Tool calls require unique nonempty IDs and nonempty names")
-                    for plugin in plugins:
-                        call = await plugin.before_tool(context, call)
-                        if not isinstance(call, ToolCall) or (call.id, call.name) != (event.id, event.name):
-                            raise ValueError(f"{type(plugin).__name__}.before_tool must preserve tool call id/name")
-                    if not self.save_tool_outputs:
-                        call.arguments.pop(_SAVE_TO_PARAM_NAME, None)
-                    pending_tool_calls.append(deepcopy(call))
-                    event.arguments = deepcopy(call.arguments)
-                    event.metadata = deepcopy(call.metadata)
-
-                yield event
-
-                if isinstance(event, ErrorEvent):
-                    has_error = True
-                    if not event.recoverable:
-                        yield DoneEvent(
-                            final_text="",
-                            session_id=session_id,
-                            finish_reason=FinishReason.UNKNOWN,
-                            usage=replace(last_usage, session=replace(session_usage)),
+                    if isinstance(event, TextChunkEvent):
+                        full_text += event.chunk
+                    elif isinstance(event, TextDoneEvent):
+                        full_text = event.text
+                        finish_reason = event.finish_reason
+                    elif isinstance(event, ToolCallEvent):
+                        call = ToolCall(
+                            id=event.id,
+                            name=event.name,
+                            arguments=deepcopy(event.arguments),
+                            metadata=deepcopy(event.metadata),
                         )
-                        return
+                        if not call.id or not call.name or any(tc.id == call.id for tc in pending_tool_calls):
+                            raise ValueError("Tool calls require unique nonempty IDs and nonempty names")
+                        for plugin in plugins:
+                            call = await plugin.before_tool(context, call)
+                            if not isinstance(call, ToolCall) or (call.id, call.name) != (event.id, event.name):
+                                raise ValueError(f"{type(plugin).__name__}.before_tool must preserve tool call id/name")
+                        if not self.save_tool_outputs:
+                            call.arguments.pop(_SAVE_TO_PARAM_NAME, None)
+                        pending_tool_calls.append(deepcopy(call))
+                        event.arguments = deepcopy(call.arguments)
+                        event.metadata = deepcopy(call.metadata)
+
+                    yield event
+
+                    if isinstance(event, ErrorEvent):
+                        has_error = True
+                        if not event.recoverable:
+                            yield DoneEvent(
+                                final_text="",
+                                session_id=session_id,
+                                finish_reason=FinishReason.UNKNOWN,
+                                usage=replace(last_usage, session=replace(session_usage)),
+                            )
+                            return
 
             # If we hit an error, don't continue
             if has_error:
@@ -1686,7 +1847,7 @@ class Agent:
         self,
         messages: list[Message],
         config: GenerationConfig | None = None,
-    ) -> AsyncIterator[Event]:
+    ) -> AsyncGenerator[Event, None]:
         """
         Run a simple generation without session management.
 
@@ -1702,6 +1863,18 @@ class Agent:
         Yields:
             Events as they occur
         """
+        self._check_channel_access()
+        self._active_runs += 1
+        try:
+            async with aclosing(self._run_simple(messages, config)) as events:
+                async for event in events:
+                    yield event
+        finally:
+            self._active_runs -= 1
+
+    async def _run_simple(
+        self, messages: list[Message], config: GenerationConfig | None
+    ) -> AsyncGenerator[Event, None]:
         self._check_extension_mode("simple")
         await self._ensure_initialized()
 
@@ -1714,37 +1887,35 @@ class Agent:
         # Track last known usage to use for events without usage data
         last_usage = Usage()
 
-        async for event in self.provider.generate(
-            messages=messages,
-            tools=tools,
-            config=config,
-            stream=self.streaming,
-        ):
-            # Track usage from events that have actual token counts
-            if event.usage.has_usage():
-                # For simple runs, session_usage = current usage
-                session_usage = TokenUsage(
-                    prompt_tokens=event.usage.prompt_tokens,
-                    completion_tokens=event.usage.completion_tokens,
-                    total_tokens=event.usage.total_tokens,
-                )
-                last_usage = Usage(
-                    prompt_tokens=event.usage.prompt_tokens,
-                    completion_tokens=event.usage.completion_tokens,
-                    total_tokens=event.usage.total_tokens,
-                )
-            else:
-                # Use last known usage for events without usage data
-                event.usage = Usage(
-                    prompt_tokens=last_usage.prompt_tokens,
-                    completion_tokens=last_usage.completion_tokens,
-                    total_tokens=last_usage.total_tokens,
-                )
+        async with self._closing_events(
+            self.provider.generate(messages=messages, tools=tools, config=config, stream=self.streaming)
+        ) as events:
+            async for event in events:
+                # Track usage from events that have actual token counts
+                if event.usage.has_usage():
+                    # For simple runs, session_usage = current usage
+                    session_usage = TokenUsage(
+                        prompt_tokens=event.usage.prompt_tokens,
+                        completion_tokens=event.usage.completion_tokens,
+                        total_tokens=event.usage.total_tokens,
+                    )
+                    last_usage = Usage(
+                        prompt_tokens=event.usage.prompt_tokens,
+                        completion_tokens=event.usage.completion_tokens,
+                        total_tokens=event.usage.total_tokens,
+                    )
+                else:
+                    # Use last known usage for events without usage data
+                    event.usage = Usage(
+                        prompt_tokens=last_usage.prompt_tokens,
+                        completion_tokens=last_usage.completion_tokens,
+                        total_tokens=last_usage.total_tokens,
+                    )
 
-            # Always attach session usage to the event
-            event.usage.session = session_usage
+                # Always attach session usage to the event
+                event.usage.session = session_usage
 
-            yield event
+                yield event
 
     async def clear_session(self, session_id: str) -> None:
         """
@@ -1753,15 +1924,78 @@ class Agent:
         Args:
             session_id: Session identifier to clear
         """
-        await self._ensure_initialized()
-        await self.session.clear_session(session_id)
+        self._check_channel_access(allow_cleanup=True)
+        self._active_runs += 1
+        try:
+            await self._ensure_initialized()
+            await self.session.clear_session(session_id)
+        finally:
+            self._active_runs -= 1
 
     async def close(self) -> None:
-        """Close the agent and release resources."""
-        await self.provider.close()
-        if self._batch_client:
-            await self._batch_client.close()
-        self._initialized = False
+        """Join one resource teardown, even if callers cancel or close concurrently.
+
+        New work is rejected until teardown finishes. Repeated closes reuse its
+        result until provider replacement, initialization, listening, or manual
+        compaction reopens the agent. Owned run cleanup may clear history, but
+        cannot start a new model run during shutdown.
+        """
+        listener = self._channel_listener_task
+        task = asyncio.current_task()
+        if task is self._close_task:
+            raise RuntimeError("Cannot close the Agent from its own resource cleanup")
+        if listener is not None and (task in (listener, self._channel_execution_task) or task in self._cleanup_tasks):
+            raise RuntimeError("Stop a listener by cancelling it or closing the Agent from another task")
+        if self._close_task is not None and self._close_task.done() and self.provider is not self._close_provider:
+            # Harness login/logout can replace a closed provider without a run
+            # or Agent.initialize(). Its resources still need their own teardown.
+            self._close_task = None
+        if self._close_task is None:
+            self._closing = True
+            self._close_provider = self.provider
+            self._close_task = asyncio.create_task(self._close_resources(self._close_provider))
+        await _join_cleanup(self._close_task)
+
+    async def _close_resources(self, provider: Provider) -> None:
+        errors: list[BaseException] = []
+        try:
+            listener = self._channel_listener_task
+            try:
+                if listener is not None:
+                    await self._stop_channel_listener(listener)
+            except BaseException as error:
+                errors.append(error)
+            try:
+                await provider.close()
+            except BaseException as error:
+                errors.append(error)
+            if self._batch_client:
+                try:
+                    await self._batch_client.close()
+                except BaseException as error:
+                    errors.append(error)
+            if len(errors) == 1:
+                raise errors[0]
+            if errors:
+                raise BaseExceptionGroup("Agent resource cleanup failed", errors)
+        finally:
+            self._initialized = False
+            self._closing = False
+
+    async def _stop_channel_listener(self, listener: asyncio.Task[None]) -> None:
+        if not listener.done():
+            listener.cancel()
+        cancelled = False
+        while not listener.done():
+            try:
+                await asyncio.shield(listener)
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                cancelled = cancelled or (task is not None and task.cancelling() > 0)
+        if not listener.cancelled():
+            listener.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
 
 # ---------------------------------------------------------------------------
