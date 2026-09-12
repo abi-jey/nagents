@@ -10,9 +10,13 @@ export function ExecutionRecord({
   open?: boolean;
   toggle?: (open: boolean) => void;
 }) {
+  const name = entry.kind === "task"
+    ? entry.trigger || (entry.recorded ? "Recorded trigger unavailable" : entry.followup ? "human" : "delegation")
+    : entry.title || "Tool call";
   return (
     <details
       className="execution-record"
+      data-disclosure-key={entry.id}
       open={open}
       onToggle={(event) => toggle?.(event.currentTarget.open)}
     >
@@ -22,26 +26,9 @@ export function ExecutionRecord({
             {entry.kind === "task"
               ? `${entry.recorded ? "Latest known activation" : "Activation"} ${entry.activation || 0}: `
               : ""}
-            <code>
-              {entry.kind === "task"
-                ? entry.trigger ||
-                  (entry.recorded
-                    ? "Recorded trigger unavailable"
-                    : entry.followup
-                      ? "human"
-                      : "delegation")
-                : entry.title || "Tool call"}
-            </code>
+            <code>{name}</code>
             {entry.kind === "task" && !!entry.followup && (
               <span> / follow-up {entry.followup}</span>
-            )}
-            {entry.callId && (
-              <small className="record-identity" title={entry.callId}>
-                Call {entry.callId}
-              </small>
-            )}
-            {entry.approval && (
-              <small className="record-identity">{entry.approval}</small>
             )}
           </span>
           <span className="execution-state" data-state={entry.state}>
@@ -57,6 +44,15 @@ export function ExecutionRecord({
       <div className="execution-detail">
         {entry.kind !== "context" && (
           <dl className="request-identity">
+            {entry.kind === "tool" && (
+              <><dt>Tool name</dt><dd>{name}</dd></>
+            )}
+            {entry.kind === "task" && (
+              <>
+                <dt>Activation</dt><dd>{entry.activation || 0}</dd>
+                <dt>Trigger</dt><dd>{name}</dd>
+              </>
+            )}
             {entry.recordedStatus && (
               <>
                 <dt>Recorded status</dt>
