@@ -76,6 +76,7 @@ export function useSessions() {
           model: reply.values.model,
           agent: reply.values.agent,
           provider: reply.connection.provider,
+          dictation: reply.dictation,
         },
     );
   }

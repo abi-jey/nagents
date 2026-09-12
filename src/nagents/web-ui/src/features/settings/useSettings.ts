@@ -100,12 +100,12 @@ export function useSettings({
     setOpen(false);
   }
 
-  function update(key: keyof SettingsDraft, value: string) {
+  function update<Key extends keyof SettingsDraft>(key: Key, value: SettingsDraft[Key]) {
     if (disabled || !snapshot) return;
     setDraft(
       (current) =>
         current &&
-        (key === "agent"
+        (key === "agent" && typeof value === "string"
           ? selectProfile(current, value, snapshot.profiles)
           : { ...current, [key]: value }),
     );
@@ -140,8 +140,8 @@ export function useSettings({
           receive(reply);
           setNotice(
             reset
-              ? "Startup defaults restored. Saved overrides removed. Applies to your next run."
-              : "Settings saved. Applies to your next run.",
+              ? "Startup defaults restored. Saved overrides removed. Applies to your next run or recording."
+              : "Settings saved. Applies to your next run or recording.",
           );
         } catch (cause) {
           const failure = settingsFailure(cause, true);

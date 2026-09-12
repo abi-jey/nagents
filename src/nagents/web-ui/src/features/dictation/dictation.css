@@ -1,0 +1,84 @@
+.dictation {
+  border-top: 1px solid var(--border-group);
+  margin-top: 10px;
+  padding-top: 10px;
+  min-width: 0;
+}
+.dictation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.dictation button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.dictation-mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.dictation-mic:not(:disabled),
+.dictation-insert:not(:disabled) {
+  color: var(--accent-violet);
+  border-color: var(--accent-violet);
+}
+.dictation-stop {
+  color: var(--accent-rose);
+  border-color: var(--accent-rose);
+}
+.dictation p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.dictation p:empty {
+  display: none;
+}
+.dictation .error-text {
+  color: var(--state-error);
+}
+.dictation[data-phase="recording"] [role="status"] {
+  color: var(--accent-rose);
+}
+.dictation-review {
+  margin-top: 12px;
+}
+.dictation-review label {
+  display: block;
+  color: var(--accent-teal);
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.dictation-review textarea {
+  background: var(--surface-output);
+  border: 1px solid var(--border-control);
+  border-radius: 4px;
+  padding: 8px;
+}
+.dictation-review textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.dictation-review [aria-invalid="true"] {
+  border-color: var(--state-error);
+}
+.dictation-insert {
+  margin-top: 10px;
+}
+@media (max-width: 760px) {
+  .composer-area textarea {
+    font-size: 16px;
+  }
+  .composer-bottom {
+    flex-wrap: wrap;
+  }
+  .composer-area {
+    max-height: 70dvh;
+    overflow-y: auto;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}

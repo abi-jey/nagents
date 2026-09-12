@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { executionLimits } from "./draft";
 import { ModelField } from "./ModelField";
+import { DictationSettings } from "./DictationSettings";
 import type { useSettings } from "./useSettings";
 import "./settings.css";
 
@@ -82,7 +83,7 @@ export function SettingsDialog({
           Settings
         </h2>
         <p id="settings-description">
-          Applies to your next run. Saved with workspace data.
+          Applies to your next run or recording. Saved with workspace data.
         </p>
       </header>
       <form
@@ -160,7 +161,7 @@ export function SettingsDialog({
               </h3>
               <p>
                 {confirmation === "reset"
-                  ? "This removes saved workspace overrides and discards your draft. The server's trusted startup defaults apply to your next run."
+                  ? "This removes saved workspace overrides and discards your draft. The server's trusted startup defaults apply to your next run or recording."
                   : "This replaces your unsaved draft with the latest server settings. It does not change any saved settings or retry your save."}
               </p>
               {confirmation === "reset" && snapshot && (
@@ -289,6 +290,13 @@ export function SettingsDialog({
                   ))}
                 </div>
               </fieldset>
+              <DictationSettings
+                config={snapshot.dictation}
+                draft={draft}
+                errors={errors}
+                disabled={disabled || !!confirmation}
+                update={settings.update}
+              />
               <section
                 className="settings-connection"
                 aria-labelledby="settings-connection-title"

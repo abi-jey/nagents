@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
 import { useSettings } from "../features/settings/useSettings";
+import { useDictation } from "../features/dictation/useDictation";
+import { promptFailure } from "../features/dictation/draft";
+import { recordingSupport } from "../features/dictation/browser";
 
 export function useClient() {
   const sessions = useSessions();
@@ -15,10 +18,15 @@ export function useClient() {
   const busy = operating || !!chat.backgroundRunId;
   const [error, setError] = useState("");
   const occupied = useRef(false);
+  const dictation = useDictation(
+    sessions.config?.token || "",
+    sessions.sessionId,
+    busy || !!sessions.externalRun || !!chat.approval.pending || sessions.activityOnly,
+  );
 
   // The UI rejects competing operations immediately, matching the backend's 409 policy.
   async function operate(action: () => Promise<void>): Promise<boolean> {
-    if (occupied.current) return false;
+    if (occupied.current || dictation.controller.active) return false;
     occupied.current = true;
     setBusy(true);
     setError("");
@@ -40,13 +48,14 @@ export function useClient() {
 
   const settings = useSettings({
     token: sessions.config?.token || "",
-    blocked: busy || !!sessions.externalRun || !!chat.approval.pending,
+    blocked: busy || !!sessions.externalRun || !!chat.approval.pending || dictation.unfinished,
     operate: (action) =>
       chat.backgroundRunId ? Promise.resolve(false) : operate(action),
     accept: sessions.acceptSettings,
   });
 
   async function connect() {
+    dictation.controller.cancel("");
     await operate(async () => {
       chat.setStatus("Connecting to local harness");
       try {
@@ -79,9 +88,15 @@ export function useClient() {
       sessions.activityOnly ||
       sessions.externalRun ||
       chat.backgroundRunId ||
+      dictation.controller.active ||
       !value.trim()
     )
       return;
+    const failure = promptFailure(value, sessions.sessionId);
+    if (failure) {
+      setError(failure);
+      return;
+    }
     await operate(async () => {
       try {
         await chat.submit(value);
@@ -107,10 +122,28 @@ export function useClient() {
     }
   }
 
+  function startDictation() {
+    if (occupied.current || busy || sessions.externalRun || sessions.activityOnly ||
+        chat.approval.pending || settings.open || !sessions.config?.dictation ||
+        !sessions.sessionId || recordingSupport()) return;
+    void dictation.controller.start({
+      token: sessions.config.token,
+      sessionId: sessions.sessionId,
+      config: sessions.config.dictation,
+    });
+  }
+
+  function insertDictation() {
+    return dictation.controller.insert(chat.insertDictation);
+  }
+
   return {
     sessions,
     chat,
     settings,
+    dictation,
+    startDictation,
+    insertDictation,
     busy,
     error,
     connect,

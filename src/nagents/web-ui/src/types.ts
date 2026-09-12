@@ -1,3 +1,5 @@
+import type { DictationConfig } from "./features/dictation/types";
+
 export type Bootstrap = {
   token: string;
   workspace: string;
@@ -5,6 +7,7 @@ export type Bootstrap = {
   model: string;
   agent: string;
   demo: boolean;
+  dictation: DictationConfig;
   active_run_id: string;
   active_session_id?: string;
   active_run_background?: boolean;
