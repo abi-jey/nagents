@@ -387,7 +387,7 @@ class ChannelHost:
         previous: dict[str, str] = {}
         while not self.closed:
             try:
-                sessions = await self.state.harness.list_sessions()
+                sessions = await self.state.list_sessions()
                 catalog = json.dumps([session.__dict__ for session in sessions], sort_keys=True)
                 if previous.get("") != catalog:
                     previous[""] = catalog

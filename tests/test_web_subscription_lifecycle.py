@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
+from contextlib import suppress
 from threading import Event as ThreadEvent
 from typing import TYPE_CHECKING
+from typing import TypeVar
 from typing import cast
 
+import aiosqlite
 import pytest
 from fastapi import HTTPException
 from starlette.websockets import WebSocket
@@ -26,6 +30,7 @@ if TYPE_CHECKING:
     from tests.test_web_channels import Site
 
 pytestmark = pytest.mark.requires_posix
+T = TypeVar("T")
 
 
 class Peer:
@@ -123,9 +128,11 @@ def test_history_read_racing_complete_run_has_consistent_snapshot(
                 app.idle()  # Hydration must not block the model or the durable worker.
             finally:
                 app.client.portal.call(release.set)
-            if mode == "http":
-                snapshot = response.result(timeout=5)
-            else:
+                if mode == "http":
+                    # Also join on a failed gate/model assertion: an HTTP read
+                    # must not outlive the test and overlap lifespan teardown.
+                    snapshot = response.result(timeout=5)
+            if mode != "http":
                 frame = socket.receive_json()
                 assert frame["type"] == "snapshot"
                 snapshot = frame["snapshot"]
@@ -179,6 +186,79 @@ def test_replay_during_hydration_delivers_each_event_then_live_handoff() -> None
             await asyncio.wait_for(task, 5)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reader", ["snapshot", "poll"])
+@pytest.mark.parametrize("repeated", [False, True])
+def test_catalog_cancellation_joins_unread_cursor_before_writer_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str, repeated: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        stop_poller(app)
+        assert app.client.portal is not None
+
+        async def scenario() -> None:
+            reached = asyncio.Event()
+            release = asyncio.Event()
+            interrupted = asyncio.Event()
+            execute = cast("Callable[..., Awaitable[object]]", aiosqlite.Connection._execute)
+
+            async def gated_execute(
+                connection: aiosqlite.Connection, operation: Callable[..., T], *args: object, **kwargs: object
+            ) -> T:
+                result = cast("T", await execute(connection, operation, *args, **kwargs))
+                if args and isinstance(args[0], str) and args[0].startswith("SELECT h.id, h.title"):
+                    # SQLite has produced a real, unread cursor. Cancel its owner
+                    # before Harness.list_sessions can consume/finalize it.
+                    reached.set()
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        interrupted.set()
+                        raise
+                return result
+
+            monkeypatch.setattr(aiosqlite.Connection, "_execute", gated_execute)
+
+            async def read() -> None:
+                if reader == "snapshot":
+                    await app.state.snapshot(app.main)
+                else:
+                    await app.state.channels.poll()
+
+            task = asyncio.create_task(read())
+            try:
+                await asyncio.wait_for(reached.wait(), 5)
+                task.cancel()
+                await asyncio.sleep(0)
+                if repeated:
+                    task.cancel()
+                assert not task.done()
+            finally:
+                release.set()
+                result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+
+            def write() -> None:
+                db = sqlite3.connect(app.state.history.db_path, timeout=0.1)
+                try:
+                    db.execute("UPDATE harness_sessions SET title = 'Synthetic title' WHERE id = ?", (app.main,))
+                    db.commit()
+                finally:
+                    db.close()
+
+            # Keep the cancelled task alive and do not consume task.result(): a
+            # retained cancellation traceback must not pin a SQLite reader lock.
+            try:
+                await asyncio.to_thread(write)
+                assert isinstance(result[0], asyncio.CancelledError) and not interrupted.is_set()
+                assert not app.providers[0].requests
+            finally:
+                # If this regresses, release the original traceback after the
+                # write assertion so teardown cannot mask the reader-lock failure.
+                with suppress(asyncio.CancelledError):
+                    task.result()
+
+        app.client.portal.call(scenario)
 
 
 @pytest.mark.parametrize("departure", ["disconnect", "unsubscribe", "switch", "invalidate"])

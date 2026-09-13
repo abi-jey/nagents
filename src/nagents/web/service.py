@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
     from nagents.harness.types import ApprovalRequest
+    from nagents.harness.types import SessionInfo
 
     from .routing import Work
     from .settings import WebSettings
@@ -166,6 +167,19 @@ class WebState:
             self.mutating = False
             self.changed()
 
+    async def list_sessions(self) -> list[SessionInfo]:
+        sessions: list[SessionInfo] = []
+
+        async def read() -> None:
+            # Cancellation between aiosqlite execute() returning its raw cursor
+            # and the caller consuming it can pin an unread SELECT in the task's
+            # cancellation traceback, retaining a reader lock even after close().
+            # Let fetch/close finish in an owned task before cancellation escapes.
+            sessions.extend(await self.harness.list_sessions())
+
+        await _join(asyncio.create_task(read()))
+        return sessions
+
     async def snapshot(self, session_id: str = "") -> dict[str, object]:
         session_id = session_id or self.selected_session_id
         try:
@@ -175,7 +189,7 @@ class WebState:
             raise HTTPException(503, "Session snapshot is busy. Retry shortly.") from None
 
     async def _snapshot(self, session_id: str) -> dict[str, object]:
-        sessions = await self.harness.list_sessions()
+        sessions = await self.list_sessions()
         if session_id not in {session.id for session in sessions}:
             raise HTTPException(404, "Session not found in this workspace.")
         history = await self.history.snapshot(session_id)
