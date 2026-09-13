@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from threading import Event as ThreadEvent
 from typing import TYPE_CHECKING
+from typing import Literal
 from typing import TypeVar
 
 import aiosqlite
@@ -103,6 +104,55 @@ async def joined(task: asyncio.Task[None], state: WebState) -> None:
         await asyncio.wait_for(task, 5)
         pytest.fail("Host cleanup failed to stop and join its worker/producer")
     await task
+
+
+def test_worker_cancellation_racing_ready_event_is_not_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        async with application(tmp_path, monkeypatch) as (state, providers):
+            host = state.channels
+            # Retire the startup worker gracefully before installing the exact
+            # event/cancellation ordering; do not depend on startup timing.
+            host.closed = True
+            host.changed.set()
+            await joined(host.tasks[0], state)
+            waiting = asyncio.Event()
+
+            class ObservedEvent(asyncio.Event):
+                async def wait(self) -> Literal[True]:
+                    waiting.set()
+                    return await super().wait()
+
+            async def empty(*, web_only: bool = False, available_channels: tuple[str, ...] | None = None) -> bool:
+                await asyncio.sleep(0)
+                return False
+
+            monkeypatch.setattr(host.store, "has_pending", empty)
+            host.changed = ObservedEvent()
+            host.closed = False
+            worker = asyncio.create_task(host.worker())
+            host.tasks[0] = worker
+            try:
+                await waiting.wait()
+                # On 3.11 wait_for, the Event.wait child finishes before the
+                # cancelled owner resumes. Its fut.done() branch then swallows
+                # the external cancellation. A direct wait must preserve it.
+                host.changed.set()
+                asyncio.get_running_loop().call_soon(worker.cancel)
+                done, _ = await asyncio.wait({worker}, timeout=1)
+                assert worker in done and worker.cancelled(), (
+                    f"Worker swallowed cancellation: done={worker.done()}, cancelling={worker.cancelling()}"
+                )
+                assert not providers[0].requests
+            finally:
+                # Bound a failing old-code control without issuing a second
+                # cancellation that could conceal the first one's loss.
+                host.closed = True
+                host.changed.set()
+                await asyncio.gather(worker, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("ending", ["shutdown", "worker-cancel", "shutdown-and-cancel"])

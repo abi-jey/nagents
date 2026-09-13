@@ -142,7 +142,7 @@ jobs:
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v -o faulthandler_timeout=60
 
   # =============================================================================
   # WINDOWS TESTS

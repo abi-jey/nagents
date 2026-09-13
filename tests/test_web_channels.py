@@ -288,6 +288,18 @@ def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkey
     with site(tmp_path, monkeypatch) as app:
         app.configure()
         app.submit("hold", id=message_id)
+
+        async def started() -> None:
+            # Admission is not execution: establish the interrupted-turn boundary
+            # before later asserting that its user row survived the restart.
+            async with asyncio.timeout(5):
+                while not app.providers[0].requests:
+                    await asyncio.sleep(0.001)
+
+        assert app.client.portal is not None
+        app.client.portal.call(started)
+        initial_history = cast("list[dict[str, object]]", app.history(app.main)["history"])
+        assert [row["content"] for row in initial_history if row["role"] == "user"] == ["hold"]
         app.emit("pending", id="pending-id")
         before = app.bindings()["chat-a"]
         app.emit("/session main", id="attach-id")
@@ -316,7 +328,9 @@ def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkey
         app.idle()
         assert app.bindings()["chat-a"] == new and len(app.providers[0].requests) == 1
         assert app.roots() == restarted_roots
-        assert app.history(main)["history"]  # Interrupted user input retained, not replayed.
+        history = cast("list[dict[str, object]]", app.history(main)["history"])
+        assert [row["content"] for row in history if row["role"] == "user"] == ["hold"]
+        assert not any(row["role"] == "assistant" for row in history)  # Interrupted, not replayed.
 
 
 def test_ws_server_owned_disconnect_draft_cancel_and_guards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

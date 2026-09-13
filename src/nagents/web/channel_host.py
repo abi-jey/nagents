@@ -381,7 +381,11 @@ class ChannelHost:
                             await self.store.finish_work(work, status)
                         continue
             with suppress(TimeoutError):
-                await asyncio.wait_for(self.changed.wait(), 0.25)
+                # Python 3.11 wait_for can swallow owner cancellation when its
+                # Event.wait child finishes concurrently. Wait in this task so
+                # cancellation always escapes, retaining the same idle deadline.
+                async with asyncio.timeout(0.25):
+                    await self.changed.wait()
 
     async def poll(self) -> None:
         previous: dict[str, str] = {}
