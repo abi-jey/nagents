@@ -429,7 +429,7 @@ class ChannelHost:
                     if work is not None:
                         # Shutdown may have started while SQLite was claiming.
                         # Model work rechecks after its async owner validation in
-                        # execute_work; acknowledgements dispatch without a gap.
+                        # execute_work; accepted acknowledgements remain bounded.
                         if self.closed:
                             await self.store.release_work(work)
                             return
@@ -511,8 +511,8 @@ class ChannelHost:
             await self.state.stop(self.state.active)
         for task in self.tasks[1:]:
             task.cancel()
-        # The worker's only other external operation is a bounded command send.
-        # Join it before closing any connector that it may still be using.
+        # Join a bounded command send or accepted configuration apply before
+        # closing any connector that the worker may still be using.
         await asyncio.gather(*self.tasks, return_exceptions=True)
         await self.activities.close()
         for id in tuple(self.sources):

@@ -19,6 +19,7 @@ from nagents.channels import ChannelDelivery
 from nagents.channels import ChannelExecutionEvent
 from nagents.channels import ChannelMessage
 from nagents.channels import ChannelSend
+from nagents.channels import dispatch_channel_execution_event
 from nagents.channels.runtime import _envelope
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 
     from nagents.channels import ChannelReceiver
     from nagents.harness.types import HarnessEvent
+    from nagents.web.routing import ChatOwner
 
 
 class NoticeChannel(Channel):
@@ -423,13 +425,27 @@ def test_only_actual_pending_approval_from_harness_worker_and_not_auto_approval(
 def test_shared_helper_isolates_failures_and_joins_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str
 ) -> None:
-    monkeypatch.setattr(channel_notices, "NOTICE_TIMEOUT", 0.03)
+    async def short_dispatch(channel: Channel, event: ChannelExecutionEvent, *, timeout: float) -> None:
+        # Exercise the connector deadline after real owner/membership reads.
+        # A 30ms budget for those Windows filesystem reads is not the contract.
+        assert timeout == channel_notices.NOTICE_TIMEOUT
+        await dispatch_channel_execution_event(channel, event, timeout=0.03)
+
+    monkeypatch.setattr(channel_notices, "dispatch_channel_execution_event", short_dispatch)
 
     async def scenario() -> None:
         async with fixture(tmp_path) as f:
             notices = f.notices()
             f.channel.failure = failure
             f.channel.block = failure == "timeout"
+            owner = f.state.channels.store.owner
+
+            async def delayed_owner(session_id: str) -> ChatOwner | None:
+                # Deliberately exceed the connector-only deadline during lookup.
+                await asyncio.sleep(0.05)
+                return await owner(session_id)
+
+            monkeypatch.setattr(f.state.channels.store, "owner", delayed_owner)
             before = asyncio.all_tasks()
             await notices.start(live=True)
             await notices.observe(call(), live=True)
