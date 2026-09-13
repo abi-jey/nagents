@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { deleteSession, SessionDeletion, type DeletionState } from "./deletion.js";
+import { deleteSession, deleteSessionFromView, restoreDeletionFocus, SessionDeletion, type DeletionState, type DeletionView } from "./deletion.js";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog.js";
 import { LiveSessions } from "../features/chat/liveTranscript.js";
 import { MessageQueue } from "./messages.js";
@@ -132,4 +132,205 @@ test("confirmation uses a named native dialog, explicit irreversible text, cance
   assert.match(html, /role="status">Deleting session/);
   assert.match(html, /<button disabled="">Cancel<\/button>/);
   assert.match(html, /disabled="">Delete session<\/button>/);
+});
+
+function deletionView() {
+  const pending = deferred<Snapshot>();
+  const state = {
+    selection: { id: target.id, revision: 1 },
+    sessions: [target.id, "ngn-sidebar"],
+    draft: "Keep my unsent draft",
+    history: ["Current conversation"],
+    review: "Edited dictation review",
+    subscription: "original subscription",
+    requests: [] as string[],
+    forgotten: [] as { id: string; discardDraft: boolean }[],
+    pauses: 0,
+    reconnects: 0,
+  };
+  const view: DeletionView = {
+    selection: () => ({ ...state.selection }),
+    remove: (id) => { state.requests.push(id); return pending.promise; },
+    drop: (id) => { state.sessions = state.sessions.filter((session) => session !== id); },
+    forget: (id, discardDraft) => { state.forgotten.push({ id, discardDraft }); if (discardDraft) state.draft = ""; },
+    replace: (next) => {
+      state.selection = { id: next.session_id, revision: state.selection.revision + 1 };
+      state.sessions = next.sessions.map((session) => session.id);
+      state.history = next.history.map((message) => message.content);
+      state.review = "";
+    },
+    pause: () => { state.pauses++; state.subscription = "paused"; },
+    reconnect: () => { state.reconnects++; state.subscription = "replacement subscription"; },
+  };
+  return { state, pending, view };
+}
+
+test("deleting another sidebar root ignores a different server selection and preserves the entire current view", async (context) => {
+  const f = deletionView();
+  const response = deferred<Response>();
+  const requests: string[] = [];
+  context.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    requests.push(`${options.method} ${url}`);
+    return response.promise;
+  });
+  f.view.remove = (id) => deleteSession("synthetic", id);
+  const removing = deleteSessionFromView("ngn-sidebar", f.view);
+  assert.equal(f.state.draft, "Keep my unsent draft");
+  assert.equal(f.state.review, "Edited dictation review");
+  assert.equal(f.state.subscription, "original subscription");
+  response.resolve(Response.json({
+    ...snapshot, deleted_session_id: "ngn-sidebar", session_id: "ngn-third-tab",
+    sessions: [target, { ...target, id: "ngn-third-tab" }],
+    history: [{ role: "user", content: "Different tab history", name: "", tool_call_id: "", tool_calls: [] }],
+  }));
+  await removing;
+  assert.deepEqual(requests, ["DELETE /api/sessions/ngn-sidebar"], "No resume or other selection mutation is sent");
+  assert.deepEqual(f.state.selection, { id: target.id, revision: 1 });
+  assert.deepEqual(f.state.history, ["Current conversation"]);
+  assert.equal(f.state.draft, "Keep my unsent draft");
+  assert.equal(f.state.review, "Edited dictation review");
+  assert.equal(f.state.subscription, "original subscription");
+  assert.equal(f.state.pauses, 0); assert.equal(f.state.reconnects, 0);
+  assert.deepEqual(f.state.sessions, [target.id]);
+  assert.deepEqual(f.state.forgotten, [{ id: "ngn-sidebar", discardDraft: false }]);
+});
+
+test("confirmed current-root deletion clears its draft and loads the surviving root exactly once", async () => {
+  const f = deletionView();
+  const removing = deleteSessionFromView(target.id, f.view);
+  assert.equal(f.state.draft, "Keep my unsent draft");
+  assert.deepEqual(f.state.history, ["Current conversation"]);
+  assert.equal(f.state.pauses, 1); assert.equal(f.state.reconnects, 0);
+  f.pending.resolve(snapshot); await removing;
+  assert.deepEqual(f.state.requests, [target.id]);
+  assert.equal(f.state.selection.id, snapshot.session_id);
+  assert.deepEqual(f.state.history, []);
+  assert.equal(f.state.draft, "");
+  assert.deepEqual(f.state.forgotten, [{ id: target.id, discardDraft: true }]);
+  assert.equal(f.state.reconnects, 1);
+});
+
+for (const id of [target.id, "ngn-sidebar"]) {
+  test(`failed deletion of ${id} keeps selection, history, draft, review and session membership`, async () => {
+    const f = deletionView();
+    const removing = deleteSessionFromView(id, f.view);
+    f.pending.reject(new Error("Bound session; reattach first"));
+    await assert.rejects(removing, /reattach first/);
+    assert.deepEqual(f.state.selection, { id: target.id, revision: 1 });
+    assert.deepEqual(f.state.history, ["Current conversation"]);
+    assert.equal(f.state.draft, "Keep my unsent draft");
+    assert.equal(f.state.review, "Edited dictation review");
+    assert.deepEqual(f.state.sessions, [target.id, "ngn-sidebar"]);
+    assert.deepEqual(f.state.forgotten, []);
+    assert.equal(f.state.pauses, id === target.id ? 1 : 0);
+    assert.equal(f.state.reconnects, id === target.id ? 1 : 0);
+  });
+}
+
+for (const id of [target.id, "ngn-sidebar"]) {
+  for (const selectedAgain of [false, true]) {
+    test(`late acknowledgement for ${id} cannot reset a newer ${selectedAgain ? "away-and-back" : "different"} selection`, async () => {
+      const f = deletionView();
+      const removing = deleteSessionFromView(id, f.view);
+      f.state.selection = { id: selectedAgain ? target.id : "ngn-newer", revision: 3 };
+      f.state.sessions.push("ngn-newer");
+      f.state.draft = "Newer draft"; f.state.history = ["Newer history"];
+      f.state.review = "Newer dictation review"; f.state.subscription = "newer subscription";
+      f.pending.resolve(snapshot); await removing;
+      assert.deepEqual(f.state.selection, { id: selectedAgain ? target.id : "ngn-newer", revision: 3 });
+      assert.deepEqual(f.state.history, ["Newer history"]);
+      assert.equal(f.state.draft, "Newer draft"); assert.equal(f.state.review, "Newer dictation review");
+      assert.equal(f.state.subscription, "newer subscription"); assert.equal(f.state.reconnects, 0);
+      assert.ok(f.state.sessions.includes("ngn-newer"));
+      assert.deepEqual(f.state.forgotten, [{ id, discardDraft: false }]);
+    });
+  }
+}
+
+test("confirmation copy distinguishes current from noncurrent deletion, including captured sidebar identity", () => {
+  const controller = new SessionDeletion(() => {}, async () => true, () => target.id);
+  controller.show({ ...target, id: "ngn-sidebar" });
+  const other = renderToStaticMarkup(createElement(DeleteSessionDialog, { controller, state: controller.state }));
+  assert.match(other, /Your current conversation and draft are kept/);
+  assert.doesNotMatch(other, /draft will be discarded/);
+  const current = renderToStaticMarkup(createElement(DeleteSessionDialog, {
+    controller, state: controller.state, currentSessionId: "ngn-sidebar",
+  }));
+  assert.match(current, /draft will be discarded only after deletion is confirmed/);
+  assert.doesNotMatch(current, /current conversation and draft are kept/);
+});
+
+type FocusCondition = "available" | "removed" | "disabled" | "hidden" | "inert-ancestor" | "hidden-ancestor" | "css-hidden" | "transparent" | "blocked";
+function focusFixture() {
+  const focused: string[] = [];
+  const ownerDocument: { activeElement: HTMLElement | null; defaultView: object } = {
+    activeElement: null,
+    defaultView: { getComputedStyle: (element: HTMLElement & { fixtureStyle: object }) => element.fixtureStyle },
+  };
+  function element(name: string, condition: FocusCondition = "available"): HTMLElement {
+    const target = {
+      ownerDocument,
+      isConnected: condition !== "removed",
+      matches: () => condition === "disabled",
+      closest: () => condition === "inert-ancestor" || condition === "hidden-ancestor" ? {} : null,
+      getClientRects: () => ({ length: condition === "hidden" ? 0 : 1 }),
+      fixtureStyle: { visibility: condition === "css-hidden" ? "hidden" : "visible", opacity: condition === "transparent" ? "0" : "1" },
+      focus: (options: FocusOptions) => {
+        assert.equal(options.preventScroll, true);
+        focused.push(name);
+        if (condition !== "blocked") ownerDocument.activeElement = target as unknown as HTMLElement;
+      },
+    };
+    return target as unknown as HTMLElement;
+  }
+  function navigation(selected: HTMLElement | null, close: HTMLElement | null): HTMLElement {
+    return { querySelector: (selector: string) => {
+      if (selector === ".session-row[data-session-id] > .session[aria-current='page']:not(:disabled)") return selected;
+      assert.equal(selector, ".sidebar-close");
+      return close;
+    } } as unknown as HTMLElement;
+  }
+  return { focused, ownerDocument, element, navigation };
+}
+
+test("desktop focus returns to a surviving trigger or composer, skipping hidden, inert and disabled triggers", () => {
+  for (const condition of ["available", "removed", "disabled", "hidden", "inert-ancestor", "hidden-ancestor", "css-hidden", "transparent"] as const) {
+    const f = focusFixture();
+    restoreDeletionFocus(f.element("trigger", condition), f.element("composer"));
+    assert.deepEqual(f.focused, [condition === "available" ? "trigger" : "composer"]);
+  }
+});
+
+test("open mobile drawer restores a surviving trigger before its selected session", () => {
+  const f = focusFixture();
+  restoreDeletionFocus(f.element("trigger"), f.element("composer", "inert-ancestor"),
+    f.navigation(f.element("selected"), f.element("close")));
+  assert.deepEqual(f.focused, ["trigger"]);
+});
+
+test("deleting a mobile sidebar row returns focus to the surviving selected session, never the inert composer", () => {
+  const f = focusFixture();
+  restoreDeletionFocus(f.element("trigger", "removed"), f.element("composer", "inert-ancestor"),
+    f.navigation(f.element("selected"), f.element("close")));
+  assert.deepEqual(f.focused, ["selected"]);
+});
+
+test("mobile focus falls back to drawer close when the selected session is absent, disabled, hidden or inert", () => {
+  for (const condition of ["removed", "disabled", "hidden", "inert-ancestor", "css-hidden"] as const) {
+    const f = focusFixture();
+    restoreDeletionFocus(null, f.element("composer", "inert-ancestor"),
+      f.navigation(condition === "removed" ? null : f.element("selected", condition), f.element("close")));
+    assert.deepEqual(f.focused, ["close"]);
+  }
+});
+
+test("focus restoration skips an unavailable fallback and continues after an implicitly blocked focus attempt", () => {
+  const f = focusFixture();
+  restoreDeletionFocus(null, f.element("composer", "inert-ancestor"),
+    f.navigation(f.element("selected", "blocked"), f.element("close")));
+  assert.deepEqual(f.focused, ["selected", "close"]);
+  f.focused.length = 0;
+  restoreDeletionFocus(null, f.element("composer", "inert-ancestor"),
+    f.navigation(null, f.element("close", "hidden")));
+  assert.deepEqual(f.focused, []);
 });

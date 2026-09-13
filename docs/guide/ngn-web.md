@@ -94,16 +94,29 @@ still stored locally in the Harness data directory.
 
 ## Operation And Safety
 
+### Workspace Navigation
+
+The sidebar keeps **New session** above an independently scrolling session list.
+**Settings**, **Channels**, and expandable workspace information stay in the bottom
+section, so they remain reachable with a long conversation history. On narrow
+screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
+it and returns focus to the navigation toggle. Dialogs opened from the drawer
+return to their controls without losing the open navigation.
+
 ### Delete A Session
 
-Select a session, then choose the compact **Delete current session** trash action
-in the header. The confirmation names the session and initially focuses **Cancel**;
+Choose the trash action beside a session in the sidebar; there is no need to switch
+to it first. Actions appear on hover or keyboard focus and remain visible on touch
+screens. The confirmation names the session and initially focuses **Cancel**;
 Escape also cancels. Only **Delete session** submits deletion. Your draft and
 conversation stay intact if you cancel or the server rejects the request. The
 dialog shows pending/error status and prevents duplicate submissions. After a
-confirmed deletion, its transcript, replay position, pending message identities,
-and current draft are cleared. Another existing root is selected, or a fresh
-empty root is created atomically when the last root is deleted.
+confirmed deletion, its transcript, replay position, and pending message identities
+are cleared. Deleting a different sidebar session keeps your current conversation,
+draft, completed dictation review, and live subscription. Only deleting the current
+session clears its draft and selects another existing root; a fresh empty root is
+created atomically when the last root is deleted. A different server-side selection
+from another browser does not replace the conversation you are viewing.
 
 Deletion requires an idle Harness. It returns `409` while the root has queued or
 running inbox work, pending wakeups, or retained descendant task handles. Finish

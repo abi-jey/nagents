@@ -6,7 +6,7 @@ import { useDictation } from "../features/dictation/useDictation";
 import { promptFailure } from "../features/dictation/draft";
 import { recordingSupport } from "../features/dictation/browser";
 import { useChannels } from "../features/channels/useChannels";
-import { SessionDeletion, type DeletionState } from "../api/deletion";
+import { deleteSessionFromView, SessionDeletion, type DeletionState } from "../api/deletion";
 
 export function useClient() {
   const sessions = useSessions();
@@ -24,7 +24,7 @@ export function useClient() {
   const [deletion, setDeletion] = useState<DeletionState>({ pending: false, error: "" });
   const removeAction = useRef(removeSession);
   removeAction.current = removeSession;
-  const [deletionController] = useState(() => new SessionDeletion(setDeletion, (id) => removeAction.current(id)));
+  const [deletionController] = useState(() => new SessionDeletion(setDeletion, (id) => removeAction.current(id), () => sessions.currentSelection().id));
   const dictation = useDictation(
     sessions.config?.token || "",
     sessions.sessionId,
@@ -98,18 +98,32 @@ export function useClient() {
     });
   }
 
+  function canDeleteSession(id: string): boolean {
+    const keepingReview = id !== sessions.currentSelection().id && dictation.controller.getSnapshot().phase === "review";
+    return !!sessions.config && !occupied.current && !busy && !channels.open && !settings.open &&
+      (!dictation.controller.active || keepingReview);
+  }
+
   async function removeSession(id: string): Promise<boolean> {
-    if (occupied.current || busy || dictation.controller.active || channels.open || settings.open) return false;
+    if (!canDeleteSession(id)) return false;
     occupied.current = true; setBusy(true); setError("");
-    chat.pause();
     try {
-      const snapshot = await sessions.remove(id);
-      chat.forgetSession(id, true);
-      chat.loadHistory(snapshot);
-      chat.setStatus("Session deleted");
+      await deleteSessionFromView(id, {
+        selection: sessions.currentSelection,
+        remove: sessions.remove,
+        drop: sessions.drop,
+        forget: chat.forgetSession,
+        replace: (snapshot) => {
+          sessions.acceptDeletion(snapshot);
+          chat.loadHistory(snapshot);
+          chat.setStatus("Session deleted");
+        },
+        pause: chat.pause,
+        reconnect: chat.reconnect,
+      });
       return true;
     } finally {
-      occupied.current = false; setBusy(false); chat.reconnect();
+      occupied.current = false; setBusy(false);
     }
   }
 
@@ -165,6 +179,7 @@ export function useClient() {
     sessions,
     deletion,
     deletionController,
+    canDeleteSession,
     chat,
     settings,
     channels,

@@ -1,14 +1,23 @@
 import { useEffect, useRef } from "react";
-import type { DeletionState, SessionDeletion } from "../../api/deletion";
+import { restoreDeletionFocus, type DeletionState, type SessionDeletion } from "../../api/deletion.js";
 
-export function DeleteSessionDialog({ state, controller }: { state: DeletionState; controller: SessionDeletion }) {
+export function DeleteSessionDialog({ state, controller, currentSessionId = state.currentSessionId ?? state.target?.id }: {
+  state: DeletionState; controller: SessionDeletion; currentSessionId?: string;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const previous = document.activeElement;
     const element = dialog.current;
     element?.showModal(); cancel.current?.focus();
-    return () => { element?.close(); if (previous instanceof HTMLElement) previous.focus(); };
+    return () => {
+      element?.close();
+      restoreDeletionFocus(
+        previous instanceof HTMLElement ? previous : null,
+        document.getElementById("composer"),
+        document.querySelector<HTMLElement>("#session-navigation.open[role='dialog'][aria-modal='true']"),
+      );
+    };
   }, []);
   return <dialog ref={dialog} className="approval-dialog delete-session-dialog" aria-labelledby="delete-session-title"
     aria-describedby="delete-session-description" aria-busy={state.pending}
@@ -16,7 +25,11 @@ export function DeleteSessionDialog({ state, controller }: { state: DeletionStat
     <header className="approval-heading"><h2 id="delete-session-title">Delete session?</h2></header>
     <div className="approval-body">
       <p className="delete-session-name">{state.target?.title}</p>
-      <p id="delete-session-description">Permanently delete this session’s saved conversation and discard your current draft. This cannot be undone. Workspace files, other sessions, and credentials are kept.</p>
+      <p id="delete-session-description">Permanently delete this session’s saved conversation.
+        {state.target?.id === currentSessionId
+          ? " Your current draft will be discarded only after deletion is confirmed."
+          : " Your current conversation and draft are kept."}
+        {" This cannot be undone. Workspace files, other sessions, and credentials are kept."}</p>
       {state.error && <p role="alert" className="error-text">{state.error}</p>}
       <p role="status">{state.pending ? "Deleting session…" : ""}</p>
     </div>

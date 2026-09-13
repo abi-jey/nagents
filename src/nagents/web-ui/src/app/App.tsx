@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { Icon } from "../components/Icon.js";
 import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
 import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
@@ -17,7 +18,9 @@ export function App() {
   const { chat, sessions, busy, error, dictation } = client;
   const { config, sessionId, externalRun } = sessions;
   const [navOpen, setNavOpen] = useState(false);
+  const closeNavigation = useCallback(() => setNavOpen(false), []);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const selectedSession = sessions.sessions.find((session) => session.id === sessionId);
   const canSubmit =
     !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target;
   const runStatus = chat.status + (chat.pendingWakeups
@@ -26,7 +29,7 @@ export function App() {
   async function select(id?: string) {
     if (await client.select(id)) {
       setNavOpen(false);
-      composer.current?.focus();
+      requestAnimationFrame(() => composer.current?.focus());
     }
   }
   async function submit(value?: string) {
@@ -49,10 +52,10 @@ export function App() {
             title="Sessions"
             onClick={() => setNavOpen(!navOpen)}
           >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+            <Icon name="menu" />
           </button>
           <div className="model">
-            <h1>ngn</h1>
+            <h1 title={selectedSession?.title || "New session"}>{selectedSession?.title || "New session"}</h1>
             <span
               title={
                 config ? `${config.agent}: ${config.model}` : "Local harness"
@@ -61,40 +64,6 @@ export function App() {
               {config ? `${config.agent}: ${config.model}` : "Local harness"}
             </span>
           </div>
-          <button
-            className="settings-trigger delete-session-trigger" aria-label="Delete current session" title="Delete current session" aria-haspopup="dialog"
-            disabled={!sessionId || busy || dictation.unfinished || client.channels.open || client.settings.open || !!client.deletion.target}
-            onClick={() => {
-              const target = sessions.sessions.find((session) => session.id === sessionId);
-              if (target) client.deletionController.show(target);
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6M12 8v6" /></svg>
-          </button>
-          <button
-            className="channels-trigger" aria-label="Channels" title="Channels" aria-haspopup="dialog"
-            disabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open}
-            onClick={client.channels.show}
-          >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="2" y="6" width="5" height="8" rx="1" /><rect x="13" y="2" width="5" height="6" rx="1" /><rect x="13" y="12" width="5" height="6" rx="1" /><path d="M7 10h3V5h3M10 10v5h3" /></svg>
-            <span className="desktop-label">Channels</span>
-          </button>
-          <button
-            className="settings-trigger"
-            aria-label="Settings"
-            title="Settings"
-            disabled={
-              !config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished
-            }
-            onClick={client.settings.show}
-            aria-haspopup="dialog"
-          >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /><path d="M7 3v4M13 8v4M8 13v4" /></svg>
-            <span className="desktop-label">Settings</span>
-          </button>
-          <span className={`mode-badge ${config?.demo ? "demo" : ""}`} title={config?.demo ? "Offline demo" : "Live provider"}>
-            {config?.demo ? "Demo" : "Live"}
-          </span>
         </header>
         <SessionSidebar
           workspace={config?.workspace || ""}
@@ -104,6 +73,14 @@ export function App() {
           newDisabled={busy}
           open={navOpen}
           select={(id) => void select(id)}
+          remove={(session) => client.deletionController.show(session)}
+          canDelete={(id) => !client.deletion.target && client.canDeleteSession(id)}
+          settings={client.settings.show}
+          settingsDisabled={!config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished || client.channels.open || !!client.deletion.target}
+          channels={client.channels.show}
+          channelsDisabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open || !!client.deletion.target}
+          demo={!!config?.demo}
+          close={closeNavigation}
         />
         <Conversation
           key={`${sessionId}:${chat.transcriptVersion}`}
@@ -177,7 +154,7 @@ export function App() {
         </footer>
       </main>
       {client.settings.open && <SettingsDialog settings={client.settings} />}
-      {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} />}
+      {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessionId} />}
       {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessionId} />}
       {chat.approval.pending && (
         <ApprovalDialog

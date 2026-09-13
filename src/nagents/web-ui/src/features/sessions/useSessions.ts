@@ -5,15 +5,17 @@ import type { Bootstrap, Session, Snapshot } from "../../types";
 import type { SettingsReply } from "../settings/types";
 import { rootSessions } from "../channels/draft";
 import { idle, sessionActivity } from "./activity";
-import { deleteSession } from "../../api/deletion";
+import { deleteSession, type DeletionSelection } from "../../api/deletion";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
   const selection = useRef("");
+  const selectionRevision = useRef(0);
   const [active, setActive] = useState(idle);
-  function selectRoot(id: string) { selection.current = id; setSessionId(id); }
+  function selectRoot(id: string) { selection.current = id; selectionRevision.current++; setSessionId(id); }
+  function currentSelection(): DeletionSelection { return { id: selection.current, revision: selectionRevision.current }; }
   function accept(snapshot: Snapshot): Snapshot {
     setSessions(rootSessions(snapshot.sessions)); selectRoot(snapshot.session_id);
     setActive((current) => sessionActivity(current, { type: "snapshot", session_id: snapshot.session_id, snapshot, cursor: 0, epoch: "http" }));
@@ -55,8 +57,9 @@ export function useSessions() {
   }
   async function remove(id: string): Promise<Snapshot> {
     if (!config) throw new Error("Reconnect to ngn before deleting a session.");
-    return accept(await deleteSession(config.token, id));
+    return deleteSession(config.token, id);
   }
+  function drop(id: string) { setSessions((current) => current.filter((session) => session.id !== id)); }
   function receive(frame: EventFrame) {
     setActive((current) => sessionActivity(current, frame));
     if (frame.type === "snapshot" || frame.type === "sessions") {
@@ -75,6 +78,6 @@ export function useSessions() {
   }
   return {
     config, sessions, sessionId, globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
-    activityOnly: false, connect, select, remove, receive, acceptSettings, acceptCredentials,
+    activityOnly: false, connect, select, remove, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
   };
 }
