@@ -428,8 +428,8 @@ class ChannelHost:
                     work = await self.claim()
                     if work is not None:
                         # Shutdown may have started while SQLite was claiming.
-                        # There is no await between this guard and run ownership
-                        # (or acknowledgement dispatch); unstarted work survives.
+                        # Model work rechecks after its async owner validation in
+                        # execute_work; acknowledgements dispatch without a gap.
                         if self.closed:
                             await self.store.release_work(work)
                             return

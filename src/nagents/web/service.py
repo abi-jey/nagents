@@ -379,6 +379,11 @@ class WebState:
 
     async def execute_work(self, work: Work) -> str:
         await self.channels.store.validate_work(work)
+        # Shutdown can pass its active-run check while owner validation awaits
+        # SQLite. Recheck before publishing/owning a producer, with no intervening
+        # await. The inbox worker returns this unstarted claim to queued.
+        if self.channels.closed:
+            return "queued"
         run = Run(work.session_id, server_owned=True, message_id=work.message_id)
         if work.channel:
             run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
