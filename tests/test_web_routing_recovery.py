@@ -28,6 +28,7 @@ def test_disabled_ack_does_not_block_web_and_unstarted_claim_survives_restart(tm
     async def scenario() -> None:
         path = tmp_path / "routing.db"
         store = await store_at(path)
+        await store.assign_owner("ngn-main", "telegram", "chat")
         envelope = _envelope("telegram", ChannelMessage("command", "chat", "sender", "/session main"))
         await store.receive("telegram", envelope, "ngn-main", ChannelCommand("session", "main"))
         assert not await store.has_pending(available_channels=())
@@ -60,6 +61,8 @@ def test_sessions_command_remains_sendable_with_many_unicode_titles(tmp_path: Pa
                 await db.execute("INSERT INTO v2_sessions(id,user_id) VALUES (?, 'harness')", (id,))
                 await db.execute("INSERT INTO harness_sessions VALUES (?, ?)", (id, "😀" * 80))
             await db.commit()
+        for number in range(100):
+            await store.assign_owner(f"ngn-session-{number}", "telegram", "chat")
         envelope = _envelope("telegram", ChannelMessage("list", "chat", "sender", "/sessions"))
         await store.receive("telegram", envelope, "ngn-main", ChannelCommand("sessions"))
         work = await store.claim_work(available_channels=("telegram",))

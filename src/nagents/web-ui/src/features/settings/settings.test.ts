@@ -9,6 +9,11 @@ import { dictationConfig } from "../dictation/testFixtures.js";
 const values: SettingsValues = {
   model: "startup-model",
   agent: "build",
+  provider: "mock",
+  base_url: "",
+  api: "responses",
+  auth: "auto",
+  api_key_env: "MOCK_API_KEY",
   shell_timeout: 30,
   max_output: 16384,
   max_file_bytes: 1048576,
@@ -29,7 +34,18 @@ const reply: SettingsReply = {
   revision: 'opaque/revision:01+"not-a-counter"',
   persisted: false,
   effective_mode: "build",
-  connection: { provider: "mock", api: "responses", auth_status: "configured" },
+  providers: ["litellm", "mock", "openai", "openrouter"],
+  apis: ["auto", "chat_completions", "responses", "messages"],
+  auths: ["auto", "api-key", "chatgpt"],
+  connection: {
+    provider: "mock",
+    api: "responses",
+    auth: "auto",
+    base_url: "",
+    api_key_env: "MOCK_API_KEY",
+    key_configured: false,
+    auth_status: "configured",
+  },
   dictation: dictationConfig,
 };
 
@@ -156,13 +172,33 @@ test("save sends all exact values and the opaque revision, without a cancellable
     assert.equal(input, "/api/settings");
     assert.equal(init.method, "POST");
     assert.deepEqual(init.headers, { "X-Ngn-Token": "mock-token", "Content-Type": "application/json" });
-    assert.deepEqual(JSON.parse(String(init.body)), { revision: reply.revision, values });
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      revision: reply.revision,
+      values,
+      api_key: "",
+      clear_api_key: false,
+    });
     assert.equal(init.signal, undefined);
     return Response.json({ ...reply, persisted: true, revision: "new-opaque-revision" });
   });
   const saved = await saveSettings("mock-token", reply.revision, values);
   assert.equal(saved.revision, "new-opaque-revision");
   assert.equal(saved.persisted, true);
+  assert.equal(fetchMock.mock.callCount(), 1);
+});
+
+test("a submitted provider key and clear flag travel write-only in the save body", async (t) => {
+  const fetchMock = t.mock.method(globalThis, "fetch", async (input: string, init: RequestInit) => {
+    assert.equal(input, "/api/settings");
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      revision: reply.revision,
+      values,
+      api_key: "write-only-draft-key",
+      clear_api_key: true,
+    });
+    return Response.json(reply);
+  });
+  await saveSettings("mock-token", reply.revision, values, "write-only-draft-key", true);
   assert.equal(fetchMock.mock.callCount(), 1);
 });
 

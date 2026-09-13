@@ -34,6 +34,8 @@ from . import built_assets
 from . import local_authority
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
+from .deletion import delete_session
+from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 from .service import Run as Run
@@ -58,6 +60,19 @@ class Input(BaseModel):
 
 class SessionInput(Input):
     session_id: str = Field(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")
+
+
+class DeleteSessionInput(Input):
+    permanent: bool = False
+
+
+class TrashGenerationInput(Input):
+    deletion_id: str = Field(min_length=1, max_length=128)
+
+
+class TrashSettingsInput(Input):
+    revision: str = Field(min_length=1, max_length=128)
+    retention_days: int = Field(ge=1, le=365)
 
 
 class PromptInput(SessionInput):
@@ -115,12 +130,15 @@ def create_app(
             state.selected_session_id = harness.session_id
             await state.channels.start()
             state.wakeups.start()
+            await state.trash.start()
             yield
         finally:
             state.channels.closed = True
+            state.channels.management.shutdown()
             state.wakeups.shutdown()
+            state.trash.shutdown()
 
-            async def close_resources() -> None:
+            async def close_host() -> None:
                 try:
                     if state.active is not None:
                         await state.stop(state.active)
@@ -138,6 +156,12 @@ def create_app(
                                     plugin for plugin in harness.agent.plugins if plugin is not state.history.identity
                                 ]
                                 await harness.close()
+
+            async def close_resources() -> None:
+                try:
+                    await state.trash.close()
+                finally:
+                    await close_host()
 
             cleanup = asyncio.create_task(close_resources())
             try:
@@ -249,7 +273,12 @@ def create_app(
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:
         with state.idle():
-            await state.settings.change(body.revision, body.values)
+            await state.settings.change(
+                body.revision,
+                body.values,
+                api_key=body.api_key,
+                clear_api_key=body.clear_api_key,
+            )
             return state.settings.snapshot()
 
     @app.post("/api/settings/reset")
@@ -268,6 +297,26 @@ def create_app(
     @app.get("/api/sessions/{session_id}")
     async def session_snapshot(session_id: RootId) -> dict[str, object]:
         return await state.snapshot(session_id)
+
+    @app.delete("/api/sessions/{session_id}")
+    async def remove_session(session_id: RootId, body: DeleteSessionInput) -> dict[str, object]:
+        return await delete_session(state, session_id, permanent=body.permanent)
+
+    @app.get("/api/trash")
+    async def trash() -> dict[str, object]:
+        return await state.trash.snapshot()
+
+    @app.put("/api/trash/settings")
+    async def trash_settings(body: TrashSettingsInput) -> dict[str, object]:
+        return await state.trash.change(body.revision, body.retention_days)
+
+    @app.post("/api/trash/{session_id}/restore")
+    async def restore_session(session_id: RootId, body: TrashGenerationInput) -> dict[str, object]:
+        return await state.trash.restore(session_id, body.deletion_id)
+
+    @app.delete("/api/trash/{session_id}")
+    async def purge_session(session_id: RootId, body: TrashGenerationInput) -> dict[str, object]:
+        return await state.trash.purge(session_id, body.deletion_id)
 
     @app.post("/api/sessions/new")
     async def new_session(body: Input) -> dict[str, object]:
@@ -293,6 +342,7 @@ def create_app(
     @app.post("/api/run")
     async def run(body: PromptInput) -> StreamingResponse:
         with state.idle():
+            await state.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
             if body.session_id != state.selected_session_id:
                 raise HTTPException(409, "The selected session changed. Reconnect before submitting.")
             if not body.prompt.strip():
@@ -319,6 +369,7 @@ def create_app(
                 raise HTTPException(409, "The selected session changed. Reconnect before recording again.")
             if request.headers.getlist("x-ngn-settings-revision") != [state.settings.revision]:
                 raise HTTPException(409, "Settings changed. Reload settings before recording again.")
+            await state.channels.store._transaction(lambda db: RoutingStore.root(db, sessions[0]))
             config = state.settings.dictation_config()
             return await state.dictation.transcribe(request, config)
 

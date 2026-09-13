@@ -94,6 +94,121 @@ still stored locally in the Harness data directory.
 
 ## Operation And Safety
 
+### Workspace Navigation
+
+The sidebar keeps **New session** above an independently scrolling session list.
+**Settings**, **Channels**, **Trash**, and expandable workspace information stay
+in the bottom section, so they remain reachable with a long conversation history. On narrow
+screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
+it and returns focus to the navigation toggle. Dialogs opened from the drawer
+return to their controls without losing the open navigation.
+
+### Delete A Session
+
+Choose the sidebar row's **Move to Trash** action to remove a session in **one
+click, without confirmation**. You do not need to select it first. Row actions
+appear on hover or keyboard focus and remain available on touch screens. A pending
+state prevents duplicate submissions. Failed admission leaves the session,
+conversation, and draft visible, with an error explaining what needs attention.
+
+Soft deletion hides the root from the active session list and prevents ordinary
+resume, message admission, channel selection, history access, or subscription to
+it. Its saved conversation remains available for restoration until its retention
+deadline. Deleting a different row preserves the conversation, draft, and live
+subscription you are viewing. If your current root is trashed, the client opens a
+surviving root; the server chooses or creates a replacement atomically when needed,
+including when the last active root is removed. A different server-side selection
+from another browser does not replace an unaffected conversation you are viewing.
+
+#### Undo And Restore
+
+Use **Undo** in the deletion notice or **Restore** in **Trash**. Restoration
+returns the **same session ID and saved history**, rather than copying messages
+into a new conversation. It restores the row to the session list without changing
+the current server/browser selection or starting a model run. Choose **Open restored session**
+when you want to navigate to the restored conversation; a late restore response
+must not overwrite a newer selection or draft.
+
+Soft deletion preserves the current unsent draft, including when its selected
+root is removed. Drafts remain **browser-local** and are not uploaded or stored
+by the Trash API. Server-side history restoration does not recover browser-local
+text on another device or after that local state is lost.
+
+#### Retention And Automatic Cleanup
+
+Trash retains sessions for **30 days by default**. The Trash panel's retention
+control accepts an integer from **1 through 365 days** and saves a workspace-wide
+policy that survives server restarts. This preference has its own API/revision,
+separate from the model, provider, tool, and dictation Settings values.
+
+Each deletion freezes a `purge_at` deadline using the policy in effect when it is
+accepted. Changing retention affects **future deletions only**; it does not shorten
+or extend existing deadlines. Repeating soft deletion while that root is already
+in Trash returns the same item and deadline, without creating another replacement
+root or extending retention.
+
+Expired Trash is purged after startup and periodically, approximately every
+30 seconds, at a safe idle boundary. Cleanup is bounded and can lag the deadline
+while the application is busy. **An expired item cannot be restored even if its
+rows have not yet been purged.** Cleanup does not call a provider or run tools;
+active sessions are not automatically pruned by this policy.
+
+#### Delete Forever
+
+Use a session row's **More actions → Delete forever**, or **Delete forever** on a
+Trash item, for immediate permanent deletion. This retains an irreversible-action
+confirmation naming the session. Confirming submits the request; pending/error
+feedback prevents duplicate submissions. Cancelling leaves the conversation
+intact. Permanent deletion removes that root's saved history and offers no Undo.
+It removes logical database records, not backups or SQLite free pages.
+
+#### Activity And Routing Guards
+
+Moving to Trash and deleting forever retain the idle, active-work, and routing
+guards. Admission returns `409` while the Harness is busy or the root has queued
+or running inbox work, pending wakeups, or retained descendant task handles.
+Finish or cancel running work first. Retained handles can still resume child
+conversations; after those tasks finish, restart ngn to expire the handles before
+deleting their root. Child histories are kept: deletion never guesses ownership
+from a session prefix, a task name, or text in old messages.
+
+Channel routing must be moved explicitly before moving a root to Trash or
+deleting it forever:
+
+1. In **Channels**, change any connection whose **main session** is this root to
+   another existing root and save. Disabled connections also count.
+2. In each attached channel conversation, use `/new`, or `/sessions` followed by
+   `/session ID`, to attach another root owned by **that same chat**. If this was
+   its default root, use `/session default ID`
+   to move that default too. This command changes the default reference; the
+   current attachment changes through `/session ID`.
+3. Let already accepted messages and command replies finish, then retry deletion.
+   Reattachment never reroutes messages already in the inbox. Removing or disabling
+   a connector alone does not detach its saved conversation bindings.
+
+Soft deletion changes active-list membership while retaining the root's history
+and related stored input. Restore atomically reinstates that membership and title.
+Permanent purge removes the root's content while retaining content-free
+channel/message deduplication keys and historical session-owner identities, so
+late channel redelivery cannot execute deleted work or transfer a reused session
+ID to another chat. Workspace files, unrelated roots and child histories, saved
+settings, channel configuration, and private credentials are preserved. Deletion
+does not silently detach channels or discard pending background work.
+
+Cancellation joins the SQLite transaction and selection/subscription cleanup
+before releasing the idle boundary, avoiding partially applied membership changes.
+Deleted-root subscribers are revoked, and clients refresh session membership;
+ordinary resume/reconnect cannot restore a trashed root. Restore publishes the
+updated session list but never replays a prompt, tool, or old subscription event.
+
+A lost HTTP acknowledgement can mean the mutation committed. Refresh the active
+session list and Trash before deciding what to do; do not blindly retry. Each
+new soft deletion has an opaque `deletion_id`. Undo, Restore, and permanent purge
+of a Trash item must supply that exact generation, so an old view cannot act on
+a later deletion of the same session. See the [Trash API contract](#trash-api-contract).
+
+### Execution And Access
+
 - One local app instance owns one Harness on one async lifespan/event loop. Web
   messages and channel notifications queue for serialized execution. Each message
   carries an explicit target session; changing the sidebar selection does not
@@ -174,9 +289,10 @@ slow tab does not block model execution.
 ## API Outline
 
 All paths are under `/api`. API clients first GET `bootstrap`, then send its token
-in `X-Ngn-Token`. POST requests also need `Origin: http://127.0.0.1:8765` (matching
-the configured authority) and `Content-Type: application/json`, except for the
-explicit WAV transcription contract below.
+in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
+`Origin: http://127.0.0.1:8765` (matching the configured authority) and
+`Content-Type: application/json`, except for the explicit WAV transcription
+contract below.
 
 | Method / Path | Purpose |
 | --- | --- |
@@ -189,6 +305,12 @@ explicit WAV transcription contract below.
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
+| `DELETE sessions/{session_id}` | `{}` or `{permanent: false}` moves an idle, unbound root to Trash; returns `Snapshot & {deleted_session_id: string, trash: TrashItem}` |
+| `DELETE sessions/{session_id}` | `{permanent: true}` permanently deletes an active-list root; returns `Snapshot & {deleted_session_id: string}` |
+| `GET trash` | Returns `{revision: string, retention_days: number, items: TrashItem[]}` |
+| `PUT trash/settings` | `{revision: string, retention_days: number}` saves retention for future deletions; returns the same Trash snapshot shape |
+| `POST trash/{session_id}/restore` | `{deletion_id: string}` restores that generation; returns `{restored_session_id: string, sessions: Session[]}` without selecting it |
+| `DELETE trash/{session_id}` | `{deletion_id: string}` permanently purges that generation; returns `{purged_session_id: string}` |
 | `POST messages` | `{session_id, prompt, message_id}` durably queues input; updates arrive through subscriptions |
 | `WS events` | Authenticated session subscriptions, snapshots, replay cursors, and live execution records |
 | `GET channels` | Installed plugin descriptors, redacted saved connections, bindings, and configuration revision |
@@ -212,6 +334,62 @@ closing it cancels that run. New browser input uses `POST messages` and the
 WebSocket subscription instead. Subscription replay replays observations, never
 executes a prompt or tool again.
 
+### Trash API Contract
+
+`DELETE /api/sessions/{session_id}` now defaults to **soft deletion**. Clients
+that intend immediate permanent deletion must explicitly send
+`{"permanent": true}` for an active-list root. For a root already in Trash, use
+`DELETE /api/trash/{session_id}` with its `deletion_id` instead. The identifier in
+the URL is the session ID; the request body identifies its deletion generation.
+
+The shared Trash wire types are:
+
+```typescript
+type TrashItem = {
+  id: string;
+  title: string;
+  deleted_at: number;
+  purge_at: number;
+  deletion_id: string;
+};
+
+type TrashSnapshot = {
+  revision: string;
+  retention_days: number;
+  items: TrashItem[];
+};
+```
+
+`deleted_at` and `purge_at` are **UTC epoch seconds**, not milliseconds or formatted
+date strings. `deletion_id` is opaque and renewed on each new soft deletion after
+restoration. A repeated soft deletion of an already-trashed root preserves its
+generation and deadline.
+
+`Snapshot` in the table is the existing selected-session response, including
+`session_id`, `sessions`, and `history` plus its existing activity/task fields.
+`Session` is the existing session-list descriptor, including `id`, `title`, and
+`updated_at`. The restore response intentionally returns only the restored ID
+and session list; it does not contain a replacement selection or run acknowledgement.
+
+Two independent concurrency tokens apply:
+
+- **`revision`** protects `PUT /api/trash/settings`. Start from `GET /api/trash`,
+  send the current revision and integer `retention_days` in `1..365`, and retain
+  the returned snapshot. Unknown fields and invalid types/bounds are rejected;
+  a stale revision returns `409`. Refetch before retrying a changed policy.
+- **`deletion_id`** protects Restore and Delete forever in Trash. Supply the
+  generation received with the item; stale generations return `409` instead of
+  restoring or purging a later deletion of the same ID. Restoring an expired item
+  still present in Trash returns `410`; an already-purged or missing item returns
+  `404`. Refresh Trash rather than assuming delayed cleanup means recovery is
+  still possible.
+
+The retention policy is stored separately from `/api/settings` and its other
+values. Do not add `retention_days` to that request or reuse its settings revision.
+All Trash routes retain the existing Host, Origin, fetch-metadata, and token
+guards. No deletion, restoration, policy update, or expiry cleanup starts model
+or tool execution.
+
 ### Channels, Telegram Chats, And Session Binding
 
 Open **Channels** to configure installed connectors. The plugin selector displays
@@ -220,7 +398,39 @@ returned to the browser; a configured indicator lets you keep an existing value
 without re-entering it. Choose an existing **main session** when configuring a
 connection, then enable it to start receiving events on the server.
 
-The web host creates a separate persistent session for each connector/chat pair.
+From an **unassigned web/admin root**, the agent can also configure a connector
+through approved tools. `channel_configuration(operation="discover")` returns
+installed schemas, private field names, saved connection summaries, the current
+`revision`, and host-controlled `plugin_path`. Use that discovery result rather
+than assuming a separate Python process has the host's plugin import path.
+
+`channel_configure(connection_id, configuration)` accepts exactly seven fields:
+`revision`, `plugin`, `enabled`, `auto_reply`, `config`, `secrets`, and
+`main_session_id`. The approved request is queued, then applied at idle only after
+its originating turn succeeds. Failed/cancelled turns and restart discard pending
+requests; stale revisions never overwrite a competing change. Use
+`channel_configuration(operation="status")` on a later eligible turn to inspect
+the request result. `APPLIED` means saved; connector open status may still be `error`.
+Chat-owned web follow-ups, channel-origin turns, and scheduled work cannot use
+these management tools. See [Configure Channels From Chat](channel-configuration.md).
+
+Prefer environment credentials or the private Channels form. Owner-supplied tokens
+in a trusted admin conversation are also supported through the configuration
+tool's private `secrets` parameter. They still pass through normal model,
+transcript, and approval surfaces; those surfaces are not a credential scrubber.
+Do not put tokens in public plugin `config`, source, or examples.
+
+Inspect the installed Telegram descriptor before configuring its options.
+Plugin 0.1.0a2 supports `allowed_usernames`, `allowed_user_ids`, and
+`private_chats_only`, alongside chat filters. Notification-enabled versions may
+also advertise `execution_notifications`; older schemas reject unknown fields.
+
+The web host creates a fresh persistent session for each new connector/chat pair;
+it never starts a new chat in the configured main session. A session's first
+assigned `(connection ID, conversation ID)` is permanent. Changing current/default
+attachments, disconnecting, disabling, deleting/readding a connector, restarting,
+or using Trash/Restore does not clear ownership. One chat can retain many sessions;
+one session cannot move to another chat or connection.
 Telegram messages appear as ordinary user messages with source information, and
 new chat sessions appear in the sidebar. Selecting another session in the browser
 does not move a Telegram chat's binding.
@@ -229,26 +439,71 @@ Telegram's host commands allow an explicit change:
 
 | Command | Purpose |
 | --- | --- |
-| `/sessions` | List available sessions. |
+| `/sessions` | List only this chat's owned, active sessions; never unowned admin roots or another chat's roots. |
 | `/session` | Report the chat's current session. |
-| `/session <session-id>` | Attach this chat to an existing session. |
-| `/session main` | Attach to the connection's configured main session. |
-| `/session default` | Return to this chat's default session. |
-| `/new <title>` | Create and attach a new session. |
+| `/session <session-id>` | Attach to an existing session owned by this chat. |
+| `/session main` | Attach to the configured main session only if this chat already owns it. |
+| `/session default` | Return to this chat's owned default session. |
+| `/session default <session-id>` | Set an already-owned default without changing the current attachment. |
+| `/new <title>` | Create and attach a new chat-owned session; old ownership remains. |
 
 Commands are handled by the host rather than sent to a model as ordinary work.
 Their acknowledgements return to the originating chat. Pending messages retain
 their admitted session target when a later command changes the binding.
 
-The agent chooses outbound channel sends and actions through tools. A final model
-response is not broadcast to every attached chat. Typing activity is a separate
-transport indicator while a bound session is working; Telegram refreshes it while
-active and lets it expire after completion/cancellation.
+Unowned, foreign, hidden, and unknown session targets receive the same rejection;
+commands do not disclose whether those IDs exist. Only trusted local management
+can make a first assignment of an unowned root, and it cannot transfer an owner.
 
-Chat separation organizes context; it does not add a multi-user authorization
-system. Configure the connector's allowed chat IDs for the contacts intended to
-use this agent. An authorized session-switch command can join an existing shared
-conversation deliberately.
+For a chat-owned execution root, `channel_send` is restricted to its owner's
+connection and destination. `channel_action` additionally requires an advertised
+string `destination` parameter marked required, with that same destination.
+Destination-less actions are denied. These checks still apply to web-origin
+follow-ups and survive browser selection changes; existing executor/profile and
+approval checks remain. Connectors are trusted Python and must honor the declared
+destination rather than reinterpret it as a different chat.
+
+Opt in to `auto_reply: true` to permit independent messages and channel discovery
+from genuine executions of owned sessions. This includes incoming channel turns,
+web follow-ups, and scheduled work even after the chat selects `/new`. It still
+requires the permanently owned connection/destination and a live enabled connector;
+it does not waive approval for shell, edits, configuration changes, or channel
+actions. The model must call a send tool: final response text is not automatically
+forwarded. Omitting the option preserves an existing same-plugin policy; new or
+replacement connections default to false.
+
+Host acknowledgements and typing indicators are scoped to the owning chat, never
+broadcast across roots or chats. Typing follows the executing session's permanent
+owner while that root remains live, **not** the chat's current/default attachment.
+An older owned root therefore still types during web follow-ups or scheduled work
+after `/new`; conflicted/trashed roots and removed/disabled transports do not.
+Pending work retains its admitted root; a later same-chat attachment change does
+not redirect it. Unowned admin roots retain
+explicit outbound tools, but cannot be adopted by remote session commands.
+
+Connectors can implement `Channel.on_event(ChannelExecutionEvent)` for compact
+start/tool/approval/terminal notices to the same permanent owner. Its phases are
+`run_started`, `tool_requested`, `tool_completed`, `waiting_for_approval`,
+`completed`, `failed`, and `cancelled`. Tool notices contain bounded sanitized
+argument summaries and status, not raw reasoning, prompts, or tool-result bodies.
+This is separate from model-authored messages and from typing; inspect the
+connector's notification option. See the [execution-event API](../api/channel-execution-events.md).
+
+On upgrade, ownership is reconstructed from both current/default bindings and
+accepted channel inbox provenance, including historical detached sessions. Mixed
+or incomplete historical ownership is quarantined: queued unsafe work is retained
+as failed, and no model or old acknowledgement is replayed from it. An affected
+chat's next ordinary input gets a fresh owned root and a fixed recovery notice instead of
+loading old history or executing that input; the user can then resend. Other chats
+continue normally. Legacy queued control replies that might contain global
+session catalogs are replaced with a fixed notice; catalogs are also rebuilt for
+the owning chat before delivery. Administrative history remains
+inspectable; clear current/default references before deleting an old root.
+
+Configure the connector's allowed chat IDs for the contacts intended to use this
+agent. Permanent chat ownership does not change the trusted local web/API token's
+administrative access or the deliberately shared semantics of standalone
+`Agent.listen()` applications.
 
 ### Dynamically Installed Connector Packages
 
@@ -412,15 +667,24 @@ insertion is rejected with both texts retained rather than silently truncated.
 
 ### Runtime Settings
 
+Trash retention uses its [separate preferences API](#trash-api-contract); it is
+not an additional field in the model/tool/dictation settings below.
+
 Settings responses contain `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
-an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`), and
-read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
-`defaults` contain exactly these fields:
+an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`),
+allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
+(`provider`, `api`, `auth`, `base_url`, `api_key_env`, `key_configured`,
+`auth_status`). Both `values` and `defaults` contain exactly these fields:
 
 | Field | Accepted Values |
 | --- | --- |
 | `model` | Trimmed, nonblank provider model ID, at most 200 characters, without control characters |
 | `agent` | An existing built-in or trusted configured profile name |
+| `provider` | An allowlisted provider name from `providers`, for example `openrouter` or `openai_compatible` |
+| `base_url` | Empty for the provider default, or an HTTP(S) endpoint without credentials, query parameters, or fragments, at most 300 characters; required for `litellm` |
+| `api` | One of `auto`, `chat_completions`, `responses`, or `messages` (`completions` is rejected for the harness) |
+| `auth` | One of `auto`, `api-key`, or `chatgpt`; `chatgpt` remains limited to the default OpenAI provider endpoint |
+| `api_key_env` | Environment variable name for the key, at most 64 characters; never a literal secret |
 | `shell_timeout` | Finite number greater than 0 and at most 600 seconds |
 | `max_output` | Integer, 1,024 through 1,048,576 **bytes of tool output**, not model tokens |
 | `max_file_bytes` | Integer, 1,024 through 4,194,304 bytes |
@@ -431,15 +695,27 @@ read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
 | `dictation_language` | Empty for automatic detection, or a two-letter lowercase language code |
 | `dictation_max_seconds` | Integer, 1 through 300; effective recording duration is capped by the administrator's startup limit |
 
-POST requires all eleven values. Unknown fields, numeric strings, booleans used as
-numbers, and nonfinite numbers are rejected with HTTP 422. Changing profile selects
-its trusted instructions/mode, but the explicitly submitted model takes precedence
-over that profile's model. Model IDs are free text: settings GET/save never query a model
-catalog or test entitlement. A later provider request may reject an unavailable ID.
-Permission ceilings and per-call approvals remain enforced. Existing sessions,
-history, provider credentials, and tools are retained. New children inherit the
-current model; retained children keep their prior state under the existing child
-continuation contract.
+POST requires all sixteen values plus the write-only `api_key` field. Unknown
+fields, numeric strings, booleans used as numbers, and nonfinite numbers are
+rejected with HTTP 422, as are invalid provider combinations (for example,
+`litellm` without an endpoint, `chatgpt` with a custom endpoint, credentials in
+an endpoint URL, or an unsupported API mode). Changing profile selects its
+trusted instructions/mode, but the explicitly submitted model takes precedence
+over that profile's model. Model IDs are free text: settings GET/save never query
+a model catalog or test entitlement. A later provider request may reject an
+unavailable ID. Permission ceilings and per-call approvals remain enforced.
+Existing sessions, history, provider credentials, and tools are retained. New
+children inherit the current model; retained children keep their prior state
+under the existing child continuation contract.
+
+An optional `api_key` stores a write-only key for the submitted provider; an
+empty value leaves any stored key unchanged. `clear_api_key` removes it. A
+stored key is installed only into this process's environment under
+`api_key_env`, is never included in `values`, `defaults`, `connection`, logs, or
+any response, and `key_configured` only signals its presence. Removing it
+restores the process environment captured at startup, so deployment-provided
+keys remain the fallback. Provider routing changes are applied by rebuilding the
+provider after the save commits; the previous client is closed exactly once.
 
 Mutations reject HTTP 409 during a run, approval, or another mutation, or when the
 submitted revision is stale. Reload before retrying; do not automatically overwrite
@@ -448,23 +724,25 @@ during a save. Error `detail` is a safe string, never raw request/provider data.
 
 The versioned `ngn_web_settings` singleton row lives in the **existing workspace
 session SQLite database**, resolved by the Harness under `data_dir`. It stores only
-the approved preferences and revision, not credentials or the full configuration.
-The override applies across sessions and web-server restarts for that resolved
-workspace. One process must own the workspace; this is not multi-process settings
-synchronization. ConfigMap/TOML, CLI, profile and initial authentication/model
-resolution establish startup defaults **before** the saved override is applied.
-Reset deletes the row, so later restarts use any newly changed trusted defaults.
-The CLI/TUI do not load this web-only override.
+the approved preferences and revision, never a key value or the full
+configuration. Write-only keys live in a separate `ngn_web_provider_keys` table
+in the same private database; both are deleted on reset. The override applies
+across sessions and web-server restarts for that resolved workspace. One process
+must own the workspace; this is not multi-process settings synchronization.
+ConfigMap/TOML, CLI, profile and initial authentication/model resolution
+establish startup defaults **before** the saved override is applied. Reset
+deletes the rows, so later restarts use any newly changed trusted defaults. The
+CLI/TUI do not load this web-only override.
 
-Existing version-1 rows are validated against the original seven-field schema
-and receive dictation defaults from trusted startup configuration. New saves
-write version 2 with all eleven preferences. Existing chat preferences and
-revision checks are retained; arbitrary unknown fields or versions are not
-accepted as a migration shortcut.
+Existing version-1 and version-2 rows are validated against their original
+schemas, retain their saved preferences, and receive the provider fields from
+trusted startup configuration. New saves write version 3 with all sixteen
+preferences. Existing chat preferences and revision checks are retained;
+arbitrary unknown fields or versions are not accepted as a migration shortcut.
 
-After a version-2 save, an older image that only understands version 1 cannot
-load that row. Roll back with a compatible image or use administrator-reviewed
-settings-row recovery; preserve the session database and credential store.
+After a version-3 save, an older image cannot load that row. Roll back with a
+compatible image or use administrator-reviewed settings-row recovery; preserve
+the session database and credential store.
 
 Bootstrap and settings responses also include a non-secret `dictation` capability
 projection: effective `enabled`/`available`, `admin_enabled`, safe `status`, the
@@ -478,8 +756,10 @@ Invalid JSON, unsupported versions, invalid values, or a removed saved profile b
 web startup rather than silently restoring potentially more permissive defaults.
 An administrator must stop ngn and repair or remove **only** the `ngn_web_settings`
 row in the affected database; preserve session history and credential storage.
-The API cannot edit provider routing, authentication, plugins, trust, paths, demo
-mode, arbitrary files, or Python configuration.
+The API may edit only the allowlisted provider fields above. Plugins, trust,
+paths, demo mode, workspace storage, arbitrary files, Python configuration, and
+anything outside a validated candidate configuration remain server-managed. A
+provider override never changes the administrator's demo-mode ceiling.
 
 ### Model Discovery
 

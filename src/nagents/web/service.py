@@ -23,11 +23,14 @@ from nagents.events import ErrorEvent
 from nagents.harness.runtime import _HarnessSession
 
 from .channel_host import ChannelHost
+from .channel_notices import ChannelNotices
+from .channel_replies import automatic_reply
 from .dictation import WebDictation
 from .history import WebHistory
 from .replay import RunReplay
 from .settings import _join
 from .subscriptions import EventBus
+from .trash import SessionTrash
 from .wakeups import Chain
 from .wakeups import Wakeups
 
@@ -66,6 +69,7 @@ class Run:
     queue: asyncio.Queue[dict[str, object]] = field(default_factory=lambda: asyncio.Queue(maxsize=64))
     task: asyncio.Task[None] = field(init=False)
     pending: Pending | None = None
+    notices: ChannelNotices | None = field(default=None, repr=False)
     outcome: str = "completed"
     finished: bool = False
     background: bool = False
@@ -136,6 +140,7 @@ class WebState:
         self.harness = harness
         self.approval_timeout: Callable[[], float] = lambda: APPROVAL_TIMEOUT
         self.selected_session_id = harness.session_id
+        self.session_revision = 0
         self.active: Run | None = None
         self.mutating = False
         self.dictation = WebDictation()
@@ -149,6 +154,7 @@ class WebState:
             lambda: self.active is None and not self.mutating, self.wake, observer=self.activity_event
         )
         self.channels = ChannelHost(self)
+        self.trash = SessionTrash(self)
         harness.approval_handler = self.approve
         harness.wakeup_handler = self.schedule
 
@@ -177,8 +183,12 @@ class WebState:
             # Let fetch/close finish in an owned task before cancellation escapes.
             sessions.extend(await self.harness.list_sessions())
 
-        await _join(asyncio.create_task(read()))
-        return sessions
+        while True:
+            revision = self.session_revision
+            sessions.clear()
+            await _join(asyncio.create_task(read()))
+            if revision == self.session_revision:
+                return sessions
 
     async def snapshot(self, session_id: str = "") -> dict[str, object]:
         session_id = session_id or self.selected_session_id
@@ -230,7 +240,24 @@ class WebState:
 
     async def approve(self, request: ApprovalRequest) -> bool:
         run = self.active
-        if run is None or run.pending is not None or run.task.cancelling():
+        if run is None or run.pending is not None or run.finished or run.task.done() or run.task.cancelling():
+            return False
+        if await automatic_reply(self, run, request):
+            self.publish(
+                run,
+                {
+                    "event": "notice",
+                    "automatic": True,
+                    "policy": "channel_auto_reply",
+                    "text": "Automatic approval for this session's permanently owned chat under its connection's automatic-message policy.",
+                    "task_id": request.task_id,
+                    "activation": request.activation,
+                    "call_id": request.id,
+                    "tool": request.tool,
+                },
+            )
+            return True
+        if self.active is not run or run.finished or run.task.done() or run.task.cancelling():
             return False
         if (run.background or run.server_owned) and not self.bus.listening(run.session_id):
             self.publish(
@@ -252,6 +279,8 @@ class WebState:
         expired = False
         try:
             await self.send(run, pending.record)
+            if run.notices is not None:
+                await run.notices.waiting_for_approval(request, live=True)
             approved = await asyncio.wait_for(pending.answer, timeout=self.approval_timeout())
             return approved
         except TimeoutError:
@@ -309,8 +338,10 @@ class WebState:
         )
 
     async def produce(self, run: Run, prompt: str, *, task_id: str = "") -> None:
+        notices = run.notices = ChannelNotices(self, run)
         try:
             await self.channels.activity(run.session_id, True, run.source)
+            await notices.start(live=True)
             source = self.harness.wake(prompt, task_id=task_id) if run.background else self.harness.run(prompt)
             async with aclosing(source) as events:
                 async for event in events:
@@ -323,6 +354,7 @@ class WebState:
                         }
                     else:
                         record = _event_record(event)
+                    await notices.observe(record, live=True)
                     await self.send(run, record)
         except asyncio.CancelledError:
             run.outcome = "cancelled"
@@ -335,9 +367,23 @@ class WebState:
             if run.pending is not None and not run.pending.answer.done():
                 run.pending.answer.set_result(False)
             run.pending = None
-            await _join(asyncio.create_task(self.channels.activity(run.session_id, False)))
+            try:
+                if run.outcome == "cancelled":
+                    await notices.finish("cancelled")
+                elif run.outcome == "failed":
+                    await notices.finish("failed")
+                else:
+                    await notices.finish("completed")
+            finally:
+                await _join(asyncio.create_task(self.channels.activity(run.session_id, False)))
 
     async def execute_work(self, work: Work) -> str:
+        await self.channels.store.validate_work(work)
+        # Shutdown can pass its active-run check while owner validation awaits
+        # SQLite. Recheck before publishing/owning a producer, with no intervening
+        # await. The inbox worker returns this unstarted claim to queued.
+        if self.channels.closed:
+            return "queued"
         run = Run(work.session_id, server_owned=True, message_id=work.message_id)
         if work.channel:
             run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
@@ -377,6 +423,7 @@ class WebState:
         if run.finished:
             return
         run.finished = True
+        self.channels.management.run_finished(run)
         self.publish(run, {"event": "run_finished", "status": run.outcome})
         if self.active is run:
             self.active = None

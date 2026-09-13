@@ -32,6 +32,7 @@ from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .provider import DemoCompaction
 from .provider import HarnessProvider
+from .skills import HarnessSkillDiscoverer
 from .subagents import SubagentManager
 from .subagents import _await_cleanup
 from .tools import CodingTools
@@ -45,6 +46,7 @@ from .types import TaskMessage
 
 if TYPE_CHECKING:
     from nagents.events import CompactionDoneEvent
+    from nagents.provider import Provider
     from nagents.types import Message
     from nagents.types import ToolArguments
 
@@ -112,6 +114,7 @@ class Harness:
         self._queue: asyncio.Queue[HarnessEvent] | None = None
         self._worker: asyncio.Task[None] | None = None
         self._closing: asyncio.Task[None] | None = None
+        self.tools = CodingTools(self)
         self.agent = Agent(
             provider=HarnessProvider(config),
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
@@ -120,8 +123,9 @@ class Harness:
             compactor="self",
             save_tool_outputs=False,
             compaction_strategy=DemoCompaction() if config.demo else None,
+            skill_discoverer=HarnessSkillDiscoverer(self.tools),
+            skill_token_limit=config.skill_token_limit,
         )
-        self.tools = CodingTools(self)
         self.tools.register()
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
@@ -203,9 +207,6 @@ class Harness:
             )
         for path, content in sorted(self.instructions.items(), key=lambda item: (len(Path(item[0]).parts), item[0])):
             base += f"\nApplicable project context ({path}):\n{content}\n"
-        if self.tools.skills:
-            base += "\nAvailable skills (use skill(name) to load; text only, no script execution):\n"
-            base += "\n".join(f"- {name}: {description}" for name, (_, description) in self.tools.skills.items())
         self.agent.system_prompt = base
 
     async def initialize(self) -> None:
@@ -235,7 +236,7 @@ class Harness:
                     )
                     await db.commit()
                 self.tools.instructions(Path("AGENTS.md"))
-                self.tools.discover_skills()
+                await self.agent.refresh_skills()
                 self.refresh_instructions()
                 if (
                     not self.config.demo
@@ -550,6 +551,35 @@ class Harness:
             self.config.model = model
             self.agent.provider.model = model
 
+    async def reconfigure_provider(self, config: "HarnessConfig") -> None:
+        """Adopt a validated provider selection, e.g. a saved web-settings override.
+
+        Only the allowlisted routing fields may differ from the running config;
+        administrator-owned fields (demo mode, storage, credential ceiling) are
+        rejected. Swapping closes the previous provider client exactly once;
+        reusing the same routing only updates the model.
+        """
+        if config.demo is not self.config.demo:
+            raise ValueError("Provider overrides cannot change demo mode")
+        identity = ("provider", "base_url", "api", "auth", "api_key_env")
+        changing = any(getattr(config, name) != getattr(self.config, name) for name in identity)
+        if changing:
+            replacement: Provider
+            if config.auth == "chatgpt":
+                if not isinstance(self.agent.provider, CodexProvider):
+                    self._api_model = self.agent.provider.model
+                replacement = CodexProvider(self.openai_auth.credentials, model=config.model)
+            else:
+                replacement = HarnessProvider(config)
+            try:
+                await self.agent.close()
+            finally:
+                self.agent.provider = replacement
+        for name in identity:
+            setattr(self.config, name, getattr(config, name))
+        self.config.model = config.model
+        self.agent.provider.model = config.model
+
     async def _use_chatgpt(self) -> None:
         if not isinstance(self.agent.provider, CodexProvider):
             self._api_model = self.agent.provider.model
@@ -604,7 +634,7 @@ class Harness:
         return f"API key from ${self.config.api_key_env} (value never displayed)"
 
     def describe(self) -> str:
-        skills = ", ".join(f"{name}: {description}" for name, (_, description) in self.tools.skills.items()) or "none"
+        skills = ", ".join(f"{skill.name}: {skill.description}" for skill in self.agent.skills.values()) or "none"
         return "\n".join(
             [
                 "OFFLINE DEMO" if self.config.demo else "Live coding harness (network only on a live request)",
@@ -627,6 +657,8 @@ class Harness:
                 f"Plugins configured: {', '.join(self.config.plugins) or 'none'}",
                 f"Plugins loaded: {', '.join(self.loaded_plugins) or 'none'}",
                 f"Skills: {skills}",
+                f"Skill loading: {self.config.skill_token_limit} approximate tokens; live discovery at message/tool boundaries",
+                *self.tools.skill_diagnostics,
                 f"Instructions: {', '.join(self.instructions) or 'none'}",
                 f"Session database: {self.agent.session.db_path}",
                 "Policy: read-only reviewer; build edits/custom tools require approval; shell always asks and is NOT SANDBOXED.",

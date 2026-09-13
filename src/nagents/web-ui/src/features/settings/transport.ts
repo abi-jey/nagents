@@ -14,9 +14,16 @@ export async function saveSettings(
   token: string,
   revision: string,
   values: SettingsValues,
+  apiKey = "",
+  clearApiKey = false,
 ): Promise<SettingsReply> {
   return (await (
-    await request("settings", token, { revision, values })
+    await request("settings", token, {
+      revision,
+      values,
+      api_key: apiKey,
+      clear_api_key: clearApiKey,
+    })
   ).json()) as SettingsReply;
 }
 

@@ -228,6 +228,7 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
 
 export class LiveSessions {
   private roots = new Map<string, LiveTranscript>();
+  forget(id: string) { this.roots.delete(id); }
   get(id: string): LiveTranscript { return this.roots.get(id) || { entries: [] }; }
   set(id: string, state: LiveTranscript): LiveTranscript { this.roots.set(id, state); return state; }
   receive(frame: SessionFrame): LiveTranscript {

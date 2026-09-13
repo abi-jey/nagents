@@ -3,6 +3,7 @@
 import asyncio
 import builtins
 import json
+import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -39,6 +40,16 @@ LEGACY_FIELDS = (
     "max_subagent_depth",
 )
 DICTATION_FIELDS = ("dictation_enabled", "dictation_model", "dictation_language", "dictation_max_seconds")
+PROVIDER_FIELDS = ("provider", "base_url", "api", "auth", "api_key_env")
+
+
+def legacy_values(version: int, values: dict[str, object]) -> dict[str, object]:
+    """Strip fields that did not exist in the requested saved schema."""
+    if version == 1:
+        return {key: values[key] for key in LEGACY_FIELDS}
+    if version == 2:
+        return {key: values[key] for key in (*LEGACY_FIELDS, *DICTATION_FIELDS)}
+    return {key: values[key] for key in SettingsValues.model_fields}
 
 
 def assert_runtime(harness: Harness, values: dict[str, object]) -> None:
@@ -90,9 +101,19 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "effective_mode",
                     "connection",
                     "dictation",
+                    "providers",
+                    "apis",
+                    "auths",
                 }
                 assert body["values"] == body["defaults"] == SettingsValues.current(harness).model_dump()
-                assert set(body["values"]) == set(SettingsValues.model_fields) == {*LEGACY_FIELDS, *DICTATION_FIELDS}
+                assert (
+                    set(body["values"])
+                    == set(SettingsValues.model_fields)
+                    == {*LEGACY_FIELDS, *DICTATION_FIELDS, *PROVIDER_FIELDS}
+                )
+                assert body["providers"] == sorted(body["providers"]) and "openai" in body["providers"]
+                assert body["apis"] == ["auto", "chat_completions", "responses", "messages"]
+                assert body["auths"] == ["auto", "api-key", "chatgpt"]
                 assert body["persisted"] is False and body["effective_mode"] == "build"
                 assert body["profiles"] == [
                     {"name": "build", "mode": "build", "model": ""},
@@ -103,9 +124,13 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 assert body["connection"] == {
                     "provider": "openai",
                     "api": "responses",
+                    "auth": "api-key",
+                    "base_url": "https://example.invalid/private-endpoint",
+                    "api_key_env": "TEST_API_KEY",
+                    "key_configured": False,
                     "auth_status": harness.auth_status(),
                 }
-                assert "SECRET" not in response.text and "private-endpoint" not in response.text
+                assert "SECRET" not in response.text
                 assert str(tmp_path) not in response.text
                 assert response.headers["cache-control"] == "no-store"
                 saved = await client.post(
@@ -577,7 +602,7 @@ def test_settings_reject_active_run_and_approval(tmp_path: Path, prompt: str) ->
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_settings_persist_fresh_lifespan_and_reset_clears_override(tmp_path: Path, version: int) -> None:
     async def check() -> None:
         config = configuration(tmp_path)
@@ -602,11 +627,11 @@ def test_settings_persist_fresh_lifespan_and_reset_clears_override(tmp_path: Pat
             assert response.status_code == 200
             saved = response.json()
         assert config.model == "gpt-4.1" and config.agent == "build"
-        if version == 1:
+        if version != 3:
             async with aiosqlite.connect(db_path) as db:
                 await db.execute(
-                    "UPDATE ngn_web_settings SET version = 1, values_json = ?",
-                    (json.dumps({key: values[key] for key in LEGACY_FIELDS}),),
+                    "UPDATE ngn_web_settings SET version = ?, values_json = ?",
+                    (version, json.dumps(legacy_values(version, values))),
                 )
                 await db.commit()
         async with client_app(tmp_path, config=replace(config, model="new-trusted-default")) as (
@@ -677,6 +702,7 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
             async with client_app(tmp_path, config=trusted) as (_, client, headers, harnesses):
                 loaded = (await client.get("/api/settings", headers=headers)).json()
                 values = {
+                    **initial["values"],
                     **legacy,
                     "dictation_enabled": True,
                     "dictation_model": "trusted-transcriber",
@@ -707,7 +733,7 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
                     async with aiosqlite.connect(db_path) as db:
                         assert list(
                             await db.execute_fetchall("SELECT version, values_json, revision FROM ngn_web_settings")
-                        ) == [(2, SettingsValues.model_validate(values).model_dump_json(), saved["revision"])]
+                        ) == [(3, SettingsValues.model_validate(values).model_dump_json(), saved["revision"])]
 
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
@@ -790,13 +816,13 @@ def test_dictation_saved_preferences_respect_restarted_admin_config(
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_settings_stored_revision_conflict_preserves_dictation_preferences(tmp_path: Path, version: int) -> None:
     async def check() -> None:
         async with client_app(tmp_path) as (_, client, headers, harnesses):
             initial = (await client.get("/api/settings", headers=headers)).json()
             db_path = harnesses[0].agent.session.db_path
-        values = initial["values"] if version == 2 else {key: initial["values"][key] for key in LEGACY_FIELDS}
+        values = legacy_values(version, initial["values"])
         async with aiosqlite.connect(db_path) as db:
             await db.execute(
                 "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, ?, ?, ?)",
@@ -1050,14 +1076,14 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
         "coercion",
     ],
 )
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_settings_corrupt_saved_row_fails_closed(tmp_path: Path, corruption: str, version: int) -> None:
     async def check() -> None:
         config = configuration(tmp_path)
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
             db_path = harnesses[0].agent.session.db_path
-        values = before["values"] if version == 2 else {key: before["values"][key] for key in LEGACY_FIELDS}
+        values = legacy_values(version, before["values"])
         saved_version, revision = version, "a" * 64
         if corruption == "unknown":
             values["trust_project"] = True
@@ -1070,14 +1096,16 @@ def test_settings_corrupt_saved_row_fails_closed(tmp_path: Path, corruption: str
         elif corruption == "coercion":
             values["max_output"] = "2048"
         elif corruption == "version":
-            saved_version = 3
+            saved_version = 4
         elif corruption == "revision":
             revision = "SECRET-invalid-revision"
         elif corruption == "wrong-schema":
             if version == 1:
                 values["dictation_enabled"] = True
-            else:
+            elif version == 2:
                 del values["dictation_model"]
+            else:
+                values["unknown_preference"] = True
         payload = json.dumps(values)
         if corruption == "json":
             payload = "{SECRET-invalid-json"
@@ -1123,5 +1151,103 @@ def test_settings_tools_use_new_byte_and_timeout_limits(tmp_path: Path) -> None:
             # No active web approval: even a valid bounded shell still requires approval.
             with pytest.raises(PermissionError, match="denied"):
                 await harness.tools.shell("true")
+
+    asyncio.run(check())
+
+
+def test_provider_override_stores_key_write_only_and_applies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_DEPLOY_CHAT_KEY", "deployment-key")
+    monkeypatch.delenv("TEST_OPENROUTER_KEY", raising=False)
+
+    async def check() -> None:
+        config = replace(configuration(tmp_path), demo=False, auth="api-key", api_key_env="TEST_DEPLOY_CHAT_KEY")
+        async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+            harness = harnesses[0]
+            before = (await client.get("/api/settings", headers=headers)).json()
+            values = {
+                **before["values"],
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "base_url": "",
+                "api": "auto",
+                "auth": "api-key",
+                "api_key_env": "TEST_OPENROUTER_KEY",
+            }
+            response = await client.post(
+                "/api/settings",
+                json={
+                    "revision": before["revision"],
+                    "values": values,
+                    "api_key": "write-only-secret-value",
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert body["values"] == values
+            assert body["defaults"]["provider"] == "openai"
+            assert body["connection"]["provider"] == "openrouter"
+            assert body["connection"]["key_configured"] is True
+            assert "write-only-secret-value" not in response.text
+            assert harness.config.provider == "openrouter"
+            assert harness.config.model == "deepseek/deepseek-v4.1-flash"
+            assert harness.agent.provider.provider_type.value == "openrouter"
+            assert os.environ["TEST_OPENROUTER_KEY"] == "write-only-secret-value"
+            listed = await client.get("/api/settings", headers=headers)
+            assert listed.json() == body and "write-only-secret-value" not in listed.text
+            with patch.object(
+                harness.agent.provider, "get_model_list", AsyncMock(return_value=["deepseek/deepseek-v4.1-flash"])
+            ):
+                models = await client.get("/api/models", headers=headers)
+            assert models.json() == {"models": ["deepseek/deepseek-v4.1-flash"], "source": "openrouter"}
+            async with aiosqlite.connect(harness.agent.session.db_path) as db:
+                assert list(await db.execute_fetchall("SELECT provider, secret FROM ngn_web_provider_keys")) == [
+                    ("openrouter", "write-only-secret-value")
+                ]
+                stored = list(await db.execute_fetchall("SELECT values_json FROM ngn_web_settings"))
+                assert len(stored) == 1 and "write-only-secret-value" not in stored[0][0]
+            cleared = await client.post(
+                "/api/settings",
+                json={"revision": body["revision"], "values": values, "clear_api_key": True},
+                headers=headers,
+            )
+            assert cleared.status_code == 200
+            assert cleared.json()["connection"]["key_configured"] is False
+            assert "TEST_OPENROUTER_KEY" not in os.environ
+            assert harness.config.provider == "openrouter"
+            reset = await client.post(
+                "/api/settings/reset", json={"revision": cleared.json()["revision"]}, headers=headers
+            )
+            assert reset.status_code == 200
+            assert reset.json()["connection"]["provider"] == "openai"
+            assert reset.json()["persisted"] is False
+            assert harness.config.provider == "openai" and harness.config.api_key_env == "TEST_DEPLOY_CHAT_KEY"
+            assert os.environ["TEST_DEPLOY_CHAT_KEY"] == "deployment-key"
+
+    asyncio.run(check())
+
+
+def test_provider_override_rejects_unsafe_combinations(tmp_path: Path) -> None:
+    async def check() -> None:
+        config = replace(configuration(tmp_path), demo=False, auth="api-key", api_key_env="TEST_DEPLOY_CHAT_KEY")
+        async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+            harness = harnesses[0]
+            before = (await client.get("/api/settings", headers=headers)).json()
+            for case in (
+                {"provider": "litellm", "base_url": ""},
+                {"provider": "openrouter", "auth": "chatgpt"},
+                {"provider": "openrouter", "api_key_env": "not-an-env-name"},
+                {"provider": "unknown-provider"},
+                {"provider": "openrouter", "base_url": "https://user:pass@example.invalid/v1"},
+                {"provider": "openrouter", "api": "completions"},
+            ):
+                response = await client.post(
+                    "/api/settings",
+                    json={"revision": before["revision"], "values": {**before["values"], **case}},
+                    headers=headers,
+                )
+                assert response.status_code == 422, (case, response.text)
+            assert harness.config.provider == "openai"
+            assert (await client.get("/api/settings", headers=headers)).json() == before
 
     asyncio.run(check())

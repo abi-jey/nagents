@@ -482,8 +482,16 @@ def test_skill_execution_preserves_symlink_and_workspace_guards(
                 skill_file.unlink()
                 skill_file.symlink_to(outside)
             assert registry.get("skill:audit") is not None
-            with pytest.raises(PermissionError):
-                await registry.execute("skill:audit")
+            if outside_path:
+                # Display metadata is not loader authority. Discovery replaces
+                # the injected path with the real, guarded workspace descriptor.
+                result = await registry.execute("skill:audit")
+                assert "Safe initial content" in result.prompt
+                assert "Must not load outside content" not in result.prompt
+            else:
+                # A newly symlinked skill disappears from the live catalog.
+                with pytest.raises(ValueError, match="Unknown command"):
+                    await registry.execute("skill:audit")
         finally:
             await harness.close()
 

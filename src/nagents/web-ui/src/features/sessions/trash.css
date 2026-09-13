@@ -1,0 +1,39 @@
+.session-more {
+  display: grid; place-items: center; width: 28px; min-height: 28px; padding: 0; flex-shrink: 0;
+  color: var(--text-secondary); border-color: transparent; background: transparent;
+}
+.session-more svg { stroke-width: 3.5; }
+.session-menu {
+  position: fixed; inset: auto; margin: 0; padding: 4px; width: min(212px, calc(100vw - 16px));
+  border: 1px solid var(--border-control); border-radius: 8px; color: var(--text-reading);
+  background: var(--surface-navigation); box-shadow: 0 8px 30px #0008;
+}
+.session-menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; border-color: transparent; text-align: left; }
+.danger-action { color: var(--state-error); }
+.trash-dialog { width: min(680px, calc(100vw - 24px)); }
+.trash-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.trash-heading h2 { margin-top: 0; }
+.trash-heading p { margin-bottom: 0; }
+.trash-close { flex-shrink: 0; }
+.trash-policy { border-bottom: 1px solid var(--border-group); padding-bottom: 16px; }
+.trash-policy label { display: block; margin-bottom: 10px; font-weight: 550; }
+.trash-policy > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.trash-policy input { width: 80px; min-height: 40px; font: inherit; color: var(--text-reading); background: var(--surface-control); border: 1px solid var(--border-control); border-radius: 6px; padding: 8px; }
+.trash-policy input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.trash-policy p, .trash-list small { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.trash-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trash-list { list-style: none; padding: 0; margin: 0; }
+.trash-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid var(--border-group); }
+.trash-list li > div:first-child { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.trash-list small { display: block; margin-top: 4px; }
+.trash-row-actions, .trash-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.trash-notice { border: 1px solid var(--border-group); border-radius: 6px; padding: 10px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.trash-notice strong { font-weight: 550; color: var(--text-reading); }
+.trash-notice-actions { margin-top: 8px; }
+.trash-notice button { font-size: 12px; }
+.trash-dialog button { min-height: 40px; }
+@media (pointer: coarse), (max-width: 760px) {
+  .session-more, .session-delete { width: 44px; min-height: 44px; opacity: 1; }
+  .trash-dialog button, .trash-notice button { min-height: 44px; }
+  .trash-policy input { min-height: 44px; }
+}

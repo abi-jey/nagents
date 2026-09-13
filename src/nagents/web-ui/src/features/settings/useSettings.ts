@@ -28,6 +28,8 @@ export function useSettings({
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<SettingsReply>();
   const [draft, setDraft] = useState<SettingsDraft>();
+  const [apiKey, setApiKey] = useState("");
+  const [clearKey, setClearKey] = useState(false);
   const [errors, setErrors] = useState<DraftErrors>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -40,16 +42,20 @@ export function useSettings({
   useEffect(() => () => reading.current?.abort(), []);
 
   const dirty =
-    !!snapshot &&
-    !!draft &&
-    Object.entries(createDraft(snapshot.values)).some(
-      ([key, value]) => draft[key as keyof SettingsDraft] !== value,
-    );
+    apiKey !== "" ||
+    clearKey ||
+    (!!snapshot &&
+      !!draft &&
+      Object.entries(createDraft(snapshot.values)).some(
+        ([key, value]) => draft[key as keyof SettingsDraft] !== value,
+      ));
   const disabled = blocked || loading || pending;
 
   function receive(reply: SettingsReply) {
     setSnapshot(reply);
     setDraft(createDraft(reply.values));
+    setApiKey("");
+    setClearKey(false);
     setErrors({});
     setError("");
     setNeedsRefresh(false);
@@ -84,6 +90,8 @@ export function useSettings({
     if (blocked || !token || writing.current) return;
     setSnapshot(undefined);
     setDraft(undefined);
+    setApiKey("");
+    setClearKey(false);
     setErrors({});
     setError("");
     setNotice("");
@@ -136,7 +144,7 @@ export function useSettings({
         try {
           const reply = reset
             ? await resetSettings(token, snapshot.revision)
-            : await saveSettings(token, snapshot.revision, parsed.values);
+            : await saveSettings(token, snapshot.revision, parsed.values, apiKey, clearKey);
           receive(reply);
           setNotice(
             reset
@@ -160,11 +168,25 @@ export function useSettings({
     }
   }
 
+  function updateKey(value: string) {
+    if (disabled) return;
+    setApiKey(value);
+    setNotice("");
+  }
+
+  function updateClearKey(value: boolean) {
+    if (disabled) return;
+    setClearKey(value);
+    setNotice("");
+  }
+
   return {
     token,
     open,
     snapshot,
     draft,
+    apiKey,
+    clearKey,
     errors,
     error,
     notice,
@@ -178,6 +200,8 @@ export function useSettings({
     close,
     refresh,
     update,
+    updateKey,
+    updateClearKey,
     save: () => write(),
     reset: () => write(true),
   };

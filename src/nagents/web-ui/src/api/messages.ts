@@ -20,6 +20,9 @@ export async function queueMessage(token: string, message: QueuedMessage): Promi
 
 export class MessageQueue {
   private uncertain = new Map<string, QueuedMessage>();
+  forget(sessionId: string) {
+    for (const [key, message] of this.uncertain) if (message.session_id === sessionId) this.uncertain.delete(key);
+  }
   prepare(sessionId: string, prompt: string, uuid: () => string = () => crypto.randomUUID()): QueuedMessage {
     const key = JSON.stringify([sessionId, prompt]);
     const message = this.uncertain.get(key) || { session_id: sessionId, prompt, message_id: uuid() };

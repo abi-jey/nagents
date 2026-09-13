@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from textual.pilot import Pilot
 
     from nagents.harness.auth import DeviceAuthorization
+    from nagents.skills import Skill
 
 
 class FakeHarness:
@@ -66,6 +67,7 @@ class FakeHarness:
         self.session_id = "test-session"
         self.approval_handler: Callable[[ApprovalRequest], Awaitable[bool]] = self.deny
         self.initialized = False
+        self._initialized = False
         self.closed = False
         self.cancelled = False
         self.running = False
@@ -83,6 +85,7 @@ class FakeHarness:
         self.fail_model = False
         self._busy = ""
         self.tools = SimpleNamespace(skills={})
+        self.agent = SimpleNamespace(refresh_skills=self.refresh_skills, skills={})
         self.tasks = SimpleNamespace(list=lambda: [])
         self.commands = CommandRegistry(cast("Harness", self))
 
@@ -91,6 +94,10 @@ class FakeHarness:
 
     async def initialize(self) -> None:
         self.initialized = True
+        self._initialized = True
+
+    async def refresh_skills(self) -> dict[str, Skill]:
+        return {}
 
     async def history(self) -> list[Message]:
         return self.messages

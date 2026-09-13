@@ -325,7 +325,7 @@ jobs:
       - name: Build wheel and sdist
         run: python -m build
 
-      - name: Verify bundled web assets
+      - name: Verify bundled web assets and skills
         shell: python
         run: |
           from pathlib import Path
@@ -342,10 +342,18 @@ jobs:
           assert "src/nagents/web/static/index.html" in sdist_files
           assert "src/nagents/web-ui/package-lock.json" in sdist_files
           assert not any(name.startswith("nagents/web-ui/") for name in wheel_files)
+          for skill in ("ngn-customize", "ngn-channels"):
+              path = f"nagents/skills/bundled/{skill}/SKILL.md"
+              assert path in wheel_files, path
+              assert f"src/{path}" in sdist_files, path
+              with zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
+                  content = wheel.read(path).decode("utf-8")
+              assert f"name: {skill}\n" in content
+              assert len(content.encode("utf-8")) <= 40000, "Keep bundled skill bodies within the default budget"
           for name in wheel_files + sdist_files:
               assert not {"node_modules", ".vite", ".cache", ".test-build"}.intersection(Path(name).parts), name
               assert not name.endswith(".tsbuildinfo"), name
-          print("Web assets are bundled; frontend dependencies and caches are excluded")
+          print("Web assets and built-in skills are bundled; frontend dependencies and caches are excluded")
 
       - name: List artifacts
         run: ls -la dist/

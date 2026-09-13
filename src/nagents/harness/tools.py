@@ -9,8 +9,8 @@ not an OS sandbox: approved shell commands and trusted Python have full user acc
 Ignore discovery supports nested .gitignore files, !negation, /anchoring,
 directory patterns and fnmatch globs; escaped patterns and Git's complete
 wildmatch semantics are not supported. Always-pruned directories stay pruned.
-Skill frontmatter supports single-line ``name:`` and ``description:`` scalars
-(optionally quoted), not general YAML, multiline scalars, or script execution.
+Skill frontmatter uses the shared text-only name/description parser; other
+metadata has no executable effect. General YAML and multiline scalars are unsupported.
 """
 
 import asyncio
@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING
 from typing import cast
 
 from nagents.events import ToolResultEvent
+from nagents.skills import SkillLoadResult
+from nagents.skills import parse_skill_metadata
 from nagents.tools import ToolExecutor
 from nagents.types import JsonSchema
 from nagents.types import JsonSchemaProperty
@@ -189,6 +191,8 @@ class CodingTools:
         self.call_id: ContextVar[str] = ContextVar("harness_tool_call_id", default="")
         self.builtins: dict[str, Callable[..., object]] = {}
         self.skills: dict[str, tuple[str, str]] = {}
+        self.workspace_skills: dict[str, tuple[str, str]] = {}
+        self.skill_diagnostics: tuple[str, ...] = ()
         self._storage_ids: dict[tuple[int, int], str] = {}
 
     def register(self) -> None:
@@ -697,48 +701,40 @@ class CodingTools:
         }
 
     def discover_skills(self) -> None:
+        discovered: dict[str, tuple[str, str]] = {}
+        diagnostics: list[str] = []
         for root in (".ngn/skills", ".agents/skills"):
             if not (self.root / root).exists():
                 continue
-            for path, is_directory in self.walk(root):
+            try:
+                paths = list(self.walk(root))
+            except (OSError, ValueError) as error:
+                diagnostics.append(f"Skill discovery skipped {root}: {type(error).__name__}")
+                continue
+            for path, is_directory in paths:
                 if is_directory or Path(path).name != "SKILL.md":
                     continue
-                text = self.snapshot(path)[0].decode("utf-8")
-                name = Path(path).parent.name
-                description = "No description; load with skill(name)."
-                if text.startswith("---\n"):
-                    header, separator, _ = text[4:].partition("\n---\n")
-                    if not separator:
-                        raise ValueError(f"Unterminated skill frontmatter: {path}")
-                    for line in header.splitlines():
-                        key, colon, value = line.partition(":")
-                        if not colon or key not in {"name", "description"}:
-                            raise ValueError(
-                                f"{path}: supported skill frontmatter is single-line name/description only"
-                            )
-                        value = value.strip()
-                        if not value or value in {"|", ">", "|-", ">-"}:
-                            raise ValueError(f"{path}: multiline/empty skill frontmatter is unsupported")
-                        if value[0] in {"'", '"'}:
-                            if len(value) < 2 or value[-1] != value[0]:
-                                raise ValueError(f"{path}: unclosed frontmatter quote")
-                            value = value[1:-1]
-                        if key == "name":
-                            name = value
-                        else:
-                            description = value
-                if name in self.skills:
+                try:
+                    name, description = self._skill_metadata(path)
+                except (OSError, ValueError) as error:
+                    if len(diagnostics) < 50:
+                        diagnostics.append(f"Skill discovery skipped {path}: {type(error).__name__}")
+                    continue
+                if name in discovered:
                     raise ValueError(f"Duplicate skill name {name!r} at {path}")
-                if len(name) > 80 or not name or any(not (char.isalnum() or char in "-_") for char in name):
-                    raise ValueError(f"Invalid skill name in {path}")
-                self.skills[name] = (path, description[:500])
+                discovered[name] = (path, description)
+        self.workspace_skills = discovered
+        self.skills = dict(discovered)
+        self.skill_diagnostics = tuple(diagnostics)
 
-    async def skill(self, name: str) -> dict[str, JsonValue]:
+    def _skill_metadata(self, path: str) -> tuple[str, str]:
+        text = self.snapshot(path)[0].decode("utf-8")
+        skill = parse_skill_metadata(text, path, Path(path).parent.name)
+        return skill.name, skill.description
+
+    async def skill(self, name: str) -> SkillLoadResult:
         """Load a discovered SKILL.md as text only. Never execute its scripts."""
-        if name not in self.skills:
-            raise ValueError(f"Unknown skill {name!r}; available: {', '.join(self.skills)}")
-        path, _ = self.skills[name]
-        return await self.read_file(path, limit=1000)
+        return await self.harness.agent.load_skill(name)
 
     async def demo_preview(self) -> dict[str, JsonValue]:
         """OFFLINE DEMO: request approval for a sample diff; never change any file."""

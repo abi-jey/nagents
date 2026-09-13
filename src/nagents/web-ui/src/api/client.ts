@@ -13,9 +13,10 @@ export async function request(
   token = "",
   body?: object,
   signal?: AbortSignal,
+  method = body ? "POST" : "GET",
 ): Promise<Response> {
   const response = await fetch(`/api/${path}`, {
-    method: body ? "POST" : "GET",
+    method,
     headers: {
       ...(token ? { "X-Ngn-Token": token } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),

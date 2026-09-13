@@ -205,6 +205,160 @@ export function SettingsDialog({
                 className="settings-group"
                 disabled={disabled || !!confirmation}
               >
+                <legend>Provider connection</legend>
+                <div className="settings-field">
+                  <label htmlFor="settings-provider">Provider</label>
+                  <select
+                    id="settings-provider"
+                    value={draft.provider}
+                    aria-describedby={`settings-provider-help${errors.provider ? " settings-provider-error" : ""}`}
+                    aria-invalid={!!errors.provider}
+                    onChange={(event) =>
+                      settings.update("provider", event.target.value)
+                    }
+                  >
+                    {!snapshot.providers.includes(draft.provider) && (
+                      <option value={draft.provider} disabled>
+                        {draft.provider || "Choose a provider"}
+                      </option>
+                    )}
+                    {snapshot.providers.map((provider) => (
+                      <option key={provider} value={provider}>
+                        {provider}
+                      </option>
+                    ))}
+                  </select>
+                  <p id="settings-provider-help">
+                    Deployment defaults fill these fields; saving stores
+                    allowlisted overrides in this workspace.
+                  </p>
+                  {errors.provider && (
+                    <p id="settings-provider-error" className="error-text">
+                      {errors.provider}
+                    </p>
+                  )}
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="settings-api">API</label>
+                  <select
+                    id="settings-api"
+                    value={draft.api}
+                    onChange={(event) => settings.update("api", event.target.value)}
+                  >
+                    {snapshot.apis.map((api) => (
+                      <option key={api} value={api}>
+                        {api}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="settings-auth">Authentication</label>
+                  <select
+                    id="settings-auth"
+                    value={draft.auth}
+                    aria-describedby="settings-auth-help"
+                    onChange={(event) => settings.update("auth", event.target.value)}
+                  >
+                    {snapshot.auths.map((auth) => (
+                      <option key={auth} value={auth}>
+                        {auth}
+                      </option>
+                    ))}
+                  </select>
+                  <p id="settings-auth-help">
+                    ChatGPT login is available only for the default OpenAI
+                    provider without an endpoint or API override.
+                  </p>
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="settings-base_url">Endpoint override</label>
+                  <input
+                    id="settings-base_url"
+                    type="text"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={draft.base_url}
+                    placeholder={snapshot.defaults.base_url || "Provider default"}
+                    aria-describedby={`settings-base_url-help${errors.base_url ? " settings-base_url-error" : ""}`}
+                    aria-invalid={!!errors.base_url}
+                    onChange={(event) =>
+                      settings.update("base_url", event.target.value)
+                    }
+                  />
+                  <p id="settings-base_url-help">
+                    Leave blank to use the provider&apos;s default endpoint, or
+                    enter an HTTP(S) gateway URL without credentials. Required
+                    for litellm.
+                  </p>
+                  {errors.base_url && (
+                    <p id="settings-base_url-error" className="error-text">
+                      {errors.base_url}
+                    </p>
+                  )}
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="settings-api_key_env">
+                    API key environment name
+                  </label>
+                  <input
+                    id="settings-api_key_env"
+                    type="text"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={draft.api_key_env}
+                    aria-describedby={`settings-api_key_env-help${errors.api_key_env ? " settings-api_key_env-error" : ""}`}
+                    aria-invalid={!!errors.api_key_env}
+                    onChange={(event) =>
+                      settings.update("api_key_env", event.target.value)
+                    }
+                  />
+                  <p id="settings-api_key_env-help">
+                    The variable name used for the deployment environment. The
+                    key value itself is never displayed.
+                  </p>
+                  {errors.api_key_env && (
+                    <p id="settings-api_key_env-error" className="error-text">
+                      {errors.api_key_env}
+                    </p>
+                  )}
+                </div>
+                <div className="settings-field">
+                  <label htmlFor="settings-provider-key">API key</label>
+                  <input
+                    id="settings-provider-key"
+                    type="password"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    value={settings.apiKey}
+                    disabled={disabled || !!confirmation || settings.clearKey}
+                    aria-describedby="settings-provider-key-help"
+                    onChange={(event) => settings.updateKey(event.target.value)}
+                  />
+                  <p id="settings-provider-key-help">
+                    {snapshot.connection.key_configured
+                      ? "A key is stored in this workspace. Leave blank to keep it, or check below to remove it."
+                      : "Optional. A submitted key is stored write-only for this provider and environment."}
+                  </p>
+                  {(snapshot.connection.key_configured || settings.apiKey) && (
+                    <label className="settings-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={settings.clearKey}
+                        disabled={disabled || !!confirmation}
+                        onChange={(event) =>
+                          settings.updateClearKey(event.target.checked)
+                        }
+                      />
+                      Remove the stored key and fall back to the environment
+                    </label>
+                  )}
+                </div>
+              </fieldset>
+              <fieldset
+                className="settings-group"
+                disabled={disabled || !!confirmation}
+              >
                 <legend>Model and profile</legend>
                 <div className="settings-field">
                   <label htmlFor="settings-agent">Agent profile</label>
@@ -294,13 +448,23 @@ export function SettingsDialog({
                   <dl>
                     <dt>Provider</dt><dd>{snapshot.connection.provider}</dd>
                     <dt>API</dt><dd>{snapshot.connection.api}</dd>
+                    <dt>Authentication</dt><dd>{snapshot.connection.auth}</dd>
+                    <dt>Endpoint</dt><dd>{snapshot.connection.base_url || "Provider default"}</dd>
+                    <dt>API key environment</dt>
+                    <dd>
+                      {snapshot.connection.api_key_env}
+                      {snapshot.connection.key_configured
+                        ? " (workspace key stored)"
+                        : ""}
+                    </dd>
                     <dt>Auth status</dt><dd>{snapshot.connection.auth_status}</dd>
                     <dt>Effective permissions</dt><dd>{snapshot.effective_mode}</dd>
                   </dl>
                   <p>
                     Current saved permissions are shown, not unsaved profile
-                    changes. Connection credentials, plugins, storage, and trust
-                    remain server-managed.
+                    changes. Provider routing is limited to allowlisted values;
+                    plugins, storage, and trust remain server-managed. Stored
+                    keys are never displayed.
                   </p>
                 </section>
                 <section className="settings-reset" aria-labelledby="settings-reset-title">

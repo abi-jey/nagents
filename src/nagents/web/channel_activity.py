@@ -1,4 +1,4 @@
-"""Reconcile transport indicators with the currently attached, active root session."""
+"""Reconcile transport indicators with the executing root's permanent chat owner."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class ChannelActivities:
     async def _refresh(self) -> None:
         async with self.lock:
             revision = self.revision
-            bindings = await self.store.bindings() if self.session_id else []
+            bindings = await self.store.activity_bindings(self.session_id) if self.session_id else []
             desired: dict[tuple[str, str], tuple[Channel, ChannelActivity]] = {}
             for binding in bindings:
                 channel = self.channels.get(binding["channel"])
@@ -73,7 +73,7 @@ class ChannelActivities:
             )
             for key in stopping:
                 del self.current[key]
-            # A newer binding/owner change gets its own reconciliation. Do not
+            # A newer execution/owner/connector change gets its own reconciliation. Do not
             # dispatch stale starts after a potentially slow stop or DB read.
             if revision != self.revision:
                 return

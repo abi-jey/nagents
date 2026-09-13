@@ -244,6 +244,7 @@ def test_active_producer_and_worker_stop_before_transport_closes(
 
             channel = ObservedChannel("fixture")
             await state.channels.open("fixture", channel)
+            await state.channels.store.assign_owner(state.selected_session_id, "fixture", "chat")
             await state.channels.store.receive(
                 "fixture",
                 _envelope("fixture", ChannelMessage("attach", "chat", "sender", "/session main")),

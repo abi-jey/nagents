@@ -5,14 +5,18 @@ import type { Bootstrap, Session, Snapshot } from "../../types";
 import type { SettingsReply } from "../settings/types";
 import { rootSessions } from "../channels/draft";
 import { idle, sessionActivity } from "./activity";
+import { deleteSession, type DeletedSnapshot, type DeletionSelection } from "../../api/deletion";
+import type { RestoreReply } from "../../api/trash";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
   const selection = useRef("");
+  const selectionRevision = useRef(0);
   const [active, setActive] = useState(idle);
-  function selectRoot(id: string) { selection.current = id; setSessionId(id); }
+  function selectRoot(id: string) { selection.current = id; selectionRevision.current++; setSessionId(id); }
+  function currentSelection(): DeletionSelection { return { id: selection.current, revision: selectionRevision.current }; }
   function accept(snapshot: Snapshot): Snapshot {
     setSessions(rootSessions(snapshot.sessions)); selectRoot(snapshot.session_id);
     setActive((current) => sessionActivity(current, { type: "snapshot", session_id: snapshot.session_id, snapshot, cursor: 0, epoch: "http" }));
@@ -36,7 +40,8 @@ export function useSessions() {
       snapshot = await snapshotResponse(await request(`sessions/${encodeURIComponent(root)}`, data.token));
     }
     setSessions(rootSessions(snapshot.sessions));
-    if (!selection.current || selection.current === snapshot.session_id) return accept(snapshot);
+    if (!selection.current || selection.current === snapshot.session_id ||
+        !snapshot.sessions.some((session) => session.id === selection.current)) return accept(snapshot);
     // A reconnect never follows the Harness's current execution into another chat.
     return undefined;
   }
@@ -51,6 +56,15 @@ export function useSessions() {
     }
     return accept(await snapshotResponse(await request("sessions/new", config.token, {})));
   }
+  async function remove(id: string, permanent = false): Promise<DeletedSnapshot> {
+    if (!config) throw new Error("Reconnect to ngn before deleting a session.");
+    return deleteSession(config.token, id, permanent);
+  }
+  function restored(reply: RestoreReply) {
+    const item = reply.sessions.find((session) => session.id === reply.restored_session_id);
+    if (item) setSessions((current) => [item, ...current.filter((session) => session.id !== item.id)]);
+  }
+  function drop(id: string) { setSessions((current) => current.filter((session) => session.id !== id)); }
   function receive(frame: EventFrame) {
     setActive((current) => sessionActivity(current, frame));
     if (frame.type === "snapshot" || frame.type === "sessions") {
@@ -69,6 +83,6 @@ export function useSessions() {
   }
   return {
     config, sessions, sessionId, globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
-    activityOnly: false, connect, select, receive, acceptSettings, acceptCredentials,
+    activityOnly: false, connect, select, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
   };
 }

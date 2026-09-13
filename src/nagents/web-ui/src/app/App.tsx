@@ -1,8 +1,12 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { Icon } from "../components/Icon.js";
 import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
 import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
+import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
+import { TrashDialog, TrashNotice } from "../features/sessions/TrashDialog";
+import "../features/sessions/trash.css";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DictationControls, DictationReview } from "../features/dictation/DictationControls";
@@ -10,22 +14,35 @@ import "../features/dictation/dictation.css";
 import "../features/settings/settings.css";
 import "../features/channels/channels.css";
 import { useClient } from "./useClient";
+import { restoreDeletionFocus } from "../api/deletion";
 
 export function App() {
   const client = useClient();
   const { chat, sessions, busy, error, dictation } = client;
   const { config, sessionId, externalRun } = sessions;
   const [navOpen, setNavOpen] = useState(false);
+  const closeNavigation = useCallback(() => setNavOpen(false), []);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const selectedSession = sessions.sessions.find((session) => session.id === sessionId);
   const canSubmit =
-    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open;
+    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target && !client.trash.open;
+  const trashBlocked = busy || (dictation.unfinished && dictation.state.phase !== "review");
+  function openRestored(id: string) { client.trashController.close(); void select(id); }
+  async function moveToTrash(session: typeof sessions.sessions[number]) {
+    const previous = document.activeElement;
+    if (await client.softDelete(session)) requestAnimationFrame(() => {
+      if (document.activeElement !== document.body && document.activeElement !== previous) return;
+      restoreDeletionFocus(previous instanceof HTMLElement ? previous : null, composer.current,
+        document.querySelector<HTMLElement>("#session-navigation.open[role='dialog'][aria-modal='true']"));
+    });
+  }
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
 
   async function select(id?: string) {
     if (await client.select(id)) {
       setNavOpen(false);
-      composer.current?.focus();
+      requestAnimationFrame(() => composer.current?.focus());
     }
   }
   async function submit(value?: string) {
@@ -48,10 +65,10 @@ export function App() {
             title="Sessions"
             onClick={() => setNavOpen(!navOpen)}
           >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+            <Icon name="menu" />
           </button>
           <div className="model">
-            <h1>ngn</h1>
+            <h1 title={selectedSession?.title || "New session"}>{selectedSession?.title || "New session"}</h1>
             <span
               title={
                 config ? `${config.agent}: ${config.model}` : "Local harness"
@@ -60,39 +77,27 @@ export function App() {
               {config ? `${config.agent}: ${config.model}` : "Local harness"}
             </span>
           </div>
-          <button
-            className="channels-trigger" aria-label="Channels" title="Channels" aria-haspopup="dialog"
-            disabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open}
-            onClick={client.channels.show}
-          >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="2" y="6" width="5" height="8" rx="1" /><rect x="13" y="2" width="5" height="6" rx="1" /><rect x="13" y="12" width="5" height="6" rx="1" /><path d="M7 10h3V5h3M10 10v5h3" /></svg>
-            <span className="desktop-label">Channels</span>
-          </button>
-          <button
-            className="settings-trigger"
-            aria-label="Settings"
-            title="Settings"
-            disabled={
-              !config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished
-            }
-            onClick={client.settings.show}
-            aria-haspopup="dialog"
-          >
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /><path d="M7 3v4M13 8v4M8 13v4" /></svg>
-            <span className="desktop-label">Settings</span>
-          </button>
-          <span className={`mode-badge ${config?.demo ? "demo" : ""}`} title={config?.demo ? "Offline demo" : "Live provider"}>
-            {config?.demo ? "Demo" : "Live"}
-          </span>
         </header>
         <SessionSidebar
           workspace={config?.workspace || ""}
           sessions={sessions.sessions}
           selected={sessionId}
-          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open}
+          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open || !!client.deletion.target || client.trash.open}
           newDisabled={busy}
           open={navOpen}
           select={(id) => void select(id)}
+          remove={(session) => void moveToTrash(session)}
+          permanent={(session) => client.deletionController.show(session)}
+          canDelete={(id) => !client.deletion.target && client.canDeleteSession(id)}
+          trash={client.trashController.show}
+          trashDisabled={!config || client.operating || (dictation.unfinished && dictation.state.phase !== "review") || client.channels.open || client.settings.open || !!client.deletion.target}
+          notice={!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
+          settings={client.settings.show}
+          settingsDisabled={!config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished || client.channels.open || !!client.deletion.target || client.trash.open}
+          channels={client.channels.show}
+          channelsDisabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open || !!client.deletion.target || client.trash.open}
+          demo={!!config?.demo}
+          close={closeNavigation}
         />
         <Conversation
           key={`${sessionId}:${chat.transcriptVersion}`}
@@ -154,7 +159,7 @@ export function App() {
                 state={dictation.state}
                 config={config?.dictation}
                 unsupported={dictation.unsupported}
-                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open || client.channels.open}
+                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open || client.channels.open || client.trash.open}
                 start={client.startDictation}
                 stop={dictation.controller.stop}
                 cancel={() => dictation.controller.cancel()}
@@ -166,6 +171,8 @@ export function App() {
         </footer>
       </main>
       {client.settings.open && <SettingsDialog settings={client.settings} />}
+      {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController} permanent={client.deletionController.showTrash.bind(client.deletionController)} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
+      {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessionId} />}
       {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessionId} />}
       {chat.approval.pending && (
         <ApprovalDialog

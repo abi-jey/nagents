@@ -353,6 +353,9 @@ def test_entrypoint_defaults_to_loopback_and_disables_forwarded_headers(
 
 def test_chat_session_round_trip_and_streaming(server: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     manager = SessionManager(server.SESSIONS_DB)
+    # Schema creation is fixture setup, not part of the ASGI request watchdog.
+    # Keep the real migrations/persistence without timing cold-disk fsyncs here.
+    asyncio.run(manager.initialize())
     calls: list[tuple[str, str, str]] = []
     scheduler = importlib.import_module("nagents.server.scheduler")
 

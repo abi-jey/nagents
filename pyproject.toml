@@ -67,7 +67,7 @@ case-sensitive = true
 known-first-party = [ "nagents",]
 
 [tool.hatch.build]
-artifacts = [ "/src/nagents/web/static/**",]
+artifacts = [ "/src/nagents/web/static/**", "/src/nagents/skills/bundled/**",]
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/nagents",]

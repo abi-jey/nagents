@@ -43,6 +43,7 @@ class ChannelRevision(BaseModel):
 class ConnectionInput(ChannelRevision):
     plugin: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_.-]*$")
     enabled: bool
+    auto_reply: bool = False
     config: dict[str, JsonValue] = Field(default_factory=dict)
     secrets: dict[str, JsonValue] = Field(default_factory=dict)
     main_session_id: str = Field(default="", max_length=80, pattern=r"^(?:ngn-[A-Za-z0-9-]+)?$")
@@ -52,6 +53,7 @@ class Connection(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
     plugin: str
     enabled: bool
+    auto_reply: bool = False
     config: dict[str, JsonValue]
     secrets: dict[str, JsonValue]
     main_session_id: str
@@ -132,7 +134,7 @@ class ChannelCatalog:
                 saved = SavedCatalog.model_validate_json(self.path.read_bytes())
             except Exception:
                 raise ValueError("Saved channel configuration is invalid") from None
-            if saved.version != 1:
+            if saved.version not in {1, 2}:
                 raise ValueError("Unsupported channel configuration version")
             self.connections = saved.connections
             self.revision = saved.revision
@@ -222,7 +224,19 @@ class ChannelCatalog:
             _validate_schema(schema_values, plugin.schema if body.enabled else {**plugin.schema, "required": []})
         except Exception:
             raise HTTPException(422, "Connection fields do not match the installed plugin schema.") from None
-        return Connection(plugin=body.plugin, enabled=body.enabled, config=public, secrets=saved, main_session_id=main)
+        # Older clients omit this host policy. Preserve an explicit saved opt-in
+        # on edits to the same connector, without granting it to a replacement.
+        auto_reply = body.auto_reply
+        if "auto_reply" not in body.model_fields_set and old is not None and old.plugin == body.plugin:
+            auto_reply = old.auto_reply
+        return Connection(
+            plugin=body.plugin,
+            enabled=body.enabled,
+            auto_reply=auto_reply,
+            config=public,
+            secrets=saved,
+            main_session_id=main,
+        )
 
     def construct(self, id: str, connection: Connection) -> Channel:
         self.require_live()
@@ -265,7 +279,7 @@ class ChannelCatalog:
         for connection in connections.values():
             self.check_public(self.public_config(connection))
         revision = secrets.token_hex(32)
-        payload = SavedCatalog(revision=revision, connections=connections).model_dump_json().encode()
+        payload = SavedCatalog(version=2, revision=revision, connections=connections).model_dump_json().encode()
         if len(payload) > 1024 * 1024:
             raise HTTPException(422, "Channel configuration exceeds the storage limit.")
         fd, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".credentials-")
@@ -326,6 +340,7 @@ class ChannelCatalog:
                     "id": id,
                     "plugin": connection.plugin,
                     "enabled": connection.enabled,
+                    "auto_reply": connection.auto_reply,
                     "status": status,
                     "error": error,
                     "config": public,

@@ -96,8 +96,13 @@ test("the full workspace path has a keyboard-accessible disclosure that mobile C
   const html = renderToStaticMarkup(createElement(SessionSidebar, {
     workspace, sessions: [], selected: "", disabled: false, open: true,
     select: () => assert.fail("Inspecting workspace information must not switch sessions"),
+    remove: () => assert.fail("Rendering navigation must not delete a session"), canDelete: () => false,
+    permanent: () => assert.fail("Rendering navigation must not purge a session"), trash: () => undefined, trashDisabled: false,
+    settings: () => undefined, settingsDisabled: false, channels: () => undefined, channelsDisabled: false,
+    demo: true, close: () => undefined,
   }));
-  assert.match(html, /<details class="sidebar-footer"><summary>Workspace info<\/summary>/);
+  assert.match(html, /<details class="workspace-info"><summary/);
+  assert.match(html, /aria-label="Workspace controls"/);
   assert.match(html, /class="sidebar-info-content" role="region" aria-label="Workspace information" tabindex="0"/);
   const information = html.slice(html.indexOf('class="sidebar-info-content"'));
   assert.ok(information.includes(`<p>${workspace}</p>`));
