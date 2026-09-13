@@ -36,7 +36,27 @@ class LocalOnly:
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] == "websocket":
-            await send({"type": "websocket.close", "code": 1008})
+            headers = Headers(scope=scope)
+            protocols = [
+                part.strip() for value in headers.getlist("sec-websocket-protocol") for part in value.split(",")
+            ]
+            tokens = [
+                protocol.removeprefix("ngn.token.") for protocol in protocols if protocol.startswith("ngn.token.")
+            ]
+            if (
+                scope["path"] != "/api/events"
+                or scope["query_string"]
+                or headers.getlist("host") != [self.authority]
+                or headers.getlist("origin") != [f"http://{self.authority}"]
+                or headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}
+                or len(protocols) != 2
+                or protocols.count("ngn.events.v1") != 1
+                or len(tokens) != 1
+                or not secrets.compare_digest(tokens[0].encode(), self.token.encode())
+            ):
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            await self.app(scope, receive, send)
             return
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -75,10 +95,10 @@ class LocalOnly:
             if len(tokens) != 1 or not secrets.compare_digest(tokens[0].encode(), self.token.encode()):
                 await reject(403, "Invalid web token. Reconnect to this ngn serve instance.")
                 return
-        if method not in {"GET", "HEAD", "POST"}:
+        if method not in {"GET", "HEAD", "POST", "PUT", "DELETE"}:
             await reject(405, "Method not allowed.")
             return
-        if method == "POST":
+        if method in {"POST", "PUT", "DELETE"}:
             if headers.getlist("origin") != [origin]:
                 await reject(403, "An exact same-origin Origin header is required.")
                 return

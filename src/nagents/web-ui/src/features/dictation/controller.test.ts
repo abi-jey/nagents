@@ -193,6 +193,39 @@ test("recording captures the settings revision before permission and keeps it th
   assert.equal(f.signal()?.aborted, true);
 });
 
+test("credential rotation uses the fresh token for explicit transcription without changing capture revision or retrying an upload", async () => {
+  const f = fixture(); f.permission.resolve();
+  await f.controller.start(dictationContext);
+  f.callbacks().stopped({ ...audio, limited: true });
+  const recorded = f.controller.getSnapshot();
+  f.controller.refreshToken("fresh-process-token");
+  assert.equal(f.controller.getSnapshot(), recorded);
+  assert.deepEqual(f.calls, ["record"], "Token rotation must not authorize transcription");
+  const upload = f.controller.transcribe();
+  assert.equal(f.context()?.token, "fresh-process-token");
+  assert.equal(f.context()?.sessionId, dictationContext.sessionId);
+  assert.equal(f.context()?.config.revision, dictationContext.config.revision);
+  f.controller.refreshToken("next-process-token");
+  assert.equal(f.context()?.token, "fresh-process-token", "An in-flight request keeps its original authentication context");
+  assert.deepEqual(f.calls, ["record", "upload"]); assert.equal(f.signal()?.aborted, false);
+  f.reply.resolve("Review me"); await upload;
+});
+
+test("credential recovery and newly observed busy state preserve completed dictation review and its edits", async () => {
+  const f = fixture(); f.permission.resolve();
+  await f.controller.start(dictationContext);
+  f.controller.stop(); f.callbacks().stopped(audio);
+  f.reply.resolve("Original review"); await setImmediate();
+  f.controller.edit("Keep these reviewed edits");
+  const review = f.controller.getSnapshot(); const calls = [...f.calls];
+  f.controller.refreshToken("rotated-process-token");
+  f.controller.interrupt();
+  assert.equal(f.controller.getSnapshot(), review); assert.deepEqual(f.calls, calls);
+  assert.equal(f.signal()?.aborted, false);
+  f.controller.cancel();
+  assert.equal(f.controller.getSnapshot().phase, "idle", "Explicit discard/session ownership cleanup remains effective");
+});
+
 test("cancel during permission ignores late start and old recorder callbacks", async () => {
   const f = fixture();
   const pending = f.controller.start(dictationContext);

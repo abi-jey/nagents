@@ -17,3 +17,13 @@ export function revealAncestors(target: HTMLElement, boundary: HTMLElement): str
   }
   return keys;
 }
+
+// Validation can target a control inside a closed optional/JSON section. Open
+// its ancestors synchronously, retain that choice, and only then move focus.
+export function revealInvalidField(boundary: HTMLElement, remember: (key: string, open: boolean) => void): boolean {
+  const invalid = boundary.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)');
+  if (!invalid) return false;
+  for (const key of revealAncestors(invalid, boundary)) remember(key, true);
+  invalid.focus();
+  return true;
+}

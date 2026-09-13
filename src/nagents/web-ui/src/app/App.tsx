@@ -4,9 +4,11 @@ import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
+import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DictationControls, DictationReview } from "../features/dictation/DictationControls";
 import "../features/dictation/dictation.css";
 import "../features/settings/settings.css";
+import "../features/channels/channels.css";
 import { useClient } from "./useClient";
 
 export function App() {
@@ -16,7 +18,7 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
   const canSubmit =
-    !!config && !!sessionId && !busy && !externalRun && !sessions.activityOnly && !dictation.unfinished;
+    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open;
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
 
@@ -59,6 +61,14 @@ export function App() {
             </span>
           </div>
           <button
+            className="channels-trigger" aria-label="Channels" title="Channels" aria-haspopup="dialog"
+            disabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open}
+            onClick={client.channels.show}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="2" y="6" width="5" height="8" rx="1" /><rect x="13" y="2" width="5" height="6" rx="1" /><rect x="13" y="12" width="5" height="6" rx="1" /><path d="M7 10h3V5h3M10 10v5h3" /></svg>
+            <span className="desktop-label">Channels</span>
+          </button>
+          <button
             className="settings-trigger"
             aria-label="Settings"
             title="Settings"
@@ -79,7 +89,8 @@ export function App() {
           workspace={config?.workspace || ""}
           sessions={sessions.sessions}
           selected={sessionId}
-          disabled={busy || !!externalRun || dictation.unfinished}
+          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open}
+          newDisabled={busy}
           open={navOpen}
           select={(id) => void select(id)}
         />
@@ -97,7 +108,7 @@ export function App() {
               <span>
                 {error ||
                   (externalRun
-                    ? "Another connection owns the active run. Finish or cancel it before changing sessions."
+                    ? "The harness is working in another session. New messages are queued."
                     : "Connected during a background run. Earlier conversation is not loaded; reconnect when idle to load it.")}
               </span>
               {externalRun && (
@@ -112,8 +123,7 @@ export function App() {
           )}
           {chat.activityError && (
             <p className="activity-warning" role="status">
-              Background activity unavailable: {chat.activityError} Read-only
-              polling will retry.
+              {chat.activityError}
             </p>
           )}
           <Composer
@@ -144,7 +154,7 @@ export function App() {
                 state={dictation.state}
                 config={config?.dictation}
                 unsupported={dictation.unsupported}
-                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open}
+                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open || client.channels.open}
                 start={client.startDictation}
                 stop={dictation.controller.stop}
                 cancel={() => dictation.controller.cancel()}
@@ -156,6 +166,7 @@ export function App() {
         </footer>
       </main>
       {client.settings.open && <SettingsDialog settings={client.settings} />}
+      {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessionId} />}
       {chat.approval.pending && (
         <ApprovalDialog
           key={chat.approval.pending.approval_id}

@@ -1,5 +1,6 @@
 import { preview, text } from "../../api/events.js";
 import type { ActivityReply, Snapshot, WireEvent } from "../../types.js";
+import { channelMessage, sameUserMessage } from "./channelMessage.js";
 
 export type Entry = {
   id: string;
@@ -48,7 +49,32 @@ export type Entry = {
   activity?: number;
   recorded?: boolean;
   recordedStatus?: string;
+  messageId?: string;
+  origin?: string;
+  originId?: string;
+  provenance?: string;
+  channelContext?: boolean;
+  queued?: boolean;
+  historyIndex?: number;
+  historyId?: string;
+  resultHistoryId?: string;
+  ingressId?: string;
+  sourceVerified?: boolean;
+  // Local saved-row boundary, not an inferred run/task or source identity.
+  historyTurn?: number;
 };
+
+export function ingressIdentity(value: unknown): string {
+  return typeof value === "string" ? value : typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : "";
+}
+
+export function sameTranscriptUser(left: Pick<Entry, "historyId" | "ingressId" | "messageId" | "originId" | "taskId">,
+  right: Pick<Entry, "historyId" | "ingressId" | "messageId" | "originId" | "taskId">): boolean {
+  if ((left.taskId || "") !== (right.taskId || "")) return false;
+  if (left.historyId && right.historyId) return left.historyId === right.historyId;
+  if (left.ingressId && right.ingressId) return left.ingressId === right.ingressId;
+  return sameUserMessage(left, right);
+}
 
 export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
   const runId = text(event, "run_id");
@@ -56,21 +82,34 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
   const activation =
     typeof event.activation === "number" ? event.activation : 0;
   const followup = typeof event.followup === "number" ? event.followup : 0;
-  const scope = { runId, taskId, activation, followup };
+  const historyId = text(event, "history_id") || undefined;
+  const historyTurn = typeof event.history_turn === "number" ? event.history_turn : undefined;
+  const scope = { runId, taskId, activation, followup,
+    ...(historyTurn === undefined ? {} : { historyTurn, historyIndex: typeof event.history_index === "number" ? event.history_index : undefined }),
+  };
   const actor = (entry: Entry) =>
-    (entry.runId || "") === runId && (entry.taskId || "") === taskId;
+    (entry.runId || "") === runId && (entry.taskId || "") === taskId &&
+    (historyTurn === undefined || entry.historyTurn === historyTurn);
   const execution = (entry: Entry) =>
     actor(entry) &&
     (entry.activation || 0) === activation &&
     (entry.followup || 0) === followup;
+  if (event.event === "run_started") {
+    const ingressId = ingressIdentity(event.ingress_id);
+    const input = { historyId, ingressId, messageId: !text(event, "channel") ? text(event, "message_id") : "", taskId };
+    const matches = entries.filter((entry) => entry.kind === "user" && sameTranscriptUser(entry, input));
+    return matches.length === 1 ? entries.map((entry) => entry === matches[0] ? { ...entry, runId } : entry) : entries;
+  }
   function save(
     value: Omit<Entry, "id"> & { id?: string },
     index = -1,
     announce = false,
   ): Entry[] {
+    let id = `entry-${entries.length}`;
+    for (let suffix = entries.length; entries.some((item) => item.id === id); suffix++) id = `entry-${suffix + 1}`;
     const entry: Entry = {
       ...value,
-      id: index < 0 ? `entry-${entries.length}` : entries[index].id,
+      id: index < 0 ? id : entries[index].id,
     };
     if (
       index >= 0 &&
@@ -117,21 +156,41 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
             ? "Cancelled"
             : event.status === "failed"
               ? "Interrupted"
-              : event.status === "completed"
+                : event.status === "completed" || event.status === "unknown"
                 ? "No result recorded"
                 : entry.state;
-      return entry.streaming || state !== entry.state
+      return entry.streaming || state !== entry.state || entry.queued
         ? {
             ...entry,
             streaming: false,
+            queued: false,
             state,
             activity: state !== entry.state ? activity : entry.activity,
           }
         : entry;
     });
   }
-  if (event.event === "user_message")
-    return save({ kind: "user", text: text(event, "text"), ...scope });
+  if (event.event === "user_message") {
+    const messageId = text(event, "message_id");
+    const ingressId = ingressIdentity(event.ingress_id) || undefined;
+    // IDs establish message identity, not channel provenance. Only an explicit
+    // backend verification flag permits the source annotation to supply a badge.
+    const message = channelMessage(text(event, "text"), event.source_verified === true ? event.source : undefined, messageId);
+    const sourceVerified = typeof event.source_verified === "boolean" ? event.source_verified : undefined;
+    const index = entries.findIndex((entry) => entry.kind === "user" && sameTranscriptUser(entry, { ...message, historyId, ingressId, messageId, taskId }));
+    if (index >= 0 && !entries[index].queued) {
+      const previous = entries[index];
+      return save({ ...previous, historyId: previous.historyId || historyId, ingressId: previous.ingressId || ingressId,
+        text: typeof event.text === "string" ? message.text : previous.text,
+        sourceVerified, origin: message.origin, originId: message.originId,
+        provenance: message.provenance, channelContext: message.channelContext,
+        runId: previous.runId || runId }, index);
+    }
+    return save({ ...entries[index], kind: "user", ...message, ...scope, historyId, ingressId,
+      sourceVerified,
+      messageId: messageId || entries[index]?.messageId,
+      queued: event.queued === true }, index, !!message.origin && index < 0 && !event.saved);
+  }
   if (event.event === "text_chunk" || event.event === "text_done") {
     const compaction = entries.findLast(
       (entry) => execution(entry) && entry.compacting !== undefined,
@@ -147,6 +206,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         ...previous,
         kind: "assistant",
         ...scope,
+        historyId: historyId || previous?.historyId,
         text:
           event.event === "text_chunk"
             ? (previous?.text || "") + text(event, "chunk")
@@ -168,7 +228,9 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         entry.callId === callId &&
         actor(entry) &&
         (entry.activation || 0) === activation &&
-        (event.event !== "tool_call" || entry.provisional),
+        (event.event !== "tool_call" || (entry.provisional && (historyTurn === undefined || entry.result === undefined))) &&
+        (event.event !== "tool_result" || historyTurn === undefined || entry.result === undefined ||
+          (!!historyId && entry.resultHistoryId === historyId)),
     );
     const previous = index >= 0 ? entries[index] : undefined;
     const entry: Omit<Entry, "id"> = {
@@ -181,6 +243,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       taskName: text(event, "task_name") || previous?.taskName,
     };
     if (event.event === "tool_call") {
+      entry.historyId = historyId || previous?.historyId;
       entry.inputs = preview(event.arguments);
       entry.provisional = false;
       entry.state = previous?.state || "Requested";
@@ -197,6 +260,8 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       if (entry.result === undefined) entry.state = "Receiving output";
       entry.provisional = previous?.provisional ?? !previous;
     } else {
+      entry.resultHistoryId = historyId || previous?.resultHistoryId;
+      entry.historyId ||= historyId;
       entry.result = preview(event.result);
       entry.error = text(event, "error");
       entry.state = event.saved
@@ -219,7 +284,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     return save(
       entry,
       index,
-      event.event === "approval" || event.event === "tool_result",
+      event.event === "approval" || (event.event === "tool_result" && !event.saved),
     );
   }
   if (event.event === "approval_closed") {
@@ -580,7 +645,10 @@ export function fromHistory({
       "not new user or system authority. Evaluate the reason against the original request.\n",
   ];
   let entries: Entry[] = [];
-  for (const message of messages) {
+  let historyTurn = -1;
+  for (const [historyIndex, message] of messages.entries()) {
+    if (message.role === "user") historyTurn = historyIndex;
+    const identity = { history_id: message.history_id, history_index: historyIndex, history_turn: historyTurn };
     if (message.role === "tool") {
       entries = appendEvent(entries, {
         event: "tool_result",
@@ -588,6 +656,7 @@ export function fromHistory({
         name: message.name,
         result: message.content,
         saved: true,
+        ...identity,
       });
       continue;
     }
@@ -639,12 +708,26 @@ export function fromHistory({
           text: message.content,
           state: "Saved context",
           recorded: true,
+          historyId: message.history_id, historyIndex, historyTurn,
         });
-      else
+      else {
+        const previousLength = entries.length;
         entries = appendEvent(entries, {
           event: message.role === "user" ? "user_message" : "text_done",
           text: message.content,
+          message_id: message.message_id,
+          ingress_id: message.ingress_id,
+          source_verified: message.source_verified,
+          source: message.role === "user" ? message.source : undefined,
+          saved: true,
+          ...identity,
         });
+        // Anonymous persisted rows have only a snapshot position. This fallback
+        // never identifies an optimistic or replayed message by its text.
+        const entry = entries.at(-1);
+        if (entry?.kind === "user" && entries.length > previousLength && !entry.messageId && !entry.originId)
+          entries[entries.length - 1] = { ...entry, historyIndex };
+      }
     }
     for (const call of message.tool_calls)
       entries = appendEvent(entries, {
@@ -652,6 +735,7 @@ export function fromHistory({
         id: call.id,
         name: call.name,
         arguments: call.arguments,
+        ...identity,
       });
   }
   entries = entries.map((entry) =>

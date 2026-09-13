@@ -1,222 +1,141 @@
 import { useEffect, useEffectEvent, useRef, useState, type SetStateAction } from "react";
 import { insertDraft } from "../dictation/draft";
 import { request } from "../../api/client";
-import { pollActivity } from "../../api/activity";
-import { readEvents, text } from "../../api/events";
-import type { ActivityReply, Snapshot } from "../../types";
+import { text } from "../../api/events";
+import { MessageQueue, queueMessage, queuedMessageFailure } from "../../api/messages";
+import { subscribeEvents, type EventFrame } from "../../api/subscription";
+import { readBootstrap } from "../../api/bootstrap";
+import type { Bootstrap, Snapshot } from "../../types";
 import { useApproval } from "../approvals/useApproval";
-import {
-  appendActivity,
-  appendEvent,
-  fromHistory,
-  type Entry,
-} from "./transcript";
+import { applySnapshot, LiveSessions, pendingApprovals, type LiveTranscript } from "./liveTranscript";
 
-export function useChatRun(
-  token: string,
-  sessionId: string,
-  activityCursor: number,
-  initialBackgroundRunId: string,
-) {
-  const [entries, setEntries] = useState<Entry[]>([]);
+export function useChatRun(token: string, sessionId: string, receive: (frame: EventFrame) => void, acceptCredentials: (bootstrap: Bootstrap) => void) {
+  const latestToken = useRef(token);
+  latestToken.current = token;
+  const authenticated = !!token;
+  const cache = useRef(new LiveSessions());
+  const queue = useRef(new MessageQueue());
+  const [view, setView] = useState<LiveTranscript>({ entries: [] });
   const [prompt, setPromptState] = useState("");
   const latestPrompt = useRef("");
-  // Keep functional draft updates synchronous even between React renders, so a
-  // transcription insertion never replaces typing that occurred while waiting.
+  const draftRevision = useRef(0);
+  const selected = useRef(sessionId);
+  selected.current = sessionId;
+  const [status, setStatus] = useState("Connecting to local harness");
+  const [activityError, setActivityError] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [connectionVersion, setConnectionVersion] = useState(0);
+  const [suspended, setSuspended] = useState(false);
+  const stopSubscription = useRef<(() => void) | undefined>(undefined);
+  const [stopping, setStopping] = useState(false);
+  const cancelling = useRef(false);
+  const sending = useRef(false);
+  const approval = useApproval(token);
+  const needsApprovalSync = useRef(true);
+
   function setPrompt(update: SetStateAction<string>) {
+    draftRevision.current++;
     latestPrompt.current = typeof update === "function" ? update(latestPrompt.current) : update;
     setPromptState(latestPrompt.current);
   }
-  function insertDictation(text: string): string {
+  function insertDictation(value: string): string {
     let error = "";
     setPrompt((current) => {
-      const result = insertDraft(current, text, sessionId);
-      if (result.ok) return result.prompt;
+      const result = insertDraft(current, value, sessionId);
+      if (result.ok) {
+        error = queuedMessageFailure(result.prompt, sessionId);
+        return error ? current : result.prompt;
+      }
       error = result.error;
       return current;
     });
     return error;
   }
-  const [runId, setRunId] = useState("");
-  const [status, setStatus] = useState("Connecting to local harness");
-  const [background, setBackground] = useState({ sessionId: "", runId: "" });
-  const backgroundRunId =
-    background.sessionId === sessionId
-      ? background.runId
-      : initialBackgroundRunId;
-  const [activityError, setActivityError] = useState("");
-  const [pendingWakeups, setPendingWakeups] = useState(0);
-  const [transcriptVersion, setTranscriptVersion] = useState(0);
-  const [stopping, setStopping] = useState(false);
-  const stream = useRef<AbortController | null>(null);
-  const cancelling = useRef(false);
-  const approval = useApproval(token);
-
-  useEffect(() => () => stream.current?.abort(), []);
-
-  const receiveActivity = useEffectEvent((reply: ActivityReply) => {
-    if (reply.session_id !== sessionId) return;
-    setActivityError("");
-    setBackground({
-      sessionId,
-      runId: stream.current ? "" : reply.active_run_id,
-    });
-    setPendingWakeups(reply.pending_wakeups.length);
-    // Background runs are unattended. Their evidence never opens an approval modal.
-    setEntries((current) => appendActivity(current, reply));
-    if (!stream.current) {
-      const finished = reply.events.findLast(
-        (event) => event.event === "run_finished",
-      );
-      if (finished)
-        setStatus(
-          finished.status === "completed"
-            ? "Ready"
-            : `Background run ${text(finished, "status")}. Completed actions were not rolled back.`,
-        );
-      else if (backgroundRunId && !reply.active_run_id)
-        setStatus(
-          "Run no longer active. No final result event was recorded in this connection.",
-        );
+  const receiveFrame = useEffectEvent((frame: EventFrame) => {
+    receive(frame);
+    if ((frame.type !== "snapshot" && frame.type !== "event") || frame.session_id !== selected.current) return;
+    const previousRun = cache.current.get(frame.session_id).activeRun;
+    const next = cache.current.receive(frame);
+    setView(next);
+    const pending = pendingApprovals(next.activeRun)[0];
+    if (needsApprovalSync.current || frame.type === "snapshot" || ["approval", "approval_closed", "run_finished"].includes(frame.record.event)) {
+      if (pending) {
+        if (approval.pending?.approval_id !== pending.approval_id) approval.open(pending);
+      } else approval.close();
+      needsApprovalSync.current = false;
     }
+    if (frame.type === "event" && frame.record.event === "run_finished") {
+      const outcome = text(frame.record, "status");
+      setStatus(outcome === "completed" ? "Ready" : `Run ${outcome}. Completed actions were not rolled back.`);
+    } else if (frame.type === "snapshot" && previousRun && !next.activeRun && !frame.snapshot.active_run)
+      setStatus("Run is no longer active. Its final outcome was not received; saved history is reconciled.");
+    else setStatus(pending ? "Waiting for approval" : next.activeRun ? "Working" : next.entries.some((entry) => entry.queued) ? "Message queued" : "Ready");
   });
-  const activityFailed = useEffectEvent((message: string) =>
-    setActivityError(message),
-  );
+  const connectionStatus = useEffectEvent((state: "connecting" | "connected" | "reconnecting") => {
+    setConnected(state === "connected");
+    setActivityError(state === "reconnecting" ? "Live updates disconnected. Reconnecting automatically; accepted messages continue on the server." : "");
+    // A stale approval is not actionable until replay/snapshot has reconciled it.
+    if (state !== "connected") { needsApprovalSync.current = true; approval.close(); }
+  });
+  const credentialsRefreshed = useEffectEvent((bootstrap: Bootstrap) => {
+    latestToken.current = bootstrap.token;
+    acceptCredentials(bootstrap);
+  });
   useEffect(() => {
-    setBackground({ sessionId, runId: initialBackgroundRunId });
-    setActivityError("");
-    setPendingWakeups(0);
-    if (!token || !sessionId) return;
+    setView(cache.current.get(sessionId));
+    setConnected(false); needsApprovalSync.current = true; approval.close(); setActivityError("");
+    if (!authenticated || !sessionId || suspended) return;
     const controller = new AbortController();
-    void pollActivity({
-      token,
-      sessionId,
-      cursor: activityCursor,
-      signal: controller.signal,
-      receive: (reply) => receiveActivity(reply),
-      failed: (message) => activityFailed(message),
+    const stop = subscribeEvents({
+      token: latestToken.current, sessionId, position: cache.current.get(sessionId).position, url: window.location.href,
+      signal: controller.signal, receive: receiveFrame, status: connectionStatus,
+      refreshCredentials: readBootstrap, credentials: credentialsRefreshed,
     });
-    return () => controller.abort();
-  }, [token, sessionId, activityCursor, initialBackgroundRunId]);
+    stopSubscription.current = stop;
+    return () => { controller.abort(); stop(); };
+    // This transport owns automatic token rotation. Publishing a refreshed token
+    // to HTTP consumers must not tear down its new socket or reset its backoff.
+    // Explicit full connections still pause/restart through connectionVersion.
+  }, [authenticated, sessionId, connectionVersion, suspended]);
 
   function loadHistory(snapshot: Snapshot) {
-    setEntries(fromHistory(snapshot));
-    setTranscriptVersion((version) => version + 1);
-    approval.close();
-    setStatus("Ready");
+    const next = cache.current.set(snapshot.session_id, { ...applySnapshot(cache.current.get(snapshot.session_id), snapshot, false), position: undefined });
+    setView(next); approval.close(); setStatus("Ready");
   }
-
   async function submit(value: string) {
-    if (stream.current || backgroundRunId)
-      throw new Error("A run is already active.");
-    const controller = new AbortController();
-    stream.current = controller;
-    setStatus("Starting run");
-    let started = false;
-    let finished = false;
-    let activeId = "";
+    if (sending.current) return;
+    const failure = queuedMessageFailure(value, sessionId);
+    if (failure) throw new Error(failure);
+    sending.current = true;
+    const root = sessionId;
+    const revision = draftRevision.current;
+    const message = queue.current.prepare(root, value);
+    setView(cache.current.enqueue(message)); setStatus("Queueing message");
     try {
-      const response = await request(
-        "run",
-        token,
-        { session_id: sessionId, prompt: value },
-        controller.signal,
-      );
-      if (!response.body)
-        throw new Error("Streaming is unavailable in this browser.");
-      setPrompt("");
-      setEntries((current) =>
-        appendEvent(current, { event: "user_message", text: value }),
-      );
-      await readEvents(response.body, (event) => {
-        if (event.event === "run_started") {
-          started = true;
-          activeId = text(event, "run_id");
-          setRunId(activeId);
-          setStatus("Working");
-        }
-        if (event.event === "approval") {
-          approval.open(event);
-          setStatus("Waiting for approval");
-        }
-        if (event.event === "approval_closed") {
-          approval.close(text(event, "approval_id"));
-          setStatus("Working");
-        }
-        if (event.event === "run_finished") {
-          finished = true;
-          approval.close();
-          setStatus(
-            text(event, "status") === "completed"
-              ? "Ready"
-              : `Run ${text(event, "status")}. Completed actions were not rolled back.`,
-          );
-        }
-        setEntries((current) => appendEvent(current, event));
-      });
-      if (!finished)
-        throw new Error(
-          "Stream disconnected. Partial output is kept; completed actions were not rolled back. Reconnect before another prompt.",
-        );
-    } catch (cause) {
-      controller.abort();
-      if (started && !finished)
-        setEntries((current) =>
-          appendEvent(current, {
-            event: "client_disconnected",
-            run_id: activeId,
-          }),
-        );
-      setStatus(
-        started && !finished
-          ? "Disconnected / partial output retained"
-          : "Request failed",
-      );
-      throw cause;
-    } finally {
-      stream.current = null;
-      setRunId("");
-      approval.close();
-    }
+      await queueMessage(token, message);
+      queue.current.confirmed(message);
+      // HTTP acknowledgements may arrive after typing, navigation, or WS events.
+      if (selected.current === root) {
+        if (latestPrompt.current === value && draftRevision.current === revision) setPrompt("");
+        setStatus(cache.current.get(root).activeRun ? "Working" : "Message queued");
+      }
+    } catch {
+      setStatus("Message acknowledgement unconfirmed");
+      throw new Error("Message acknowledgement was not confirmed. Your draft is kept. Retry the same prompt to check its queued identity without starting a duplicate run.");
+    } finally { sending.current = false; }
   }
-
   async function cancel(id: string) {
     if (!id || cancelling.current) return;
-    cancelling.current = true;
-    setStopping(true);
-    setStatus("Cancelling and waiting for tools to stop");
-    try {
-      await request("cancel", token, { run_id: id });
-    } catch (cause) {
-      stream.current?.abort();
-      throw cause;
-    } finally {
-      cancelling.current = false;
-      setStopping(false);
-    }
+    cancelling.current = true; setStopping(true); setStatus("Cancelling and waiting for tools to stop");
+    try { await request("cancel", token, { run_id: id }); }
+    finally { cancelling.current = false; setStopping(false); }
   }
-
   return {
-    entries,
-    prompt,
-    setPrompt,
-    insertDictation,
-    runId: runId || backgroundRunId,
-    backgroundRunId,
-    activityError,
-    pendingWakeups,
-    transcriptVersion,
-    status:
-      runId || stopping
-        ? status
-        : backgroundRunId
-          ? "Run active outside this connection"
-          : status,
-    setStatus,
-    approval,
-    loadHistory,
-    submit,
-    cancel,
+    entries: view.entries, prompt, setPrompt, insertDictation, runId: view.activeRun?.id || "", connected,
+    backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,
+    transcriptVersion: 0, status: stopping ? "Cancelling and waiting for tools to stop" : status,
+    setStatus, approval, loadHistory, submit, cancel,
+    pause: () => { stopSubscription.current?.(); setSuspended(true); setConnected(false); },
+    reconnect: () => { setSuspended(false); setConnectionVersion((version) => version + 1); },
   };
 }
