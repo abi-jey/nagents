@@ -134,6 +134,7 @@ def create_app(
             yield
         finally:
             state.channels.closed = True
+            state.channels.management.shutdown()
             state.wakeups.shutdown()
             state.trash.shutdown()
 
@@ -336,7 +337,7 @@ def create_app(
     @app.post("/api/run")
     async def run(body: PromptInput) -> StreamingResponse:
         with state.idle():
-            await state.channels.store._transaction(lambda db: RoutingStore.root(db, body.session_id))
+            await state.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
             if body.session_id != state.selected_session_id:
                 raise HTTPException(409, "The selected session changed. Reconnect before submitting.")
             if not body.prompt.strip():

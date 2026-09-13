@@ -55,6 +55,8 @@ def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -
 
     # Preserve only channel/message identities, never envelopes or conversation
     # content. A late connector redelivery must not re-execute deleted history.
+    # ngn_web_session_owners is deliberately retained: deleting/recreating an ID
+    # cannot transfer its historical chat ownership.
     statements = [
         (
             "INSERT OR IGNORE INTO ngn_web_deleted_messages SELECT channel, message_id FROM ngn_web_inbox "

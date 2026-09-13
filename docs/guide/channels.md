@@ -218,19 +218,45 @@ Point the entry point at `my_connector:plugin` instead of the factory function.
 `load_channel` accepts either form. `writeOnly` marks credential fields for a
 host to store privately and redact from configuration responses.
 
-Two optional Channel methods support richer hosts:
+Three optional Channel methods support richer hosts:
 
 - `command(message)` recognizes an explicit transport command and returns a
   `ChannelCommand`, without doing I/O. The host decides which commands to handle
   and owns session routing and persistence.
 - `activity(event)` receives `ChannelActivity` start/stop notifications for typing
   or similar indicators. A connector must stop its keepalive tasks during close.
+- `on_event(event)` receives `ChannelExecutionEvent` through an optional, default
+  no-op hook. Phases are `run_started`, `tool_requested`, `tool_completed`,
+  `waiting_for_approval`, `completed`, `failed`, and `cancelled`. Connectors can
+  render compact status and sanitized argument summaries; raw reasoning, prompts
+  and tool-result bodies are excluded. This differs from the existing local
+  `Agent.listen(on_event=...)` raw-event observer. See the
+  [execution-event API](../api/channel-execution-events.md) for bounds and cleanup.
 
 The standalone `Agent.listen(session_id=...)` API keeps one shared identity. The
 [web host](ngn-web.md#channels-telegram-chats-and-session-binding) adds a routing
-policy: each external chat starts with a separate session and can explicitly
-reattach to an existing one. Source conversation IDs are therefore routing data,
+policy: each external chat starts with a fresh session and can reattach only to
+sessions permanently owned by its `(connection ID, conversation ID)`. Ownership
+survives detachment, connector replacement, restart, and Trash/Restore; outbound
+tools, typing, and execution notices follow that owner even when the chat selects
+another session with `/new`. Web follow-ups and scheduled work in historical
+owned roots remain scoped to the same chat; conflicted/trashed/missing roots do
+not produce indicators. No connected transport means no transport activity.
+Source IDs are routing data,
 not a universal instruction to create or merge core Agent sessions.
+
+The web host's `auto_reply` opt-in permits independent same-chat sends and channel
+discovery during genuine owned-session execution, including scheduled work.
+Shell, edits, channel actions, and configuration retain their approval gates.
+Unassigned web/admin roots alone can use approved `channel_configuration`
+discovery/status and `channel_configure` tools; the seven-field configuration is
+applied only after a successful originating turn, at idle. Discovery includes the
+installed schema, revision and `plugin_path`. Private `secrets` can carry a token
+explicitly supplied by the owner; normal model/transcript/approval surfaces remain.
+See [Configure Channels From Chat](channel-configuration.md) for the full contract.
+Telegram plugin 0.1.0a2 supports user-ID, username and private-chat admission
+filters; inspect the installed descriptor for those fields and any
+`execution_notifications` option before setting them.
 
 ## Feature-branch alpha releases
 

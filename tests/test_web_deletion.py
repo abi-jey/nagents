@@ -336,6 +336,7 @@ def test_binding_reattachment_and_deleted_channel_redelivery(tmp_path: Path) -> 
             await quiet(state)
             other = state.selected_session_id
             store = state.channels.store
+            await store.assign_owner(other, "fixture", "conversation")
 
             def envelope(id: str) -> str:
                 return json.dumps(

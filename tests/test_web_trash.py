@@ -347,14 +347,20 @@ def test_recovered_dangling_binding_or_queued_ack_cannot_replay_trash(tmp_path: 
                 dict(message_id="new", conversation_id="conversation", thread_id="", reply_to="", text="new input")
             )
             with pytest.raises(HTTPException) as error:
-                await state.channels.store.receive("fixture", envelope, state.selected_session_id, None)
-            assert error.value.status_code == 404
-            assert not await state.channels.store.has_pending()
-            assert await state.channels.store.claim_work() is None
-            with pytest.raises(HTTPException) as error:
                 await state.trash.restore(root, str(item["deletion_id"]))
             assert error.value.status_code == 409
-            assert await rows(state, "SELECT status FROM ngn_web_inbox") == [("queued",)]
+            await state.channels.store.receive("fixture", envelope, state.selected_session_id, None)
+            work = await state.channels.store.claim_work()
+            assert work is not None and work.session_id != root and work.message_id == "new"
+            assert "please send your request again" in work.acknowledgement
+            await state.channels.store.finish_work(work, "completed")
+            assert not await state.channels.store.has_pending()
+            assert await state.channels.store.claim_work() is None
+            assert await rows(state, "SELECT prompt, status FROM ngn_web_inbox WHERE message_id = 'queued'") == [
+                ("private", "failed")
+            ]
+            assert not await rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root)
+            assert await rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", root)
 
     asyncio.run(run())
 

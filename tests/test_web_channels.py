@@ -246,7 +246,9 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
     assert all(task.done() for task in app.state.web.channels.tasks)
 
 
-def test_chat_roots_main_reattachment_history_and_typing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_chat_roots_reject_unowned_main_and_keep_history_and_typing_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with site(tmp_path, monkeypatch) as app:
         app.configure()
         app.emit("first", thread="thread-a")
@@ -267,20 +269,27 @@ def test_chat_roots_main_reattachment_history_and_typing(tmp_path: Path, monkeyp
         ] == [(True, "thread-a"), (False, "thread-a")]
         app.emit("/session main")
         app.idle()
-        assert app.bindings()["chat-a"] == app.main
-        assert app.channels[0].deliveries[-1].text == f"Session: {app.main}"
-        app.submit("web origin")
+        assert app.bindings()["chat-a"] == bindings["chat-a"]
+        assert "Session not found" in app.channels[0].deliveries[-1].text
+        app.emit("/new")
+        app.idle()
+        owned = app.bindings()["chat-a"]
+        assert owned not in {*bindings.values(), app.main}
+        app.submit("web origin", owned)
         app.idle()
         assert app.channels[0].activities[-2:] == [
-            ChannelActivity("chat-a", True, session_id=app.main),
-            ChannelActivity("chat-a", False, session_id=app.main),
+            ChannelActivity("chat-a", True, session_id=owned),
+            ChannelActivity("chat-a", False, session_id=owned),
         ]
         app.emit("/session default")
         app.idle()
         assert app.bindings()["chat-a"] == bindings["chat-a"]
         app.emit("/sessions")
         app.idle()
-        assert bindings["chat-b"] in app.channels[0].deliveries[-1].text
+        assert bindings["chat-a"] in app.channels[0].deliveries[-1].text
+        assert owned in app.channels[0].deliveries[-1].text
+        assert bindings["chat-b"] not in app.channels[0].deliveries[-1].text
+        assert app.main not in app.channels[0].deliveries[-1].text
 
 
 def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,7 +312,7 @@ def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkey
         app.emit("pending", id="pending-id")
         before = app.bindings()["chat-a"]
         app.emit("/session main", id="attach-id")
-        assert app.bindings()["chat-a"] == app.main
+        assert app.bindings()["chat-a"] == before
         before_new = app.roots()
         app.emit("/new New title", id="new-id")
         new = app.bindings()["chat-a"]
@@ -577,7 +586,7 @@ def test_disconnect_denies_pending_approval_without_cancelling_run(
         assert app.history(app.main)["history"][-1]["content"] == "answer"  # type: ignore[index]
 
 
-def test_busy_selection_does_not_reroute_model_and_typing_stops_after_reattach(
+def test_busy_selection_does_not_reroute_model_or_stop_owner_typing_after_reattach(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
@@ -597,9 +606,9 @@ def test_busy_selection_does_not_reroute_model_and_typing_stops_after_reattach(
         selected = app.client.post("/api/sessions/resume", headers=app.headers, json={"session_id": root})
         assert selected.status_code == 200 and app.state.selected_session_id == root
         assert app.state.harness.session_id == root
-        app.emit("/session main")
-        assert app.bindings()["chat-a"] == app.main
-        assert app.channels[0].activities[-1] == ChannelActivity("chat-a", False, "source-thread", root)
+        app.emit("/new")
+        assert app.bindings()["chat-a"] not in {root, app.main}
+        assert app.channels[0].activities == [ChannelActivity("chat-a", True, "source-thread", root)]
         assert app.state.active is run and not run.task.done()
         assert app.client.post("/api/cancel", headers=app.headers, json={"run_id": run.id}).status_code == 200
         app.idle()
@@ -609,55 +618,66 @@ def test_busy_selection_does_not_reroute_model_and_typing_stops_after_reattach(
 
 
 @pytest.mark.parametrize("origin", ["web", "other-connector"])
-def test_activity_tracks_all_current_bindings_and_reattachment_during_work(
+def test_activity_tracks_only_owner_binding_and_reattachment_during_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origin: str
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
         app.configure()
         for chat in ("chat-a", "chat-b"):
-            app.emit("/session main", chat)
+            app.emit("/session", chat)
         app.idle()
         app.configure("other")
         other = app.state.channels.channels["other"]
         assert isinstance(other, FakeChannel)
         assert app.client.portal is not None
-        app.client.portal.call(other.emit, ChannelMessage("attach", "other-room", "sender", "/session main"))
+        app.client.portal.call(other.emit, ChannelMessage("attach", "other-room", "sender", "/session"))
         app.idle()
+        bot = app.channels[0]
+        active_channel = bot if origin == "web" else other
+        inactive_channel = other if origin == "web" else bot
+        room = "chat-a" if origin == "web" else "other-room"
+        root = app.bindings()[room]
         if origin == "web":
-            app.submit("hold")
+            app.submit("hold", root)
         else:
             app.client.portal.call(other.emit, ChannelMessage("work", "other-room", "sender", "hold"))
 
         async def started() -> None:
             async with asyncio.timeout(5):
-                while len(app.channels[0].activities) < 2:
+                while not active_channel.activities:
                     await asyncio.sleep(0.01)
 
         app.client.portal.call(started)
         run = app.state.active
         assert run is not None
-        bot = app.channels[0]
-        assert bot.activities == [ChannelActivity(chat, True, session_id=app.main) for chat in ("chat-a", "chat-b")]
-        assert other.activities == [ChannelActivity("other-room", True, session_id=app.main)]
-        app.emit("/session default", "chat-a")
-        detached_root = app.bindings()["chat-a"]
-        assert bot.activities[-1] == ChannelActivity("chat-a", False, session_id=app.main)
+        assert active_channel.activities == [ChannelActivity(room, True, session_id=root)]
+        assert not inactive_channel.activities
+        unrelated = app.bindings()["chat-b"]
+        app.emit(f"/session {root}", "chat-b")
+        assert app.bindings()["chat-b"] == unrelated
+
+        def route(text: str, id: str) -> None:
+            assert app.client.portal is not None
+            app.client.portal.call(active_channel.emit, ChannelMessage(id, room, "sender", text))
+
+        route("/new", "detach")
+        detached_root = app.bindings()[room]
+        assert active_channel.activities == [ChannelActivity(room, True, session_id=root)]
         assert app.state.active is run and not run.task.done()
-        app.emit("/session main", "chat-a", id="reattach")
-        assert bot.activities[-1] == ChannelActivity("chat-a", True, session_id=app.main)
-        unchanged = list(bot.activities)
-        app.emit("/session main", "chat-a", id="reattach")
+        route(f"/session {root}", "reattach")
+        assert active_channel.activities[-1] == ChannelActivity(room, True, session_id=root)
+        unchanged = list(active_channel.activities)
+        route(f"/session {root}", "reattach")
         # Late cleanup for a different session cannot stop this session's indicator.
         app.client.portal.call(app.state.channels.activity, detached_root, False)
-        assert bot.activities == unchanged
-        app.emit("/session main", "chat-c")
-        assert bot.activities[-1] == ChannelActivity("chat-c", True, session_id=app.main)
+        assert active_channel.activities == unchanged
+        app.emit(f"/session {root}", "chat-c")
+        assert active_channel.activities == unchanged
+        assert not inactive_channel.activities
         assert app.client.post("/api/cancel", headers=app.headers, json={"run_id": run.id}).status_code == 200
         app.idle()
-        assert bot.activities[-3:] == [
-            ChannelActivity(chat, False, session_id=app.main) for chat in ("chat-b", "chat-a", "chat-c")
-        ]
-        assert other.activities[-1] == ChannelActivity("other-room", False, session_id=app.main)
+        assert active_channel.activities == [ChannelActivity(room, active, session_id=root) for active in (True, False)]
+        assert not inactive_channel.activities
         assert not app.state.channels.activities.current
 
 
@@ -668,8 +688,9 @@ def test_web_activity_control_failure_does_not_fail_model_or_expose_credentials(
     monkeypatch.setattr("nagents.channels.runtime.ACTIVITY_TIMEOUT", 0.01)
     with site(tmp_path, monkeypatch) as app:
         app.configure()
-        app.emit("/session main")
+        app.emit("/session")
         app.idle()
+        root = app.bindings()["chat-a"]
         controls = 0
 
         async def broken_indicator(channel: FakeChannel, event: ChannelActivity) -> None:
@@ -686,16 +707,16 @@ def test_web_activity_control_failure_does_not_fail_model_or_expose_credentials(
             finally:
                 controls -= 1
 
-        async def broken_bindings() -> list[dict[str, str]]:
+        async def broken_bindings(session_id: str) -> list[dict[str, str]]:
             raise RuntimeError("SECRET-activity-control")
 
         if failure == "bindings":
-            monkeypatch.setattr(app.state.channels.store, "bindings", broken_bindings)
+            monkeypatch.setattr(app.state.channels.store, "activity_bindings", broken_bindings)
         else:
             monkeypatch.setattr(FakeChannel, "activity", broken_indicator)
-        app.submit("finish normally")
+        app.submit("finish normally", root)
         app.idle()
-        snapshot = app.history(app.main)
+        snapshot = app.history(root)
         assert cast("list[dict[str, object]]", snapshot["history"])[-1]["content"] == "answer"
         assert len(app.providers[0].requests) == 1 and controls == 0
         assert "SECRET-activity-control" not in json.dumps(snapshot) + caplog.text

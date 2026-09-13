@@ -94,6 +94,7 @@ nav:
       - Skills: guide/skills.md
       - Sessions: guide/sessions.md
       - Channels and Listening: guide/channels.md
+      - Channel Configuration by Chat: guide/channel-configuration.md
       - Compaction: guide/compaction.md
       - Events: guide/events.md
       - Batch Processing: guide/batch.md
@@ -108,6 +109,7 @@ nav:
       - Events: api/events.md
       - Session: api/session.md
       - Channels: api/channels.md
+      - Channel Execution Events: api/channel-execution-events.md
       - Tools: api/tools.md
       - Skills: api/skills.md
       - Batch: api/batch.md

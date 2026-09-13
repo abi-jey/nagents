@@ -38,6 +38,9 @@ def target_root(app: Site) -> str:
     response = app.client.post("/api/sessions/new", headers=app.headers, json={})
     assert response.status_code == 200
     target = str(response.json()["session_id"])
+    # Ordering tests switch among roots already assigned to this same chat.
+    assert app.client.portal is not None
+    app.client.portal.call(app.state.channels.store.assign_owner, target, "fixture", "chat")
     response = app.client.post("/api/sessions/resume", headers=app.headers, json={"session_id": app.main})
     assert response.status_code == 200
     return target
@@ -158,7 +161,6 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
         if blocker == "A":
             assert channel.activities == [
                 ChannelActivity("chat", True, "thread-S", old),
-                ChannelActivity("chat", False, "thread-S", old),
             ]
         deliver(app, ChannelMessage("C", "chat", "sender", "C", "thread-T", "reply-C"))
         assert journal(app) == {
@@ -225,6 +227,8 @@ def test_admission_switch_and_frozen_A_C_targets_survive_restart_before_command_
         assert journal(app) == {id: {**row, "status": "completed"} for id, row in before.items()}
         assert app.channels[0].deliveries == [ChannelSend("chat", f"Session: {target}", "command-thread", "reply-B")]
         assert app.channels[0].activities == [
+            ChannelActivity("chat", True, "thread-S", old),
+            ChannelActivity("chat", False, "thread-S", old),
             ChannelActivity("chat", True, "thread-T", target),
             ChannelActivity("chat", False, "thread-T", target),
         ]

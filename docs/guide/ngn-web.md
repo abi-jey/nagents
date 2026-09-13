@@ -177,8 +177,9 @@ deleting it forever:
 
 1. In **Channels**, change any connection whose **main session** is this root to
    another existing root and save. Disabled connections also count.
-2. In each attached channel conversation, use `/sessions`, then `/session ID` to
-   attach another root. If this was its default root, use `/session default ID`
+2. In each attached channel conversation, use `/new`, or `/sessions` followed by
+   `/session ID`, to attach another root owned by **that same chat**. If this was
+   its default root, use `/session default ID`
    to move that default too. This command changes the default reference; the
    current attachment changes through `/session ID`.
 3. Let already accepted messages and command replies finish, then retry deletion.
@@ -188,8 +189,9 @@ deleting it forever:
 Soft deletion changes active-list membership while retaining the root's history
 and related stored input. Restore atomically reinstates that membership and title.
 Permanent purge removes the root's content while retaining content-free
-channel/message deduplication keys, so late channel redelivery cannot execute
-deleted work again. Workspace files, unrelated roots and child histories, saved
+channel/message deduplication keys and historical session-owner identities, so
+late channel redelivery cannot execute deleted work or transfer a reused session
+ID to another chat. Workspace files, unrelated roots and child histories, saved
 settings, channel configuration, and private credentials are preserved. Deletion
 does not silently detach channels or discard pending background work.
 
@@ -396,7 +398,39 @@ returned to the browser; a configured indicator lets you keep an existing value
 without re-entering it. Choose an existing **main session** when configuring a
 connection, then enable it to start receiving events on the server.
 
-The web host creates a separate persistent session for each connector/chat pair.
+From an **unassigned web/admin root**, the agent can also configure a connector
+through approved tools. `channel_configuration(operation="discover")` returns
+installed schemas, private field names, saved connection summaries, the current
+`revision`, and host-controlled `plugin_path`. Use that discovery result rather
+than assuming a separate Python process has the host's plugin import path.
+
+`channel_configure(connection_id, configuration)` accepts exactly seven fields:
+`revision`, `plugin`, `enabled`, `auto_reply`, `config`, `secrets`, and
+`main_session_id`. The approved request is queued, then applied at idle only after
+its originating turn succeeds. Failed/cancelled turns and restart discard pending
+requests; stale revisions never overwrite a competing change. Use
+`channel_configuration(operation="status")` on a later eligible turn to inspect
+the request result. `APPLIED` means saved; connector open status may still be `error`.
+Chat-owned web follow-ups, channel-origin turns, and scheduled work cannot use
+these management tools. See [Configure Channels From Chat](channel-configuration.md).
+
+Prefer environment credentials or the private Channels form. Owner-supplied tokens
+in a trusted admin conversation are also supported through the configuration
+tool's private `secrets` parameter. They still pass through normal model,
+transcript, and approval surfaces; those surfaces are not a credential scrubber.
+Do not put tokens in public plugin `config`, source, or examples.
+
+Inspect the installed Telegram descriptor before configuring its options.
+Plugin 0.1.0a2 supports `allowed_usernames`, `allowed_user_ids`, and
+`private_chats_only`, alongside chat filters. Notification-enabled versions may
+also advertise `execution_notifications`; older schemas reject unknown fields.
+
+The web host creates a fresh persistent session for each new connector/chat pair;
+it never starts a new chat in the configured main session. A session's first
+assigned `(connection ID, conversation ID)` is permanent. Changing current/default
+attachments, disconnecting, disabling, deleting/readding a connector, restarting,
+or using Trash/Restore does not clear ownership. One chat can retain many sessions;
+one session cannot move to another chat or connection.
 Telegram messages appear as ordinary user messages with source information, and
 new chat sessions appear in the sidebar. Selecting another session in the browser
 does not move a Telegram chat's binding.
@@ -405,27 +439,71 @@ Telegram's host commands allow an explicit change:
 
 | Command | Purpose |
 | --- | --- |
-| `/sessions` | List available sessions. |
+| `/sessions` | List only this chat's owned, active sessions; never unowned admin roots or another chat's roots. |
 | `/session` | Report the chat's current session. |
-| `/session <session-id>` | Attach this chat to an existing session. |
-| `/session main` | Attach to the connection's configured main session. |
-| `/session default` | Return to this chat's default session. |
-| `/session default <session-id>` | Change this chat's persisted default without changing its current attachment. |
-| `/new <title>` | Create and attach a new session. |
+| `/session <session-id>` | Attach to an existing session owned by this chat. |
+| `/session main` | Attach to the configured main session only if this chat already owns it. |
+| `/session default` | Return to this chat's owned default session. |
+| `/session default <session-id>` | Set an already-owned default without changing the current attachment. |
+| `/new <title>` | Create and attach a new chat-owned session; old ownership remains. |
 
 Commands are handled by the host rather than sent to a model as ordinary work.
 Their acknowledgements return to the originating chat. Pending messages retain
 their admitted session target when a later command changes the binding.
 
-The agent chooses outbound channel sends and actions through tools. A final model
-response is not broadcast to every attached chat. Typing activity is a separate
-transport indicator while a bound session is working; Telegram refreshes it while
-active and lets it expire after completion/cancellation.
+Unowned, foreign, hidden, and unknown session targets receive the same rejection;
+commands do not disclose whether those IDs exist. Only trusted local management
+can make a first assignment of an unowned root, and it cannot transfer an owner.
 
-Chat separation organizes context; it does not add a multi-user authorization
-system. Configure the connector's allowed chat IDs for the contacts intended to
-use this agent. An authorized session-switch command can join an existing shared
-conversation deliberately.
+For a chat-owned execution root, `channel_send` is restricted to its owner's
+connection and destination. `channel_action` additionally requires an advertised
+string `destination` parameter marked required, with that same destination.
+Destination-less actions are denied. These checks still apply to web-origin
+follow-ups and survive browser selection changes; existing executor/profile and
+approval checks remain. Connectors are trusted Python and must honor the declared
+destination rather than reinterpret it as a different chat.
+
+Opt in to `auto_reply: true` to permit independent messages and channel discovery
+from genuine executions of owned sessions. This includes incoming channel turns,
+web follow-ups, and scheduled work even after the chat selects `/new`. It still
+requires the permanently owned connection/destination and a live enabled connector;
+it does not waive approval for shell, edits, configuration changes, or channel
+actions. The model must call a send tool: final response text is not automatically
+forwarded. Omitting the option preserves an existing same-plugin policy; new or
+replacement connections default to false.
+
+Host acknowledgements and typing indicators are scoped to the owning chat, never
+broadcast across roots or chats. Typing follows the executing session's permanent
+owner while that root remains live, **not** the chat's current/default attachment.
+An older owned root therefore still types during web follow-ups or scheduled work
+after `/new`; conflicted/trashed roots and removed/disabled transports do not.
+Pending work retains its admitted root; a later same-chat attachment change does
+not redirect it. Unowned admin roots retain
+explicit outbound tools, but cannot be adopted by remote session commands.
+
+Connectors can implement `Channel.on_event(ChannelExecutionEvent)` for compact
+start/tool/approval/terminal notices to the same permanent owner. Its phases are
+`run_started`, `tool_requested`, `tool_completed`, `waiting_for_approval`,
+`completed`, `failed`, and `cancelled`. Tool notices contain bounded sanitized
+argument summaries and status, not raw reasoning, prompts, or tool-result bodies.
+This is separate from model-authored messages and from typing; inspect the
+connector's notification option. See the [execution-event API](../api/channel-execution-events.md).
+
+On upgrade, ownership is reconstructed from both current/default bindings and
+accepted channel inbox provenance, including historical detached sessions. Mixed
+or incomplete historical ownership is quarantined: queued unsafe work is retained
+as failed, and no model or old acknowledgement is replayed from it. An affected
+chat's next ordinary input gets a fresh owned root and a fixed recovery notice instead of
+loading old history or executing that input; the user can then resend. Other chats
+continue normally. Legacy queued control replies that might contain global
+session catalogs are replaced with a fixed notice; catalogs are also rebuilt for
+the owning chat before delivery. Administrative history remains
+inspectable; clear current/default references before deleting an old root.
+
+Configure the connector's allowed chat IDs for the contacts intended to use this
+agent. Permanent chat ownership does not change the trusted local web/API token's
+administrative access or the deliberately shared semantics of standalone
+`Agent.listen()` applications.
 
 ### Dynamically Installed Connector Packages
 

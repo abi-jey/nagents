@@ -23,8 +23,11 @@ from typing import TYPE_CHECKING
 from typing import ParamSpec
 from typing import TypeVar
 from typing import cast
+from uuid import uuid4
 
 from nagents.events import ErrorEvent
+from nagents.events import ToolCallEvent
+from nagents.events import ToolResultEvent
 from nagents.extensions import AgentPlugin
 from nagents.types import Message
 
@@ -38,6 +41,7 @@ from .types import ChannelAttachment
 from .types import ChannelDelivery
 from .types import ChannelError
 from .types import ChannelEvent
+from .types import ChannelExecutionEvent
 from .types import ChannelMessage
 from .types import ChannelSend
 from .types import discard_event
@@ -53,11 +57,13 @@ if TYPE_CHECKING:
     from nagents.types import ToolDefinition
 
     from .types import ChannelEventHandler
+    from .types import ChannelExecutionPhase
     from .types import ChannelValue
 
 MAX_PAYLOAD_BYTES = 1024 * 1024
 MAX_TEXT_LENGTH = 256 * 1024
 ACTIVITY_TIMEOUT = 2.0
+EXECUTION_EVENT_TIMEOUT = 2.0
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z")
 _OWNERS: set[tuple[Path, str]] = set()
 _OWNER_LOCK = Lock()
@@ -302,6 +308,49 @@ async def _activity(channel: Channel, event: ChannelActivity) -> None:
         pass
 
 
+async def dispatch_channel_execution_event(
+    channel: Channel, event: ChannelExecutionEvent, *, timeout: float = EXECUTION_EVENT_TIMEOUT
+) -> None:
+    """Attempt one optional notice, with no retries or exposed connector errors.
+
+    Await this helper inside the host's owned execution/cleanup task. An owning
+    task's cancellation joins the bounded attempt before propagating, including
+    repeated cancellation. Connector failures, timeouts and self-cancellation
+    are isolated. No background queue or unowned tasks are retained. Connectors
+    must cooperate with asyncio cancellation (as with Channel.activity).
+
+    Routing is host-owned: this does not authorize a session or discover a
+    destination. Invalid/missing routes are skipped rather than guessed. The
+    host must finish dispatches before closing the connector.
+    """
+
+    async def dispatch() -> None:
+        try:
+            _text(event.conversation_id, "execution conversation")
+            _text(event.thread_id, "execution thread", blank=True)
+            _text(event.session_id, "execution session")
+            for name in ("run_id", "activation_id", "call_id", "tool_name", "message_id"):
+                _text(getattr(event, name), name, blank=True)
+            if not math.isfinite(timeout) or timeout <= 0:
+                return
+            # Frozen events can still contain a mutable dict. Detach and sanitize
+            # again immediately before handing data to connector code.
+            notice = replace(event)
+            async with asyncio.timeout(timeout):
+                await channel.on_event(notice)
+                # Deliver a connector's task.cancel() even if its hook returned
+                # without awaiting, so that cancellation is isolated here too.
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            # Owner cancellation is shielded by finish_on_cancel; cancellation
+            # here originates in the optional connector, not the model task.
+            pass
+        except Exception:
+            pass
+
+    await finish_on_cancel(dispatch())
+
+
 def _inbound_activity(envelope: str, session_id: str) -> ChannelActivity:
     # Older/application-written inbox rows need not carry routing metadata.
     # Missing optional typing information cannot change their execution policy.
@@ -329,6 +378,14 @@ def _tool_arguments(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]
 
 
 class ChannelRuntime:
+    """Shared-listener execution and the existing connector-provided tool catalog.
+
+    All conversations share one serialized session. Execution notices go only to
+    the current inbox item's connector/conversation/thread, even when a tool
+    explicitly sends elsewhere. The local raw-event observer retains its own
+    contract; connector hooks are optional, sanitized and failure-isolated.
+    """
+
     def __init__(
         self,
         agent: Agent,
@@ -477,7 +534,18 @@ class ChannelRuntime:
                         item = await self._store.claim()
                 channel = self._routes[item.channel].channel
                 activity = _inbound_activity(item.envelope, self.session_id)
+                notice = ChannelExecutionEvent(
+                    conversation_id=activity.conversation_id,
+                    thread_id=activity.thread_id,
+                    session_id=self.session_id,
+                    phase="run_started",
+                    run_id=f"channel-run-{uuid4().hex}",
+                    activation_id=f"channel-inbox:{item.id}",
+                    message_id=item.message_id,
+                )
+                outcome: ChannelExecutionPhase = "failed"
                 try:
+                    await dispatch_channel_execution_event(channel, notice, timeout=EXECUTION_EVENT_TIMEOUT)
                     await _activity(channel, activity)
                     message = Message(role="user", content=_INBOUND_PREFIX + item.envelope)
                     async with aclosing(
@@ -485,27 +553,59 @@ class ChannelRuntime:
                     ) as events:
                         async for event in events:
                             failed = isinstance(event, ErrorEvent)
+                            if isinstance(event, ToolCallEvent):
+                                await dispatch_channel_execution_event(
+                                    channel,
+                                    replace(
+                                        notice,
+                                        phase="tool_requested",
+                                        call_id=event.id,
+                                        tool_name=event.name,
+                                        tool_arguments=event.arguments,
+                                    ),
+                                    timeout=EXECUTION_EVENT_TIMEOUT,
+                                )
+                            elif isinstance(event, ToolResultEvent):
+                                await dispatch_channel_execution_event(
+                                    channel,
+                                    replace(
+                                        notice,
+                                        phase="tool_completed",
+                                        call_id=event.id,
+                                        tool_name=event.name,
+                                        tool_failed=event.error is not None,
+                                    ),
+                                    timeout=EXECUTION_EVENT_TIMEOUT,
+                                )
                             await on_event(
                                 ChannelEvent(self.session_id, item.channel, item.message_id, deepcopy(event))
                             )
                             if failed:
                                 raise ChannelError("Channel agent execution failed; no automatic turn replay")
+                    await self._store.finish(item, "completed")
+                    outcome = "completed"
                 except asyncio.CancelledError:
+                    outcome = "cancelled"
                     await self._store.finish(item, "interrupted")
                     raise
                 except BaseException:
                     await self._store.finish(item, "failed")
                     raise
-                else:
-                    await self._store.finish(item, "completed")
                 finally:
                     try:
-                        # Stop even if start timed out after a remote side effect,
-                        # and finish this bounded control before closing connectors.
-                        await finish_on_cancel(_activity(channel, replace(activity, active=False)))
+                        # Completion is emitted only after generator/plugin cleanup
+                        # and inbox finalization, never merely on a raw DoneEvent.
+                        await dispatch_channel_execution_event(
+                            channel, replace(notice, phase=outcome), timeout=EXECUTION_EVENT_TIMEOUT
+                        )
                     finally:
-                        async with self._condition:
-                            self._condition.notify_all()
+                        try:
+                            # Stop even if start timed out after a remote side effect,
+                            # and join this bounded control before closing connectors.
+                            await finish_on_cancel(_activity(channel, replace(activity, active=False)))
+                        finally:
+                            async with self._condition:
+                                self._condition.notify_all()
         finally:
             if self.agent._channel_execution_task is task:
                 self.agent._channel_execution_task = None

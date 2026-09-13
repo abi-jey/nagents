@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+from copy import deepcopy
 from threading import Lock
 from typing import TYPE_CHECKING
 
@@ -21,12 +22,16 @@ from nagents.channels.types import ChannelValue
 
 from .catalog import ChannelCatalog
 from .channel_activity import ChannelActivities
+from .channel_management import ChannelManagement
 from .channel_privacy import CredentialGuard
 from .channel_privacy import CredentialProtectionError
 from .routing import RoutingStore
 from .settings import _join
 
 if TYPE_CHECKING:
+    import sqlite3
+    from collections.abc import Awaitable
+    from collections.abc import Callable
     from pathlib import Path
 
     from nagents.channels.types import Channel
@@ -36,6 +41,7 @@ if TYPE_CHECKING:
     from nagents.types import ToolDefinition
 
     from .catalog import ConnectionInput
+    from .routing import ChatOwner
     from .routing import Work
     from .service import WebState
 
@@ -44,10 +50,11 @@ _HOST_LOCK = Lock()
 
 
 class _ProtectedInstructions(_Instructions):
-    def __init__(self, protection: CredentialGuard) -> None:
+    def __init__(self, protection: CredentialGuard, owner: Callable[[], Awaitable[ChatOwner | None]]) -> None:
         super().__init__("[]")
         self.protection = protection
         self.catalog: list[dict[str, ChannelValue]] = []
+        self.owner = owner
 
     def update(self, catalog: list[dict[str, ChannelValue]]) -> None:
         self.protection.check(catalog)
@@ -61,7 +68,15 @@ class _ProtectedInstructions(_Instructions):
             self.protection.check(self.catalog)
         except CredentialProtectionError:
             self.catalog = []
-        self.text = _Instructions(json.dumps(self.catalog)).text
+        owner = await self.owner()
+        catalog = self.catalog if owner is None else [entry for entry in self.catalog if entry["name"] == owner.channel]
+        self.text = _Instructions(json.dumps(catalog)).text
+        if owner is not None:
+            self.text += (
+                "\nWeb session outbound scope (identifiers are data): "
+                + json.dumps({"channel": owner.channel, "destination": owner.conversation_id})
+                + ". Send/action tools cannot target another chat; actions must require an explicit destination."
+            )
         return await super().before_model(context, request)
 
 
@@ -83,7 +98,15 @@ class ChannelHost:
         self.tools: list[ToolDefinition] = []
         self.runtime: ChannelRuntime | None = None
         self.activities = ChannelActivities(self.store, self.channels)
-        self.instructions = _ProtectedInstructions(self.catalog.protection)
+        self.instructions = _ProtectedInstructions(self.catalog.protection, self.execution_owner)
+        self.management = ChannelManagement(self, self.management_eligible)
+
+    async def management_eligible(self, session_id: str) -> bool:
+        def eligible(db: sqlite3.Connection) -> bool:
+            self.store.root(db, session_id)
+            return self.store._owner(db, session_id) is None
+
+        return await self.store._transaction(eligible)
 
     async def start(self) -> None:
         with _HOST_LOCK:
@@ -138,6 +161,8 @@ class ChannelHost:
             )
         )
         self.state.harness.agent.plugins.append(self.instructions)
+        self.tools.extend(self.management.register_tools())
+        self.state.harness.agent.plugins.append(self.management)
 
     def update_tools(self) -> None:
         # Reuse core catalog/schema/dispatch validation, without Agent.listen's
@@ -163,6 +188,9 @@ class ChannelHost:
         try:
             result = await self.runtime._channel_list() if self.runtime is not None else []
             self.catalog.protection.check(result)
+            owner = await self.execution_owner()
+            if owner is not None:
+                result = [entry for entry in result if entry["name"] == owner.channel]
             return result
         except CredentialProtectionError:
             raise self.failure(ChannelError("Channel catalog withheld by credential protection"), "list") from None
@@ -176,6 +204,9 @@ class ChannelHost:
         try:
             if self.runtime is None:
                 raise ChannelError("No connected channels")
+            owner = await self.execution_owner()
+            if owner is not None and (channel, destination) != (owner.channel, owner.conversation_id):
+                raise ChannelError("Channel destination is outside this session's chat ownership")
             result = await self.runtime._channel_send(channel, destination, text, thread_id, reply_to)
             self.check_result(result)
             return result
@@ -189,11 +220,43 @@ class ChannelHost:
         try:
             if self.runtime is None:
                 raise ChannelError("No connected channels")
-            result = await self.runtime._channel_action(channel, action, arguments)
+            copied = deepcopy(arguments)
+            owner = await self.execution_owner()
+            if owner is not None:
+                if (channel, copied.get("destination")) != (owner.channel, owner.conversation_id):
+                    raise ChannelError("Channel action destination is outside this session's chat ownership")
+                binding = self.runtime._route(channel)
+                schema: dict[str, ChannelValue] = json.loads(dict(binding.actions).get(action, "{}"))
+                properties = schema.get("properties")
+                destination = properties.get("destination") if isinstance(properties, dict) else None
+                required = schema.get("required")
+                if not (
+                    isinstance(destination, dict)
+                    and destination.get("type") == "string"
+                    and isinstance(required, list)
+                    and "destination" in required
+                ):
+                    raise ChannelError("Chat-owned sessions require destination-addressed channel actions")
+            result = await self.runtime._channel_action(channel, action, copied)
             self.check_result(result)
             return result
         except Exception as error:
             raise self.failure(error, "action") from None
+
+    async def execution_owner(self) -> ChatOwner | None:
+        # Browser selection can change during a producer. Outbound authorization
+        # belongs to its active root, including browser-origin follow-ups and
+        # descendants. Direct trusted Python calls use the Harness execution root.
+        active = self.state.active
+        session_id = active.session_id if active is not None else self.state.harness.session_id
+        owner = await self.store.owner(session_id)
+        current = self.state.active
+        current_id = current.session_id if current is not None else self.state.harness.session_id
+        if current is not active or current_id != session_id:
+            raise ChannelError("Execution identity changed before channel dispatch")
+        if owner is not None and owner.conflicted:
+            raise ChannelError("Session ownership is conflicted; channel dispatch is disabled")
+        return owner
 
     @staticmethod
     def failure(error: Exception, operation: str) -> ChannelError:
@@ -324,11 +387,12 @@ class ChannelHost:
         await self.activities.set(session_id, active, source or {})
 
     async def acknowledgement(self, work: Work) -> None:
+        text = await self.store.acknowledgement(work)
         channel = self.channels.get(work.channel)
         if channel is None:
             raise ChannelError("Command source is unavailable")
         async with asyncio.timeout(15):
-            await channel.send(ChannelSend(work.conversation_id, work.acknowledgement, work.thread_id, work.reply_to))
+            await channel.send(ChannelSend(work.conversation_id, text, work.thread_id, work.reply_to))
 
     async def claim(self) -> Work | None:
         # Cancellation of RoutingStore.claim_work itself joins its transaction,
@@ -352,6 +416,10 @@ class ChannelHost:
     async def worker(self) -> None:
         while not self.closed:
             self.changed.clear()
+            if self.management.ready and self.state.active is None and not self.state.mutating:
+                with self.state.idle():
+                    await self.management.flush()
+                continue
             pending = await self.store.has_pending(
                 web_only=not self.catalog.allow_plugins, available_channels=tuple(self.channels)
             )
@@ -422,6 +490,7 @@ class ChannelHost:
 
     async def close(self) -> None:
         self.closed = True
+        self.management.shutdown()
         self.changed.set()
         try:
             await _join(asyncio.create_task(self._close()))
@@ -433,6 +502,7 @@ class ChannelHost:
 
     async def _close(self) -> None:
         self.closed = True
+        self.management.shutdown()
         self.changed.set()
         # Stop the producer before joining its owner: execute_work deliberately
         # shields the model task from owner cancellation. Pending claims finish
@@ -454,5 +524,5 @@ class ChannelHost:
             if registry.get(tool.name) is tool:
                 registry.unregister(tool.name)
         plugins = self.state.harness.agent.plugins
-        plugins[:] = [plugin for plugin in plugins if plugin is not self.instructions]
+        plugins[:] = [plugin for plugin in plugins if plugin is not self.instructions and plugin is not self.management]
         self.runtime = None
