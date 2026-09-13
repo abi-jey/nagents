@@ -36,7 +36,9 @@ def test_portable_directory_reads_unicode_and_multiple_native_read_chunks(tmp_pa
         skills = await source.discover()
         assert len(skills) == 1
         assert skills[0].location == str(path)
-        assert await source.load(skills[0]) == path.read_text(encoding="utf-8")
+        # The loader preserves file text; read_text() would normalize the CRLF
+        # bytes produced by Windows text writes and hide that distinction.
+        assert await source.load(skills[0]) == path.read_bytes().decode("utf-8")
         assert not source.diagnostics
 
     asyncio.run(drive())
