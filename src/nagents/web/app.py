@@ -273,7 +273,12 @@ def create_app(
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:
         with state.idle():
-            await state.settings.change(body.revision, body.values)
+            await state.settings.change(
+                body.revision,
+                body.values,
+                api_key=body.api_key,
+                clear_api_key=body.clear_api_key,
+            )
             return state.settings.snapshot()
 
     @app.post("/api/settings/reset")

@@ -46,6 +46,7 @@ from .types import TaskMessage
 
 if TYPE_CHECKING:
     from nagents.events import CompactionDoneEvent
+    from nagents.provider import Provider
     from nagents.types import Message
     from nagents.types import ToolArguments
 
@@ -549,6 +550,35 @@ class Harness:
                 raise ValueError("Model must not be empty")
             self.config.model = model
             self.agent.provider.model = model
+
+    async def reconfigure_provider(self, config: "HarnessConfig") -> None:
+        """Adopt a validated provider selection, e.g. a saved web-settings override.
+
+        Only the allowlisted routing fields may differ from the running config;
+        administrator-owned fields (demo mode, storage, credential ceiling) are
+        rejected. Swapping closes the previous provider client exactly once;
+        reusing the same routing only updates the model.
+        """
+        if config.demo is not self.config.demo:
+            raise ValueError("Provider overrides cannot change demo mode")
+        identity = ("provider", "base_url", "api", "auth", "api_key_env")
+        changing = any(getattr(config, name) != getattr(self.config, name) for name in identity)
+        if changing:
+            replacement: Provider
+            if config.auth == "chatgpt":
+                if not isinstance(self.agent.provider, CodexProvider):
+                    self._api_model = self.agent.provider.model
+                replacement = CodexProvider(self.openai_auth.credentials, model=config.model)
+            else:
+                replacement = HarnessProvider(config)
+            try:
+                await self.agent.close()
+            finally:
+                self.agent.provider = replacement
+        for name in identity:
+            setattr(self.config, name, getattr(config, name))
+        self.config.model = config.model
+        self.agent.provider.model = config.model
 
     async def _use_chatgpt(self) -> None:
         if not isinstance(self.agent.provider, CodexProvider):

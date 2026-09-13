@@ -48,10 +48,18 @@ export const executionLimits = [
   },
 ] as const;
 
+export const providerApis = ["auto", "chat_completions", "responses", "messages"] as const;
+export const providerAuths = ["auto", "api-key", "chatgpt"] as const;
+
 export function createDraft(values: SettingsValues): SettingsDraft {
   return {
     model: values.model,
     agent: values.agent,
+    provider: values.provider,
+    base_url: values.base_url,
+    api: values.api,
+    auth: values.auth,
+    api_key_env: values.api_key_env,
     shell_timeout: String(values.shell_timeout),
     max_output: String(values.max_output),
     max_file_bytes: String(values.max_file_bytes),
@@ -82,6 +90,11 @@ export function parseDraft(
   const values: SettingsValues = {
     model: draft.model.trim(),
     agent: draft.agent,
+    provider: draft.provider.trim(),
+    base_url: draft.base_url.trim(),
+    api: draft.api,
+    auth: draft.auth,
+    api_key_env: draft.api_key_env.trim(),
     shell_timeout: 0,
     max_output: 0,
     max_file_bytes: 0,
@@ -102,6 +115,25 @@ export function parseDraft(
   }
   if (!profiles.some((profile) => profile.name === draft.agent)) {
     errors.agent = "Choose a profile provided by this server.";
+  }
+  if (
+    !values.provider ||
+    [...values.provider].length > 40 ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(draft.provider)
+  ) {
+    errors.provider = "Choose a provider provided by this server.";
+  }
+  if ([...values.base_url].length > 300 || /[\u0000-\u001f\u007f-\u009f]/.test(draft.base_url)) {
+    errors.base_url = "Enter an HTTP(S) endpoint of at most 300 printable characters, or leave blank.";
+  }
+  if (!(providerApis as readonly string[]).includes(values.api)) {
+    errors.api = "Choose a supported API mode.";
+  }
+  if (!(providerAuths as readonly string[]).includes(values.auth)) {
+    errors.auth = "Choose a supported authentication mode.";
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(values.api_key_env) || [...values.api_key_env].length > 64) {
+    errors.api_key_env = "Enter an environment variable name, not the key itself.";
   }
   if (typeof draft.dictation_enabled !== "boolean")
     errors.dictation_enabled = "Choose whether dictation is enabled.";

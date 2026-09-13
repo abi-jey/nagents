@@ -79,6 +79,14 @@ class HarnessConfig:
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
         self.data_dir = self.data_dir.expanduser().resolve()
+        self.validate()
+
+    def validate(self) -> None:
+        """Re-run the trusted field checks; no I/O, plugins, or credential reads.
+
+        Callers that overlay allowlisted fields on a copy can validate the
+        candidate configuration without constructing a new dataclass.
+        """
         if self.theme not in THEME_NAMES:
             raise ValueError(f"theme must be one of: {', '.join(THEME_NAMES)}")
         if self.theme_background not in THEME_BACKGROUNDS:

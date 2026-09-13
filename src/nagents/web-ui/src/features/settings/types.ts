@@ -3,6 +3,11 @@ import type { DictationConfig } from "../dictation/types.js";
 export type SettingsValues = {
   model: string;
   agent: string;
+  provider: string;
+  base_url: string;
+  api: string;
+  auth: string;
+  api_key_env: string;
   shell_timeout: number;
   max_output: number;
   max_file_bytes: number;
@@ -20,6 +25,16 @@ export type SettingsProfile = {
   model: string;
 };
 
+export type SettingsConnection = {
+  provider: string;
+  api: string;
+  auth: string;
+  base_url: string;
+  api_key_env: string;
+  key_configured: boolean;
+  auth_status: string;
+};
+
 export type SettingsReply = {
   values: SettingsValues;
   defaults: SettingsValues;
@@ -27,6 +42,9 @@ export type SettingsReply = {
   revision: string;
   persisted: boolean;
   effective_mode: "build" | "reviewer";
-  connection: { provider: string; api: string; auth_status: string };
+  providers: string[];
+  apis: string[];
+  auths: string[];
+  connection: SettingsConnection;
   dictation: DictationConfig;
 };

@@ -139,7 +139,7 @@ text on another device or after that local state is lost.
 Trash retains sessions for **30 days by default**. The Trash panel's retention
 control accepts an integer from **1 through 365 days** and saves a workspace-wide
 policy that survives server restarts. This preference has its own API/revision,
-separate from the existing eleven model/tool/dictation Settings values.
+separate from the model, provider, tool, and dictation Settings values.
 
 Each deletion freezes a `purge_at` deadline using the policy in effect when it is
 accepted. Changing retention affects **future deletions only**; it does not shorten
@@ -384,7 +384,7 @@ Two independent concurrency tokens apply:
   `404`. Refresh Trash rather than assuming delayed cleanup means recovery is
   still possible.
 
-The retention policy is stored separately from `/api/settings` and its eleven
+The retention policy is stored separately from `/api/settings` and its other
 values. Do not add `retention_days` to that request or reuse its settings revision.
 All Trash routes retain the existing Host, Origin, fetch-metadata, and token
 guards. No deletion, restoration, policy update, or expiry cleanup starts model
@@ -671,14 +671,20 @@ Trash retention uses its [separate preferences API](#trash-api-contract); it is
 not an additional field in the model/tool/dictation settings below.
 
 Settings responses contain `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
-an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`), and
-read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
-`defaults` contain exactly these fields:
+an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`),
+allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
+(`provider`, `api`, `auth`, `base_url`, `api_key_env`, `key_configured`,
+`auth_status`). Both `values` and `defaults` contain exactly these fields:
 
 | Field | Accepted Values |
 | --- | --- |
 | `model` | Trimmed, nonblank provider model ID, at most 200 characters, without control characters |
 | `agent` | An existing built-in or trusted configured profile name |
+| `provider` | An allowlisted provider name from `providers`, for example `openrouter` or `openai_compatible` |
+| `base_url` | Empty for the provider default, or an HTTP(S) endpoint without credentials, query parameters, or fragments, at most 300 characters; required for `litellm` |
+| `api` | One of `auto`, `chat_completions`, `responses`, or `messages` (`completions` is rejected for the harness) |
+| `auth` | One of `auto`, `api-key`, or `chatgpt`; `chatgpt` remains limited to the default OpenAI provider endpoint |
+| `api_key_env` | Environment variable name for the key, at most 64 characters; never a literal secret |
 | `shell_timeout` | Finite number greater than 0 and at most 600 seconds |
 | `max_output` | Integer, 1,024 through 1,048,576 **bytes of tool output**, not model tokens |
 | `max_file_bytes` | Integer, 1,024 through 4,194,304 bytes |
@@ -689,15 +695,27 @@ read-only `connection` (`provider`, `api`, `auth_status`). Both `values` and
 | `dictation_language` | Empty for automatic detection, or a two-letter lowercase language code |
 | `dictation_max_seconds` | Integer, 1 through 300; effective recording duration is capped by the administrator's startup limit |
 
-POST requires all eleven values. Unknown fields, numeric strings, booleans used as
-numbers, and nonfinite numbers are rejected with HTTP 422. Changing profile selects
-its trusted instructions/mode, but the explicitly submitted model takes precedence
-over that profile's model. Model IDs are free text: settings GET/save never query a model
-catalog or test entitlement. A later provider request may reject an unavailable ID.
-Permission ceilings and per-call approvals remain enforced. Existing sessions,
-history, provider credentials, and tools are retained. New children inherit the
-current model; retained children keep their prior state under the existing child
-continuation contract.
+POST requires all sixteen values plus the write-only `api_key` field. Unknown
+fields, numeric strings, booleans used as numbers, and nonfinite numbers are
+rejected with HTTP 422, as are invalid provider combinations (for example,
+`litellm` without an endpoint, `chatgpt` with a custom endpoint, credentials in
+an endpoint URL, or an unsupported API mode). Changing profile selects its
+trusted instructions/mode, but the explicitly submitted model takes precedence
+over that profile's model. Model IDs are free text: settings GET/save never query
+a model catalog or test entitlement. A later provider request may reject an
+unavailable ID. Permission ceilings and per-call approvals remain enforced.
+Existing sessions, history, provider credentials, and tools are retained. New
+children inherit the current model; retained children keep their prior state
+under the existing child continuation contract.
+
+An optional `api_key` stores a write-only key for the submitted provider; an
+empty value leaves any stored key unchanged. `clear_api_key` removes it. A
+stored key is installed only into this process's environment under
+`api_key_env`, is never included in `values`, `defaults`, `connection`, logs, or
+any response, and `key_configured` only signals its presence. Removing it
+restores the process environment captured at startup, so deployment-provided
+keys remain the fallback. Provider routing changes are applied by rebuilding the
+provider after the save commits; the previous client is closed exactly once.
 
 Mutations reject HTTP 409 during a run, approval, or another mutation, or when the
 submitted revision is stale. Reload before retrying; do not automatically overwrite
@@ -706,23 +724,25 @@ during a save. Error `detail` is a safe string, never raw request/provider data.
 
 The versioned `ngn_web_settings` singleton row lives in the **existing workspace
 session SQLite database**, resolved by the Harness under `data_dir`. It stores only
-the approved preferences and revision, not credentials or the full configuration.
-The override applies across sessions and web-server restarts for that resolved
-workspace. One process must own the workspace; this is not multi-process settings
-synchronization. ConfigMap/TOML, CLI, profile and initial authentication/model
-resolution establish startup defaults **before** the saved override is applied.
-Reset deletes the row, so later restarts use any newly changed trusted defaults.
-The CLI/TUI do not load this web-only override.
+the approved preferences and revision, never a key value or the full
+configuration. Write-only keys live in a separate `ngn_web_provider_keys` table
+in the same private database; both are deleted on reset. The override applies
+across sessions and web-server restarts for that resolved workspace. One process
+must own the workspace; this is not multi-process settings synchronization.
+ConfigMap/TOML, CLI, profile and initial authentication/model resolution
+establish startup defaults **before** the saved override is applied. Reset
+deletes the rows, so later restarts use any newly changed trusted defaults. The
+CLI/TUI do not load this web-only override.
 
-Existing version-1 rows are validated against the original seven-field schema
-and receive dictation defaults from trusted startup configuration. New saves
-write version 2 with all eleven preferences. Existing chat preferences and
-revision checks are retained; arbitrary unknown fields or versions are not
-accepted as a migration shortcut.
+Existing version-1 and version-2 rows are validated against their original
+schemas, retain their saved preferences, and receive the provider fields from
+trusted startup configuration. New saves write version 3 with all sixteen
+preferences. Existing chat preferences and revision checks are retained;
+arbitrary unknown fields or versions are not accepted as a migration shortcut.
 
-After a version-2 save, an older image that only understands version 1 cannot
-load that row. Roll back with a compatible image or use administrator-reviewed
-settings-row recovery; preserve the session database and credential store.
+After a version-3 save, an older image cannot load that row. Roll back with a
+compatible image or use administrator-reviewed settings-row recovery; preserve
+the session database and credential store.
 
 Bootstrap and settings responses also include a non-secret `dictation` capability
 projection: effective `enabled`/`available`, `admin_enabled`, safe `status`, the
@@ -736,8 +756,10 @@ Invalid JSON, unsupported versions, invalid values, or a removed saved profile b
 web startup rather than silently restoring potentially more permissive defaults.
 An administrator must stop ngn and repair or remove **only** the `ngn_web_settings`
 row in the affected database; preserve session history and credential storage.
-The API cannot edit provider routing, authentication, plugins, trust, paths, demo
-mode, arbitrary files, or Python configuration.
+The API may edit only the allowlisted provider fields above. Plugins, trust,
+paths, demo mode, workspace storage, arbitrary files, Python configuration, and
+anything outside a validated candidate configuration remain server-managed. A
+provider override never changes the administrator's demo-mode ceiling.
 
 ### Model Discovery
 
