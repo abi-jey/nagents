@@ -136,6 +136,7 @@ class WebState:
         self.harness = harness
         self.approval_timeout: Callable[[], float] = lambda: APPROVAL_TIMEOUT
         self.selected_session_id = harness.session_id
+        self.session_revision = 0
         self.active: Run | None = None
         self.mutating = False
         self.dictation = WebDictation()
@@ -177,8 +178,12 @@ class WebState:
             # Let fetch/close finish in an owned task before cancellation escapes.
             sessions.extend(await self.harness.list_sessions())
 
-        await _join(asyncio.create_task(read()))
-        return sessions
+        while True:
+            revision = self.session_revision
+            sessions.clear()
+            await _join(asyncio.create_task(read()))
+            if revision == self.session_revision:
+                return sessions
 
     async def snapshot(self, session_id: str = "") -> dict[str, object]:
         session_id = session_id or self.selected_session_id

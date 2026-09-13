@@ -79,8 +79,9 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 `/help` all use the same live harness registry, including:
 
 - Built-in actions such as `/new`, `/model`, `/agent`, `/tasks`, and `/queue`.
-- Discovered skills as `/skill:<name> [task]`, loaded on demand through guarded
-  file tools. Listing suggestions never runs a skill or a script.
+- Discovered skills as `/skill:<name> [task]`, loaded on demand through the Agent's
+  skill loader. Workspace reads remain guarded; bundled skills load from package
+  resources. Suggestions refresh metadata without activating skills or running scripts.
 - Trusted Python-plugin commands, labeled with their plugin source.
 
 | Command | Purpose |
@@ -580,6 +581,35 @@ See the [full configuration reference](ngn-configuration.md) for every accepted
 field, exact types/defaults/ranges, provider recipes, and the distinction between
 configuration precedence and runtime profile model selection.
 
+## Skills
+
+The Harness includes `ngn-customize` for the application's customization
+interfaces and `ngn-channels` for external messaging integrations. Add workspace
+skills as `.ngn/skills/<name>/SKILL.md` or `.agents/skills/<name>/SKILL.md` with
+single-line `name` and `description` frontmatter. Workspace names take precedence
+over bundled names.
+
+The model sees escaped descriptive metadata in a separate system-level message
+and calls `skill(name)` to load relevant instructions as tool-result task context.
+The preview has a separate 10,000-estimated-token cap, complete sorted entries,
+and an omission notice; omitted names remain in the full catalog for named loads.
+Explicitly select one as user-level task context with `$ngn-customize` or
+`$ngn-channels`, including ordinary web/Telegram messages. In the TUI,
+`/skill:ngn-customize [task]` is also supported. Dollar mentions and slash commands
+are ngn/client conventions, not universal Agent Skills syntax.
+
+The catalog refreshes at incoming text boundaries, before each model request,
+and before/after every tool invocation. Changes therefore become available during
+the same turn without restarting ngn. Each load defaults to a 10,000-token
+approximation based on UTF-8 bytes divided by four, with UTF-8-safe truncation
+and a bounded aggregate allowance for explicit activation. Trusted TOML
+`skill_token_limit = 10000` or the `NGN_SKILL_TOKEN_LIMIT` environment default
+configures this same allowance (integer 1–100,000). All discovery sources share
+the top-level single-line metadata parser; extra and nested metadata is ignored. Loading adds task
+context and executes no scripts; referenced resources require separate permitted
+access. See [Skills](skills.md) for authoring, library discoverers, loading results,
+and batch/realtime limitations.
+
 ## Python behavior extensions
 
 ### Register slash commands
@@ -689,8 +719,10 @@ MCP implementation details to the terminal widgets.
   anything your user account can access, including outside the workspace.
 - The reviewer profile denies modifying tools and shell execution. Skills and
   system prompts are not the mechanism enforcing those restrictions.
-- Skills provide instructions/resources on demand. Loading a skill does not
-  automatically execute scripts in its directory.
+- Skills provide task guidance on demand through the Agent loader. Workspace
+  resources retain file-tool restrictions; bundled bodies use package resources.
+  Loading grants no permissions and does not execute scripts or automatically
+  read referenced files.
 - Interruption stops managed work but never rolls back already completed actions.
   An uncertain tool outcome is not automatically replayed on resume.
 
@@ -721,8 +753,11 @@ extension marketplaces, cross-process exactly-once tool execution, or a secure
 sandbox for arbitrary plugins and shell commands. Realtime speech remains a
 separate library workflow. Guarded filesystem tools and process-group shell
 cleanup currently target POSIX; Windows is not yet a supported coding-tool host.
-Skills support single-line `name` and `description` frontmatter, and ignore
-matching is a documented subset rather than complete Git wildmatch semantics.
+Skills use a lightweight single-line `name` and `description` frontmatter subset;
+other Agent Skills metadata does not configure tool permissions. See the
+[skills guide](skills.md#agent-skills-standard-and-host-choices) for the standard
+and host-specific choices. Ignore matching is a documented subset rather than
+complete Git wildmatch semantics.
 
 For the reasoning behind these boundaries and the upstream comparison, see
 [Harness extensibility research](../development/harness-research.md).

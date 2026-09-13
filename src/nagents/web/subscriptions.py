@@ -119,6 +119,20 @@ class EventBus:
             if subscriber.session_id == session_id:
                 subscriber.close(1008)
 
+    def delete_session(self, session_id: str) -> None:
+        self.invalidate_session(session_id)
+        # Invalidate reads already in flight, including HTTP checkpoints. Purge
+        # global catalogs too: they can contain the deleted root's private title.
+        self.cursor += 1
+        kept = deque(
+            (frame, size)
+            for frame, size in self.ring
+            if frame.get("session_id") not in {None, session_id} and frame.get("type") != "snapshot"
+        )
+        self.ring = kept
+        self.bytes = sum(size for _, size in kept)
+        self.discarded = self.cursor
+
     async def checkpoint(
         self, session_id: str, snapshot: Callable[[str], Awaitable[dict[str, object]]]
     ) -> tuple[int, dict[str, object]]:

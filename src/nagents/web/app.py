@@ -34,6 +34,7 @@ from . import built_assets
 from . import local_authority
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
+from .deletion import delete_session
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
 from .service import Run as Run
@@ -268,6 +269,10 @@ def create_app(
     @app.get("/api/sessions/{session_id}")
     async def session_snapshot(session_id: RootId) -> dict[str, object]:
         return await state.snapshot(session_id)
+
+    @app.delete("/api/sessions/{session_id}")
+    async def remove_session(session_id: RootId, body: Input) -> dict[str, object]:
+        return await delete_session(state, session_id)
 
     @app.post("/api/sessions/new")
     async def new_session(body: Input) -> dict[str, object]:

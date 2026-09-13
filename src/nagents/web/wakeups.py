@@ -130,6 +130,11 @@ class Wakeups:
                 self.lifecycle(wakeup, "cancelled")
         self.changed.set()
 
+    def forget_session(self, session_id: str) -> None:
+        self._events = deque(item for item in self._events if item[1].get("session_id") != session_id)
+        self._bytes = sum(size for _, _, size in self._events)
+        self._discarded = self.cursor
+
     def activity(self, session_id: str, after: int, active_run_id: str) -> dict[str, object]:
         return {
             "session_id": session_id,

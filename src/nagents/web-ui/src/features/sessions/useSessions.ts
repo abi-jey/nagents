@@ -5,6 +5,7 @@ import type { Bootstrap, Session, Snapshot } from "../../types";
 import type { SettingsReply } from "../settings/types";
 import { rootSessions } from "../channels/draft";
 import { idle, sessionActivity } from "./activity";
+import { deleteSession } from "../../api/deletion";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
@@ -36,7 +37,8 @@ export function useSessions() {
       snapshot = await snapshotResponse(await request(`sessions/${encodeURIComponent(root)}`, data.token));
     }
     setSessions(rootSessions(snapshot.sessions));
-    if (!selection.current || selection.current === snapshot.session_id) return accept(snapshot);
+    if (!selection.current || selection.current === snapshot.session_id ||
+        !snapshot.sessions.some((session) => session.id === selection.current)) return accept(snapshot);
     // A reconnect never follows the Harness's current execution into another chat.
     return undefined;
   }
@@ -50,6 +52,10 @@ export function useSessions() {
       return accept(await snapshotResponse(await request("sessions/resume", config.token, { session_id: id })));
     }
     return accept(await snapshotResponse(await request("sessions/new", config.token, {})));
+  }
+  async function remove(id: string): Promise<Snapshot> {
+    if (!config) throw new Error("Reconnect to ngn before deleting a session.");
+    return accept(await deleteSession(config.token, id));
   }
   function receive(frame: EventFrame) {
     setActive((current) => sessionActivity(current, frame));
@@ -69,6 +75,6 @@ export function useSessions() {
   }
   return {
     config, sessions, sessionId, globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
-    activityOnly: false, connect, select, receive, acceptSettings, acceptCredentials,
+    activityOnly: false, connect, select, remove, receive, acceptSettings, acceptCredentials,
   };
 }

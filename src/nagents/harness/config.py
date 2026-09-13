@@ -74,6 +74,7 @@ class HarnessConfig:
     dictation_api_key_env: str = "OPENAI_API_KEY"
     dictation_language: str = ""
     dictation_max_seconds: int = 120
+    skill_token_limit: int = 10000
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
@@ -128,6 +129,8 @@ class HarnessConfig:
             raise ValueError("max_output must be between 1024 and 1048576 bytes")
         if not 1024 <= self.max_file_bytes <= 4194304:
             raise ValueError("max_file_bytes must be between 1024 and 4194304 bytes")
+        if type(self.skill_token_limit) is not int or not 1 <= self.skill_token_limit <= 100000:
+            raise ValueError("skill_token_limit must be an integer between 1 and 100000")
         if not 1 <= self.max_tool_rounds <= 1000:
             raise ValueError("max_tool_rounds must be between 1 and 1000")
         if type(self.max_subagent_depth) is not int or not 0 <= self.max_subagent_depth <= 8:
@@ -185,7 +188,14 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "dictation_api_key_env",
         "dictation_language",
     }
-    integers = {"max_output", "max_file_bytes", "max_tool_rounds", "max_subagent_depth", "dictation_max_seconds"}
+    integers = {
+        "max_output",
+        "max_file_bytes",
+        "skill_token_limit",
+        "max_tool_rounds",
+        "max_subagent_depth",
+        "dictation_max_seconds",
+    }
     booleans = {"demo", "animations", "dictation_enabled"}
     allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles"}
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:

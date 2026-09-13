@@ -201,6 +201,19 @@ from .realtime import RealtimeSession
 from .realtime import WAVFileAudioInput
 from .realtime import WAVFileAudioOutput
 from .session import SessionManager
+from .skills import DEFAULT_SKILL_TOKEN_LIMIT
+from .skills import MAX_SKILL_MANIFEST_TOKENS
+from .skills import MAX_SKILL_TOKEN_LIMIT
+from .skills import BuiltinSkillDiscoverer
+from .skills import CompositeSkillDiscoverer
+from .skills import DirectorySkillDiscoverer
+from .skills import Skill
+from .skills import SkillDiscoverer
+from .skills import SkillLoadResult
+from .skills import budget_skill_content
+from .skills import estimate_skill_tokens
+from .skills import parse_skill_metadata
+from .skills import render_skill_manifest
 from .stt import OPENAI_TRANSCRIPTION_FORMATS
 from .stt import GeminiSTTService
 from .stt import OpenAISTTService
@@ -232,8 +245,11 @@ __all__ = [
     "DEFAULT_COMPACTOR",
     "DEFAULT_COMPACT_PROMPT",
     "DEFAULT_REALTIME_MODEL",
+    "DEFAULT_SKILL_TOKEN_LIMIT",
     "DOCUMENT_MIME_TYPES",
     "IMAGE_MIME_TYPES",
+    "MAX_SKILL_MANIFEST_TOKENS",
+    "MAX_SKILL_TOKEN_LIMIT",
     "OPENAI_TRANSCRIPTION_FORMATS",
     "REALTIME_VOICES",
     "Agent",
@@ -255,6 +271,7 @@ __all__ = [
     "BatchStatus",
     "BatchStore",
     "BatchToolCall",
+    "BuiltinSkillDiscoverer",
     "BytesAudioInput",
     "BytesAudioOutput",
     "Channel",
@@ -280,7 +297,9 @@ __all__ = [
     "CompactionStartedEvent",
     "CompactionStrategy",
     "Compactor",
+    "CompositeSkillDiscoverer",
     "ContentPart",
+    "DirectorySkillDiscoverer",
     "DocumentContent",
     "DoneEvent",
     "ErrorEvent",
@@ -326,6 +345,9 @@ __all__ = [
     "RunContext",
     "STTService",
     "SessionManager",
+    "Skill",
+    "SkillDiscoverer",
+    "SkillLoadResult",
     "SpeechStartedEvent",
     "SpeechStoppedEvent",
     "TextChunkEvent",
@@ -350,11 +372,15 @@ __all__ = [
     "UsageInfo",
     "WAVFileAudioInput",
     "WAVFileAudioOutput",
+    "budget_skill_content",
     "docker_run",
     "estimate_messages_tokens",
+    "estimate_skill_tokens",
     "get_media_capabilities",
     "get_model_context_limit",
     "load_channel",
+    "parse_skill_metadata",
+    "render_skill_manifest",
     "transcode_audio_to_wav",
     "truncate_tool_results",
 ]

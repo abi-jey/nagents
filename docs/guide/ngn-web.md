@@ -94,6 +94,55 @@ still stored locally in the Harness data directory.
 
 ## Operation And Safety
 
+### Delete A Session
+
+Select a session, then choose the compact **Delete current session** trash action
+in the header. The confirmation names the session and initially focuses **Cancel**;
+Escape also cancels. Only **Delete session** submits deletion. Your draft and
+conversation stay intact if you cancel or the server rejects the request. The
+dialog shows pending/error status and prevents duplicate submissions. After a
+confirmed deletion, its transcript, replay position, pending message identities,
+and current draft are cleared. Another existing root is selected, or a fresh
+empty root is created atomically when the last root is deleted.
+
+Deletion requires an idle Harness. It returns `409` while the root has queued or
+running inbox work, pending wakeups, or retained descendant task handles. Finish
+or cancel running work first. Retained handles can still resume child conversations;
+after those tasks finish, restart ngn to expire the handles before deleting their
+root. Child histories are kept: deletion never guesses ownership from a session
+prefix, a task name, or text in old messages.
+
+Channel routing must be moved explicitly before deletion:
+
+1. In **Channels**, change any connection whose **main session** is this root to
+   another existing root and save. Disabled connections also count.
+2. In each attached channel conversation, use `/sessions`, then `/session ID` to
+   attach another root. If this was its default root, use `/session default ID`
+   to move that default too. This command changes the default reference; the
+   current attachment changes through `/session ID`.
+3. Let already accepted messages and command replies finish, then retry deletion.
+   Reattachment never reroutes messages already in the inbox. Removing or disabling
+   a connector alone does not detach its saved conversation bindings.
+
+The authenticated `DELETE /api/sessions/{session_id}` endpoint takes `{}` as JSON
+and uses the same exact-origin/token guards as other mutations. It validates
+workspace root membership and deletes that root's history, picker entry, ingress
+annotations, and terminal inbox rows in one SQLite transaction. Content-free
+channel/message deduplication keys remain so a late channel redelivery cannot
+execute deleted work again. Files, unrelated rows/child histories, saved settings,
+channel configuration, and private credentials are preserved. This removes logical
+history, not backups or SQLite free pages.
+
+Cancellation joins the transaction and selection/subscription cleanup before
+releasing the idle boundary; the root cannot be partially deleted. A lost HTTP
+acknowledgement can still mean deletion committed: reconnect to check the session
+list before retrying. Deleted-root subscribers are revoked, and their clients
+refresh root membership instead of reconnecting to the missing root indefinitely.
+Other tabs retain unsent drafts when recovering to a surviving session. Restart,
+resume, history, activity, and subscription requests cannot restore a deleted root.
+
+### Execution And Access
+
 - One local app instance owns one Harness on one async lifespan/event loop. Web
   messages and channel notifications queue for serialized execution. Each message
   carries an explicit target session; changing the sidebar selection does not
@@ -189,6 +238,7 @@ explicit WAV transcription contract below.
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
+| `DELETE sessions/{session_id}` | `{}` deletes an idle, unbound root atomically; returns `deleted_session_id` plus the replacement/selected snapshot |
 | `POST messages` | `{session_id, prompt, message_id}` durably queues input; updates arrive through subscriptions |
 | `WS events` | Authenticated session subscriptions, snapshots, replay cursors, and live execution records |
 | `GET channels` | Installed plugin descriptors, redacted saved connections, bindings, and configuration revision |

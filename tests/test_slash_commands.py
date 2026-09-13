@@ -325,18 +325,27 @@ def test_required_arguments_and_prompt_command_follow_normal_run(tmp_path: Path)
 
 
 @pytest.mark.requires_posix
-def test_discovered_skill_is_invocable_from_composer(tmp_path: Path) -> None:
+@pytest.mark.parametrize("created_after_start", [False, True])
+def test_discovered_skill_is_invocable_from_composer(tmp_path: Path, created_after_start: bool) -> None:
     directory = tmp_path / ".agents/skills/audit"
     directory.mkdir(parents=True)
-    (directory / "SKILL.md").write_text(
-        "---\nname: audit\ndescription: Inspect evidence without changing files\n---\nKeep evidence separate from guesses.\n"
-    )
+
+    def install() -> None:
+        (directory / "SKILL.md").write_text(
+            "---\nname: audit\ndescription: Inspect evidence without changing files\n---\nKeep evidence separate from guesses.\n"
+        )
+
+    if not created_after_start:
+        install()
 
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, demo=True))
+        harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", demo=True))
         app = NagentsApp(harness)
         async with app.run_test(size=(100, 30)) as pilot:
             await idle(app, pilot)
+            if created_after_start:
+                assert harness.commands.get("skill:audit") is None
+                install()
             await pilot.press(*"/skill:audit", "enter")
             assert app.query_one(Composer).text == "/skill:audit "
             await pilot.press(*"Check the docs", "enter")

@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from textual.events import Resize
     from textual.events import TextSelected
     from textual.widget import Widget
+    from textual.worker import Worker
 
     from nagents.harness import Harness
     from nagents.harness.auth import DeviceAuthorization
@@ -131,6 +132,7 @@ class NagentsApp(App[None]):
         self._resume_session = resume_session
         self._continue_session = continue_session
         self._active: asyncio.Task[None] | None = None
+        self._skill_completion_worker: Worker[None] | None = None
         self._backend_ready = False
         self._shutting_down = False
         self._last_error = ""
@@ -354,6 +356,26 @@ class NagentsApp(App[None]):
         menu.display = eligible
         if eligible:
             menu.update_commands(self.harness.commands.list(), text[1:])
+            if self._backend_ready:
+                self._skill_completion_worker = self.run_worker(
+                    self._discover_command_skills, group="skill-completions", exclusive=True, exit_on_error=False
+                )
+
+    async def _discover_command_skills(self) -> None:
+        """Refresh suggestions in an owned, replaceable worker, never in list()."""
+        try:
+            await self.harness.agent.refresh_skills()
+        except Exception:
+            # Command execution reports discovery failures explicitly. A menu
+            # refresh must not interrupt an in-flight run or discard its draft.
+            return
+        if self._shutting_down or not self.query("#slash-menu"):
+            return
+        menu = self.query_one(SlashMenu)
+        if menu.display:
+            text = self.query_one(Composer).text.lstrip()
+            if text.startswith("/") and not any(character.isspace() for character in text):
+                menu.update_commands(self.harness.commands.list(), text[1:])
 
     def _hide_completions(self) -> None:
         composer = self.query_one(Composer)
@@ -573,7 +595,7 @@ class NagentsApp(App[None]):
         name = command.split(maxsplit=1)[0]
         custom_command = (
             is_command
-            and self.harness.commands.get(name[1:]) is not None
+            and (name.startswith("/skill:") or self.harness.commands.get(name[1:]) is not None)
             and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
         )
         if (
@@ -1050,7 +1072,7 @@ class NagentsApp(App[None]):
             )
         elif name in ("/new", "/compact", "/agent", "/model"):
             self._launch(lambda: self._change(name, argument), f"{name[1:].capitalize()}...")
-        elif self.harness.commands.get(name[1:]) is not None:
+        elif name.startswith("/skill:") or self.harness.commands.get(name[1:]) is not None:
             self._launch(lambda: self._custom_command(name[1:], argument), f"Running {name}...")
         else:
             self._status(f"Unknown command: {name}. Use /help.", error=True)

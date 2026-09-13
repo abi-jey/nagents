@@ -6,6 +6,7 @@ import { useDictation } from "../features/dictation/useDictation";
 import { promptFailure } from "../features/dictation/draft";
 import { recordingSupport } from "../features/dictation/browser";
 import { useChannels } from "../features/channels/useChannels";
+import { SessionDeletion, type DeletionState } from "../api/deletion";
 
 export function useClient() {
   const sessions = useSessions();
@@ -14,11 +15,16 @@ export function useClient() {
     sessions.sessionId,
     sessions.receive,
     sessions.acceptCredentials,
+    () => void connect(),
   );
   const [operating, setBusy] = useState(false);
   const busy = operating || !!chat.runId || sessions.globalBusy;
   const [error, setError] = useState("");
   const occupied = useRef(false);
+  const [deletion, setDeletion] = useState<DeletionState>({ pending: false, error: "" });
+  const removeAction = useRef(removeSession);
+  removeAction.current = removeSession;
+  const [deletionController] = useState(() => new SessionDeletion(setDeletion, (id) => removeAction.current(id)));
   const dictation = useDictation(
     sessions.config?.token || "",
     sessions.sessionId,
@@ -62,7 +68,11 @@ export function useClient() {
       chat.setStatus("Connecting to local harness");
       try {
         const snapshot = await sessions.connect();
-        if (snapshot) chat.loadHistory(snapshot);
+        if (snapshot) {
+          if (sessions.sessionId && !snapshot.sessions.some((session) => session.id === sessions.sessionId))
+            chat.forgetSession(sessions.sessionId);
+          chat.loadHistory(snapshot);
+        }
         chat.reconnect();
       } catch (cause) {
         chat.setStatus("Disconnected");
@@ -77,7 +87,7 @@ export function useClient() {
 
   async function select(id = "") {
     if (id && id === sessions.sessionId) return true;
-    if (!sessions.config || (!id && busy) || channels.open || settings.open)
+    if (!sessions.config || (!id && busy) || channels.open || settings.open || deletion.target)
       return false;
     return operate(async () => {
       chat.pause();
@@ -88,12 +98,27 @@ export function useClient() {
     });
   }
 
+  async function removeSession(id: string): Promise<boolean> {
+    if (occupied.current || busy || dictation.controller.active || channels.open || settings.open) return false;
+    occupied.current = true; setBusy(true); setError("");
+    chat.pause();
+    try {
+      const snapshot = await sessions.remove(id);
+      chat.forgetSession(id, true);
+      chat.loadHistory(snapshot);
+      chat.setStatus("Session deleted");
+      return true;
+    } finally {
+      occupied.current = false; setBusy(false); chat.reconnect();
+    }
+  }
+
   async function submit(value = chat.prompt) {
     if (
       !sessions.config ||
       !sessions.sessionId ||
       sessions.activityOnly ||
-      channels.open || settings.open ||
+      channels.open || settings.open || deletion.target ||
       dictation.controller.active ||
       !value.trim()
     )
@@ -138,6 +163,8 @@ export function useClient() {
 
   return {
     sessions,
+    deletion,
+    deletionController,
     chat,
     settings,
     channels,

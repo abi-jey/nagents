@@ -133,9 +133,14 @@ class CommandRegistry:
     def list(self) -> list[Command]:
         """Return fresh metadata without initialization, disk reads, or callbacks."""
         commands = [*BUILTIN_COMMANDS, *(entry[0] for entry in self._registered.values())]
+        skills = (
+            {name: (skill.location, skill.description) for name, skill in self.harness.agent.skills.items()}
+            if self.harness._initialized
+            else self.harness.tools.skills
+        )
         commands.extend(
             Command(f"skill:{name}", description, source="skill", argument_hint="[task]")
-            for name, (_, description) in sorted(self.harness.tools.skills.items())
+            for name, (_, description) in sorted(skills.items())
         )
         return list(dict.fromkeys(commands))
 
@@ -154,6 +159,7 @@ class CommandRegistry:
         if self.harness._busy:
             raise RuntimeError(f"Harness is busy ({self.harness._busy}); wait before executing /{name}")
         await self.harness.initialize()
+        await self.harness.agent.refresh_skills()
         if self.harness._busy:
             raise RuntimeError(f"Harness is busy ({self.harness._busy}); wait before executing /{name}")
         command = self.get(name)

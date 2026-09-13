@@ -9,7 +9,7 @@ import type { Bootstrap, Snapshot } from "../../types";
 import { useApproval } from "../approvals/useApproval";
 import { applySnapshot, LiveSessions, pendingApprovals, type LiveTranscript } from "./liveTranscript";
 
-export function useChatRun(token: string, sessionId: string, receive: (frame: EventFrame) => void, acceptCredentials: (bootstrap: Bootstrap) => void) {
+export function useChatRun(token: string, sessionId: string, receive: (frame: EventFrame) => void, acceptCredentials: (bootstrap: Bootstrap) => void, unavailable: () => void) {
   const latestToken = useRef(token);
   latestToken.current = token;
   const authenticated = !!token;
@@ -81,6 +81,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     latestToken.current = bootstrap.token;
     acceptCredentials(bootstrap);
   });
+  const sessionUnavailable = useEffectEvent(() => { setConnected(false); unavailable(); });
   useEffect(() => {
     setView(cache.current.get(sessionId));
     setConnected(false); needsApprovalSync.current = true; approval.close(); setActivityError("");
@@ -90,6 +91,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
       token: latestToken.current, sessionId, position: cache.current.get(sessionId).position, url: window.location.href,
       signal: controller.signal, receive: receiveFrame, status: connectionStatus,
       refreshCredentials: readBootstrap, credentials: credentialsRefreshed,
+      unavailable: sessionUnavailable,
     });
     stopSubscription.current = stop;
     return () => { controller.abort(); stop(); };
@@ -101,6 +103,11 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   function loadHistory(snapshot: Snapshot) {
     const next = cache.current.set(snapshot.session_id, { ...applySnapshot(cache.current.get(snapshot.session_id), snapshot, false), position: undefined });
     setView(next); approval.close(); setStatus("Ready");
+  }
+  function forgetSession(id: string, discardDraft = false) {
+    cache.current.forget(id); queue.current.forget(id);
+    if (discardDraft) setPrompt("");
+    approval.close(); setActivityError("");
   }
   async function submit(value: string) {
     if (sending.current) return;
@@ -134,7 +141,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     entries: view.entries, prompt, setPrompt, insertDictation, runId: view.activeRun?.id || "", connected,
     backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,
     transcriptVersion: 0, status: stopping ? "Cancelling and waiting for tools to stop" : status,
-    setStatus, approval, loadHistory, submit, cancel,
+    setStatus, approval, loadHistory, forgetSession, submit, cancel,
     pause: () => { stopSubscription.current?.(); setSuspended(true); setConnected(false); },
     reconnect: () => { setSuspended(false); setConnectionVersion((version) => version + 1); },
   };

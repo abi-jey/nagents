@@ -32,6 +32,7 @@ from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .provider import DemoCompaction
 from .provider import HarnessProvider
+from .skills import HarnessSkillDiscoverer
 from .subagents import SubagentManager
 from .subagents import _await_cleanup
 from .tools import CodingTools
@@ -112,6 +113,7 @@ class Harness:
         self._queue: asyncio.Queue[HarnessEvent] | None = None
         self._worker: asyncio.Task[None] | None = None
         self._closing: asyncio.Task[None] | None = None
+        self.tools = CodingTools(self)
         self.agent = Agent(
             provider=HarnessProvider(config),
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
@@ -120,8 +122,9 @@ class Harness:
             compactor="self",
             save_tool_outputs=False,
             compaction_strategy=DemoCompaction() if config.demo else None,
+            skill_discoverer=HarnessSkillDiscoverer(self.tools),
+            skill_token_limit=config.skill_token_limit,
         )
-        self.tools = CodingTools(self)
         self.tools.register()
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
@@ -203,9 +206,6 @@ class Harness:
             )
         for path, content in sorted(self.instructions.items(), key=lambda item: (len(Path(item[0]).parts), item[0])):
             base += f"\nApplicable project context ({path}):\n{content}\n"
-        if self.tools.skills:
-            base += "\nAvailable skills (use skill(name) to load; text only, no script execution):\n"
-            base += "\n".join(f"- {name}: {description}" for name, (_, description) in self.tools.skills.items())
         self.agent.system_prompt = base
 
     async def initialize(self) -> None:
@@ -235,7 +235,7 @@ class Harness:
                     )
                     await db.commit()
                 self.tools.instructions(Path("AGENTS.md"))
-                self.tools.discover_skills()
+                await self.agent.refresh_skills()
                 self.refresh_instructions()
                 if (
                     not self.config.demo
@@ -604,7 +604,7 @@ class Harness:
         return f"API key from ${self.config.api_key_env} (value never displayed)"
 
     def describe(self) -> str:
-        skills = ", ".join(f"{name}: {description}" for name, (_, description) in self.tools.skills.items()) or "none"
+        skills = ", ".join(f"{skill.name}: {skill.description}" for skill in self.agent.skills.values()) or "none"
         return "\n".join(
             [
                 "OFFLINE DEMO" if self.config.demo else "Live coding harness (network only on a live request)",
@@ -627,6 +627,8 @@ class Harness:
                 f"Plugins configured: {', '.join(self.config.plugins) or 'none'}",
                 f"Plugins loaded: {', '.join(self.loaded_plugins) or 'none'}",
                 f"Skills: {skills}",
+                f"Skill loading: {self.config.skill_token_limit} approximate tokens; live discovery at message/tool boundaries",
+                *self.tools.skill_diagnostics,
                 f"Instructions: {', '.join(self.instructions) or 'none'}",
                 f"Session database: {self.agent.session.db_path}",
                 "Policy: read-only reviewer; build edits/custom tools require approval; shell always asks and is NOT SANDBOXED.",

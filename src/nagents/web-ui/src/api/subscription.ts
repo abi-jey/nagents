@@ -72,6 +72,7 @@ export type SubscriptionOptions = {
   status: (status: "connecting" | "connected" | "reconnecting") => void;
   refreshCredentials?: (signal: AbortSignal) => Promise<Bootstrap>;
   credentials?: (bootstrap: Bootstrap) => void;
+  unavailable?: () => void;
   socket?: (url: string, protocols: string[]) => EventSocket;
   schedule?: (callback: () => void, delay: number) => () => void;
 };
@@ -206,7 +207,12 @@ export function subscribeEvents(options: SubscriptionOptions): () => void {
           retry();
         }
       };
-      socket.onclose = () => { if (socket === connection) retry(); };
+      socket.onclose = (event) => {
+        if (socket !== connection) return;
+        if (event.code === 1008 && options.unavailable) {
+          stop(); options.unavailable();
+        } else retry();
+      };
       socket.onerror = () => { if (socket === connection) retry(); };
     } catch { retry(); }
   }

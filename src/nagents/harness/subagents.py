@@ -443,7 +443,6 @@ class SubagentManager:
                 child = self._create_child(info.profile, info, continuing=bool(info.activation))
                 self._children[info.id] = child
                 await _await_cleanup(asyncio.create_task(child.initialize(), name=f"ngn-subagent-initialize-{info.id}"))
-                child.tools.skills.update(self.harness.tools.skills)
                 child.refresh_instructions()
                 info.mode = child.mode
                 done: DoneEvent | None = None

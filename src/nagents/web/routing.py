@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -57,26 +58,32 @@ class RoutingStore(InboxStore):
                 "UNIQUE(channel, message_id))"
             )
             db.execute("CREATE INDEX IF NOT EXISTS ngn_web_inbox_pending ON ngn_web_inbox(status, id)")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS ngn_web_deleted_messages ("
+                "channel TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(channel, message_id))"
+            )
             db.execute("UPDATE ngn_web_inbox SET status = 'interrupted' WHERE status = 'running'")
 
         await self._transaction(initialize)
 
     @staticmethod
     def root(db: sqlite3.Connection, session_id: str) -> str:
-        if (
+        with closing(
             db.execute(
                 "SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id WHERE h.id = ?", (session_id,)
-            ).fetchone()
-            is None
-        ):
-            raise HTTPException(404, "Session not found in this workspace.")
+            )
+        ) as cursor:
+            if cursor.fetchone() is None:
+                raise HTTPException(404, "Session not found in this workspace.")
         return session_id
 
     @staticmethod
     def new_root(db: sqlite3.Connection, title: str) -> str:
         session_id = f"ngn-{uuid.uuid4().hex[:16]}"
-        db.execute("INSERT INTO v2_sessions (id, user_id) VALUES (?, 'harness')", (session_id,))
-        db.execute("INSERT INTO harness_sessions (id, title) VALUES (?, ?)", (session_id, title[:80]))
+        with closing(db.execute("INSERT INTO v2_sessions (id, user_id) VALUES (?, 'harness')", (session_id,))):
+            pass
+        with closing(db.execute("INSERT INTO harness_sessions (id, title) VALUES (?, ?)", (session_id, title[:80]))):
+            pass
         return session_id
 
     def capacity(self, db: sqlite3.Connection) -> None:
@@ -110,6 +117,11 @@ class RoutingStore(InboxStore):
 
         def admit(db: sqlite3.Connection) -> None:
             if db.execute(
+                "SELECT 1 FROM ngn_web_deleted_messages WHERE channel = ? AND message_id = ?",
+                (channel, payload["message_id"]),
+            ).fetchone():
+                return
+            if db.execute(
                 "SELECT 1 FROM ngn_web_inbox WHERE channel = ? AND message_id = ?", (channel, payload["message_id"])
             ).fetchone():
                 return
@@ -142,7 +154,13 @@ class RoutingStore(InboxStore):
                         units += length
                     ack = "\n".join(lines)
                 elif command.name in {"session", "new"}:
-                    if command.name == "new" or argument == "new":
+                    if command.name == "session" and argument.startswith("default "):
+                        try:
+                            default = self.root(db, argument.removeprefix("default ").strip())
+                            ack = f"Default session: {default}"
+                        except HTTPException:
+                            ack = "Session not found. Use /sessions to list available session IDs."
+                    elif command.name == "new" or argument == "new":
                         target = self.new_root(db, argument if command.name == "new" else f"{channel}: {conversation}")
                     elif argument:
                         candidate = main if argument == "main" else default if argument == "default" else argument
@@ -156,7 +174,7 @@ class RoutingStore(InboxStore):
                     ack = "Unknown session command. Use /sessions, /session [ID|main|default|new], or /new [title]."
             db.execute(
                 "INSERT INTO ngn_web_bindings VALUES (?, ?, ?, ?) ON CONFLICT(channel, conversation_id) "
-                "DO UPDATE SET session_id = excluded.session_id",
+                "DO UPDATE SET session_id = excluded.session_id, default_session_id = excluded.default_session_id",
                 (channel, conversation, target, default),
             )
             db.execute(

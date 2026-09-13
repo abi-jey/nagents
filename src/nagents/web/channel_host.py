@@ -396,7 +396,10 @@ class ChannelHost:
                 if previous.get("") != catalog:
                     previous[""] = catalog
                     self.state.bus.publish({"type": "sessions", "sessions": json.loads(catalog)})
-                for session_id in {sub.session_id for sub in self.state.bus.subscribers if sub.ready or sub.hydrating}:
+                watching = {sub.session_id for sub in self.state.bus.subscribers if sub.ready or sub.hydrating}
+                for session_id in set(previous) - watching - {""}:
+                    del previous[session_id]
+                for session_id in watching:
                     try:
                         snapshot = await self.state.snapshot(session_id)
                     except HTTPException as error:

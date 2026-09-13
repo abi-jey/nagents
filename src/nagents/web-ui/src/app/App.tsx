@@ -3,6 +3,7 @@ import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
 import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
+import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DictationControls, DictationReview } from "../features/dictation/DictationControls";
@@ -18,7 +19,7 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const composer = useRef<HTMLTextAreaElement>(null);
   const canSubmit =
-    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open;
+    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target;
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
 
@@ -61,6 +62,16 @@ export function App() {
             </span>
           </div>
           <button
+            className="settings-trigger delete-session-trigger" aria-label="Delete current session" title="Delete current session" aria-haspopup="dialog"
+            disabled={!sessionId || busy || dictation.unfinished || client.channels.open || client.settings.open || !!client.deletion.target}
+            onClick={() => {
+              const target = sessions.sessions.find((session) => session.id === sessionId);
+              if (target) client.deletionController.show(target);
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6M12 8v6" /></svg>
+          </button>
+          <button
             className="channels-trigger" aria-label="Channels" title="Channels" aria-haspopup="dialog"
             disabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open}
             onClick={client.channels.show}
@@ -89,7 +100,7 @@ export function App() {
           workspace={config?.workspace || ""}
           sessions={sessions.sessions}
           selected={sessionId}
-          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open}
+          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open || !!client.deletion.target}
           newDisabled={busy}
           open={navOpen}
           select={(id) => void select(id)}
@@ -166,6 +177,7 @@ export function App() {
         </footer>
       </main>
       {client.settings.open && <SettingsDialog settings={client.settings} />}
+      {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} />}
       {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessionId} />}
       {chat.approval.pending && (
         <ApprovalDialog

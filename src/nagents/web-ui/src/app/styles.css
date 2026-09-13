@@ -888,3 +888,6 @@ button.deny:hover:not(:disabled) {
     scroll-behavior: auto !important;
   }
 }
+.delete-session-dialog { max-width: 30rem; }
+.delete-session-name { font-weight: 600; overflow-wrap: anywhere; }
+.delete-session-trigger:hover:not(:disabled) { color: var(--danger, #d77979); }
