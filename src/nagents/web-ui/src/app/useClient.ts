@@ -5,17 +5,18 @@ import { useSettings } from "../features/settings/useSettings";
 import { useDictation } from "../features/dictation/useDictation";
 import { promptFailure } from "../features/dictation/draft";
 import { recordingSupport } from "../features/dictation/browser";
+import { useChannels } from "../features/channels/useChannels";
 
 export function useClient() {
   const sessions = useSessions();
   const chat = useChatRun(
     sessions.config?.token || "",
     sessions.sessionId,
-    sessions.activityCursor,
-    sessions.initialBackgroundRunId,
+    sessions.receive,
+    sessions.acceptCredentials,
   );
   const [operating, setBusy] = useState(false);
-  const busy = operating || !!chat.backgroundRunId;
+  const busy = operating || !!chat.runId || sessions.globalBusy;
   const [error, setError] = useState("");
   const occupied = useRef(false);
   const dictation = useDictation(
@@ -49,19 +50,20 @@ export function useClient() {
   const settings = useSettings({
     token: sessions.config?.token || "",
     blocked: busy || !!sessions.externalRun || !!chat.approval.pending || dictation.unfinished,
-    operate: (action) =>
-      chat.backgroundRunId ? Promise.resolve(false) : operate(action),
+    operate: (action) => busy ? Promise.resolve(false) : operate(action),
     accept: sessions.acceptSettings,
   });
+  const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
 
   async function connect() {
     dictation.controller.cancel("");
     await operate(async () => {
+      chat.pause();
       chat.setStatus("Connecting to local harness");
       try {
         const snapshot = await sessions.connect();
         if (snapshot) chat.loadHistory(snapshot);
-        else chat.setStatus("A run is active in another connection");
+        chat.reconnect();
       } catch (cause) {
         chat.setStatus("Disconnected");
         throw cause;
@@ -74,10 +76,15 @@ export function useClient() {
   }, []);
 
   async function select(id = "") {
-    if (!sessions.config || sessions.externalRun || chat.backgroundRunId)
+    if (id && id === sessions.sessionId) return true;
+    if (!sessions.config || (!id && busy) || channels.open || settings.open)
       return false;
     return operate(async () => {
-      chat.loadHistory(await sessions.select(id));
+      chat.pause();
+      try {
+        const snapshot = await sessions.select(id);
+        if (snapshot) chat.loadHistory(snapshot);
+      } finally { chat.reconnect(); }
     });
   }
 
@@ -86,8 +93,7 @@ export function useClient() {
       !sessions.config ||
       !sessions.sessionId ||
       sessions.activityOnly ||
-      sessions.externalRun ||
-      chat.backgroundRunId ||
+      channels.open || settings.open ||
       dictation.controller.active ||
       !value.trim()
     )
@@ -98,21 +104,14 @@ export function useClient() {
       return;
     }
     await operate(async () => {
-      try {
-        await chat.submit(value);
-      } catch (cause) {
-        sessions.invalidate();
-        throw cause;
-      }
-      // Preserve partial output: navigation refresh does not reload saved history.
-      await sessions.refresh();
+      await chat.submit(value);
     });
   }
 
   async function cancel() {
     try {
       await chat.cancel(chat.runId || sessions.externalRun);
-      if (sessions.externalRun) await connect();
+      if (!chat.connected) await connect();
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -124,7 +123,7 @@ export function useClient() {
 
   function startDictation() {
     if (occupied.current || busy || sessions.externalRun || sessions.activityOnly ||
-        chat.approval.pending || settings.open || !sessions.config?.dictation ||
+        chat.approval.pending || settings.open || channels.open || !sessions.config?.dictation ||
         !sessions.sessionId || recordingSupport()) return;
     void dictation.controller.start({
       token: sessions.config.token,
@@ -141,10 +140,12 @@ export function useClient() {
     sessions,
     chat,
     settings,
+    channels,
     dictation,
     startDictation,
     insertDictation,
     busy,
+    operating,
     error,
     connect,
     select,

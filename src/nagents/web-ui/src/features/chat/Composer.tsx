@@ -75,19 +75,18 @@ export function Composer({
             <p>{demo ? "Offline demo: no paid requests. Sessions are saved locally." : "Live requests may incur costs. Approvals apply to one call; completed actions are not rolled back. Shell is not sandboxed."}</p>
           </div>
         </details>
-        {running ? (
+        {running && (
           <button type="button" className="cancel" onClick={cancel}>
             Stop run
           </button>
-        ) : (
-          <button
-            type="submit"
-            className="primary"
-            disabled={!canSubmit || !prompt.trim()}
-          >
-            Send
-          </button>
         )}
+        <button
+          type="submit"
+          className="primary"
+          disabled={!canSubmit || !prompt.trim()}
+        >
+          Send
+        </button>
       </div>
     </form>
   );

@@ -52,10 +52,12 @@ class Wakeups:
         execute: Callable[[Wakeup], Awaitable[None]],
         *,
         clock: Callable[[], float] = time.monotonic,
+        observer: Callable[[dict[str, object]], None] = lambda record: None,
     ) -> None:
         self.idle = idle
         self.execute = execute
         self.clock = clock
+        self.observer = observer
         self.pending: dict[str, Wakeup] = {}
         self.changed = asyncio.Event()
         self.closed = False
@@ -66,6 +68,7 @@ class Wakeups:
         self._tasks: list[asyncio.Task[None]] = []
 
     def publish(self, record: dict[str, object]) -> None:
+        self.observer(record)
         record = {**record, "cursor": self.cursor + 1}
         size = len(json.dumps(record, default=_json_default, ensure_ascii=True))
         self.cursor += 1

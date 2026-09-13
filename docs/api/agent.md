@@ -18,6 +18,8 @@ and compaction for the same session.
         - run
         - run_simple
         - register_tool
+        - add_channel
+        - listen
         - clear_session
         - close
 

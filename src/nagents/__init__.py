@@ -110,6 +110,22 @@ from .batch import BatchStore
 from .batch import BatchToolCall
 from .batch import ToolCallFunction
 from .batch import UsageInfo
+from .channels import Channel
+from .channels import ChannelAction
+from .channels import ChannelActivity
+from .channels import ChannelAttachment
+from .channels import ChannelCommand
+from .channels import ChannelDelivery
+from .channels import ChannelError
+from .channels import ChannelEvent
+from .channels import ChannelEventHandler
+from .channels import ChannelFactory
+from .channels import ChannelMessage
+from .channels import ChannelPlugin
+from .channels import ChannelReceiver
+from .channels import ChannelSend
+from .channels import ChannelValue
+from .channels import load_channel
 from .compaction import estimate_messages_tokens
 from .compaction import get_model_context_limit
 from .compaction import truncate_tool_results
@@ -241,6 +257,21 @@ __all__ = [
     "BatchToolCall",
     "BytesAudioInput",
     "BytesAudioOutput",
+    "Channel",
+    "ChannelAction",
+    "ChannelActivity",
+    "ChannelAttachment",
+    "ChannelCommand",
+    "ChannelDelivery",
+    "ChannelError",
+    "ChannelEvent",
+    "ChannelEventHandler",
+    "ChannelFactory",
+    "ChannelMessage",
+    "ChannelPlugin",
+    "ChannelReceiver",
+    "ChannelSend",
+    "ChannelValue",
     "CodexCredentials",
     "CodexProvider",
     "CompactionDoneEvent",
@@ -323,6 +354,7 @@ __all__ = [
     "estimate_messages_tokens",
     "get_media_capabilities",
     "get_model_context_limit",
+    "load_channel",
     "transcode_audio_to_wav",
     "truncate_tool_results",
 ]

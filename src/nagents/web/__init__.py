@@ -41,6 +41,7 @@ def serve(
         import uvicorn
 
         from .app import create_app
+        from .subscriptions import MAX_FRAME
     except ModuleNotFoundError as error:
         if error.name not in {"fastapi", "starlette", "pydantic", "uvicorn", "anyio"}:
             raise
@@ -59,4 +60,14 @@ def serve(
         continue_session=continue_session,
     )
     # One process and one lifespan own every Harness resource. Never trust proxy headers.
-    uvicorn.run(app, host=host, port=port, proxy_headers=False, access_log=False, timeout_graceful_shutdown=3)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        proxy_headers=False,
+        access_log=False,
+        timeout_graceful_shutdown=3,
+        ws_max_size=MAX_FRAME,
+        ws_max_queue=16,
+        ws_per_message_deflate=False,
+    )

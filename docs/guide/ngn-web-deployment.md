@@ -85,7 +85,7 @@ Tailnet browser, HTTPS, access governed by Tailscale ACLs/grants
   -> custom ts-serve Ingress ngn-web (TLS terminates here)
   -> ClusterIP Service ngn-web:8080
   -> nginx sidecar: exact external Host/HTTPS Origin checks, no login prompt
-  -> same-pod HTTP 127.0.0.1:8765: unchanged ngn serve / LocalOnly
+  -> same-pod HTTP/WebSocket 127.0.0.1:8765: ngn serve / LocalOnly
 ```
 
 - The example new URL is **https://ngn-web.your-tailnet.ts.net**. No Funnel, public Internet
@@ -130,10 +130,15 @@ Tailnet browser, HTTPS, access governed by Tailscale ACLs/grants
   additionally enforces WAV format, duration, and a smaller effective byte limit.
   Shared proxy directives apply to both locations, including request-buffering
   and temporary-file restrictions. Do not enable request/debug logs to troubleshoot auth.
+- Only `/api/events` receives WebSocket upgrade headers. The server-scoped header
+  rules preserve the same validated Host/Origin rewriting and stripped incoming
+  Authorization headers for that route. `Sec-WebSocket-Protocol` passes through
+  unchanged; ngn validates the process token before accepting a subscription.
 
 **Live validation gate:** confirm the custom ts-serve proxy preserves the external
 Host and Origin, as well as `Sec-Fetch-Site` and `X-Ngn-Token`, and
-streams NDJSON without buffering. A proxy that overwrites Host/Origin cannot be
+streams NDJSON without buffering and supports the `/api/events` WebSocket upgrade.
+A proxy that overwrites Host/Origin cannot be
 made safe by simply trusting forwarded headers or disabling LocalOnly checks.
 Resolve that incompatibility with the cluster administrator before any cutover. The Ingress does
 not itself prove TLS, tailnet-only exposure, or header preservation.
@@ -155,6 +160,21 @@ even after the seed Secret is deleted. Deleting the workload/PVC does not erase
 the retained PV or node data. Never automatically delete or clear either during
 cleanup. Do not mount NFS, the current checkout, a Docker socket, or broad host
 directories into this workload.
+
+The template also creates `/state/channel-plugins` and sets
+`NGN_CHANNEL_PLUGIN_PATH` to it. Python packages installed there through the
+application's approved shell are retained by the PVC and become discoverable with
+**Channels → Refresh**. The image's Python/pip installation remains on its
+read-only root filesystem; package installation targets the writable plugin
+directory explicitly. Channel configuration, secret values, and chat/session
+bindings are private application state and belong in protected backups with the
+session database. Do not put bot tokens in the public manifest or shell prompts.
+
+Web input and connector notifications use a durable queue. Check queued channel
+work as well as active runs before maintenance. A browser disconnect does not
+stop that work. Failed/interrupted execution is not automatically replayed after
+restart because an external action may already have occurred. This differs from
+the process-local scheduled wakeups described below.
 
 Initialization uses `/state/.ngn-web-state` to recognize this deployment's state.
 Without that marker, `/state` must be empty; an unrecognized nonempty directory

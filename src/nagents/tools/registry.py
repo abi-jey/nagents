@@ -220,6 +220,10 @@ class ToolRegistry:
         """Get all registered tools."""
         return list(self._tools.values())
 
+    def unregister(self, name: str) -> None:
+        """Remove a tool by name; removing an absent tool is a no-op."""
+        self._tools.pop(name, None)
+
     def has_tools(self) -> bool:
         """Check if any tools are registered."""
         return len(self._tools) > 0
