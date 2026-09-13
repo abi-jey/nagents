@@ -25,7 +25,9 @@ from tests.test_agent_skills import MemorySkills
 from tests.test_agent_skills import descriptor
 
 
-@pytest.mark.parametrize("body", ["x" * 50000, "😀漢é" * 10000, "a\n" * 20000])
+@pytest.mark.parametrize(
+    "body", ["x" * 50000, "😀漢é" * 10000, "a\n" * 20000], ids=["long-line", "unicode", "many-lines"]
+)
 def test_utf8_budget_long_lines_and_unlimited_line_count(body: str) -> None:
     result = budget_skill_content(descriptor("guide"), body)
     assert result["estimated_tokens"] <= 10000

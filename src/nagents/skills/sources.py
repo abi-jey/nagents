@@ -5,7 +5,9 @@ import os
 import stat
 import sys
 from collections.abc import Iterable
+from collections.abc import Iterator
 from collections.abc import Sequence
+from contextlib import contextmanager
 from importlib import resources
 from pathlib import Path
 
@@ -29,6 +31,9 @@ class DirectorySkillDiscoverer:
     Files over 4 MB are skipped with a bounded diagnostic. This source grants
     access to its configured roots; applications with their own filesystem
     authorization should implement SkillDiscoverer using that guarded access.
+    Windows rejects all reparse points (including junctions) and pins ancestors
+    with read-only sharing; listing/attribute access to ancestors is required.
+    Conflicting write/delete handles cause a diagnostic skip or a load error.
     """
 
     def __init__(self, roots: Iterable[Path | str], *, max_entries: int = 10_000, max_depth: int = 16) -> None:
@@ -42,6 +47,8 @@ class DirectorySkillDiscoverer:
 
     @staticmethod
     def _open_directory(path: Path) -> int:
+        if sys.platform == "win32":
+            raise OSError("Windows directory access requires guarded native handles, not POSIX descriptors")
         # Walk from the filesystem anchor using directory descriptors. Checking
         # is_symlink()/resolve() alone would leave a check/open symlink race.
         descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
@@ -57,6 +64,10 @@ class DirectorySkillDiscoverer:
 
     @classmethod
     def _read(cls, path: Path) -> str:
+        if sys.platform == "win32":
+            from ._windows import read_file
+
+            return read_file(path, _MAX_FILE_BYTES).decode("utf-8")
         parent = cls._open_directory(path.parent)
         try:
             descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
@@ -70,6 +81,22 @@ class DirectorySkillDiscoverer:
         if len(content) > _MAX_FILE_BYTES:
             raise ValueError(f"SKILL.md exceeds {_MAX_FILE_BYTES} bytes")
         return content.decode("utf-8")
+
+    @classmethod
+    @contextmanager
+    def _scandir(cls, path: Path) -> Iterator[Iterator[os.DirEntry[str]]]:
+        if sys.platform == "win32":
+            from ._windows import guarded_directory
+
+            with guarded_directory(path) as native_path, os.scandir(native_path) as entries:
+                yield entries
+        else:
+            descriptor = cls._open_directory(path)
+            try:
+                with os.scandir(descriptor) as entries:
+                    yield entries
+            finally:
+                os.close(descriptor)
 
     async def discover(self) -> Sequence[Skill]:
         found: list[Skill] = []
@@ -88,31 +115,34 @@ class DirectorySkillDiscoverer:
                 return
             visited.add(directory)
             try:
-                descriptor = self._open_directory(directory)
-                try:
-                    with os.scandir(descriptor) as entries:
-                        names: list[str] = []
-                        for entry in entries:
-                            if len(names) >= remaining:
-                                diagnose(directory, "discovery entry limit reached; increase max_entries")
-                                # Never publish an arbitrary filesystem-order subset.
-                                names.clear()
-                                remaining = 0
-                                break
-                            names.append(entry.name)
-                finally:
-                    os.close(descriptor)
-            except OSError as error:
+                with self._scandir(directory) as entries:
+                    modes: dict[str, int] = {}
+                    for entry in entries:
+                        if len(modes) >= remaining:
+                            diagnose(directory, "discovery entry limit reached; increase max_entries")
+                            # Never publish an arbitrary filesystem-order subset.
+                            modes.clear()
+                            remaining = 0
+                            break
+                        modes[entry.name] = 0
+                        try:
+                            # Inspect entries while their parent is still pinned.
+                            info = entry.stat(follow_symlinks=False)
+                            if stat.S_ISLNK(info.st_mode) or (
+                                sys.platform == "win32" and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                            ):
+                                continue
+                            modes[entry.name] = info.st_mode
+                        except OSError as error:
+                            diagnose(directory / entry.name, error)
+            except (OSError, ValueError) as error:
                 diagnose(directory, error)
                 return
-            remaining -= len(names)
-            for name in sorted(names):
+            remaining -= len(modes)
+            for name, mode in sorted(modes.items()):
                 await asyncio.sleep(0)
                 path = directory / name
                 try:
-                    mode = path.lstat().st_mode
-                    if stat.S_ISLNK(mode):
-                        continue
                     if stat.S_ISDIR(mode):
                         if depth < self.max_depth and remaining:
                             await walk(path, depth + 1)
