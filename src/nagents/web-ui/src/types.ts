@@ -26,6 +26,8 @@ export type ActiveRun = {
   events?: WireEvent[];
   records?: WireEvent[];
   message_id?: string;
+  history_id?: string;
+  ingress_id?: string | number;
   pending_approvals?: WireEvent[];
   approval?: WireEvent | Record<string, never>;
 };
@@ -57,6 +59,10 @@ export type Snapshot = {
   active_session_id?: string;
   history: {
     role: string;
+    history_id?: string;
+    ingress_id?: string | number;
+    // Missing on legacy replies; only explicit true authorizes channel source metadata.
+    source_verified?: boolean;
     message_id?: string;
     source?: unknown;
     content: string;

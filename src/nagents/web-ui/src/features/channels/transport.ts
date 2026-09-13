@@ -15,10 +15,11 @@ function schema(value: unknown, depth = 0): boolean {
 
 export async function channelRequest(token: string, signal: AbortSignal, operation: "load" | "refresh" | "save" | "delete", id = "", body?: ChannelSave | { revision: string }): Promise<Catalog> {
   const path = operation === "refresh" ? "channels/refresh" : operation === "load" ? "channels" : `channels/${encodeURIComponent(id)}`;
+  const payload = operation === "refresh" ? {} : body;
   const response = await fetch(`/api/${path}`, {
     method: { load: "GET", refresh: "POST", save: "PUT", delete: "DELETE" }[operation],
-    headers: { "X-Ngn-Token": token, ...(body ? { "Content-Type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined, signal, cache: "no-store", credentials: "same-origin",
+    headers: { "X-Ngn-Token": token, ...(payload ? { "Content-Type": "application/json" } : {}) },
+    body: payload ? JSON.stringify(payload) : undefined, signal, cache: "no-store", credentials: "same-origin",
   });
   if (!response.ok) throw new RequestError(channelError(response.status), response.status);
   const value: unknown = await response.json();

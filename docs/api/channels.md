@@ -16,6 +16,12 @@ delivery semantics, and an extension example.
 
 ::: nagents.channels.ChannelAction
 
+::: nagents.channels.ChannelPlugin
+
+::: nagents.channels.ChannelCommand
+
+::: nagents.channels.ChannelActivity
+
 ::: nagents.channels.ChannelError
 
 ::: nagents.channels.ChannelEvent

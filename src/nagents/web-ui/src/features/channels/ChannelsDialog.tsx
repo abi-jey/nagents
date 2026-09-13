@@ -49,7 +49,7 @@ export function ChannelsDialog({ channels, sessions, selected }: {
   }
   function fieldHelp(key: string, field: Property = {}, secret = false) {
     return <details className="settings-help channel-field-help">
-      <summary aria-label={`Details for ${fieldLabel(key, field)}`}>Field details</summary>
+      <summary aria-label={`Field details for ${fieldLabel(key, field)}`}>Field details</summary>
       <div id={`channel-${key}-help`}>
         <p><code>{key}</code>{field.description ? ` — ${field.description}` : ""}</p>
         {secret ? <p>Leave empty to keep the saved secret.{field.type && field.type !== "string" ? " Enter this property's value as JSON." : ""}</p>

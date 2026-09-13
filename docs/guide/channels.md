@@ -194,6 +194,44 @@ Factories and connectors are explicitly trusted Python extensions. Dependencies
 belong to their separate distributions; the core channel interface adds no
 transport-specific dependency to Nagents.
 
+### Configuration Descriptors And Host Features
+
+A factory can be wrapped in a callable `ChannelPlugin` to expose configuration
+fields to management clients:
+
+```python
+from nagents import ChannelPlugin
+
+plugin = ChannelPlugin(
+    name="Example connector",
+    description="Receive project updates",
+    config_schema={
+        "type": "object",
+        "properties": {"token": {"type": "string", "writeOnly": True}},
+        "required": ["token"],
+    },
+    factory=from_config,
+)
+```
+
+Point the entry point at `my_connector:plugin` instead of the factory function.
+`load_channel` accepts either form. `writeOnly` marks credential fields for a
+host to store privately and redact from configuration responses.
+
+Two optional Channel methods support richer hosts:
+
+- `command(message)` recognizes an explicit transport command and returns a
+  `ChannelCommand`, without doing I/O. The host decides which commands to handle
+  and owns session routing and persistence.
+- `activity(event)` receives `ChannelActivity` start/stop notifications for typing
+  or similar indicators. A connector must stop its keepalive tasks during close.
+
+The standalone `Agent.listen(session_id=...)` API keeps one shared identity. The
+[web host](ngn-web.md#channels-telegram-chats-and-session-binding) adds a routing
+policy: each external chat starts with a separate session and can explicitly
+reattach to an existing one. Source conversation IDs are therefore routing data,
+not a universal instruction to create or merge core Agent sessions.
+
 ## Feature-branch alpha releases
 
 Maintainers can publish a tested core prerelease without merging a draft PR:

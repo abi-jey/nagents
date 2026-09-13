@@ -33,9 +33,10 @@ port. The only accepted hosts are `127.0.0.1`, `::1`, and `localhost`.
 
 Common Harness options work before or after `serve`, including `--provider`,
 `--model`, `--agent`, `--config`, `--continue`, and `--resume`. API keys and saved
-OAuth credentials stay on the backend. Configure credentials through the existing
-CLI/environment, not the browser. Textual is not required. The existing `server`
-extra also supplies the HTTP dependencies, but the applications are independent.
+OAuth credentials stay on the backend. Configure model-provider credentials through
+the existing CLI/environment. Connector credentials have a separate Channels form
+described below. Textual is not required. The existing `server` extra also supplies
+the HTTP/WebSocket dependencies, but the applications are independent.
 
 ### Your Own Connection
 
@@ -93,22 +94,23 @@ still stored locally in the Harness data directory.
 
 ## Operation And Safety
 
-- One local app instance owns one Harness on one async lifespan/event loop. Runs
-  and session mutations conflict explicitly with HTTP 409; nothing is secretly
-  queued by a competing user request. Scheduled wakeups wait for an idle boundary.
-  Another tab cannot submit into a different selected session by accident.
-- Closing the stream, navigating away, cancelling, or shutting down cancels and
-  joins an ordinary request-owned run and its child tools. Pending approvals fail
-  closed. A previously accepted timer from a completed run does not require an
-  open browser; see [Scheduled Wakeups](#scheduled-wakeups). Completed actions
-  are **not rolled back**.
+- One local app instance owns one Harness on one async lifespan/event loop. Web
+  messages and channel notifications queue for serialized execution. Each message
+  carries an explicit target session; changing the sidebar selection does not
+  reroute already accepted input. Settings and other session mutations still
+  require an idle boundary. Scheduled wakeups also wait for idle execution.
+- The browser subscribes to session updates over WebSocket. Navigating away or
+  losing that subscription does not cancel server-owned queued work. Use **Stop
+  run** to cancel an active run; server shutdown joins its owned work. Pending
+  approvals fail closed, and completed actions are **not rolled back**.
 - Approvals apply to an exact run, call ID, and fresh approval nonce. Only the
   active pending approval may be decided; stale, duplicate, or unknown decisions
   fail. An unanswered approval expires after five minutes and is denied.
-- Partial streamed output remains visible after failure/cancellation. Prompts and
-  decisions are never automatically retried. Reconnect explicitly to reload saved
-  history; unfinished output may not have been persisted by the Harness. If another
-  connection still owns a run, finish or cancel it before reconnecting.
+- Partial streamed output remains visible after failure/cancellation. Subscription
+  reconnects use a cursor and server-instance epoch. A gap or restart requests a
+  fresh snapshot instead of replaying model/tool work. Web input has a stable
+  client message ID for durable admission deduplication. Approval decisions are
+  never automatically retried.
 - The client displays model and tool output as escaped text, with fenced code
   shown in keyboard-scrollable code regions. Tool records retain separate inputs,
   streamed output, final result/error, call identity, and measured duration when
@@ -129,7 +131,7 @@ still stored locally in the Harness data directory.
   the review heading, show exact inputs alongside the diff, and keep Deny conspicuous.
   Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
   a stream does not steal focus or scroll a reader away from earlier messages.
-- No remote binding, CORS wildcard, authentication/endpoint editor,
+- No remote binding, CORS wildcard, model-provider authentication/endpoint editor,
   attachment upload into chat, arbitrary file HTTP access, or direct shell
   endpoint is provided. The separate [dictation upload](#microphone-dictation)
   produces editable text. Only built frontend assets are served. Unknown routes
@@ -162,6 +164,13 @@ The token is held in browser
 memory, never a URL or local storage. Responses are non-cacheable, frame embedding
 is blocked, and no third-party scripts/fonts are loaded.
 
+WebSocket upgrades enforce the same Host/Origin boundary and authenticate before
+accepting a connection. The browser offers `ngn.events.v1` and
+`ngn.token.<process-token>` as subprotocols; the server selects only the former.
+Tokens never belong in a WebSocket URL. Subscriptions can read only validated root
+sessions in this workspace. Subscriber queues and replay history are bounded so a
+slow tab does not block model execution.
+
 ## API Outline
 
 All paths are under `/api`. API clients first GET `bootstrap`, then send its token
@@ -180,7 +189,13 @@ explicit WAV transcription contract below.
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
-| `POST run` | `{session_id, prompt}` starts an owning NDJSON response |
+| `POST messages` | `{session_id, prompt, message_id}` durably queues input; updates arrive through subscriptions |
+| `WS events` | Authenticated session subscriptions, snapshots, replay cursors, and live execution records |
+| `GET channels` | Installed plugin descriptors, redacted saved connections, bindings, and configuration revision |
+| `POST channels/refresh` | Refresh installed connector discovery after package installation |
+| `PUT channels/{id}` | Save a connection and its enabled/main-session configuration at an idle boundary |
+| `DELETE channels/{id}` | Remove a configured connection using its current revision |
+| `POST run` | Compatibility API: `{session_id, prompt}` starts a request-owned NDJSON response |
 | `POST cancel` | `{run_id}` cancels/joins exactly that active run |
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
 | `POST dictation/transcribe` | Bounded raw `audio/wav` recording; returns `{text}` without starting a chat run |
@@ -192,8 +207,74 @@ adds `run_id` to every record. Web lifecycle records are `run_started`, `heartbe
 nonce. A core `done` is not the transport terminator; wait for `run_finished`.
 `approval_closed` includes the backend's `decision` and `expired` flag so the live
 transcript can retain the actual decision without guessing from tool output.
-Streams are not replayable/resumable. Read saved history to recover, rather than
-automatically replaying a request with side effects.
+The compatibility `POST run` stream remains request-owned and is not resumable;
+closing it cancels that run. New browser input uses `POST messages` and the
+WebSocket subscription instead. Subscription replay replays observations, never
+executes a prompt or tool again.
+
+### Channels, Telegram Chats, And Session Binding
+
+Open **Channels** to configure installed connectors. The plugin selector displays
+the package's configuration schema and version. Saved secret values are never
+returned to the browser; a configured indicator lets you keep an existing value
+without re-entering it. Choose an existing **main session** when configuring a
+connection, then enable it to start receiving events on the server.
+
+The web host creates a separate persistent session for each connector/chat pair.
+Telegram messages appear as ordinary user messages with source information, and
+new chat sessions appear in the sidebar. Selecting another session in the browser
+does not move a Telegram chat's binding.
+
+Telegram's host commands allow an explicit change:
+
+| Command | Purpose |
+| --- | --- |
+| `/sessions` | List available sessions. |
+| `/session` | Report the chat's current session. |
+| `/session <session-id>` | Attach this chat to an existing session. |
+| `/session main` | Attach to the connection's configured main session. |
+| `/session default` | Return to this chat's default session. |
+| `/new <title>` | Create and attach a new session. |
+
+Commands are handled by the host rather than sent to a model as ordinary work.
+Their acknowledgements return to the originating chat. Pending messages retain
+their admitted session target when a later command changes the binding.
+
+The agent chooses outbound channel sends and actions through tools. A final model
+response is not broadcast to every attached chat. Typing activity is a separate
+transport indicator while a bound session is working; Telegram refreshes it while
+active and lets it expire after completion/cancellation.
+
+Chat separation organizes context; it does not add a multi-user authorization
+system. Configure the connector's allowed chat IDs for the contacts intended to
+use this agent. An authorized session-switch command can join an existing shared
+conversation deliberately.
+
+### Dynamically Installed Connector Packages
+
+Connectors are ordinary Python packages declaring a `nagents.channels` entry point.
+The Channels panel shows the server-controlled plugin directory and an installation
+command. An agent can run that command through its existing approved shell tool,
+then the panel's **Refresh** makes a newly installed connector available.
+
+In the Kubernetes template, packages persist at `/state/channel-plugins`:
+
+```bash
+python -m pip install --pre --no-cache-dir --no-deps \
+  --target "$NGN_CHANNEL_PLUGIN_PATH" nagents-channel-telegram-bot
+```
+
+The image already supplies the Telegram connector's Nagents/aiohttp requirements.
+Other connectors may need compatible additional dependencies. The directory is
+on the state volume, so packages survive image replacement. Local installations
+default to a plugin directory beneath the configured data directory; use the path
+shown by your own server rather than assuming the Kubernetes path.
+
+Installation and activation are distinct: package discovery does not enable a bot
+or supply credentials. Configure and enable it in Channels after installation.
+New modules can be discovered in the running process. Upgrades to already imported
+modules/dependencies may require a server restart; the app does not reload live
+Python modules underneath executing tools.
 
 ### Scheduled Wakeups
 
@@ -308,14 +389,16 @@ to the browser.
 #### Upload Contract
 
 `POST /api/dictation/transcribe` accepts only a raw `audio/wav` body and also
-requires `X-Ngn-Session` for the selected root conversation and
+requires `X-Ngn-Session` for the selected root conversation (or a root with a
+verified live editor subscription) and
 `X-Ngn-Settings-Revision` for the recording's captured settings revision. Stale
 session/settings requests conflict rather than silently using a different
-conversation or transcription configuration.
+conversation or transcription configuration. A recovered WebSocket editor can
+retain its root after server restart without changing the legacy shared selection.
 
-One admitted upload/transcription owns the operation slot. Competing runs,
-uploads, settings saves, and session mutations conflict; due wakeups wait for
-the slot to become idle. Admission occurs before buffering the recording.
+One admitted upload/transcription owns the operation slot. Competing uploads,
+settings saves, and session mutations conflict; queued runs and due wakeups wait
+for the slot to become idle. Admission occurs before buffering the recording.
 The backend counts actual received bytes, validates PCM format and duration,
 and rebuilds WAV data without ancillary metadata before the provider upload.
 The limit is `effective_seconds * 32000 + 4096` bytes, with at most 300 seconds.

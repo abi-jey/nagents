@@ -104,6 +104,16 @@ data:
             "" "";
             default "http://127.0.0.1:8765";
         }
+        # Upgrade only the session subscription route. Keeping these directives
+        # at server scope preserves all inherited Host/Origin/auth header rules.
+        map "$uri|$http_upgrade" $ngn_websocket_upgrade {
+            default "";
+            "/api/events|websocket" websocket;
+        }
+        map $ngn_websocket_upgrade $ngn_connection {
+            "" "";
+            websocket upgrade;
+        }
 
         server {
             listen 8080 default_server;
@@ -125,7 +135,8 @@ data:
             proxy_set_header Origin $ngn_upstream_origin;
             proxy_set_header Authorization "";
             proxy_set_header Proxy-Authorization "";
-            proxy_set_header Connection "";
+            proxy_set_header Upgrade $ngn_websocket_upgrade;
+            proxy_set_header Connection $ngn_connection;
             # Sec-Fetch-Site, X-Ngn-Token, and transcription session/revision
             # headers pass through unchanged for backend validation.
             proxy_buffering off;
@@ -223,7 +234,7 @@ spec:
               chown 1000:1000 "$marker"
               chmod 0600 "$marker"
               # Only fixed private paths, never recursive chown of workspace files.
-              for directory in /state /state/home /state/config /state/workspace /state/sessions /state/data /state/data/ngn /state/data/ngn/auth; do
+              for directory in /state /state/home /state/config /state/workspace /state/sessions /state/channel-plugins /state/data /state/data/ngn /state/data/ngn/auth; do
                 if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
                   printf '%s\n' 'Refusing unsafe ngn state directory.' >&2
                   exit 1
@@ -307,6 +318,8 @@ spec:
               value: /state/data
             - name: XDG_CONFIG_HOME
               value: /state/config
+            - name: NGN_CHANNEL_PLUGIN_PATH
+              value: /state/channel-plugins
             # Optional at startup: Settings reports a missing transcription key.
             # This variable is not used for the Codex chat connection.
             - name: NGN_TRANSCRIPTION_API_KEY

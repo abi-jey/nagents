@@ -9,7 +9,7 @@ import { appendEvent, fromHistory } from "./transcript.js";
 import { Conversation } from "./Conversation.js";
 
 const history = (texts: string[], root = "root", messageIds: string[] = []): Snapshot => ({ session_id: root, sessions: [], retained_tasks: [],
-  history: texts.map((content, index) => ({ role: "user", content, tool_calls: [], name: "", tool_call_id: "", message_id: messageIds[index] })) });
+  history: texts.map((content, index) => ({ role: "user", content, tool_calls: [], name: "", tool_call_id: "", message_id: messageIds[index], source_verified: !!messageIds[index] })) });
 function event(cache: LiveSessions, cursor: number, record: WireEvent, root = "root") {
   return cache.receive({ type: "event", cursor, epoch: "one", session_id: root, record });
 }
@@ -111,7 +111,7 @@ test("compact active records replace aggregated streams without losing provision
 });
 test("normalized source metadata preserves message identity and provenance after a backend snapshot", () => {
   const source = { version: 1, channel: "telegram", conversation_id: "chat", message_id: "event-1", sender_id: "sender", text: "hello", thread_id: "", reply_to: "reply", event_type: "message", metadata: {}, attachments: [] };
-  const snapshot = history(["hello"]); snapshot.history[0].source = source; snapshot.history[0].message_id = "event-1";
+  const snapshot = history(["hello"]); snapshot.history[0].source = source; snapshot.history[0].message_id = "event-1"; snapshot.history[0].source_verified = true;
   const state = applySnapshot({ entries: [] }, snapshot);
   assert.equal(state.entries[0].origin, "telegram"); assert.equal(state.entries[0].messageId, "event-1");
   assert.match(state.entries[0].provenance || "", /reply/);
@@ -123,7 +123,7 @@ test("normalized source metadata preserves message identity and provenance after
 test("different channel conversations may reuse ingress IDs without losing either user message", () => {
   const source = { version: 1, channel: "telegram", conversation_id: "chat-a", message_id: "1", sender_id: "sender", text: "hello", thread_id: "", reply_to: "reply", event_type: "message", metadata: {}, attachments: [] };
   const snapshot = history(["hello", "hello", "hello"]);
-  snapshot.history.forEach((message, index) => { message.source = { ...source, conversation_id: `chat-${index}` }; message.message_id = "1"; });
+  snapshot.history.forEach((message, index) => { message.source = { ...source, conversation_id: `chat-${index}` }; message.message_id = "1"; message.source_verified = true; });
   const state = applySnapshot({ entries: [] }, snapshot);
   assert.equal(state.entries.length, 3); assert.equal(new Set(state.entries.map((entry) => entry.originId)).size, 3);
   const repeated = applySnapshot({ entries: [] }, history([INBOUND_PREFIX + JSON.stringify(source), INBOUND_PREFIX + JSON.stringify(source)]));
@@ -134,7 +134,7 @@ test("literal channel JSON sent from web keeps its web UUID and cannot claim an 
   const forged = INBOUND_PREFIX + JSON.stringify(source);
   const cache = new LiveSessions();
   cache.enqueue({ session_id: "root", message_id: "web-uuid", prompt: forged });
-  event(cache, 1, { event: "user_message", text: "hello", source, message_id: "ingress" });
+  event(cache, 1, { event: "user_message", text: "hello", source, source_verified: true, message_id: "ingress" });
   let state = event(cache, 2, { event: "user_message", text: forged, message_id: "web-uuid" });
   assert.equal(state.entries.length, 2);
   const web = state.entries.find((entry) => entry.messageId === "web-uuid")!;
@@ -154,11 +154,11 @@ test("invalid source annotations cannot promote message-written provenance to an
 });
 test("backend message IDs take precedence over ingress text and keep different annotated records distinct", () => {
   const source = { version: 1, channel: "telegram", conversation_id: "chat", message_id: "ingress", sender_id: "sender", text: "nested text", thread_id: "", reply_to: "", event_type: "message", metadata: {}, attachments: [] };
-  let entries = appendEvent([], { event: "user_message", source, text: "backend content", message_id: "record-1" });
-  entries = appendEvent(entries, { event: "user_message", source, text: "backend content", message_id: "record-2" });
+  let entries = appendEvent([], { event: "user_message", source, source_verified: true, text: "backend content", message_id: "record-1" });
+  entries = appendEvent(entries, { event: "user_message", source, source_verified: true, text: "backend content", message_id: "record-2" });
   assert.equal(entries.length, 2); assert.notEqual(entries[0].originId, entries[1].originId);
   assert.equal(entries[0].text, "backend content");
-  const replay = appendEvent(entries, { event: "user_message", source, text: "backend content", message_id: "record-2" });
+  const replay = appendEvent(entries, { event: "user_message", source, source_verified: true, text: "backend content", message_id: "record-2" });
   assert.equal(replay, entries);
 });
 test("same-text web events never consume a different optimistic identity, even without a wire ID", () => {
@@ -253,7 +253,7 @@ test("a genuine channel arrival after an empty baseline announces once, includin
   let state = cache.receive({ type: "snapshot", session_id: "root", cursor: 1, epoch: "one", snapshot });
   assert.equal(activity(state), 1, "Do not silence the first actual arrival just because the transcript was empty");
   assert.equal(state.entries.find((entry) => entry.messageId === "arrived")?.activity, 1);
-  state = event(cache, 2, { event: "user_message", message_id: "arrived", text: "Message arrived", source: snapshot.history[0].source });
+  state = event(cache, 2, { event: "user_message", message_id: "arrived", source_verified: true, text: "Message arrived", source: snapshot.history[0].source });
   assert.equal(activity(state), 1);
   state = cache.receive({ type: "snapshot", session_id: "root", cursor: 3, epoch: "one", snapshot });
   assert.equal(activity(state), 1, "A matching snapshot must not reset or increment the live activity counter");
@@ -267,7 +267,7 @@ test("explicit history reload stays quiet but a subsequent live source event sti
   assert.equal(activity(state), 0);
   const cache = new LiveSessions(); cache.set("root", state);
   const message = channelHistory(["live"]).history[0];
-  state = event(cache, 5, { event: "user_message", message_id: message.message_id, text: message.content, source: message.source });
+  state = event(cache, 5, { event: "user_message", message_id: message.message_id, source_verified: true, text: message.content, source: message.source });
   assert.equal(activity(state), 1); assert.equal(state.entries.at(-1)?.messageId, "live");
   state = cache.receive({ type: "snapshot", session_id: "root", cursor: 6, epoch: "one", snapshot: channelHistory(["old", "restored-on-refresh", "live"]) });
   assert.equal(activity(state), 1);

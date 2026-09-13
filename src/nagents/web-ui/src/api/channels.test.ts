@@ -106,6 +106,10 @@ test("install command safely quotes plugin path and accepts distribution names r
 test("channel transport discovers installed plugins, explicitly refreshes and sends revision-bound PUT/DELETE", async (context) => {
   const calls: { url: string; options: RequestInit }[] = [];
   context.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    if (options.method !== "GET") {
+      assert.equal(new Headers(options.headers).get("Content-Type"), "application/json");
+      assert.doesNotThrow(() => JSON.parse(options.body as string));
+    }
     calls.push({ url, options }); return Response.json(catalog);
   });
   const signal = new AbortController().signal;
@@ -117,6 +121,7 @@ test("channel transport discovers installed plugins, explicitly refreshes and se
   assert.deepEqual(calls.map(({ url, options }) => [url, options.method]), [
     ["/api/channels", "GET"], ["/api/channels/refresh", "POST"], ["/api/channels/personal", "PUT"], ["/api/channels/personal", "DELETE"],
   ]);
+  assert.deepEqual(JSON.parse(calls[1].options.body as string), {});
   assert.equal(JSON.parse(calls[2].options.body as string).revision, "revision-1");
   assert.deepEqual(JSON.parse(calls[3].options.body as string), { revision: "revision-1" });
 });

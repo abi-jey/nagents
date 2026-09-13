@@ -15,6 +15,7 @@ import re
 from contextlib import aclosing
 from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from threading import Lock
@@ -32,6 +33,7 @@ from .store import InboxStore
 from .store import finish_on_cancel
 from .types import Channel
 from .types import ChannelAction
+from .types import ChannelActivity
 from .types import ChannelAttachment
 from .types import ChannelDelivery
 from .types import ChannelError
@@ -55,6 +57,7 @@ if TYPE_CHECKING:
 
 MAX_PAYLOAD_BYTES = 1024 * 1024
 MAX_TEXT_LENGTH = 256 * 1024
+ACTIVITY_TIMEOUT = 2.0
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z")
 _OWNERS: set[tuple[Path, str]] = set()
 _OWNER_LOCK = Lock()
@@ -282,6 +285,35 @@ def _failure(error: Exception, operation: str, *, side_effect: bool = False) -> 
     return ChannelError(_json(details), retry_after=retry_after, outcome_unknown=outcome_unknown)
 
 
+async def _activity(channel: Channel, event: ChannelActivity) -> None:
+    """Optional, bounded transport control; never expose connector exception text."""
+    try:
+        _text(event.conversation_id, "activity conversation")
+        _text(event.thread_id, "activity thread", blank=True)
+        async with asyncio.timeout(ACTIVITY_TIMEOUT):
+            await channel.activity(event)
+    except asyncio.CancelledError:
+        # Preserve real owner cancellation, but a connector raising CancelledError
+        # by itself is still just a failed optional indicator.
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise
+    except Exception:
+        pass
+
+
+def _inbound_activity(envelope: str, session_id: str) -> ChannelActivity:
+    # Older/application-written inbox rows need not carry routing metadata.
+    # Missing optional typing information cannot change their execution policy.
+    try:
+        payload = _object_copy(json.loads(envelope))
+        conversation = _text(payload.get("conversation_id"), "activity conversation")
+        thread = _text(payload.get("thread_id", ""), "activity thread", blank=True)
+    except Exception:
+        conversation = thread = ""
+    return ChannelActivity(conversation, True, thread, session_id)
+
+
 def _tool_arguments(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
     """Normalize argument-binding errors while retaining the tool's schema/signature."""
 
@@ -443,7 +475,10 @@ class ChannelRuntime:
                             return
                         await self._condition.wait()
                         item = await self._store.claim()
+                channel = self._routes[item.channel].channel
+                activity = _inbound_activity(item.envelope, self.session_id)
                 try:
+                    await _activity(channel, activity)
                     message = Message(role="user", content=_INBOUND_PREFIX + item.envelope)
                     async with aclosing(
                         self.agent.run(message, session_id=self.session_id, user_id=self.user_id)
@@ -464,8 +499,13 @@ class ChannelRuntime:
                 else:
                     await self._store.finish(item, "completed")
                 finally:
-                    async with self._condition:
-                        self._condition.notify_all()
+                    try:
+                        # Stop even if start timed out after a remote side effect,
+                        # and finish this bounded control before closing connectors.
+                        await finish_on_cancel(_activity(channel, replace(activity, active=False)))
+                    finally:
+                        async with self._condition:
+                            self._condition.notify_all()
         finally:
             if self.agent._channel_execution_task is task:
                 self.agent._channel_execution_task = None

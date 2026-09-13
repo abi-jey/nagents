@@ -21,6 +21,7 @@ from nagents import ProviderType
 from nagents import SessionManager
 from nagents.channels import Channel
 from nagents.channels import ChannelAction
+from nagents.channels import ChannelActivity
 from nagents.channels import ChannelAttachment
 from nagents.channels import ChannelDelivery
 from nagents.channels import ChannelError
@@ -104,6 +105,7 @@ class MemoryChannel(Channel):
         self.messages = messages
         self.finite = finite
         self.sent: list[ChannelSend] = []
+        self.activities: list[ChannelActivity] = []
         self.acknowledged: list[str] = []
         self.operations: list[tuple[str, dict[str, ChannelValue]]] = []
         self.opened = 0
@@ -167,6 +169,9 @@ class MemoryChannel(Channel):
     async def close(self) -> None:
         self.closed += 1
         self.fail("close")
+
+    async def activity(self, event: ChannelActivity) -> None:
+        self.activities.append(event)
 
 
 class Audit(AgentPlugin):
@@ -444,6 +449,140 @@ def test_cancelled_active_run_leaves_queued_work_for_reopen_without_replay(tmp_p
         assert notifications(reopened_provider.requests[0].messages)[-1]["message_id"] == "queued"
         assert [(row[1], row[2]) for row in await rows(path)] == [("active", "interrupted"), ("queued", "completed")]
         await reopened.close()
+
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled", "observer-failed"])
+def test_public_listen_source_activity_is_scoped_and_always_stops(tmp_path: Path, outcome: str) -> None:
+    async def drive() -> None:
+        provider = OfflineProvider(
+            ((ErrorEvent(message="offline failure", recoverable=False),),) if outcome == "failed" else ()
+        )
+        if outcome == "cancelled":
+            provider.release.clear()
+        agent = make_agent(tmp_path / "activity.db", provider)
+        message = replace(inbound(), conversation_id="origin-room", thread_id="origin-thread")
+        source = MemoryChannel("source", (message, message))
+        untouched = MemoryChannel("other")
+        agent.add_channel(source)
+        agent.add_channel(untouched)
+
+        async def observe(event: ChannelEvent) -> None:
+            assert source.activities == [ChannelActivity("origin-room", True, "origin-thread", "identity")]
+            if outcome == "observer-failed":
+                raise ValueError("Observer failed")
+
+        listener = asyncio.create_task(agent.listen("identity", on_event=observe))
+        if outcome == "cancelled":
+            await asyncio.wait_for(provider.started.wait(), 3)
+            await cancel(listener)
+        elif outcome == "failed":
+            with pytest.raises(ChannelError, match="execution failed"):
+                await asyncio.wait_for(listener, 3)
+        elif outcome == "observer-failed":
+            with pytest.raises(ValueError, match="Observer failed"):
+                await asyncio.wait_for(listener, 3)
+        else:
+            await asyncio.wait_for(listener, 3)
+        assert source.activities == [
+            ChannelActivity("origin-room", True, "origin-thread", "identity"),
+            ChannelActivity("origin-room", False, "origin-thread", "identity"),
+        ]
+        assert not source.sent and not untouched.activities
+        assert len(provider.requests) == 1 and source.closed == untouched.closed == 1
+        assert (await rows(agent.session.db_path))[0][2] == {
+            "completed": "completed",
+            "failed": "failed",
+            "cancelled": "interrupted",
+            "observer-failed": "failed",
+        }[outcome]
+        assert_no_runtime_tasks()
+        await agent.close()
+
+    asyncio.run(drive())
+
+
+@pytest.mark.parametrize("failure", ["exception", "timeout", "self-cancel"])
+def test_source_activity_failure_is_bounded_sanitized_and_does_not_fail_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str
+) -> None:
+    monkeypatch.setattr("nagents.channels.runtime.ACTIVITY_TIMEOUT", 0.01)
+
+    async def drive() -> None:
+        controls = 0
+
+        class BrokenIndicator(MemoryChannel):
+            async def activity(self, event: ChannelActivity) -> None:
+                nonlocal controls
+                self.activities.append(event)
+                controls += 1
+                try:
+                    if failure == "timeout":
+                        await asyncio.Event().wait()
+                    elif failure == "self-cancel":
+                        raise asyncio.CancelledError
+                    else:
+                        raise RuntimeError("SECRET-activity-credential")
+                finally:
+                    controls -= 1
+
+        provider = OfflineProvider()
+        agent = make_agent(tmp_path / "activity-failure.db", provider)
+        source = BrokenIndicator("source", (inbound(),))
+        agent.add_channel(source)
+        observed: list[ChannelEvent] = []
+
+        async def observe(event: ChannelEvent) -> None:
+            observed.append(event)
+
+        await asyncio.wait_for(agent.listen("identity", on_event=observe), 3)
+        assert len(provider.requests) == 1 and (await rows(agent.session.db_path))[0][2] == "completed"
+        assert [event.active for event in source.activities] == [True, False]
+        assert controls == 0 and source.closed == 1
+        assert "SECRET-activity-credential" not in repr(observed) + caplog.text
+        assert_no_runtime_tasks()
+        await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_cancel_during_activity_start_joins_stop_before_connector_close(tmp_path: Path) -> None:
+    async def drive() -> None:
+        starting = asyncio.Event()
+        stopping = asyncio.Event()
+        release = asyncio.Event()
+
+        class SlowIndicator(MemoryChannel):
+            async def activity(self, event: ChannelActivity) -> None:
+                self.activities.append(event)
+                assert self.closed == 0
+                if event.active:
+                    starting.set()
+                    await asyncio.Event().wait()
+                else:
+                    stopping.set()
+                    await release.wait()
+
+        provider = OfflineProvider()
+        agent = make_agent(tmp_path / "activity-cancel.db", provider)
+        source = SlowIndicator("source", (inbound(),))
+        agent.add_channel(source)
+        listener = asyncio.create_task(agent.listen("identity"))
+        await asyncio.wait_for(starting.wait(), 3)
+        listener.cancel()
+        await asyncio.wait_for(stopping.wait(), 3)
+        listener.cancel()
+        await asyncio.sleep(0)
+        assert source.closed == 0
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(listener, 3)
+        assert source.closed == 1 and not provider.requests
+        assert [event.active for event in source.activities] == [True, False]
+        assert (await rows(agent.session.db_path))[0][2] == "interrupted"
+        assert_no_runtime_tasks()
+        await agent.close()
 
     asyncio.run(drive())
 
