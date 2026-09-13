@@ -1,7 +1,11 @@
 """Optional, local-only web client for the ngn Harness, not nagents.server."""
 
+import hashlib
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from .assets import prepare_assets
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
@@ -18,14 +22,7 @@ def local_authority(host: str, port: int) -> str:
 
 
 def built_assets() -> Path:
-    directory = Path(__file__).parent / "static"
-    if not (directory / "index.html").is_file() or not (directory / "assets").is_dir():
-        raise ValueError(
-            "The ngn React assets are missing. In a source checkout run `npm --prefix src/nagents/web-ui ci` then "
-            "`npm --prefix src/nagents/web-ui run build`. For a packaged install, reinstall a release that includes web assets. "
-            "ngn serve never downloads or builds at startup."
-        )
-    return directory
+    return prepare_assets(Path(__file__).resolve().parent)
 
 
 def serve(
@@ -51,6 +48,8 @@ def serve(
             "The existing server extra also supplies these dependencies. Textual is not required."
         ) from error
     assets = built_assets()
+    build_id = hashlib.sha256((assets / "build.json").read_bytes()).hexdigest()[:12]
+    print(f"ngn: React UI build {build_id} from {assets}", file=sys.stderr, flush=True)
     app = create_app(
         config,
         host=host,

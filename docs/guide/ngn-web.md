@@ -18,14 +18,17 @@ Node 20.19 or newer installed:
 
 ```bash
 python -m pip install -e '.[web]'
-npm --prefix src/nagents/web-ui ci
-npm --prefix src/nagents/web-ui run build
 ngn serve --demo --workspace /path/to/project
 ```
 
-For Poetry, use `poetry install -E web` instead of the editable pip command, run
-the same npm commands, and launch with `poetry run ngn serve --demo --workspace
+For Poetry, use `poetry install -E web` instead of the editable pip command and
+launch with `poetry run ngn serve --demo --workspace
 /path/to/project`. Omit `--demo` when you want configured live provider requests.
+
+Use a separate virtualenv and editable installation for each Git worktree.
+Changing your working directory does not change which checkout an installed `ngn`
+command imports. Startup prints the resolved UI asset directory and build ID so
+you can identify the build in use.
 
 Open **http://127.0.0.1:8765**. Use the exact host and port you started; `localhost`
 and `127.0.0.1` are intentionally different origins. `--port 9876` selects another
@@ -67,14 +70,32 @@ visitor. This does not add multi-user account isolation to a shared deployment.
 
 ### Frontend Build
 
-The React/TypeScript source and npm lockfile live in `src/nagents/web-ui/`.
-Vite builds into `src/nagents/web/static/`. These generated assets and
-`src/nagents/web-ui/node_modules/` are ignored by Git. Rebuild after editing frontend source.
-There is no separate Vite origin/proxy required: test the production client through
-`ngn serve`. Startup never downloads dependencies or builds assets. Missing assets
-produce an actionable error. A future published distribution with web support
-must include this build; installing the published `v0.5.0` wheel is not a
-replacement for these source-checkout steps.
+Local source checkouts, CI packages, and Docker use the same React/TypeScript
+source in `src/nagents/web-ui/` and the same `npm run build` command. The build
+typechecks the frontend, runs Vite, and writes `src/nagents/web/static/build.json`
+with hashes of its inputs and output assets. Generated assets and `node_modules/`
+are ignored by Git.
+
+In an editable source installation, `ngn serve` verifies those hashes at startup.
+Missing or stale assets trigger `npm ci` followed by `npm run build` in the
+frontend directory adjacent to the imported Python package. This includes source
+edits, additions, deletions, and lockfile changes after a Git pull. A failed build
+stops startup instead of serving an old UI. The first build, and builds after
+changes, need Node.js and access to the locked npm dependencies; a verified build
+starts without npm. Restart `ngn serve` after editing source; it is not a live
+file watcher. To build ahead of time or prepare for offline use:
+
+```bash
+npm --prefix src/nagents/web-ui ci
+npm --prefix src/nagents/web-ui run build
+```
+
+Wheels and deployed containers serve the same verified bundle, built during
+packaging. They do not install npm dependencies or rebuild at startup. A missing
+or damaged packaged bundle produces a reinstall error. Matching UI builds still
+require matching source revisions; pulling a checkout does not update an already
+deployed image. There is no separate Vite origin/proxy required: test the production
+client through `ngn serve`.
 
 ## Try It Offline
 

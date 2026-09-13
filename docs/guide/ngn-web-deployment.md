@@ -218,6 +218,14 @@ the optional transcription Secret described below. The pinned amd64 application 
 Codex client; `command: [ngn]` overrides its legacy default CMD with `serve` and the
 exact loopback/workspace/config flags. Both images are pinned by digest.
 
+The image builds the same frontend as a local source installation with
+`npm ci` and `npm run build`. It packages the assets and their `build.json`
+manifest together; `ngn serve` verifies the bundle without rebuilding inside the
+container. Startup logs include the UI build ID and asset directory. Compare the
+build ID with a local launch to check that both use identical frontend inputs and
+outputs. Updating local source does not update the pinned deployed image; build
+and roll out an image from the same revision to align them.
+
 The web runtime settings API stores its versioned `ngn_web_settings` row in the
 existing workspace SQLite database under `/state/sessions` on this same PVC.
 Model, profile, dictation preferences, and bounded tool/runtime limits therefore survive pod/image

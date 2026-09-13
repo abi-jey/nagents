@@ -4,6 +4,8 @@ WORKDIR /build/src/nagents/web-ui
 COPY src/nagents/web-ui/package.json src/nagents/web-ui/package-lock.json ./
 RUN npm ci
 COPY src/nagents/web-ui/ ./
+# Canonical build shared with source-checkout startup and Python release CI.
+# Includes build.json so the installed runtime can verify the bundled assets.
 RUN npm run build
 
 FROM python:3.12-slim
