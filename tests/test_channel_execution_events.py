@@ -344,6 +344,23 @@ def test_credential_shaped_argument_keys_are_not_displayed() -> None:
         "ordinary prefix " + "x" * 80 + " Bearer fake-test-value",
         "Bearer " + "fake_test_value_" * 10000,
     ],
+    ids=[
+        "newline",
+        "carriage-return",
+        "tab",
+        "nul",
+        "escape",
+        "delete",
+        "c1-control",
+        "line-separator",
+        "bidi-control",
+        "zero-width",
+        "encoded-newline",
+        "double-encoded-newline",
+        "overlong",
+        "embedded-credential-after-limit",
+        "large-credential",
+    ],
 )
 def test_controls_and_overlong_values_are_omitted_whole_never_prefix_truncated(value: str) -> None:
     assert sanitize_channel_tool_arguments({"data": value}) == {"data": "[redacted]"}
