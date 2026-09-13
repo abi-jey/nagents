@@ -16,6 +16,7 @@ import pytest
 from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
+from nagents.channels.store import finish_on_cancel
 from nagents.channels.types import ChannelCommand
 from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
@@ -91,9 +92,9 @@ def test_soft_delete_preserves_all_history_and_restores_same_identity_without_se
                 other = (await client.post("/api/sessions/new", headers=headers, json={})).json()["session_id"]
                 if selection == "selected":
                     await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
-            before = {table: rows(state, f"SELECT * FROM {table}") for table in tables}
+            before = {table: await rows(state, f"SELECT * FROM {table}") for table in tables}
             await state.settings.change(state.settings.revision, state.settings.values)
-            settings = rows(state, "SELECT * FROM ngn_web_settings")
+            settings = await rows(state, "SELECT * FROM ngn_web_settings")
             subscriber = Subscriber(session_id=root, ready=True)
             state.bus.subscribers.add(subscriber)
             response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
@@ -106,13 +107,13 @@ def test_soft_delete_preserves_all_history_and_restores_same_identity_without_se
             selected = response.json()["session_id"]
             assert selected != root and (not other or selected == other)
             assert subscriber.close_code == 1008 and not state.bus.listening(root)
-            assert not rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root)
+            assert not await rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root)
             for table in tables:
-                after = rows(state, f"SELECT * FROM {table}")
+                after = await rows(state, f"SELECT * FROM {table}")
                 assert after[: len(before[table])] == before[table]
                 if table != "v2_sessions":
                     assert after == before[table]
-            assert rows(state, "SELECT * FROM ngn_web_settings") == settings
+            assert await rows(state, "SELECT * FROM ngn_web_settings") == settings
             assert (await client.get("/api/trash", headers=headers)).json()["items"] == [item]
             restored = await client.post(
                 f"/api/trash/{root}/restore", headers=headers, json={"deletion_id": item["deletion_id"]}
@@ -121,8 +122,10 @@ def test_soft_delete_preserves_all_history_and_restores_same_identity_without_se
             assert set(restored.json()) == {"restored_session_id", "sessions"}
             assert restored.json()["restored_session_id"] == root
             assert state.selected_session_id == state.harness.session_id == selected
-            assert rows(state, "SELECT title FROM harness_sessions WHERE id = ?", root) == [("Exact saved title",)]
-            assert not rows(state, "SELECT * FROM ngn_web_session_trash")
+            assert await rows(state, "SELECT title FROM harness_sessions WHERE id = ?", root) == [
+                ("Exact saved title",)
+            ]
+            assert not await rows(state, "SELECT * FROM ngn_web_session_trash")
             assert (await client.get(f"/api/sessions/{root}", headers=headers)).status_code == 200
             assert state.active is None and all(frame.get("type") != "event" for frame, _ in state.bus.ring)
 
@@ -142,8 +145,8 @@ def test_duplicate_soft_delete_freezes_generation_deadline_and_replacement(tmp_p
             ).json()
             assert first["trash"] == second["trash"]
             assert first["session_id"] == second["session_id"]
-            assert len(rows(state, "SELECT * FROM harness_sessions")) == 1
-            assert len(rows(state, "SELECT * FROM ngn_web_session_trash")) == 1
+            assert len(await rows(state, "SELECT * FROM harness_sessions")) == 1
+            assert len(await rows(state, "SELECT * FROM ngn_web_session_trash")) == 1
             assert (
                 await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True})
             ).status_code == 404
@@ -236,8 +239,8 @@ def test_stale_generation_cannot_restore_or_purge_later_deletion(tmp_path: Path,
                     "DELETE", f"/api/trash/{root}", headers=headers, json={"deletion_id": second["deletion_id"]}
                 )
             ).status_code == 404
-            assert not rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)
-            assert len(rows(state, "SELECT * FROM harness_sessions")) == 1
+            assert not await rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)
+            assert len(await rows(state, "SELECT * FROM harness_sessions")) == 1
 
     asyncio.run(run())
 
@@ -258,14 +261,14 @@ def test_expired_restore_rejected_before_idle_purge_and_expiry_survives_restart(
             state.active = Run(state.selected_session_id)
             try:
                 assert await state.trash.purge_expired() == []
-                assert rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)
+                assert await rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)
             finally:
                 state.active = None
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
             assert (await client.get("/api/trash", headers=headers)).json()["items"] == []
-            assert not rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)
-            assert not rows(state, "SELECT * FROM v2_messages WHERE session_id = ?", root)
+            assert not await rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)
+            assert not await rows(state, "SELECT * FROM v2_messages WHERE session_id = ?", root)
             assert state.active is None
 
     asyncio.run(run())
@@ -317,7 +320,7 @@ def test_trash_hides_membership_from_http_ws_harness_channels_and_admission(tmp_
             await state.channels.store.receive(
                 "fixture", envelope, state.selected_session_id, ChannelCommand("sessions")
             )
-            assert root not in str(rows(state, "SELECT acknowledgement FROM ngn_web_inbox"))
+            assert root not in str(await rows(state, "SELECT acknowledgement FROM ngn_web_inbox"))
 
     asyncio.run(run())
 
@@ -351,7 +354,7 @@ def test_recovered_dangling_binding_or_queued_ack_cannot_replay_trash(tmp_path: 
             with pytest.raises(HTTPException) as error:
                 await state.trash.restore(root, str(item["deletion_id"]))
             assert error.value.status_code == 409
-            assert rows(state, "SELECT status FROM ngn_web_inbox") == [("queued",)]
+            assert await rows(state, "SELECT status FROM ngn_web_inbox") == [("queued",)]
 
     asyncio.run(run())
 
@@ -414,8 +417,8 @@ def test_soft_delete_keeps_existing_work_and_routing_guards(tmp_path: Path, cloc
             try:
                 response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
                 assert response.status_code == 409, response.text
-                assert rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
-                assert not rows(state, "SELECT * FROM ngn_web_session_trash")
+                assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
+                assert not await rows(state, "SELECT * FROM ngn_web_session_trash")
                 assert state.selected_session_id == root
             finally:
                 state.active = None
@@ -455,7 +458,7 @@ def test_delete_input_remains_strict(tmp_path: Path, clock: Clock, body: dict[st
             assert (
                 await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json=body)
             ).status_code == 422
-            assert not rows(state, "SELECT * FROM ngn_web_session_trash")
+            assert not await rows(state, "SELECT * FROM ngn_web_session_trash")
 
     asyncio.run(run())
 
@@ -476,8 +479,8 @@ def test_cancelled_mutations_join_atomic_commit_or_rollback(
                 item = (await deletion.delete_session(state, root))["trash"]
                 assert isinstance(item, dict)
                 generation = str(item["deletion_id"])
-            before_membership = rows(state, "SELECT * FROM harness_sessions")
-            before_trash = rows(state, "SELECT * FROM ngn_web_session_trash")
+            before_membership = await rows(state, "SELECT * FROM harness_sessions")
+            before_trash = await rows(state, "SELECT * FROM ngn_web_session_trash")
             entered, release = Event(), Event()
 
             def block() -> None:
@@ -520,29 +523,37 @@ def test_cancelled_mutations_join_atomic_commit_or_rollback(
                 await asyncio.sleep(0)
                 task.cancel()
                 assert not task.done() and state.mutating
-                assert rows(state, "SELECT * FROM harness_sessions") == before_membership
-                assert rows(state, "SELECT * FROM ngn_web_session_trash") == before_trash
+                assert await rows(state, "SELECT * FROM harness_sessions") == before_membership
+                assert await rows(state, "SELECT * FROM ngn_web_session_trash") == before_trash
             finally:
                 release.set()
             with pytest.raises(ValueError if rollback else asyncio.CancelledError):
                 await task
             assert not state.mutating and not state.harness._busy
-            present = bool(rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root))
+            present = bool(await rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root))
             assert present is ((operation == "trash") if rollback else (operation == "restore"))
-            assert bool(rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)) is (
+            assert bool(await rows(state, "SELECT * FROM v2_sessions WHERE id = ?", root)) is (
                 rollback or operation != "purge"
             )
             if rollback:
-                assert rows(state, "SELECT * FROM harness_sessions") == before_membership
-                assert rows(state, "SELECT * FROM ngn_web_session_trash") == before_trash
-            with closing(sqlite3.connect(state.history.db_path, timeout=0.2)) as db:
-                db.execute("BEGIN EXCLUSIVE")
-                db.rollback()
+                assert await rows(state, "SELECT * FROM harness_sessions") == before_membership
+                assert await rows(state, "SELECT * FROM ngn_web_session_trash") == before_trash
+
+            def check_unlocked() -> None:
+                with closing(sqlite3.connect(state.history.db_path, timeout=0.2)) as db:
+                    db.execute("BEGIN EXCLUSIVE")
+                    db.rollback()
+
+            await finish_on_cancel(asyncio.to_thread(check_unlocked))
 
     asyncio.run(run())
 
 
 def test_purge_keeps_content_free_channel_dedup_and_backup_restores_frozen_trash(tmp_path: Path, clock: Clock) -> None:
+    def backup_database(source_path: Path, destination_path: Path) -> None:
+        with closing(sqlite3.connect(source_path)) as source, closing(sqlite3.connect(destination_path)) as destination:
+            source.backup(destination)
+
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
@@ -560,11 +571,9 @@ def test_purge_keeps_content_free_channel_dedup_and_backup_restores_frozen_trash
             item = (await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})).json()["trash"]
             backup = tmp_path / "trash-backup.db"
             database = state.history.db_path
-            with closing(sqlite3.connect(database)) as source, closing(sqlite3.connect(backup)) as destination:
-                source.backup(destination)
+            await finish_on_cancel(asyncio.to_thread(backup_database, database, backup))
             await state.trash.restore(root, item["deletion_id"])
-        with closing(sqlite3.connect(backup)) as source, closing(sqlite3.connect(database)) as destination:
-            source.backup(destination)
+        await finish_on_cancel(asyncio.to_thread(backup_database, backup, database))
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
             await quiet(state)
@@ -572,9 +581,9 @@ def test_purge_keeps_content_free_channel_dedup_and_backup_restores_frozen_trash
             assert root not in {session.id for session in await state.harness.list_sessions()}
             clock.value = item["purge_at"]
             assert await state.trash.purge_expired() == [root]
-            assert rows(state, "SELECT * FROM ngn_web_deleted_messages") == [("fixture", "late-redelivery")]
-            assert not rows(state, "SELECT * FROM ngn_web_inbox")
-            assert not rows(state, "SELECT * FROM v2_messages WHERE session_id = ?", root)
+            assert await rows(state, "SELECT * FROM ngn_web_deleted_messages") == [("fixture", "late-redelivery")]
+            assert not await rows(state, "SELECT * FROM ngn_web_inbox")
+            assert not await rows(state, "SELECT * FROM v2_messages WHERE session_id = ?", root)
             envelope = json.dumps(
                 dict(
                     message_id="late-redelivery",
@@ -584,10 +593,10 @@ def test_purge_keeps_content_free_channel_dedup_and_backup_restores_frozen_trash
                     text="PRIVATE envelope",
                 )
             )
-            before = rows(state, "SELECT * FROM harness_sessions")
+            before = await rows(state, "SELECT * FROM harness_sessions")
             await state.channels.store.receive("fixture", envelope, state.selected_session_id, None)
-            assert rows(state, "SELECT * FROM harness_sessions") == before
-            assert not rows(state, "SELECT * FROM ngn_web_inbox")
+            assert await rows(state, "SELECT * FROM harness_sessions") == before
+            assert not await rows(state, "SELECT * FROM ngn_web_inbox")
 
     asyncio.run(run())
 
@@ -613,8 +622,8 @@ def test_idle_purge_is_batch_bounded_and_never_prunes_recovered_active_membershi
             assert len(first) <= PURGE_BATCH and protected not in first
             second = await state.trash.purge_expired()
             assert len(first + second) == PURGE_BATCH
-            assert rows(state, "SELECT id FROM v2_sessions WHERE id = ?", protected) == [(protected,)]
-            assert rows(state, "SELECT title FROM harness_sessions WHERE id = ?", protected) == [
+            assert await rows(state, "SELECT id FROM v2_sessions WHERE id = ?", protected) == [(protected,)]
+            assert await rows(state, "SELECT title FROM harness_sessions WHERE id = ?", protected) == [
                 ("Recovered active membership",)
             ]
 
@@ -726,16 +735,16 @@ def test_expiry_scan_moves_past_full_blocked_batch_and_revisits_repaired_rows(tm
             clock.value += 30 * DAY
             assert await state.trash.purge_expired() == []
             assert await state.trash.purge_expired() == [healthy]
-            assert len(rows(state, "SELECT * FROM ngn_web_session_trash")) == PURGE_BATCH
-            assert len(rows(state, "SELECT * FROM ngn_web_bindings")) == PURGE_BATCH
-            assert len(rows(state, "SELECT * FROM v2_messages")) == PURGE_BATCH
+            assert len(await rows(state, "SELECT * FROM ngn_web_session_trash")) == PURGE_BATCH
+            assert len(await rows(state, "SELECT * FROM ngn_web_bindings")) == PURGE_BATCH
+            assert len(await rows(state, "SELECT * FROM v2_messages")) == PURGE_BATCH
 
             def repair(db: sqlite3.Connection) -> None:
                 db.execute("DELETE FROM ngn_web_bindings")
 
             await state.channels.store._transaction(repair)
             assert set(await state.trash.purge_expired()) == set(blocked)
-            assert not rows(state, "SELECT * FROM ngn_web_session_trash")
+            assert not await rows(state, "SELECT * FROM ngn_web_session_trash")
 
     asyncio.run(run())
 
@@ -767,15 +776,17 @@ def test_expiry_rolls_back_one_root_failure_and_continues_other_roots(tmp_path: 
                 )
 
             await state.channels.store._transaction(corrupt)
-            before = rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", bad)
+            before = await rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", bad)
             clock.value += 30 * DAY
             assert await state.trash.purge_expired() == [healthy]
-            assert rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", bad) == before
-            assert rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", bad) == [
+            assert await rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", bad) == before
+            assert await rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", bad) == [
                 ("must survive failed purge",)
             ]
-            assert rows(state, "SELECT prompt FROM ngn_web_inbox WHERE session_id = ?", bad) == [("retained journal",)]
-            assert not rows(state, "SELECT * FROM ngn_web_deleted_messages")
+            assert await rows(state, "SELECT prompt FROM ngn_web_inbox WHERE session_id = ?", bad) == [
+                ("retained journal",)
+            ]
+            assert not await rows(state, "SELECT * FROM ngn_web_deleted_messages")
             assert not state.mutating and not state.harness._busy
 
     asyncio.run(run())

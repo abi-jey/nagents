@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
+from nagents.channels.store import finish_on_cancel
 from nagents.channels.types import ChannelCommand
 from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
@@ -40,12 +41,18 @@ async def quiet(state: WebState) -> None:
     await asyncio.gather(*state.channels.tasks, return_exceptions=True)
 
 
-def rows(state: WebState, sql: str, *parameters: str) -> list[tuple[object, ...]]:
-    with (
-        closing(sqlite3.connect(state.history.db_path, timeout=0.2)) as db,
-        closing(db.execute(sql, parameters)) as cursor,
-    ):
-        return cursor.fetchall()
+async def rows(state: WebState, sql: str, *parameters: str) -> list[tuple[object, ...]]:
+    """Read off-loop so pending writers can finish event-loop-owned reader cleanup."""
+    path = state.history.db_path
+
+    def read() -> list[tuple[object, ...]]:
+        with (
+            closing(sqlite3.connect(path, timeout=0.2)) as db,
+            closing(db.execute(sql, parameters)) as cursor,
+        ):
+            return cursor.fetchall()
+
+    return await finish_on_cancel(asyncio.to_thread(read))
 
 
 @pytest.mark.parametrize("selection", ["selected", "other", "last"])
@@ -57,7 +64,7 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
             root = state.selected_session_id
             child = "ngn-hidden-child"
             await state.settings.change(state.settings.revision, state.settings.values)
-            settings_before = rows(state, "SELECT * FROM ngn_web_settings")
+            settings_before = await rows(state, "SELECT * FROM ngn_web_settings")
             await state.history.get_or_create_session(child, "harness")
             await state.history.add_message(child, Message(role="user", content="child kept"))
             await state.history.add_message(root, Message(role="user", content="root removed"))
@@ -105,11 +112,11 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
                 ("harness_sessions", "id"),
                 ("ngn_web_inbox", "session_id"),
             ):
-                assert not rows(state, f"SELECT * FROM {table} WHERE {key} = ?", root)
-            assert not rows(state, "SELECT * FROM ngn_web_message_origins")
-            assert rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", child) == [("child kept",)]
-            assert rows(state, "SELECT * FROM private_extension") == [("private configuration",)]
-            assert rows(state, "SELECT * FROM ngn_web_settings") == settings_before
+                assert not await rows(state, f"SELECT * FROM {table} WHERE {key} = ?", root)
+            assert not await rows(state, "SELECT * FROM ngn_web_message_origins")
+            assert await rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", child) == [("child kept",)]
+            assert await rows(state, "SELECT * FROM private_extension") == [("private configuration",)]
+            assert await rows(state, "SELECT * FROM ngn_web_settings") == settings_before
             assert protected.read_bytes() == before
             assert subscriber.close_code == 1008 and not state.bus.listening(root)
             assert all(frame.get("session_id") != root for frame, _ in state.bus.ring)
@@ -163,7 +170,7 @@ def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
                     "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
                 )
                 assert response.status_code == 409 and "private" not in response.text
-                assert rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
+                assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
                 assert state.selected_session_id == root and not state.mutating
             finally:
                 state.active = None
@@ -196,7 +203,7 @@ def test_delete_rejects_durable_work(tmp_path: Path, table: str, status: str) ->
                 "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
             )
             assert response.status_code == 409 and "inbox" in response.text
-            assert rows(state, f"SELECT status FROM {table}") == [(status,)]
+            assert await rows(state, f"SELECT status FROM {table}") == [(status,)]
 
     asyncio.run(run())
 
@@ -236,7 +243,7 @@ def test_delete_auth_and_membership(tmp_path: Path, case: str) -> None:
                 "DELETE", f"/api/sessions/{target}", headers=headers, json={"permanent": True}
             )
             assert response.status_code == expected, response.text
-            assert rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
+            assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
 
     asyncio.run(run())
 
@@ -270,20 +277,26 @@ def test_cancel_during_transaction_joins_atomic_outcome_and_cleanup(
                 await asyncio.sleep(0)
                 task.cancel()
                 assert not task.done() and state.mutating
-                assert rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", root) == [("original",)]
-                assert rows(state, "SELECT id FROM harness_sessions") == [(root,)]
+                assert await rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", root) == [
+                    ("original",)
+                ]
+                assert await rows(state, "SELECT id FROM harness_sessions") == [(root,)]
             finally:
                 release.set()
             with pytest.raises(ValueError if rollback else asyncio.CancelledError):
                 await task
             assert not state.mutating and not state.harness._busy
-            roots = rows(state, "SELECT id FROM harness_sessions")
+            roots = await rows(state, "SELECT id FROM harness_sessions")
             assert len(roots) == 1
             assert (roots == [(root,)]) is rollback
             assert state.selected_session_id == state.harness.session_id == roots[0][0]
-            with closing(sqlite3.connect(state.history.db_path, timeout=0.2)) as db:
-                db.execute("BEGIN EXCLUSIVE")  # no orphan connections/read cursors
-                db.rollback()
+
+            def check_unlocked() -> None:
+                with closing(sqlite3.connect(state.history.db_path, timeout=0.2)) as db:
+                    db.execute("BEGIN EXCLUSIVE")  # no orphan connections/read cursors
+                    db.rollback()
+
+            await finish_on_cancel(asyncio.to_thread(check_unlocked))
 
     asyncio.run(run())
 
@@ -311,7 +324,7 @@ def test_admission_racing_delete_cannot_recreate_root(tmp_path: Path, monkeypatc
             with pytest.raises(HTTPException) as error:
                 await admitted
             assert error.value.status_code == 404
-            assert not rows(state, "SELECT * FROM ngn_web_inbox WHERE session_id = ?", root)
+            assert not await rows(state, "SELECT * FROM ngn_web_inbox WHERE session_id = ?", root)
 
     asyncio.run(run())
 
@@ -350,9 +363,9 @@ def test_binding_reattachment_and_deleted_channel_redelivery(tmp_path: Path) -> 
                 await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True})
             ).status_code == 200
             await store.receive("fixture", envelope("original"), other, None)
-            assert not rows(state, "SELECT * FROM ngn_web_inbox WHERE message_id = 'original'")
-            assert rows(state, "SELECT * FROM ngn_web_deleted_messages") == [("fixture", "original")]
-            assert len(rows(state, "SELECT * FROM ngn_web_inbox")) == 2
+            assert not await rows(state, "SELECT * FROM ngn_web_inbox WHERE message_id = 'original'")
+            assert await rows(state, "SELECT * FROM ngn_web_deleted_messages") == [("fixture", "original")]
+            assert len(await rows(state, "SELECT * FROM ngn_web_inbox")) == 2
             assert (await store.bindings())[0]["session_id"] == other
 
     asyncio.run(run())
@@ -396,14 +409,14 @@ def test_crossroot_origin_corruption_rejects_without_removing_other_history(tmp_
                 db.execute("INSERT INTO ngn_web_message_origins SELECT ?, id FROM ngn_web_inbox", (message,))
 
             await state.channels.store._transaction(corrupt)
-            before = rows(state, "SELECT * FROM ngn_web_message_origins")
+            before = await rows(state, "SELECT * FROM ngn_web_message_origins")
             response = await client.request(
                 "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
             )
             assert response.status_code == 409 and "cross-session" in response.text
-            assert rows(state, "SELECT * FROM ngn_web_message_origins") == before
-            assert rows(state, "SELECT content FROM v2_messages") == [("unrelated",)]
-            assert rows(state, "SELECT id FROM harness_sessions") == [(root,)]
+            assert await rows(state, "SELECT * FROM ngn_web_message_origins") == before
+            assert await rows(state, "SELECT content FROM v2_messages") == [("unrelated",)]
+            assert await rows(state, "SELECT id FROM harness_sessions") == [(root,)]
 
     asyncio.run(run())
 
@@ -430,7 +443,7 @@ def test_unrelated_pending_work_bindings_and_retained_tasks_are_preserved(tmp_pa
                     "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
                 )
                 assert response.status_code == 200
-                assert rows(state, "SELECT prompt, status FROM ngn_web_inbox") == [("do not drop", "queued")]
+                assert await rows(state, "SELECT prompt, status FROM ngn_web_inbox") == [("do not drop", "queued")]
                 assert (await state.channels.store.bindings())[0]["session_id"] == other
                 assert "other-task" in state.harness.tasks._infos
                 assert len(state.wakeups.pending) == 1
