@@ -5,6 +5,8 @@ import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
+import { TrashDialog, TrashNotice } from "../features/sessions/TrashDialog";
+import "../features/sessions/trash.css";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DictationControls, DictationReview } from "../features/dictation/DictationControls";
@@ -12,6 +14,7 @@ import "../features/dictation/dictation.css";
 import "../features/settings/settings.css";
 import "../features/channels/channels.css";
 import { useClient } from "./useClient";
+import { restoreDeletionFocus } from "../api/deletion";
 
 export function App() {
   const client = useClient();
@@ -22,7 +25,17 @@ export function App() {
   const composer = useRef<HTMLTextAreaElement>(null);
   const selectedSession = sessions.sessions.find((session) => session.id === sessionId);
   const canSubmit =
-    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target;
+    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target && !client.trash.open;
+  const trashBlocked = busy || (dictation.unfinished && dictation.state.phase !== "review");
+  function openRestored(id: string) { client.trashController.close(); void select(id); }
+  async function moveToTrash(session: typeof sessions.sessions[number]) {
+    const previous = document.activeElement;
+    if (await client.softDelete(session)) requestAnimationFrame(() => {
+      if (document.activeElement !== document.body && document.activeElement !== previous) return;
+      restoreDeletionFocus(previous instanceof HTMLElement ? previous : null, composer.current,
+        document.querySelector<HTMLElement>("#session-navigation.open[role='dialog'][aria-modal='true']"));
+    });
+  }
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
 
@@ -69,16 +82,20 @@ export function App() {
           workspace={config?.workspace || ""}
           sessions={sessions.sessions}
           selected={sessionId}
-          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open || !!client.deletion.target}
+          disabled={client.operating || dictation.unfinished || client.channels.open || client.settings.open || !!client.deletion.target || client.trash.open}
           newDisabled={busy}
           open={navOpen}
           select={(id) => void select(id)}
-          remove={(session) => client.deletionController.show(session)}
+          remove={(session) => void moveToTrash(session)}
+          permanent={(session) => client.deletionController.show(session)}
           canDelete={(id) => !client.deletion.target && client.canDeleteSession(id)}
+          trash={client.trashController.show}
+          trashDisabled={!config || client.operating || (dictation.unfinished && dictation.state.phase !== "review") || client.channels.open || client.settings.open || !!client.deletion.target}
+          notice={!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
           settings={client.settings.show}
-          settingsDisabled={!config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished || client.channels.open || !!client.deletion.target}
+          settingsDisabled={!config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished || client.channels.open || !!client.deletion.target || client.trash.open}
           channels={client.channels.show}
-          channelsDisabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open || !!client.deletion.target}
+          channelsDisabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open || !!client.deletion.target || client.trash.open}
           demo={!!config?.demo}
           close={closeNavigation}
         />
@@ -142,7 +159,7 @@ export function App() {
                 state={dictation.state}
                 config={config?.dictation}
                 unsupported={dictation.unsupported}
-                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open || client.channels.open}
+                disabled={!config || !sessionId || busy || !!externalRun || sessions.activityOnly || client.settings.open || client.channels.open || client.trash.open}
                 start={client.startDictation}
                 stop={dictation.controller.stop}
                 cancel={() => dictation.controller.cancel()}
@@ -154,6 +171,7 @@ export function App() {
         </footer>
       </main>
       {client.settings.open && <SettingsDialog settings={client.settings} />}
+      {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController} permanent={client.deletionController.showTrash.bind(client.deletionController)} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
       {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessionId} />}
       {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessionId} />}
       {chat.approval.pending && (

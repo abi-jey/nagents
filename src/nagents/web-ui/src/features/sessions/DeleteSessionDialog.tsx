@@ -14,19 +14,19 @@ export function DeleteSessionDialog({ state, controller, currentSessionId = stat
       element?.close();
       restoreDeletionFocus(
         previous instanceof HTMLElement ? previous : null,
-        document.getElementById("composer"),
+        document.querySelector<HTMLElement>("dialog[open] .trash-close") || document.getElementById("composer"),
         document.querySelector<HTMLElement>("#session-navigation.open[role='dialog'][aria-modal='true']"),
       );
     };
   }, []);
   return <dialog ref={dialog} className="approval-dialog delete-session-dialog" aria-labelledby="delete-session-title"
     aria-describedby="delete-session-description" aria-busy={state.pending}
-    onCancel={(event) => { event.preventDefault(); controller.cancel(); }}>
-    <header className="approval-heading"><h2 id="delete-session-title">Delete session?</h2></header>
+    onCancel={(event) => { event.preventDefault(); event.stopPropagation(); controller.cancel(); }}>
+    <header className="approval-heading"><h2 id="delete-session-title">Delete forever?</h2></header>
     <div className="approval-body">
       <p className="delete-session-name">{state.target?.title}</p>
       <p id="delete-session-description">Permanently delete this session’s saved conversation.
-        {state.target?.id === currentSessionId
+        {!state.trash && state.target?.id === currentSessionId
           ? " Your current draft will be discarded only after deletion is confirmed."
           : " Your current conversation and draft are kept."}
         {" This cannot be undone. Workspace files, other sessions, and credentials are kept."}</p>
@@ -35,7 +35,7 @@ export function DeleteSessionDialog({ state, controller, currentSessionId = stat
     </div>
     <div className="dialog-actions">
       <button ref={cancel} disabled={state.pending} onClick={() => controller.cancel()}>Cancel</button>
-      <button className="cancel" disabled={state.pending} onClick={() => void controller.confirm()}>Delete session</button>
+      <button className="cancel danger-action" disabled={state.pending} onClick={() => void controller.confirm()}>Delete forever</button>
     </div>
   </dialog>;
 }

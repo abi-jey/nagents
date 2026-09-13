@@ -88,7 +88,9 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
             protected = tmp_path / "credentials.json"
             protected.write_text("synthetic private credential")
             before = protected.read_bytes()
-            response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+            response = await client.request(
+                "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+            )
             assert response.status_code == 200, response.text
             result = response.json()
             selected = result["session_id"]
@@ -119,7 +121,7 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
                 await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
             ).status_code == 404
             assert (
-                await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+                await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True})
             ).status_code == 404
         async with client_app(tmp_path) as (_, client, headers, _):
             refreshed = (await client.get("/api/sessions", headers=headers)).json()
@@ -157,7 +159,9 @@ def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
                     main_session_id=root,
                 )
             try:
-                response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+                response = await client.request(
+                    "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+                )
                 assert response.status_code == 409 and "private" not in response.text
                 assert rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
                 assert state.selected_session_id == root and not state.mutating
@@ -188,7 +192,9 @@ def test_delete_rejects_durable_work(tmp_path: Path, table: str, status: str) ->
                 db.execute(f"UPDATE {table} SET status = ?", (status,))
 
             await state.channels.store._transaction(seed)
-            response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+            response = await client.request(
+                "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+            )
             assert response.status_code == 409 and "inbox" in response.text
             assert rows(state, f"SELECT status FROM {table}") == [(status,)]
 
@@ -226,7 +232,9 @@ def test_delete_auth_and_membership(tmp_path: Path, case: str) -> None:
                     with closing(sqlite3.connect(foreign)) as db, db:
                         db.execute("CREATE TABLE harness_sessions(id TEXT)")
                         db.execute("INSERT INTO harness_sessions VALUES (?)", (target,))
-            response = await client.request("DELETE", f"/api/sessions/{target}", headers=headers, json={})
+            response = await client.request(
+                "DELETE", f"/api/sessions/{target}", headers=headers, json={"permanent": True}
+            )
             assert response.status_code == expected, response.text
             assert rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
 
@@ -255,7 +263,7 @@ def test_cancel_during_transaction_joins_atomic_outcome_and_cleanup(
                 return result
 
             monkeypatch.setattr(deletion, "_delete_rows", blocked)
-            task = asyncio.create_task(deletion.delete_session(state, root))
+            task = asyncio.create_task(deletion.delete_session(state, root, permanent=True))
             assert await asyncio.to_thread(entered.wait, 5)
             try:
                 task.cancel()
@@ -295,7 +303,7 @@ def test_admission_racing_delete_cannot_recreate_root(tmp_path: Path, monkeypatc
                 return original(db, id, selected)
 
             monkeypatch.setattr(deletion, "_delete_rows", blocked)
-            task = asyncio.create_task(deletion.delete_session(state, root))
+            task = asyncio.create_task(deletion.delete_session(state, root, permanent=True))
             assert await asyncio.to_thread(entered.wait, 5)
             admitted = asyncio.create_task(state.channels.store.web(root, "racing-message", "must not run"))
             release.set()
@@ -332,12 +340,14 @@ def test_binding_reattachment_and_deleted_channel_redelivery(tmp_path: Path) -> 
 
             await complete()
             for id, command in (("attach", f"{other}"), ("default", f"default {other}")):
-                response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+                response = await client.request(
+                    "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+                )
                 assert response.status_code == 409 and "/session default ID" in response.text
                 await store.receive("fixture", envelope(id), other, ChannelCommand("session", command))
                 await complete()
             assert (
-                await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+                await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True})
             ).status_code == 200
             await store.receive("fixture", envelope("original"), other, None)
             assert not rows(state, "SELECT * FROM ngn_web_inbox WHERE message_id = 'original'")
@@ -358,7 +368,7 @@ def test_deleted_root_revokes_live_and_reconnecting_subscribers(tmp_path: Path) 
             task = await peer.start(state.bus, state.snapshot, state.disconnected)
             peer.subscribe(root)
             frame = await peer.frame()
-            await deletion.delete_session(state, root)
+            await deletion.delete_session(state, root, permanent=True)
             assert (await peer.message())["code"] == 1008
             await task
             peer = Peer()
@@ -387,7 +397,9 @@ def test_crossroot_origin_corruption_rejects_without_removing_other_history(tmp_
 
             await state.channels.store._transaction(corrupt)
             before = rows(state, "SELECT * FROM ngn_web_message_origins")
-            response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+            response = await client.request(
+                "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+            )
             assert response.status_code == 409 and "cross-session" in response.text
             assert rows(state, "SELECT * FROM ngn_web_message_origins") == before
             assert rows(state, "SELECT content FROM v2_messages") == [("unrelated",)]
@@ -414,7 +426,9 @@ def test_unrelated_pending_work_bindings_and_retained_tasks_are_preserved(tmp_pa
 
             await state.channels.store._transaction(bind)
             try:
-                response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+                response = await client.request(
+                    "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+                )
                 assert response.status_code == 200
                 assert rows(state, "SELECT prompt, status FROM ngn_web_inbox") == [("do not drop", "queued")]
                 assert (await state.channels.store.bindings())[0]["session_id"] == other
@@ -451,7 +465,7 @@ def test_catalog_read_racing_deletion_cannot_publish_deleted_membership(
             reading = asyncio.create_task(state.list_sessions())
             await entered.wait()
             try:
-                await deletion.delete_session(state, root)
+                await deletion.delete_session(state, root, permanent=True)
             finally:
                 release.set()
             assert root not in {item.id for item in await reading}
@@ -480,7 +494,7 @@ def test_delete_revokes_hydration_before_its_late_snapshot(tmp_path: Path, monke
             task = await peer.start(state.bus, state.snapshot, state.disconnected)
             peer.subscribe(root)
             await entered.wait()
-            await deletion.delete_session(state, root)
+            await deletion.delete_session(state, root, permanent=True)
             assert not state.bus.listening(root)
             release.set()
             assert (await peer.message())["code"] == 1008

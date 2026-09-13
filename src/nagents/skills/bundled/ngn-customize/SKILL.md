@@ -334,6 +334,13 @@ automatic skill discovery. Command registry entries are available to clients
 that implement command dispatch; registration alone does not add browser routes
 or a universal slash-command UI.
 
+Web rows move to Trash in one click; Undo/Restore keeps the same ID/history.
+Drafts stay browser-local. Trash retention is separate from runtime Settings:
+30 days by default, configurable 1–365, with frozen per-deletion deadlines.
+Expired items cannot restore even if idle cleanup lags. Delete forever requires
+confirmation; Trash restore/purge uses the current `deletion_id`. Existing work
+and routing guards apply. See the web guide for the preferences API and recovery.
+
 ## Verification sources
 
 - Runnable behavior example: `examples/harness/custom_behavior.py`.

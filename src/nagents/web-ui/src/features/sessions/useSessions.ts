@@ -5,7 +5,8 @@ import type { Bootstrap, Session, Snapshot } from "../../types";
 import type { SettingsReply } from "../settings/types";
 import { rootSessions } from "../channels/draft";
 import { idle, sessionActivity } from "./activity";
-import { deleteSession, type DeletionSelection } from "../../api/deletion";
+import { deleteSession, type DeletedSnapshot, type DeletionSelection } from "../../api/deletion";
+import type { RestoreReply } from "../../api/trash";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
@@ -55,9 +56,13 @@ export function useSessions() {
     }
     return accept(await snapshotResponse(await request("sessions/new", config.token, {})));
   }
-  async function remove(id: string): Promise<Snapshot> {
+  async function remove(id: string, permanent = false): Promise<DeletedSnapshot> {
     if (!config) throw new Error("Reconnect to ngn before deleting a session.");
-    return deleteSession(config.token, id);
+    return deleteSession(config.token, id, permanent);
+  }
+  function restored(reply: RestoreReply) {
+    const item = reply.sessions.find((session) => session.id === reply.restored_session_id);
+    if (item) setSessions((current) => [item, ...current.filter((session) => session.id !== item.id)]);
   }
   function drop(id: string) { setSessions((current) => current.filter((session) => session.id !== id)); }
   function receive(frame: EventFrame) {
@@ -78,6 +83,6 @@ export function useSessions() {
   }
   return {
     config, sessions, sessionId, globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
-    activityOnly: false, connect, select, remove, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
+    activityOnly: false, connect, select, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
   };
 }

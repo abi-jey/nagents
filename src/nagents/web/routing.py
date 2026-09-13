@@ -172,6 +172,7 @@ class RoutingStore(InboxStore):
                         ack = f"Session: {target}"
                 else:
                     ack = "Unknown session command. Use /sessions, /session [ID|main|default|new], or /new [title]."
+            self.root(db, target)
             db.execute(
                 "INSERT INTO ngn_web_bindings VALUES (?, ?, ?, ?) ON CONFLICT(channel, conversation_id) "
                 "DO UPDATE SET session_id = excluded.session_id, default_session_id = excluded.default_session_id",
@@ -196,7 +197,10 @@ class RoutingStore(InboxStore):
 
     @staticmethod
     def eligible(web_only: bool, available_channels: tuple[str, ...] | None) -> tuple[str, tuple[str | bool, ...]]:
-        predicate = "status = 'queued' AND (? = 0 OR channel = '')"
+        predicate = (
+            "status = 'queued' AND (? = 0 OR channel = '') AND EXISTS ("
+            "SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id WHERE h.id = ngn_web_inbox.session_id)"
+        )
         parameters: tuple[str | bool, ...] = (web_only,)
         if available_channels is not None:
             if available_channels:

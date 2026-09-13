@@ -107,7 +107,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   function forgetSession(id: string, discardDraft = false) {
     cache.current.forget(id); queue.current.forget(id);
     if (discardDraft) setPrompt("");
-    approval.close(); setActivityError("");
+    if (id === selected.current) { approval.close(); setActivityError(""); }
   }
   async function submit(value: string) {
     if (sending.current) return;

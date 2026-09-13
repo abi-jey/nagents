@@ -28,6 +28,7 @@ from .history import WebHistory
 from .replay import RunReplay
 from .settings import _join
 from .subscriptions import EventBus
+from .trash import SessionTrash
 from .wakeups import Chain
 from .wakeups import Wakeups
 
@@ -150,6 +151,7 @@ class WebState:
             lambda: self.active is None and not self.mutating, self.wake, observer=self.activity_event
         )
         self.channels = ChannelHost(self)
+        self.trash = SessionTrash(self)
         harness.approval_handler = self.approve
         harness.wakeup_handler = self.schedule
 

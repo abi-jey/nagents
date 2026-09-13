@@ -97,6 +97,7 @@ test("the full workspace path has a keyboard-accessible disclosure that mobile C
     workspace, sessions: [], selected: "", disabled: false, open: true,
     select: () => assert.fail("Inspecting workspace information must not switch sessions"),
     remove: () => assert.fail("Rendering navigation must not delete a session"), canDelete: () => false,
+    permanent: () => assert.fail("Rendering navigation must not purge a session"), trash: () => undefined, trashDisabled: false,
     settings: () => undefined, settingsDisabled: false, channels: () => undefined, channelsDisabled: false,
     demo: true, close: () => undefined,
   }));

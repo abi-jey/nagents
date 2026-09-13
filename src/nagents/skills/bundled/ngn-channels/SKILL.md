@@ -215,6 +215,13 @@ session before deletion, use `/session default <session-id>` and
 current binding leaves the old default referenced; these commands do not change
 the connection's configured main session.
 
+These routing guards apply to one-click Move to Trash as well as Delete forever.
+Move the configured main session in Channels and let queued messages finish;
+deletion never detaches bindings implicitly. Undo/Trash Restore returns the same
+session ID/history before its frozen retention deadline (default 30 days).
+Trashed roots cannot receive new input or be selected by channel commands.
+Delete forever requires confirmation; neither deletion nor restoration replays work.
+
 ## Implement an installable connector
 
 Subclass `nagents.channels.Channel`. The required operations are

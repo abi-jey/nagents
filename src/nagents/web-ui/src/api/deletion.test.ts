@@ -70,12 +70,12 @@ test("client operation conflicts are visible instead of closing confirmation", a
 test("DELETE sends authenticated same-origin JSON and validates a surviving selected snapshot", async (context) => {
   context.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
     assert.equal(url, `/api/sessions/${target.id}`); assert.equal(options.method, "DELETE");
-    assert.equal(options.body, "{}"); assert.equal(options.credentials, "same-origin");
+    assert.equal(options.body, '{"permanent":true}'); assert.equal(options.credentials, "same-origin");
     assert.equal(options.cache, "no-store");
     assert.deepEqual(options.headers, { "X-Ngn-Token": "synthetic", "Content-Type": "application/json" });
     return Response.json(snapshot);
   });
-  assert.deepEqual(await deleteSession("synthetic", target.id), snapshot);
+  assert.deepEqual(await deleteSession("synthetic", target.id, true), snapshot);
 });
 
 test("unconfirmed or inconsistent deletion acknowledgement cannot clear local history", async (context) => {
@@ -83,14 +83,14 @@ test("unconfirmed or inconsistent deletion acknowledgement cannot clear local hi
     { ...snapshot, sessions: [target] }, { ...snapshot, sessions: [...snapshot.sessions, target] } ];
   for (const reply of replies) {
     const mocked = context.mock.method(globalThis, "fetch", async () => Response.json(reply));
-    await assert.rejects(deleteSession("synthetic", target.id), /acknowledgement was not confirmed/);
+    await assert.rejects(deleteSession("synthetic", target.id, true), /acknowledgement was not confirmed/);
     mocked.mock.restore();
   }
 });
 
 test("HTTP deletion conflicts preserve actionable routing instructions", async (context) => {
   context.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Reattach with /session ID first." }, { status: 409 }));
-  await assert.rejects(deleteSession("synthetic", target.id), /Reattach with \/session ID/);
+  await assert.rejects(deleteSession("synthetic", target.id, true), /Reattach with \/session ID/);
 });
 
 test("forgetting a deleted root drops its transcript, replay cursor and uncertain message identities only", () => {
@@ -131,7 +131,7 @@ test("confirmation uses a named native dialog, explicit irreversible text, cance
   assert.match(html, /role="alert"[^>]*>Reattach channel first/);
   assert.match(html, /role="status">Deleting session/);
   assert.match(html, /<button disabled="">Cancel<\/button>/);
-  assert.match(html, /disabled="">Delete session<\/button>/);
+  assert.match(html, /disabled="">Delete forever<\/button>/);
 });
 
 function deletionView() {
@@ -173,8 +173,8 @@ test("deleting another sidebar root ignores a different server selection and pre
     requests.push(`${options.method} ${url}`);
     return response.promise;
   });
-  f.view.remove = (id) => deleteSession("synthetic", id);
-  const removing = deleteSessionFromView("ngn-sidebar", f.view);
+  f.view.remove = (id) => deleteSession("synthetic", id, true);
+  const removing = deleteSessionFromView("ngn-sidebar", f.view, true);
   assert.equal(f.state.draft, "Keep my unsent draft");
   assert.equal(f.state.review, "Edited dictation review");
   assert.equal(f.state.subscription, "original subscription");
@@ -197,7 +197,7 @@ test("deleting another sidebar root ignores a different server selection and pre
 
 test("confirmed current-root deletion clears its draft and loads the surviving root exactly once", async () => {
   const f = deletionView();
-  const removing = deleteSessionFromView(target.id, f.view);
+  const removing = deleteSessionFromView(target.id, f.view, true);
   assert.equal(f.state.draft, "Keep my unsent draft");
   assert.deepEqual(f.state.history, ["Current conversation"]);
   assert.equal(f.state.pauses, 1); assert.equal(f.state.reconnects, 0);
@@ -333,4 +333,13 @@ test("focus restoration skips an unavailable fallback and continues after an imp
   restoreDeletionFocus(null, f.element("composer", "inert-ancestor"),
     f.navigation(null, f.element("close", "hidden")));
   assert.deepEqual(f.focused, []);
+});
+
+test("a removed Trash row returns confirmation focus to the underlying native Trash dialog, not its inert drawer", () => {
+  const f = focusFixture();
+  const trashClose = f.element("trash-close");
+  restoreDeletionFocus(f.element("purged-row", "removed"), trashClose,
+    f.navigation(f.element("drawer-selected", "blocked"), f.element("drawer-close", "blocked")));
+  assert.equal(f.ownerDocument.activeElement, trashClose);
+  assert.deepEqual(f.focused, ["drawer-selected", "drawer-close", "trash-close"]);
 });

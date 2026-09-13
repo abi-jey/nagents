@@ -19,10 +19,8 @@ if TYPE_CHECKING:
     from .service import WebState
 
 
-def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
-    # Membership is the join used by Harness.list_sessions/resume, not an ID
-    # prefix or a raw history row. BEGIN IMMEDIATE also serializes admissions.
-    RoutingStore.root(db, session_id)
+def _guard_rows(db: sqlite3.Connection, session_id: str) -> set[str]:
+    """Reject durable work/bindings before either removing membership or content."""
     with closing(db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")) as cursor:
         tables = {str(row[0]) for row in cursor.fetchall()}
 
@@ -50,6 +48,10 @@ def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
         (session_id, session_id),
     ):
         raise HTTPException(409, "Session has inconsistent cross-session history metadata. Deletion was not performed.")
+    return tables
+
+
+def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
 
     # Preserve only channel/message identities, never envelopes or conversation
     # content. A late connector redelivery must not re-execute deleted history.
@@ -73,6 +75,9 @@ def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
     for sql in statements:
         with closing(db.execute(sql, (session_id,) * sql.count("?"))):
             pass
+
+
+def _selection(db: sqlite3.Connection, selected: str) -> str:
     with closing(
         db.execute(
             "SELECT h.id FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
@@ -85,7 +90,35 @@ def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
     return roots[0] if roots else RoutingStore.new_root(db, "")
 
 
-async def delete_session(state: WebState, session_id: str) -> dict[str, object]:
+def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
+    # Root membership, never an ID prefix or raw history, authorizes destruction.
+    RoutingStore.root(db, session_id)
+    tables = _guard_rows(db, session_id)
+    _remove_content(db, session_id, tables)
+    return _selection(db, selected)
+
+
+def _guard_process(state: WebState, session_id: str) -> None:
+    harness = state.harness
+    if any(info.session_id == session_id for info in harness.tasks._infos.values()):
+        raise HTTPException(
+            409,
+            "Session has retained descendant tasks. Finish or cancel them, then restart ngn before "
+            "deleting this root. Retained task handles expire on restart; child history is kept.",
+        )
+    if any(not worker.done() for worker in harness.tasks._workers.values()):
+        raise HTTPException(409, "Descendant tasks are still running. Finish or cancel them before deleting.")
+    if any(item.session_id == session_id for item in state.wakeups.pending.values()):
+        raise HTTPException(409, "Session has pending wakeups. Let them finish or cancel their run before deleting.")
+    if any(item.main_session_id == session_id for item in state.channels.catalog.connections.values()):
+        raise HTTPException(
+            409,
+            "Session is a configured channel main session. Open Channels and save another main session "
+            "first, including for disabled connections. Then reattach any conversations before deleting.",
+        )
+
+
+async def delete_session(state: WebState, session_id: str, *, permanent: bool = False) -> dict[str, object]:
     with state.idle():
         harness = state.harness
         if harness._busy:
@@ -96,29 +129,17 @@ async def delete_session(state: WebState, session_id: str) -> dict[str, object]:
                 # Retained handles can resume descendants and carry notification
                 # queues. Fail closed rather than partially dismantling the task
                 # registry or guessing ownership of raw child rows after restart.
-                if any(info.session_id == session_id for info in harness.tasks._infos.values()):
-                    raise HTTPException(
-                        409,
-                        "Session has retained descendant tasks. Finish or cancel them, then restart ngn before "
-                        "deleting this root. Retained task handles expire on restart; child history is kept.",
+                _guard_process(state, session_id)
+                extra: dict[str, object] = {}
+                if permanent:
+                    selected = await state.channels.store._transaction(
+                        lambda db: _delete_rows(db, session_id, state.selected_session_id)
                     )
-                if any(not worker.done() for worker in harness.tasks._workers.values()):
-                    raise HTTPException(
-                        409, "Descendant tasks are still running. Finish or cancel them before deleting."
+                else:
+                    selected, item = await state.channels.store._transaction(
+                        lambda db: state.trash.remove_rows(db, session_id, state.selected_session_id)
                     )
-                if any(item.session_id == session_id for item in state.wakeups.pending.values()):
-                    raise HTTPException(
-                        409, "Session has pending wakeups. Let them finish or cancel their run before deleting."
-                    )
-                if any(item.main_session_id == session_id for item in state.channels.catalog.connections.values()):
-                    raise HTTPException(
-                        409,
-                        "Session is a configured channel main session. Open Channels and save another main session "
-                        "first, including for disabled connections. Then reattach any conversations before deleting.",
-                    )
-                selected = await state.channels.store._transaction(
-                    lambda db: _delete_rows(db, session_id, state.selected_session_id)
-                )
+                    extra["trash"] = item.wire()
                 # No await between commit acknowledgement and memory invalidation.
                 # The enclosing owned task joins this even if HTTP is cancelled.
                 state.selected_session_id = selected
@@ -130,7 +151,7 @@ async def delete_session(state: WebState, session_id: str) -> dict[str, object]:
                 state.wakeups.forget_session(session_id)
                 result = await state.snapshot(selected)
                 state.bus.publish({"type": "sessions", "sessions": result["sessions"]})
-                return {**result, "deleted_session_id": session_id}
+                return {**result, "deleted_session_id": session_id, **extra}
 
             with anyio.CancelScope(shield=True):
                 result = await finish_on_cancel(remove())

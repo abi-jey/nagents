@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../../components/Icon.js";
 import type { Session } from "../../types";
+import type { ReactNode } from "react";
+import { SessionMenu } from "./SessionMenu.js";
 
 export function SessionSidebar({
   workspace,
@@ -12,6 +14,10 @@ export function SessionSidebar({
   select,
   remove,
   canDelete,
+  permanent,
+  trash,
+  trashDisabled,
+  notice,
   settings,
   settingsDisabled,
   channels,
@@ -28,6 +34,10 @@ export function SessionSidebar({
   select: (id?: string) => void;
   remove: (session: Session) => void;
   canDelete: (id: string) => boolean;
+  permanent: (session: Session) => void;
+  trash: () => void;
+  trashDisabled: boolean;
+  notice?: ReactNode;
   settings: () => void;
   settingsDisabled: boolean;
   channels: () => void;
@@ -53,7 +63,7 @@ export function SessionSidebar({
     background.forEach((item) => { item.inert = true; });
     element.querySelector<HTMLButtonElement>(".sidebar-close")?.focus();
     function keydown(event: KeyboardEvent) {
-      if (document.querySelector("dialog[open]")) return;
+      if (document.querySelector("dialog[open], [popover]:popover-open")) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
       if (event.key !== "Tab") return;
       const targets = [...element.querySelectorAll<HTMLElement>("button:not(:disabled), summary, [tabindex='0']")]
@@ -78,7 +88,7 @@ export function SessionSidebar({
       if (trigger?.getClientRects().length && !trigger.disabled) trigger.focus();
       else if (previous instanceof HTMLElement && previous.isConnected && previous.getClientRects().length) previous.focus();
     };
-  }, [open, mobile, close]);
+  }, [open, mobile, close, selected]);
   return (
     <>
     {open && <button className="sidebar-scrim" aria-hidden="true" tabIndex={-1} onClick={close} />}
@@ -120,16 +130,21 @@ export function SessionSidebar({
             {session.active_run_id && <span className="session-working" title="Working"><span className="sr-only">Working</span></span>}
             <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
           </button>
-          <button className="session-delete" aria-label={`Delete session: ${session.title || "New session"}`}
-            title="Delete session" aria-haspopup="dialog" disabled={!canDelete(session.id) || !!session.active_run_id}
+          <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
+            title="Move to Trash" disabled={!canDelete(session.id) || !!session.active_run_id}
             onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
+          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} />
           </li>
         ))}
         </ul>
         {!sessions.length && <p className="empty-sessions">Your conversations will appear here.</p>}
       </nav>
       <div className="sidebar-footer">
+        {notice}
         <nav className="sidebar-utilities" aria-label="Workspace controls">
+          <button className="sidebar-utility trash-trigger" disabled={trashDisabled} onClick={trash} aria-haspopup="dialog">
+            <Icon name="trash" /><span>Trash</span><Icon name="chevron" size={13} />
+          </button>
           <button className="sidebar-utility settings-trigger" disabled={settingsDisabled} onClick={settings} aria-haspopup="dialog">
             <Icon name="settings" /><span>Settings</span><Icon name="chevron" size={13} />
           </button>

@@ -97,35 +97,83 @@ still stored locally in the Harness data directory.
 ### Workspace Navigation
 
 The sidebar keeps **New session** above an independently scrolling session list.
-**Settings**, **Channels**, and expandable workspace information stay in the bottom
-section, so they remain reachable with a long conversation history. On narrow
+**Settings**, **Channels**, **Trash**, and expandable workspace information stay
+in the bottom section, so they remain reachable with a long conversation history. On narrow
 screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
 it and returns focus to the navigation toggle. Dialogs opened from the drawer
 return to their controls without losing the open navigation.
 
 ### Delete A Session
 
-Choose the trash action beside a session in the sidebar; there is no need to switch
-to it first. Actions appear on hover or keyboard focus and remain visible on touch
-screens. The confirmation names the session and initially focuses **Cancel**;
-Escape also cancels. Only **Delete session** submits deletion. Your draft and
-conversation stay intact if you cancel or the server rejects the request. The
-dialog shows pending/error status and prevents duplicate submissions. After a
-confirmed deletion, its transcript, replay position, and pending message identities
-are cleared. Deleting a different sidebar session keeps your current conversation,
-draft, completed dictation review, and live subscription. Only deleting the current
-session clears its draft and selects another existing root; a fresh empty root is
-created atomically when the last root is deleted. A different server-side selection
-from another browser does not replace the conversation you are viewing.
+Choose the sidebar row's **Move to Trash** action to remove a session in **one
+click, without confirmation**. You do not need to select it first. Row actions
+appear on hover or keyboard focus and remain available on touch screens. A pending
+state prevents duplicate submissions. Failed admission leaves the session,
+conversation, and draft visible, with an error explaining what needs attention.
 
-Deletion requires an idle Harness. It returns `409` while the root has queued or
-running inbox work, pending wakeups, or retained descendant task handles. Finish
-or cancel running work first. Retained handles can still resume child conversations;
-after those tasks finish, restart ngn to expire the handles before deleting their
-root. Child histories are kept: deletion never guesses ownership from a session
-prefix, a task name, or text in old messages.
+Soft deletion hides the root from the active session list and prevents ordinary
+resume, message admission, channel selection, history access, or subscription to
+it. Its saved conversation remains available for restoration until its retention
+deadline. Deleting a different row preserves the conversation, draft, and live
+subscription you are viewing. If your current root is trashed, the client opens a
+surviving root; the server chooses or creates a replacement atomically when needed,
+including when the last active root is removed. A different server-side selection
+from another browser does not replace an unaffected conversation you are viewing.
 
-Channel routing must be moved explicitly before deletion:
+#### Undo And Restore
+
+Use **Undo** in the deletion notice or **Restore** in **Trash**. Restoration
+returns the **same session ID and saved history**, rather than copying messages
+into a new conversation. It restores the row to the session list without changing
+the current server/browser selection or starting a model run. Choose **Open restored session**
+when you want to navigate to the restored conversation; a late restore response
+must not overwrite a newer selection or draft.
+
+Soft deletion preserves the current unsent draft, including when its selected
+root is removed. Drafts remain **browser-local** and are not uploaded or stored
+by the Trash API. Server-side history restoration does not recover browser-local
+text on another device or after that local state is lost.
+
+#### Retention And Automatic Cleanup
+
+Trash retains sessions for **30 days by default**. The Trash panel's retention
+control accepts an integer from **1 through 365 days** and saves a workspace-wide
+policy that survives server restarts. This preference has its own API/revision,
+separate from the existing eleven model/tool/dictation Settings values.
+
+Each deletion freezes a `purge_at` deadline using the policy in effect when it is
+accepted. Changing retention affects **future deletions only**; it does not shorten
+or extend existing deadlines. Repeating soft deletion while that root is already
+in Trash returns the same item and deadline, without creating another replacement
+root or extending retention.
+
+Expired Trash is purged after startup and periodically, approximately every
+30 seconds, at a safe idle boundary. Cleanup is bounded and can lag the deadline
+while the application is busy. **An expired item cannot be restored even if its
+rows have not yet been purged.** Cleanup does not call a provider or run tools;
+active sessions are not automatically pruned by this policy.
+
+#### Delete Forever
+
+Use a session row's **More actions → Delete forever**, or **Delete forever** on a
+Trash item, for immediate permanent deletion. This retains an irreversible-action
+confirmation naming the session. Confirming submits the request; pending/error
+feedback prevents duplicate submissions. Cancelling leaves the conversation
+intact. Permanent deletion removes that root's saved history and offers no Undo.
+It removes logical database records, not backups or SQLite free pages.
+
+#### Activity And Routing Guards
+
+Moving to Trash and deleting forever retain the idle, active-work, and routing
+guards. Admission returns `409` while the Harness is busy or the root has queued
+or running inbox work, pending wakeups, or retained descendant task handles.
+Finish or cancel running work first. Retained handles can still resume child
+conversations; after those tasks finish, restart ngn to expire the handles before
+deleting their root. Child histories are kept: deletion never guesses ownership
+from a session prefix, a task name, or text in old messages.
+
+Channel routing must be moved explicitly before moving a root to Trash or
+deleting it forever:
 
 1. In **Channels**, change any connection whose **main session** is this root to
    another existing root and save. Disabled connections also count.
@@ -137,22 +185,25 @@ Channel routing must be moved explicitly before deletion:
    Reattachment never reroutes messages already in the inbox. Removing or disabling
    a connector alone does not detach its saved conversation bindings.
 
-The authenticated `DELETE /api/sessions/{session_id}` endpoint takes `{}` as JSON
-and uses the same exact-origin/token guards as other mutations. It validates
-workspace root membership and deletes that root's history, picker entry, ingress
-annotations, and terminal inbox rows in one SQLite transaction. Content-free
-channel/message deduplication keys remain so a late channel redelivery cannot
-execute deleted work again. Files, unrelated rows/child histories, saved settings,
-channel configuration, and private credentials are preserved. This removes logical
-history, not backups or SQLite free pages.
+Soft deletion changes active-list membership while retaining the root's history
+and related stored input. Restore atomically reinstates that membership and title.
+Permanent purge removes the root's content while retaining content-free
+channel/message deduplication keys, so late channel redelivery cannot execute
+deleted work again. Workspace files, unrelated roots and child histories, saved
+settings, channel configuration, and private credentials are preserved. Deletion
+does not silently detach channels or discard pending background work.
 
-Cancellation joins the transaction and selection/subscription cleanup before
-releasing the idle boundary; the root cannot be partially deleted. A lost HTTP
-acknowledgement can still mean deletion committed: reconnect to check the session
-list before retrying. Deleted-root subscribers are revoked, and their clients
-refresh root membership instead of reconnecting to the missing root indefinitely.
-Other tabs retain unsent drafts when recovering to a surviving session. Restart,
-resume, history, activity, and subscription requests cannot restore a deleted root.
+Cancellation joins the SQLite transaction and selection/subscription cleanup
+before releasing the idle boundary, avoiding partially applied membership changes.
+Deleted-root subscribers are revoked, and clients refresh session membership;
+ordinary resume/reconnect cannot restore a trashed root. Restore publishes the
+updated session list but never replays a prompt, tool, or old subscription event.
+
+A lost HTTP acknowledgement can mean the mutation committed. Refresh the active
+session list and Trash before deciding what to do; do not blindly retry. Each
+new soft deletion has an opaque `deletion_id`. Undo, Restore, and permanent purge
+of a Trash item must supply that exact generation, so an old view cannot act on
+a later deletion of the same session. See the [Trash API contract](#trash-api-contract).
 
 ### Execution And Access
 
@@ -236,9 +287,10 @@ slow tab does not block model execution.
 ## API Outline
 
 All paths are under `/api`. API clients first GET `bootstrap`, then send its token
-in `X-Ngn-Token`. POST requests also need `Origin: http://127.0.0.1:8765` (matching
-the configured authority) and `Content-Type: application/json`, except for the
-explicit WAV transcription contract below.
+in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
+`Origin: http://127.0.0.1:8765` (matching the configured authority) and
+`Content-Type: application/json`, except for the explicit WAV transcription
+contract below.
 
 | Method / Path | Purpose |
 | --- | --- |
@@ -251,7 +303,12 @@ explicit WAV transcription contract below.
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
-| `DELETE sessions/{session_id}` | `{}` deletes an idle, unbound root atomically; returns `deleted_session_id` plus the replacement/selected snapshot |
+| `DELETE sessions/{session_id}` | `{}` or `{permanent: false}` moves an idle, unbound root to Trash; returns `Snapshot & {deleted_session_id: string, trash: TrashItem}` |
+| `DELETE sessions/{session_id}` | `{permanent: true}` permanently deletes an active-list root; returns `Snapshot & {deleted_session_id: string}` |
+| `GET trash` | Returns `{revision: string, retention_days: number, items: TrashItem[]}` |
+| `PUT trash/settings` | `{revision: string, retention_days: number}` saves retention for future deletions; returns the same Trash snapshot shape |
+| `POST trash/{session_id}/restore` | `{deletion_id: string}` restores that generation; returns `{restored_session_id: string, sessions: Session[]}` without selecting it |
+| `DELETE trash/{session_id}` | `{deletion_id: string}` permanently purges that generation; returns `{purged_session_id: string}` |
 | `POST messages` | `{session_id, prompt, message_id}` durably queues input; updates arrive through subscriptions |
 | `WS events` | Authenticated session subscriptions, snapshots, replay cursors, and live execution records |
 | `GET channels` | Installed plugin descriptors, redacted saved connections, bindings, and configuration revision |
@@ -275,6 +332,62 @@ closing it cancels that run. New browser input uses `POST messages` and the
 WebSocket subscription instead. Subscription replay replays observations, never
 executes a prompt or tool again.
 
+### Trash API Contract
+
+`DELETE /api/sessions/{session_id}` now defaults to **soft deletion**. Clients
+that intend immediate permanent deletion must explicitly send
+`{"permanent": true}` for an active-list root. For a root already in Trash, use
+`DELETE /api/trash/{session_id}` with its `deletion_id` instead. The identifier in
+the URL is the session ID; the request body identifies its deletion generation.
+
+The shared Trash wire types are:
+
+```typescript
+type TrashItem = {
+  id: string;
+  title: string;
+  deleted_at: number;
+  purge_at: number;
+  deletion_id: string;
+};
+
+type TrashSnapshot = {
+  revision: string;
+  retention_days: number;
+  items: TrashItem[];
+};
+```
+
+`deleted_at` and `purge_at` are **UTC epoch seconds**, not milliseconds or formatted
+date strings. `deletion_id` is opaque and renewed on each new soft deletion after
+restoration. A repeated soft deletion of an already-trashed root preserves its
+generation and deadline.
+
+`Snapshot` in the table is the existing selected-session response, including
+`session_id`, `sessions`, and `history` plus its existing activity/task fields.
+`Session` is the existing session-list descriptor, including `id`, `title`, and
+`updated_at`. The restore response intentionally returns only the restored ID
+and session list; it does not contain a replacement selection or run acknowledgement.
+
+Two independent concurrency tokens apply:
+
+- **`revision`** protects `PUT /api/trash/settings`. Start from `GET /api/trash`,
+  send the current revision and integer `retention_days` in `1..365`, and retain
+  the returned snapshot. Unknown fields and invalid types/bounds are rejected;
+  a stale revision returns `409`. Refetch before retrying a changed policy.
+- **`deletion_id`** protects Restore and Delete forever in Trash. Supply the
+  generation received with the item; stale generations return `409` instead of
+  restoring or purging a later deletion of the same ID. Restoring an expired item
+  still present in Trash returns `410`; an already-purged or missing item returns
+  `404`. Refresh Trash rather than assuming delayed cleanup means recovery is
+  still possible.
+
+The retention policy is stored separately from `/api/settings` and its eleven
+values. Do not add `retention_days` to that request or reuse its settings revision.
+All Trash routes retain the existing Host, Origin, fetch-metadata, and token
+guards. No deletion, restoration, policy update, or expiry cleanup starts model
+or tool execution.
+
 ### Channels, Telegram Chats, And Session Binding
 
 Open **Channels** to configure installed connectors. The plugin selector displays
@@ -297,6 +410,7 @@ Telegram's host commands allow an explicit change:
 | `/session <session-id>` | Attach this chat to an existing session. |
 | `/session main` | Attach to the connection's configured main session. |
 | `/session default` | Return to this chat's default session. |
+| `/session default <session-id>` | Change this chat's persisted default without changing its current attachment. |
 | `/new <title>` | Create and attach a new session. |
 
 Commands are handled by the host rather than sent to a model as ordinary work.
@@ -474,6 +588,9 @@ or retry automatically. Returned text remains an unsent draft. Oversized draft
 insertion is rejected with both texts retained rather than silently truncated.
 
 ### Runtime Settings
+
+Trash retention uses its [separate preferences API](#trash-api-contract); it is
+not an additional field in the model/tool/dictation settings below.
 
 Settings responses contain `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
 an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`), and

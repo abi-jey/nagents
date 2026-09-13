@@ -21,11 +21,12 @@ export function validRecord(value: unknown): value is WireEvent {
       (key) => value[key] === undefined || typeof value[key] === "string",
     ) && ["activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
 }
-function sessions(value: unknown): value is Session[] {
+export function validSessionList(value: unknown): value is Session[] {
   return Array.isArray(value) && value.every((item: unknown) => object(item) &&
     ["id", "title", "updated_at"].every((key) => typeof item[key] === "string") &&
     ["active_run_id", "parent_session_id", "status"].every((key) => item[key] === undefined || typeof item[key] === "string"));
 }
+const sessions = validSessionList;
 function activeRun(value: unknown): boolean {
   return value === undefined || value === null || (object(value) &&
     typeof value.id === "string" && typeof value.status === "string" &&
