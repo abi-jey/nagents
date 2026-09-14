@@ -32,13 +32,14 @@ def serve(
     port: int = 8765,
     resume_session: str = "",
     continue_session: bool = False,
+    dev: bool = False,
 ) -> None:
     local_authority(host, port)
     try:
         import uvicorn
 
         from .app import create_app
-        from .subscriptions import MAX_FRAME
+        from .runtime import server_config
     except ModuleNotFoundError as error:
         if error.name not in {"fastapi", "starlette", "pydantic", "uvicorn", "anyio"}:
             raise
@@ -47,6 +48,11 @@ def serve(
             "virtualenv, run `pip install -e '.[web]'` (or `poetry install -E web`). "
             "The existing server extra also supplies these dependencies. Textual is not required."
         ) from error
+    if dev:
+        from .dev import serve_dev
+
+        serve_dev(config, host=host, port=port, resume_session=resume_session, continue_session=continue_session)
+        return
     assets = built_assets()
     build_id = hashlib.sha256((assets / "build.json").read_bytes()).hexdigest()[:12]
     print(f"ngn: React UI build {build_id} from {assets}", file=sys.stderr, flush=True)
@@ -58,15 +64,4 @@ def serve(
         resume_session=resume_session,
         continue_session=continue_session,
     )
-    # One process and one lifespan own every Harness resource. Never trust proxy headers.
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        proxy_headers=False,
-        access_log=False,
-        timeout_graceful_shutdown=3,
-        ws_max_size=MAX_FRAME,
-        ws_max_queue=16,
-        ws_per_message_deflate=False,
-    )
+    uvicorn.Server(server_config(app, host=host, port=port)).run()

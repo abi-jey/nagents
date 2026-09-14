@@ -92,9 +92,9 @@ def test_stale_source_build_uses_canonical_npm_commands(
     monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: "/tools/npm")
     # A different current directory/workspace must never choose a different frontend.
     monkeypatch.chdir(tmp_path)
-    assert prepare_assets(web) == web / "static"
+    assert prepare_assets(web, dev=True) == web / "static"
     assert [call.args[0] for call in run.call_args_list] == [["/tools/npm", "ci"], ["/tools/npm", "run", "build"]]
-    assert prepare_assets(web) == web / "static"
+    assert prepare_assets(web, dev=True) == web / "static"
     assert run.call_count == 2
 
 
@@ -132,7 +132,7 @@ def test_stale_source_without_node_has_actionable_error(web: Path, monkeypatch: 
     (web / "static" / "build.json").unlink()
     monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: None)
     with pytest.raises(ValueError, match=r"Node.js 20.19.*ngn serve"):
-        prepare_assets(web)
+        prepare_assets(web, dev=True)
 
 
 @pytest.mark.parametrize("failure", ["install", "build", "unverified-output"])
@@ -149,7 +149,30 @@ def test_failed_rebuild_never_falls_back_to_stale_assets(
     monkeypatch.setattr("nagents.web.assets.subprocess.run", fail)
     monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: "/tools/npm")
     with pytest.raises(ValueError, match=r"Could not build|incomplete"):
+        prepare_assets(web, dev=True)
+
+
+def test_normal_source_launch_serves_existing_bundle_without_inspecting_source(
+    web: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (web.parent / "web-ui" / "src" / "App.tsx").write_text("unbuilt changes", encoding="utf-8")
+    monkeypatch.setattr("nagents.web.assets.source_hashes", Mock(side_effect=AssertionError("No source inspection")))
+    monkeypatch.setattr("nagents.web.assets.subprocess.run", Mock(side_effect=AssertionError("No npm")))
+    assert prepare_assets(web) == web / "static"
+
+
+def test_normal_source_launch_does_not_build_missing_assets(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (web / "static" / "build.json").unlink()
+    monkeypatch.setattr("nagents.web.assets.subprocess.run", Mock(side_effect=AssertionError("No npm")))
+    with pytest.raises(ValueError, match="ngn serve --dev"):
         prepare_assets(web)
+
+
+def test_dev_requires_source_even_with_valid_packaged_assets(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (web.parent / "web-ui").rename(web.parent / "unrelated-source")
+    monkeypatch.setattr("nagents.web.assets.subprocess.run", Mock(side_effect=AssertionError("No npm")))
+    with pytest.raises(ValueError, match="editable source checkout"):
+        prepare_assets(web, dev=True)
 
 
 def test_packaged_asset_inventory_includes_source_excluded_names(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:

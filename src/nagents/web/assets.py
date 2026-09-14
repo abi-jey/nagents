@@ -53,7 +53,7 @@ def _hash_map(value: object) -> dict[str, str]:
     return result
 
 
-def current_build(directory: Path, source: Path) -> bool:
+def current_build(directory: Path, source: Path, *, check_sources: bool = True) -> bool:
     """Check contents, not mtimes: Git operations must not hide stale assets."""
     try:
         manifest: object = json.loads((directory / "build.json").read_text(encoding="utf-8"))
@@ -68,22 +68,24 @@ def current_build(directory: Path, source: Path) -> bool:
         if actual != assets:
             return False
         sources = _hash_map(manifest.get("sources"))
-        return not source.is_dir() or source_hashes(source) == sources
+        return not check_sources or not source.is_dir() or source_hashes(source) == sources
     except (OSError, ValueError):
         return False
 
 
-def prepare_assets(web: Path) -> Path:
+def prepare_assets(web: Path, *, dev: bool = False) -> Path:
     """Build only the imported package's adjacent source, never the user's workspace."""
     directory = web / "static"
     source = web.parent / "web-ui"
-    if current_build(directory, source):
+    if dev and not source.is_dir():
+        raise ValueError("ngn serve --dev requires an editable source checkout with web-ui sources.")
+    if current_build(directory, source, check_sources=dev):
         return directory
-    if not source.is_dir():
+    if not dev:
         raise ValueError(
             f"The ngn React assets in {directory} are missing or invalid. "
             "Reinstall a release that includes web assets. For a source checkout, activate its virtualenv, "
-            "install it with `pip install -e '.[web]'`, and run `ngn serve` again. "
+            "install it with `pip install -e '.[web]'`, and run `ngn serve --dev`. "
             "You can also build explicitly with `npm --prefix src/nagents/web-ui ci` then "
             "`npm --prefix src/nagents/web-ui run build`."
         )
@@ -91,7 +93,7 @@ def prepare_assets(web: Path) -> Path:
     if not npm:
         raise ValueError(
             f"The ngn React assets are missing or stale for {source}. "
-            "Install Node.js 20.19 or newer (including npm), then rerun `ngn serve`. "
+            "Install Node.js 20.19 or newer (including npm), then rerun `ngn serve --dev`. "
             "Packaged installs with bundled assets do not need Node.js."
         )
     print(f"ngn: rebuilding React UI from {source}", file=sys.stderr, flush=True)
@@ -102,9 +104,9 @@ def prepare_assets(web: Path) -> Path:
         subprocess.run([npm, "run", "build"], cwd=source, check=True)
     except (OSError, subprocess.CalledProcessError) as error:
         raise ValueError(
-            f"Could not build the ngn React UI in {source}. Fix the npm error above and rerun `ngn serve`. "
+            f"Could not build the ngn React UI in {source}. Fix the npm error above and rerun `ngn serve --dev`. "
             "Stale assets will not be served."
         ) from error
     if not current_build(directory, source):
-        raise ValueError(f"The React build in {source} is incomplete or its inputs changed. Rerun `ngn serve`.")
+        raise ValueError(f"The React build in {source} is incomplete or its inputs changed. Rerun `ngn serve --dev`.")
     return directory
