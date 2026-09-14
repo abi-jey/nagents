@@ -95,11 +95,19 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             assert await harness.history() == []
             assert "TEST-CODE" not in harness.describe()
             assert "test-access-do-not-display" not in harness.describe()
+            selection = harness.login_store.selection()
+            assert selection is not None
+            assert (selection.provider, selection.auth, selection.model) == (
+                "openai",
+                "chatgpt",
+                DEFAULT_CODEX_MODEL,
+            )
             await harness.logout()
             assert not fake.saved
             assert harness.config.auth == "api-key"
             assert harness.config.model == "gpt-4.1"
             assert isinstance(harness.agent.provider, HarnessProvider)
+            assert harness.login_store.selection() is None
         finally:
             await harness.close()
         assert fake.closed
@@ -194,7 +202,9 @@ def test_cli_login_and_status_are_safe(
     assert "test-access-do-not-display" not in output
     assert "not-a-real-device-id" not in output
     assert main(["login", "--workspace", str(tmp_path), "--status"]) == 0
-    assert "saved" in capsys.readouterr().out
+    status = capsys.readouterr().out
+    assert "saved" in status
+    assert "ChatGPT:" in status and "Provider login:" in status
     assert fake.started == 1
 
 

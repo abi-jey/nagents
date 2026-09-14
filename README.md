@@ -76,16 +76,21 @@ by default, never exceeds the parent's permissions, and defaults to depth two
 (root 0, child 1, grandchild 2).
 
 For ChatGPT/Codex subscription access, start `ngn` without `--demo` and use
-`/login`, or run `ngn login --device-auth`. Device login must be enabled in your
-ChatGPT security/workspace settings. This uses a separate Codex Responses route,
-not a general-purpose OpenAI API key. See the guide for credential storage and
-`--auth api-key` selection. Saved OAuth tokens are never sent to custom endpoints.
+`/login`, or run `ngn login chatgpt` (same as `--device-auth`). Device login must
+be enabled in your ChatGPT security/workspace settings. This uses a separate
+Codex Responses route, not a general-purpose OpenAI API key. `ngn login` also
+selects OpenRouter through a browser sign-in or stores API keys for OpenAI,
+Anthropic, Gemini, and custom OpenAI-compatible endpoints; keys are entered
+hidden or referenced with `--api-key-env`, and `ngn login --status`/`ngn logout`
+manage the saved selection. See the guide for credential storage and `--auth`
+selection. Saved credentials are never sent to custom endpoints.
 
 Configuration uses top-level TOML, **not `[ngn]` sections**. Priority is built-ins
-< `NGN_*` environment defaults < global TOML < trusted project TOML < explicit
-TOML < CLI. The global file is `~/.config/ngn/config.toml` (respecting
-`XDG_CONFIG_HOME`); workspace `.ngn/config.toml` needs `--trust-project`, or explicit
-selection with `--config`. Any explicitly selected config file is trusted.
+< saved `ngn login` selection < `NGN_*` environment defaults < global TOML <
+trusted project TOML < explicit TOML < CLI. The global file is
+`~/.config/ngn/config.toml` (respecting `XDG_CONFIG_HOME`); workspace
+`.ngn/config.toml` needs `--trust-project`, or explicit selection with `--config`.
+Any explicitly selected config file is trusted.
 See the [full schema and recipes](docs/guide/ngn-configuration.md) for types,
 defaults, ranges, profile replacement, relative paths, and LiteLLM endpoints.
 

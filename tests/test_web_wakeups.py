@@ -59,7 +59,7 @@ async def scheduled_app(
     states: list[WebState] = []
     clock = Clock()
 
-    def provider(config: HarnessConfig) -> FakeProvider:
+    def provider(config: HarnessConfig, login_store: object | None = None) -> FakeProvider:
         instance = FakeProvider(config, len(providers), script)
         providers.append(instance)
         return instance

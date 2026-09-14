@@ -25,16 +25,19 @@ if TYPE_CHECKING:
     from nagents.types import ToolDefinition
 
     from .config import HarnessConfig
+    from .credentials import ProviderLoginStore
 
 
 class HarnessProvider(Provider):
-    def __init__(self, config: "HarnessConfig") -> None:
+    def __init__(self, config: "HarnessConfig", login_store: "ProviderLoginStore | None" = None) -> None:
         if config.api == "completions":
             raise ValueError(
                 "The coding harness requires conversation roles and tools; the legacy completions API is text-only. "
                 "Use api='chat_completions', 'responses', or 'messages', or use Provider directly with one text prompt."
             )
         self.harness_config = config
+        # A saved ngn login supplies the key only when the environment does not.
+        self.login_store = login_store
         super().__init__(
             provider_type=PROVIDERS[config.provider],
             api_key="deferred-until-live-request",
@@ -48,9 +51,12 @@ class HarnessProvider(Provider):
         if self.harness_config.demo:
             return
         key = os.environ.get(self.harness_config.api_key_env, "")
+        if not key.strip() and self.login_store is not None:
+            key = self.login_store.key_for(self.harness_config.provider)
         if not key.strip():
             raise ValueError(
-                f"Set {self.harness_config.api_key_env} before an API-key request, or use offline demo mode"
+                f"Set {self.harness_config.api_key_env}, sign in with ngn login, or use offline demo mode "
+                "before an API-key request"
             )
         self.api_key = key
 

@@ -47,11 +47,12 @@ poetry run ngn --config examples/harness/config.toml --demo
 The order is **lowest to highest priority**:
 
 1. Built-in defaults.
-2. `NGN_*` environment defaults.
-3. Global/user TOML.
-4. Trusted project TOML.
-5. An explicitly selected TOML file.
-6. Explicit CLI flags.
+2. A saved provider login (`ngn login`): provider, model, endpoint, API, authentication, and key reference only.
+3. `NGN_*` environment defaults.
+4. Global/user TOML.
+5. Trusted project TOML.
+6. An explicitly selected TOML file.
+7. Explicit CLI flags.
 
 Environment variables are **not** the highest-priority override. For example,
 `NGN_MODEL=environment-model` loses to `model = "file-model"` in global TOML;
@@ -82,6 +83,7 @@ configuration; see [profiles](#agent-profiles) before combining a profile-specif
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
 | State root | `data_dir`; default `$XDG_DATA_HOME/ngn` or `~/.local/share/ngn` when `XDG_DATA_HOME` is unset or empty | Stores workspace-scoped session databases. |
 | OpenAI login store | `$XDG_DATA_HOME/ngn/auth/openai.json` or `~/.local/share/ngn/auth/openai.json` | Separate credential store, not a TOML setting or a session database. Changing `data_dir` does not move it. Never include it in a config example or bug report. |
+| Provider login store | `$XDG_DATA_HOME/ngn/auth/login.json` or `~/.local/share/ngn/auth/login.json` | One active `ngn login` selection and its optional write-only API key, beside the ChatGPT store. Supplies defaults below environment variables and TOML; `ngn logout` removes it. Never include it in a config example or bug report. |
 
 The workspace's `.ngn/config.toml` is the project file; ngn does not search every
 ancestor directory for more configuration layers. The trust decision is made
@@ -189,8 +191,10 @@ redirect a ChatGPT login to a gateway or to the ordinary paid API.
 
 The key's **value** is read from the named environment variable when a live
 request needs it. `NGN_API_KEY_ENV=TEAM_OPENAI_KEY` changes the reference; it does
-not set the key itself. ngn does not automatically load `.env` files or borrow
-another coding assistant's credentials.
+not set the key itself. When that environment variable is unset, ngn falls back
+to a matching `ngn login` key stored in the protected provider login file. ngn
+does not automatically load `.env` files or borrow another coding assistant's
+credentials.
 
 ### Agent and tool limits
 

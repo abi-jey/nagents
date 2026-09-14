@@ -1,4 +1,4 @@
-"""Ephemeral device-login surfaces. Credentials and polling belong to the harness."""
+"""Ephemeral provider-login surfaces. Credentials and polling belong to the harness."""
 
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ from textual.containers import Vertical
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button
+from textual.widgets import Input
 from textual.widgets import Static
+
+from nagents.harness import provider_login
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -23,6 +26,7 @@ if TYPE_CHECKING:
     from textual.binding import BindingType
 
     from nagents.harness.auth import DeviceAuthorization
+    from nagents.harness.provider_login import LoginMethod
 
 DEVICE_URL = "https://auth.openai.com/codex/device"
 
@@ -37,14 +41,15 @@ class LoginMethodModal(ModalScreen[str]):
                 yield Static(
                     "ChatGPT / Codex\nUse eligible ChatGPT subscription access for Codex. "
                     "This is not OAuth access to the general OpenAI API.\n\n"
-                    "Enable device code login in ChatGPT security settings. "
-                    "Your workspace administrator may also need to allow it.\n\n"
-                    "API key\nUsage-based provider API billing is separate from your ChatGPT subscription. "
-                    "This version only explains environment setup; it never accepts or stores an API key here.",
+                    "OpenRouter\nSign in once in your browser; ngn stores a user-controlled API key.\n\n"
+                    "API key / other provider\nUsage-based provider billing, separate from ChatGPT. "
+                    "Keys are stored in ngn's private credential store and never shown in the conversation. "
+                    "To reference an environment variable instead, run ngn login in a terminal.",
                     markup=False,
                 )
             yield Button("ChatGPT / Codex device login", id="login-chatgpt")
-            yield Button("API-key environment instructions", id="login-api-key")
+            yield Button("OpenRouter browser sign-in", id="login-openrouter")
+            yield Button("API key / other provider", id="login-api-key")
             yield Button("Cancel", id="login-choice-cancel")
 
     def on_mount(self) -> None:
@@ -54,10 +59,146 @@ class LoginMethodModal(ModalScreen[str]):
     def choose(self, event: Button.Pressed) -> None:
         if event.button.id == "login-chatgpt":
             self.dismiss("chatgpt")
+        elif event.button.id == "login-openrouter":
+            self.dismiss("openrouter")
         elif event.button.id == "login-api-key":
             self.dismiss("api-key")
         else:
             self.dismiss()
+
+
+class ProviderKeyModal(ModalScreen[tuple[str, str, str] | None]):
+    """Collect a write-only API key plus optional model and base URL."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape,ctrl+c", "cancel", show=False, priority=True)]
+
+    def __init__(self, chosen: LoginMethod) -> None:
+        super().__init__()
+        self.chosen = chosen
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog provider-key-dialog"):
+            yield Static(f"SIGN IN / {self.chosen.label.upper()}", classes="dialog-title", markup=False)
+            with VerticalScroll(classes="provider-key-content"):
+                yield Static(
+                    "Paste the API key below. It is written only to ngn's private credential store "
+                    "(POSIX 0600) and is never shown in the conversation or history.\n\n"
+                    f"Environment variable: ${self.chosen.env}.",
+                    markup=False,
+                )
+                yield Input(placeholder="API key", password=True, id="provider-key")
+                if not self.chosen.default_model:
+                    yield Input(placeholder="Model ID", id="provider-model")
+                if self.chosen.needs_base_url:
+                    yield Input(placeholder="Base URL, e.g. https://gateway.example/v1", id="provider-base-url")
+                yield Static("", id="provider-key-status", markup=False)
+            with Horizontal(classes="dialog-actions"):
+                yield Button("Save", id="key-save", variant="primary")
+                yield Button("Cancel", id="key-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#provider-key", Input).focus()
+
+    def _message(self, text: str) -> None:
+        self.query_one("#provider-key-status", Static).update(text)
+
+    def submit_values(self) -> None:
+        key = self.query_one("#provider-key", Input).value.strip()
+        model = self.query_one("#provider-model", Input).value.strip() if not self.chosen.default_model else ""
+        base_url = self.query_one("#provider-base-url", Input).value.strip() if self.chosen.needs_base_url else ""
+        if not key:
+            self._message("An API key is required; use ngn login in a terminal to reference an environment variable.")
+            return
+        if not self.chosen.default_model and not model:
+            self._message("A model ID is required for this provider.")
+            return
+        if self.chosen.needs_base_url and not base_url:
+            self._message("A base URL is required for this provider.")
+            return
+        self.dismiss((key, model, base_url))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Input.Submitted)
+    def submitted(self) -> None:
+        self.submit_values()
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "key-save":
+            self.submit_values()
+        else:
+            self.dismiss(None)
+
+
+class OpenRouterLoginModal(ModalScreen[str | None]):
+    """Headless PKCE: show the authorization URL and accept the pasted code."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape,ctrl+c", "cancel", show=False, priority=True)]
+
+    def __init__(self, url: str) -> None:
+        super().__init__()
+        self.url = url
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog openrouter-login-dialog"):
+            yield Static("SIGN IN / OPENROUTER", classes="dialog-title", markup=False)
+            with VerticalScroll(classes="openrouter-login-content"):
+                yield Static("1. Open this address in your browser and approve ngn:", markup=False)
+                yield Static(self.url, id="openrouter-url", markup=False)
+                yield Static("2. OpenRouter then shows a single-use code. Paste it below.", markup=False)
+                yield Input(placeholder="Authorization code", password=True, id="openrouter-code")
+                yield Static("", id="openrouter-status", markup=False)
+                yield Static(
+                    "Only continue if you started this sign-in. The code expires in 10 minutes.",
+                    classes="dialog-hint",
+                    markup=False,
+                )
+            with Horizontal(classes="dialog-actions"):
+                yield Button("Open Browser", id="openrouter-browser")
+                yield Button("Copy URL", id="openrouter-copy")
+                yield Button("Continue", id="openrouter-continue", variant="primary")
+                yield Button("Cancel", id="openrouter-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#openrouter-code", Input).focus()
+
+    def _message(self, text: str) -> None:
+        self.query_one("#openrouter-status", Static).update(text)
+
+    def submit_code(self) -> None:
+        code = self.query_one("#openrouter-code", Input).value.strip()
+        if not provider_login.valid_code(code):
+            self._message("Enter the code shown by OpenRouter; run /login again if it expired.")
+            return
+        self.dismiss(code)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Input.Submitted)
+    def submitted(self) -> None:
+        self.submit_code()
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "openrouter-browser":
+            try:
+                self.app.open_url(self.url)
+            except Exception:
+                self._message("Browser unavailable. Open the address above yourself.")
+        elif event.button.id == "openrouter-copy":
+            try:
+                self.app.copy_to_clipboard(self.url)
+            except Exception:
+                self._message("Clipboard unavailable. Select the address above.")
+            else:
+                self._message("Address copied to the clipboard.")
+        elif event.button.id == "openrouter-continue":
+            self.submit_code()
+        else:
+            self.dismiss(None)
 
 
 class DeviceLoginModal(ModalScreen[None]):
