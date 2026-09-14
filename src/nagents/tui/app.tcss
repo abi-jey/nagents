@@ -142,6 +142,13 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; backgroun
 .login-method-content { height: 1fr; scrollbar-size: 1 1; margin-bottom: 1; }
 .login-method-content Static { height: auto; }
 .login-method-dialog Button { width: 100%; height: 3; }
+.provider-key-dialog { height: 85%; padding: 0 1; }
+.provider-key-content { height: 1fr; scrollbar-size: 1 1; margin-bottom: 1; }
+.provider-key-content Static { height: auto; }
+.openrouter-login-dialog { height: 85%; padding: 0 1; }
+.openrouter-login-content { height: 1fr; scrollbar-size: 1 1; margin-bottom: 1; }
+.openrouter-login-content Static { height: auto; }
+#openrouter-url { color: $ngn-accent; margin: 1 0; }
 .device-login-dialog { height: 21; padding: 0 1; }
 .device-login-content { height: 1fr; scrollbar-size: 1 1; }
 .device-login-content Static { height: auto; }

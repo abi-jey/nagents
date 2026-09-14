@@ -57,7 +57,7 @@ async def application(
 ) -> AsyncIterator[tuple[WebState, list[FakeProvider]]]:
     providers: list[FakeProvider] = []
 
-    def provider(config: HarnessConfig) -> FakeProvider:
+    def provider(config: HarnessConfig, login_store: object | None = None) -> FakeProvider:
         instance = FakeProvider(config, len(providers), script)
         providers.append(instance)
         return instance

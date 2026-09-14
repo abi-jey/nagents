@@ -12,6 +12,18 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 | OpenRouter | `ProviderType.OPENROUTER` | OpenAI-compatible API with OpenRouter identification |
 | LiteLLM | `ProviderType.LITELLM` | API-key gateway with an explicit API prefix |
 
+## Sign in from ngn
+
+The terminal client selects a provider with `ngn login`: `chatgpt` (device
+login), `openrouter` (browser PKCE that yields a user-controlled API key),
+`openai`, `anthropic`, `gemini`, `custom` (any OpenAI-compatible endpoint), or
+any advanced `--provider` name. API keys are accepted through a hidden prompt or
+`--key-stdin`, or referenced with `--api-key-env NAME` so the value stays in the
+environment. The active selection is stored in the protected provider login
+store described in [ngn configuration](../guide/ngn-configuration.md#file-locations-and-trust);
+`ngn login --status` and `ngn logout` manage it. Library users pass credentials
+explicitly as shown below.
+
 ## Discover Model IDs
 
 The current source checkout adds `await provider.get_model_list() -> list[str]`;

@@ -35,7 +35,9 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness import provider_login
 from nagents.harness.commands import BUILTIN_COMMANDS
+from nagents.harness.credentials import ProviderLogin
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
@@ -48,6 +50,8 @@ from .commands import SlashMenu
 from .dictation import DictationModal
 from .login import DeviceLoginModal
 from .login import LoginMethodModal
+from .login import OpenRouterLoginModal
+from .login import ProviderKeyModal
 from .screens import ApprovalModal
 from .screens import ChoiceModal
 from .screens import DetailModal
@@ -79,6 +83,7 @@ if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.harness.auth import DeviceAuthorization
     from nagents.harness.commands import Command
+    from nagents.harness.provider_login import LoginMethod
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 
@@ -1089,19 +1094,118 @@ class NagentsApp(App[None]):
     def _chosen_login(self, method: str | None) -> None:
         if method == "chatgpt":
             self._launch(self._login, "Starting ChatGPT/Codex device login...")
+        elif method == "openrouter":
+            self._launch(self._login_openrouter, "Starting OpenRouter sign-in...")
         elif method == "api-key":
-            self.push_screen(
-                DetailModal(
-                    "API KEY / ENVIRONMENT SETUP",
-                    "Provider API access uses usage-based billing, separate from ChatGPT subscriptions.\n\n"
-                    f"Provide {self.harness.config.api_key_env} in ngn's launching environment using your secret manager. "
-                    'Set auth = "api-key" in your ngn configuration, then restart ngn with the matching provider/model.\n\n'
-                    "This dialog does not accept or store API keys. Do not paste a key into the conversation or "
-                    "a command saved in shell history.\n\n"
-                    "ChatGPT/Codex device login instead uses eligible subscription access for Codex; "
-                    "it is not OAuth access to the general OpenAI API.",
-                )
+            choices = [
+                (entry.token, entry.label) for entry in provider_login.methods() if not entry.device and not entry.pkce
+            ]
+            self.push_screen(ChoiceModal("SIGN IN / PROVIDER", choices), self._chosen_provider)
+
+    def _chosen_provider(self, token: str | None) -> None:
+        if not token:
+            return
+        chosen = provider_login.method(token)
+
+        def collected(result: tuple[str, str, str] | None) -> None:
+            if result is None:
+                return
+            key, model, base_url = result
+            self._launch(
+                lambda: self._login_provider_api(chosen, key, model, base_url),
+                f"Signing in to {chosen.provider}...",
             )
+
+        self.push_screen(ProviderKeyModal(chosen), collected)
+
+    async def _login_provider_api(self, chosen: LoginMethod, key: str, model: str, base_url: str) -> None:
+        entry = chosen
+        if self.harness.config.demo:
+            await self._notice(
+                "Restart without --demo to sign in. Offline demo never starts network login.", error=True
+            )
+            return
+        login = ProviderLogin(
+            provider=entry.provider,
+            model=model or entry.default_model,
+            base_url=base_url,
+            api="auto",
+            auth="api-key",
+            api_key_env=entry.env,
+            api_key=key,
+        )
+        try:
+            await self.harness.login_api(login)
+            note = await provider_login.verify_credentials(
+                provider=entry.provider,
+                model=self.harness.config.model,
+                base_url=base_url,
+                api="auto",
+                api_key=key,
+            )
+        except Exception:
+            # Provider and network errors may embed response bodies. Never render them.
+            await self._notice(
+                f"Signing in to {entry.provider} did not complete; check the details and try /login again.",
+                error=True,
+            )
+            return
+        self._usage = ""
+        await self._notice(f"Signed in to {entry.provider}. Model: {self.harness.config.model}. {note}")
+
+    async def _login_openrouter(self) -> None:
+        if self.harness.config.demo:
+            await self._notice(
+                "Restart without --demo to sign in. Offline demo never starts network login.", error=True
+            )
+            return
+        verifier = provider_login.code_verifier()
+        modal = OpenRouterLoginModal(provider_login.authorization_url(verifier))
+        pending: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+
+        def closed(result: str | None) -> None:
+            if not pending.done():
+                pending.set_result(result)
+
+        try:
+            await self.push_screen(modal, closed)
+            async with asyncio.timeout(900):
+                code = await pending
+            if not code or self._shutting_down:
+                return
+            key = await provider_login.exchange_code(code, verifier)
+            login = ProviderLogin(
+                provider="openrouter",
+                model=provider_login.OPENROUTER_DEFAULT_MODEL,
+                auth="api-key",
+                api_key_env="OPENROUTER_API_KEY",
+                api_key=key,
+            )
+            await self.harness.login_api(login)
+            note = await provider_login.verify_credentials(
+                provider="openrouter",
+                model=self.harness.config.model,
+                base_url="",
+                api="auto",
+                api_key=key,
+            )
+        except TimeoutError:
+            if not self._shutting_down and modal in self.screen_stack:
+                await modal.dismiss()
+            await self._notice("OpenRouter sign-in expired. Run /login for a new code.", error=True)
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await self._notice(
+                "OpenRouter sign-in did not complete; check the connection and try /login again.", error=True
+            )
+            return
+        finally:
+            if not self._shutting_down and modal in self.screen_stack:
+                await modal.dismiss()
+        self._usage = ""
+        await self._notice(f"Signed in to OpenRouter. Model: {self.harness.config.model}. {note}")
 
     def _cancel_login(self) -> None:
         if self._active is not None and not self._active.cancelling():

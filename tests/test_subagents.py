@@ -114,7 +114,7 @@ def setup_harness(
 ) -> tuple[Harness, list[FakeProvider]]:
     providers: list[FakeProvider] = []
 
-    def provider_factory(config: HarnessConfig) -> FakeProvider:
+    def provider_factory(config: HarnessConfig, login_store: object | None = None) -> FakeProvider:
         provider = FakeProvider(config, len(providers), script)
         providers.append(provider)
         return provider

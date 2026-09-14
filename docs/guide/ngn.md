@@ -388,7 +388,66 @@ using clearly labeled, scripted offline responses. A live example is:
 Protocol references: [OpenAI function-call correlation](https://developers.openai.com/api/docs/guides/function-calling)
 and [Anthropic tool-result ordering](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
 
-## OpenAI device login
+## Provider sign-in
+
+`ngn login` chooses the provider and stores one active login. In a terminal it
+shows a menu; name the method to skip it:
+
+```bash
+ngn login                    # interactive menu
+ngn login chatgpt            # ChatGPT/Codex device code (same as --device-auth)
+ngn login openrouter         # browser PKCE; paste the code OpenRouter shows
+ngn login openai             # hidden API-key prompt
+ngn login anthropic --model MODEL-ID
+ngn login gemini --model MODEL-ID
+ngn login custom --base-url https://gateway.example/v1 --model local-model
+ngn login --status
+ngn logout
+```
+
+| Method | Provider | Notes |
+| --- | --- | --- |
+| `chatgpt` | `openai` | ChatGPT/Codex device login; subscription access, not general API access. |
+| `openrouter` | `openrouter` | Headless PKCE: open the printed link, approve ngn, and paste the single-use code shown by OpenRouter (valid for 10 minutes). ngn exchanges it for a user-controlled API key. |
+| `openai` | `openai` | OpenAI Platform API key with usage-based billing. Default model `gpt-4.1`. |
+| `anthropic` | `anthropic` | Anthropic API key; enter a model ID when prompted. |
+| `gemini` | `gemini` | Google AI Studio API key; enter a model ID when prompted. |
+| `custom` | `openai_compatible` | Your own gateway, Ollama, or another compatible service; requires a base URL and model. `--api` selects the HTTP contract, and `--provider` accepts any advanced provider name. |
+
+API keys are read with a hidden prompt, or from standard input with
+`--key-stdin`, never from the command line. Passing `--api-key-env NAME` stores
+only a reference to an environment variable instead of a key, which suits a
+secret manager. A non-interactive `ngn login` without a method keeps the
+historical ChatGPT device-code behavior.
+
+The saved selection becomes this machine's provider default, but it is the
+lowest layer above built-ins: `NGN_*` environment variables, TOML files, and CLI
+flags all override it, and a stored key is used only when its environment
+variable is unset. `ngn login --status` prints the ChatGPT status and the active
+provider login without a network request.
+
+The active login lives in `$XDG_DATA_HOME/ngn/auth/login.json`
+(`~/.local/share/ngn/auth/login.json` by default), a **plaintext credential
+file** protected by POSIX permissions (directory `700`, file `600`) next to the
+ChatGPT store. Only one login is active: signing in to another provider replaces
+the previous selection and key. Keys are never printed, logged, added to model
+context, or rendered by status output. `/logout` or `ngn logout` removes ngn's
+saved provider login and ChatGPT credentials; it does not touch other clients or
+revoke remote sessions. Built-in file tools deny the entire credential
+directory, and sign-in is disabled in offline demo mode.
+
+### OpenRouter browser sign-in
+
+`ngn login openrouter` uses OpenRouter's headless PKCE flow: ngn prints an
+`openrouter.ai/auth` address with a generated code challenge, you approve the
+request in your browser, and OpenRouter displays a single-use authorization
+code. Paste that code at the prompt. ngn exchanges it over HTTPS for a
+user-controlled API key and stores it like any other API login; the code cannot
+be reused and expires after 10 minutes. Only continue if you started the
+sign-in yourself. The default model is `openrouter/auto`; change it with
+`--model` or `/model`.
+
+### OpenAI device login
 
 Start `ngn` without `--demo`, then enter `/login`. Select ChatGPT device login,
 open the displayed OpenAI link, and enter the one-time code in your browser.
@@ -487,9 +546,9 @@ after the subcommand; prefer supplying each option only once.
 | `ngn serve` | New local React client for the harness. Requires the current checkout, `[web]`, and built assets; see [Local Web Client](ngn-web.md). Not the legacy `python -m nagents.server` API. |
 | `ngn sessions` | List saved sessions for the selected workspace. |
 | `ngn doctor` | Initialize the harness and show configuration/extension diagnostics without an LLM request. Trusted plugins still execute. Use `--demo` to skip them. |
-| `ngn login [--device-auth]` | Start OpenAI device-code login; device auth is the default method. |
-| `ngn login --status` | Show local login status without a network request. |
-| `ngn logout` | Remove only ngn's local saved OpenAI login. |
+| `ngn login [METHOD]` | Start provider sign-in. Methods: `chatgpt`, `openrouter`, `openai`, `anthropic`, `gemini`, `custom`, or an advanced `--provider` name. Interactive menu in a terminal; ChatGPT device login when none is chosen non-interactively. |
+| `ngn login --status` | Show ChatGPT and provider login status without a network request. |
+| `ngn logout` | Remove ngn's saved ChatGPT and provider logins. |
 | `ngn --version` | Print CLI/package version; the version alone does not prove an unreleased feature is present. |
 | `ngn --help`, `ngn run --help` | Show options implemented by the installed source build. |
 

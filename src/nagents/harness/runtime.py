@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import aclosing
 from contextlib import contextmanager
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,8 @@ from nagents.session import SessionManager
 
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
+from .credentials import ProviderLogin
+from .credentials import ProviderLoginStore
 from .provider import DemoCompaction
 from .provider import HarnessProvider
 from .skills import HarnessSkillDiscoverer
@@ -105,6 +108,7 @@ class Harness:
         self.diagnostics: list[str] = list(config.diagnostics)
         self.loaded_plugins: list[str] = []
         self.openai_auth = OpenAIAuth()
+        self.login_store = ProviderLoginStore()
         self._api_model = config.model
         self._initialized = False
         self._closed = False
@@ -116,7 +120,7 @@ class Harness:
         self._closing: asyncio.Task[None] | None = None
         self.tools = CodingTools(self)
         self.agent = Agent(
-            provider=HarnessProvider(config),
+            provider=HarnessProvider(config, self.login_store),
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
             streaming=True,
             max_tool_rounds=config.max_tool_rounds,
@@ -559,6 +563,7 @@ class Harness:
         rejected. Swapping closes the previous provider client exactly once;
         reusing the same routing only updates the model.
         """
+        config.validate()
         if config.demo is not self.config.demo:
             raise ValueError("Provider overrides cannot change demo mode")
         identity = ("provider", "base_url", "api", "auth", "api_key_env")
@@ -570,7 +575,7 @@ class Harness:
                     self._api_model = self.agent.provider.model
                 replacement = CodexProvider(self.openai_auth.credentials, model=config.model)
             else:
-                replacement = HarnessProvider(config)
+                replacement = HarnessProvider(config, self.login_store)
             try:
                 await self.agent.close()
             finally:
@@ -610,17 +615,65 @@ class Harness:
             await self.openai_auth.complete_device_login(authorization)
             self.config.auth = "chatgpt"
             await self._use_chatgpt()
+            # Remember the selection so later runs use ChatGPT without flags.
+            self.login_store.save(ProviderLogin(provider="openai", model=self.config.model, auth="chatgpt"))
+
+    async def login_api(self, login: ProviderLogin) -> None:
+        """Adopt and persist a provider API login; the key never enters history.
+
+        The candidate selection is fully validated before anything is saved.
+        A stored key counts as available credentials even when the environment
+        variable is unset, and the previous selection is restored if the
+        provider swap fails.
+        """
+        with self.operation("login"):
+            if self.config.demo:
+                raise ValueError("Login is disabled in offline demo. Restart ngn without --demo, then use ngn login.")
+            candidate = replace(
+                self.config,
+                provider=login.provider,
+                model=login.model or self.config.model,
+                base_url=login.base_url,
+                api=login.api,
+                auth="api-key",
+                api_key_env=login.api_key_env or self.config.api_key_env,
+            )
+            if not login.api_key and not login.api_key_env:
+                raise ValueError(
+                    "No API key or key environment variable was provided; provide one or reference an environment "
+                    "variable with --api-key-env."
+                )
+            await self.initialize()
+            stored = replace(
+                login,
+                model=candidate.model,
+                base_url=candidate.base_url,
+                api=candidate.api,
+                api_key_env=candidate.api_key_env,
+            )
+            previous = self.login_store.selection()
+            self.login_store.save(stored)
+            try:
+                await self.reconfigure_provider(candidate)
+            except BaseException:
+                if previous is None:
+                    self.login_store.remove()
+                else:
+                    self.login_store.save(previous)
+                raise
+            self.diagnostics.append(f"Signed in to provider {candidate.provider} using saved credentials")
 
     async def logout(self) -> None:
-        """Remove only ngn's local OpenAI OAuth credentials, not other clients'."""
+        """Remove only ngn's local logins, not other clients' credentials."""
         with self.operation("logout"):
             if self.config.demo:
                 raise ValueError("Logout is disabled in offline demo; your saved credentials were not touched.")
             self.openai_auth.logout()
+            self.login_store.remove()
             self.config.auth = "api-key"
             if isinstance(self.agent.provider, CodexProvider):
                 self.config.model = self._api_model
-                replacement = HarnessProvider(self.config)
+                replacement = HarnessProvider(self.config, self.login_store)
                 try:
                     await self.agent.close()
                 finally:
@@ -631,7 +684,14 @@ class Harness:
             return "Offline demo; authentication is disabled"
         if isinstance(self.agent.provider, CodexProvider) or self.config.auth == "chatgpt":
             return self.openai_auth.status()
+        if self.login_store.key_for(self.config.provider):
+            return f"{self.config.provider} API key saved in ngn's private credential store (value never displayed)"
         return f"API key from ${self.config.api_key_env} (value never displayed)"
+
+    def login_status(self) -> str:
+        if self.config.demo:
+            return "Offline demo; authentication is disabled"
+        return f"ChatGPT: {self.openai_auth.status()}\nProvider login: {self.login_store.status()}"
 
     def describe(self) -> str:
         skills = ", ".join(f"{skill.name}: {skill.description}" for skill in self.agent.skills.values()) or "none"

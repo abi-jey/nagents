@@ -12,10 +12,14 @@ import tomllib
 import warnings
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from nagents.provider import ProviderType
+
+from .credentials import ProviderLoginStore
+from .private_store import ProtectedStoreError
 
 PROVIDERS = {provider.value: provider for provider in ProviderType}
 PROVIDERS.update(
@@ -175,9 +179,36 @@ class HarnessConfig:
         return self.profiles[name]
 
 
+def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
+    """Overlay a saved provider login below environment and file precedence.
+
+    Only secret-free routing fields are read here. The API key remains in the
+    protected store and is resolved lazily by the provider at request time.
+    """
+    try:
+        selection = ProviderLoginStore().selection()
+    except ProtectedStoreError:
+        return config, "Ignored an unreadable saved provider login; run ngn login again."
+    if selection is None:
+        return config, ""
+    try:
+        candidate = replace(
+            config,
+            provider=selection.provider,
+            model=selection.model or config.model,
+            base_url=selection.base_url,
+            api=selection.api or config.api,
+            auth=selection.auth or config.auth,
+            api_key_env=selection.api_key_env or config.api_key_env,
+        )
+    except ValueError:
+        return config, "Ignored an unsupported saved provider login; run ngn login again."
+    return candidate, f"Applied saved provider login: {candidate.provider} / {candidate.model}"
+
+
 def load_config(workspace: Path, config_path: Path | None = None, *, trust_project: bool = False) -> HarnessConfig:
     """Load trusted config only; never import plugins or read credential values."""
-    config = HarnessConfig(workspace=workspace, trust_project=trust_project)
+    config, login_note = _login_defaults(HarnessConfig(workspace=workspace, trust_project=trust_project))
     strings = {
         "provider",
         "model",
@@ -225,7 +256,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     project = config.workspace / ".ngn/config.toml"
     explicit = config_path.expanduser().resolve() if config_path is not None else None
     paths = [user]
-    diagnostics: list[str] = []
+    diagnostics: list[str] = [login_note] if login_note else []
     if project.exists() and not trust_project and explicit != project.resolve():
         message = (
             f"Ignoring untrusted project config {project}; use trust_project=True to allow endpoints and Python code."

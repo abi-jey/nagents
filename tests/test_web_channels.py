@@ -221,7 +221,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
             yield TextChunkEvent(chunk="answer")
             yield TextDoneEvent(text="answer")
 
-    def provider(config: HarnessConfig) -> FakeProvider:
+    def provider(config: HarnessConfig, login_store: object | None = None) -> FakeProvider:
         fake = FakeProvider(config, len(providers), script)
         providers.append(fake)
         return fake

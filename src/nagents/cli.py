@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import logging
+import os
 import sys
 from contextlib import aclosing
 from dataclasses import asdict
@@ -27,9 +29,11 @@ from .events import ToolCallEvent
 from .events import ToolResultEvent
 from .harness import Harness
 from .harness import load_config
+from .harness import provider_login
 from .harness.config import API_NAMES
 from .harness.config import THEME_BACKGROUNDS
 from .harness.config import THEME_NAMES
+from .harness.credentials import ProviderLogin
 from .harness.types import ApprovalRequest
 from .harness.types import HarnessEvent
 from .harness.types import Notice
@@ -43,6 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from .harness.auth import DeviceAuthorization
+    from .harness.provider_login import LoginMethod
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -116,13 +121,23 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="Loopback address only (default: 127.0.0.1)")
     serve.add_argument("--port", type=int, default=8765, help="Local HTTP port (default: 8765)")
     serve.add_argument("--dev", action="store_true", help="Rebuild frontend assets and reload on source changes")
-    login = commands.add_parser("login", parents=[common], help="Sign in to OpenAI with a ChatGPT device code")
+    login = commands.add_parser(
+        "login", parents=[common], help="Sign in to a provider: ChatGPT/Codex, OpenRouter, or an API key"
+    )
+    login.add_argument(
+        "method",
+        nargs="?",
+        help="Sign-in method: chatgpt, openrouter, openai, anthropic, gemini, or custom (default: choose interactively)",
+    )
     method = login.add_mutually_exclusive_group()
     method.add_argument(
-        "--status", action="store_true", help="Show local OpenAI login status, without a network request"
+        "--status", action="store_true", help="Show local ChatGPT and provider login status, without a network request"
     )
-    method.add_argument("--device-auth", action="store_true", help="Use device-code login (the default)")
-    commands.add_parser("logout", parents=[common], help="Remove ngn's saved OpenAI login from this machine")
+    method.add_argument("--device-auth", action="store_true", help="Use ChatGPT device-code login")
+    login.add_argument(
+        "--key-stdin", action="store_true", help="Read an API key from standard input instead of a hidden prompt"
+    )
+    commands.add_parser("logout", parents=[common], help="Remove ngn's saved ChatGPT and provider logins")
     commands.add_parser(
         "doctor", parents=[common], help="Show configuration and extension diagnostics without an LLM call"
     )
@@ -200,27 +215,141 @@ async def _prepare(harness: Harness, args: argparse.Namespace) -> None:
             await harness.resume(sessions[0].id)
 
 
+def _read_line(prompt: str) -> str:
+    """Print a plain prompt and read one line; end-of-input is an error."""
+    print(_plain(prompt), end="", flush=True)
+    line = sys.stdin.readline()
+    if not line:
+        raise ValueError("Input ended before a value was provided")
+    return line.rstrip("\r\n")
+
+
+def _read_secret(prompt: str, *, from_stdin: bool) -> str:
+    """Read a write-only API key; never from argv, shell history, or output."""
+    if from_stdin:
+        line = sys.stdin.readline()
+        if not line.strip():
+            raise ValueError("--key-stdin received an empty API key")
+        return line.strip()
+    if not sys.stdin.isatty():
+        raise ValueError("Provide the API key with --key-stdin when standard input is not a terminal")
+    try:
+        return getpass.getpass(prompt).strip()
+    except EOFError:
+        raise ValueError("No API key was provided") from None
+
+
+def _interactive_login_choice() -> LoginMethod:
+    entries = provider_login.methods()
+    print("Sign in to a provider:")
+    print(_plain(provider_login.format_methods(entries)))
+    while True:
+        answer = _read_line(f"Choose 1-{len(entries)} [1]: ").strip().lower()
+        if not answer:
+            return entries[0]
+        if answer.isdigit() and 1 <= int(answer) <= len(entries):
+            return entries[int(answer) - 1]
+        try:
+            return provider_login.method(answer)
+        except ValueError:
+            print(f"Enter a number 1-{len(entries)} or one of: {', '.join(entry.token for entry in entries)}")
+
+
+def _login_choice(args: argparse.Namespace) -> LoginMethod:
+    if getattr(args, "device_auth", False):
+        return provider_login.method("chatgpt")
+    given = getattr(args, "method", "") or getattr(args, "provider", "")
+    if given:
+        try:
+            return provider_login.method(given)
+        except ValueError:
+            try:
+                return provider_login.method_for_provider(given)
+            except ValueError:
+                return provider_login.generic(given)
+    if sys.stdin.isatty():
+        return _interactive_login_choice()
+    # Preserve the historical non-interactive default: ChatGPT device login.
+    return provider_login.method("chatgpt")
+
+
+async def _provider_login(harness: Harness, args: argparse.Namespace, chosen: LoginMethod) -> None:
+    base_url = getattr(args, "base_url", "") or ""
+    if chosen.needs_base_url and not base_url:
+        base_url = _read_line(f"Base URL for {chosen.provider} (an API prefix, not a full endpoint): ").strip()
+    model = getattr(args, "model", "") or chosen.default_model
+    if not model:
+        model = _read_line(f"Model ID for {chosen.provider}: ").strip()
+    if not model:
+        raise ValueError(f"A model ID is required for {chosen.provider}; pass --model")
+    api = getattr(args, "api", "auto") or "auto"
+    env = getattr(args, "api_key_env", "") or chosen.env
+    key = ""
+    if getattr(args, "api_key_env", ""):
+        if not os.environ.get(env, "").strip():
+            print(_plain(f"Note: {env} is not set here; export the key in ngn's environment."), file=sys.stderr)
+    elif chosen.pkce:
+        verifier = provider_login.code_verifier()
+        print("\nSign in to OpenRouter in your browser:")
+        print(_plain(provider_login.authorization_url(verifier)))
+        print("After approving, OpenRouter shows a single-use code. Only continue if you started this sign-in.")
+        code = _read_line("\nCode: ").strip()
+        if not provider_login.valid_code(code):
+            raise ValueError("That is not a valid OpenRouter code; run ngn login openrouter again")
+        key = await provider_login.exchange_code(code, verifier)
+    else:
+        key = _read_secret(f"Paste your {chosen.provider} API key (hidden): ", from_stdin=args.key_stdin)
+        if not key:
+            raise ValueError("No API key was provided")
+    login = ProviderLogin(
+        provider=chosen.provider,
+        model=model,
+        base_url=base_url,
+        api=api,
+        auth="api-key",
+        api_key_env=env,
+        api_key=key,
+    )
+    await harness.login_api(login)
+    print(_plain(f"Signed in to {chosen.provider}. {harness.auth_status()}"))
+    print(_plain(f"Provider/model: {chosen.provider} / {harness.config.model}"))
+    if key:
+        note = await provider_login.verify_credentials(
+            provider=chosen.provider, model=harness.config.model, base_url=base_url, api=api, api_key=key
+        )
+        print(_plain(note))
+    else:
+        print(_plain(f"Export {env} in ngn's environment before the first live request."))
+
+
 async def _headless(harness: Harness, args: argparse.Namespace) -> int:
     try:
         if args.command == "login":
             if args.status:
-                print(_plain(harness.auth_status() if harness.config.demo else harness.openai_auth.status()))
+                print(_plain(harness.login_status()))
                 return 0
+            chosen = _login_choice(args)
+            if chosen.device:
 
-            async def show_code(authorization: DeviceAuthorization) -> None:
-                print("\nSign in with ChatGPT / Codex using device authorization.")
-                print("Enable device-code login in your ChatGPT security or workspace settings if required.")
-                print(_plain(f"\nOpen: {authorization.verification_url}"))
-                print(_plain(f"Code: {authorization.user_code}"), flush=True)
-                print("\nOnly continue if you initiated this login in ngn. Do not share the code.")
-                print("Waiting for approval (up to 15 minutes). Ctrl+C cancels.", flush=True)
+                async def show_code(authorization: DeviceAuthorization) -> None:
+                    print("\nSign in with ChatGPT / Codex using device authorization.")
+                    print("Enable device-code login in your ChatGPT security or workspace settings if required.")
+                    print(_plain(f"\nOpen: {authorization.verification_url}"))
+                    print(_plain(f"Code: {authorization.user_code}"), flush=True)
+                    print("\nOnly continue if you initiated this login in ngn. Do not share the code.")
+                    print("Waiting for approval (up to 15 minutes). Ctrl+C cancels.", flush=True)
 
-            await harness.login(show_code)
-            print(_plain(f"Signed in. {harness.auth_status()}\nModel: {harness.config.model}"))
+                await harness.login(show_code)
+                print(_plain(f"Signed in. {harness.auth_status()}\nModel: {harness.config.model}"))
+                return 0
+            await _provider_login(harness, args, chosen)
             return 0
         if args.command == "logout":
             await harness.logout()
-            print("Removed ngn's local OpenAI login. Other clients and remote sessions were not changed.")
+            print(
+                "Removed ngn's saved logins (ChatGPT and any provider API key). "
+                "Other clients and remote sessions were not changed."
+            )
             return 0
         await _prepare(harness, args)
         if args.command == "doctor":
