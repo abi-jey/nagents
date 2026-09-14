@@ -106,12 +106,13 @@ These are separate applications, not interchangeable launch commands:
 
 | Command | Purpose | Installation |
 | --- | --- | --- |
-| `python -m nagents.server` | Legacy HTTP/SSE API server; retained as the Docker image's default command. The current source has no bundled chat UI. | Current checkout with `[server]`; see the [legacy API server guide](docs/guide/server.md) for token, bind, and deployment setup. |
-| `ngn serve` | New local React client for the ngn coding harness, sharing its workspace sessions and approvals. | Current checkout with `[web]` and built frontend assets; not included in `v0.5.0`. See the [local web client guide](docs/guide/ngn-web.md). |
+| `python -m nagents.server` | Legacy HTTP/SSE API server. The current source has no bundled chat UI. | Current checkout with `[server]`; see the [legacy API server guide](docs/guide/server.md) for token, bind, and deployment setup. |
+| `ngn serve` | Local React client for the ngn coding harness, sharing its workspace sessions and approvals. Also the Docker image's default command. | Current checkout with `[web]` and built frontend assets; not included in `v0.5.0`. See the [local web client guide](docs/guide/ngn-web.md). |
 
 The new frontend source lives in `src/nagents/web-ui/`; its Vite build goes to
-`src/nagents/web/static/`. Neither installing `[web]` nor launching the server
-builds those assets. Source build/check commands are in
+`src/nagents/web/static/`. Plain `ngn serve` uses the bundled assets without
+building or reloading. Use `ngn serve --dev` in an editable checkout to build stale
+assets and reload after frontend or Python edits. Source build/check commands are in
 [Contributing](docs/development/contributing.md#web-client-development).
 
 The legacy server's authentication hardening and removal of its old UI are also

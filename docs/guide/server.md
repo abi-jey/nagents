@@ -1,7 +1,7 @@
 # Legacy API Server
 
-`python -m nagents.server` runs the retained HTTP/SSE API application. It is also
-the Docker image's default command. The current source has **no bundled chat
+`python -m nagents.server` runs the retained HTTP/SSE API application. The Docker
+image defaults to `ngn serve`; select this API explicitly. The current source has **no bundled chat
 UI**: `/` and `/ui*` return JSON 404 responses after access checks. The separate
 [React web client](ngn-web.md) uses `ngn serve` and the ngn harness, not this API.
 
@@ -99,14 +99,15 @@ command output and process diagnostics.
 
 ## Docker
 
-The current Dockerfile still launches `python -m nagents.server`, not `ngn serve`.
-Build from the repository root after the frontend source is present at
+The current Dockerfile defaults to `ngn serve`. Override its command and health
+check to launch the legacy API. Build from the repository root with the frontend source at
 `src/nagents/web-ui/`; the Dockerfile builds its assets in a separate stage:
 
 ```bash
 docker build -f dockerfiles/Runtime.Dockerfile -t nagents-server:local .
 docker run --rm --name nagents-api \
   -p 127.0.0.1:8080:8080 \
+  --health-cmd 'curl -fsS --max-time 4 -o /dev/null http://127.0.0.1:8080/health || exit 1' \
   -e NAGENTS_SERVER_HOST=0.0.0.0 \
   -e NAGENTS_SERVER_TOKEN \
   -e NAGENTS_LLM_PROVIDER -e NAGENTS_LLM_API_KEY \
@@ -116,12 +117,12 @@ docker run --rm --name nagents-api \
   -e NAGENTS_CONFIGS_PATH=/tmp/nagents-server/configs.json \
   -e NAGENTS_MCP_CONFIG=/tmp/nagents-server/mcp.json \
   -e NAGENTS_MCP_ENABLED=false \
-  nagents-server:local
+  nagents-server:local python -m nagents.server
 ```
 
 This uses the exported secrets by name. Binding inside the container to
 `0.0.0.0` lets the port mapping reach the server; publishing only on host
-`127.0.0.1` keeps that mapping local. The image health check uses public
+`127.0.0.1` keeps that mapping local. The overridden health check uses public
 `GET /health`. Example state is ephemeral; provision a private writable volume
 for persistence. The example deliberately does not mount the host Docker socket,
 so Docker-backed shell tools need separate, explicitly authorized provisioning.
@@ -129,7 +130,7 @@ so Docker-backed shell tools need separate, explicitly authorized provisioning.
 ## Kubernetes and Remote Access
 
 The repository's `examples/k8s/deployment.yaml` is a cluster-specific legacy API
-deployment, not a web-client deployment. It binds on the pod network and reads
+deployment with an explicit `python -m nagents.server` command. It binds on the pod network and reads
 `NAGENTS_SERVER_TOKEN` from the `nagents-server-auth` Secret. Create the `nagents`
 namespace first if absent, then provision a separate high-entropy token:
 

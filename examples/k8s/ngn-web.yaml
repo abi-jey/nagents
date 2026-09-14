@@ -297,7 +297,7 @@ spec:
         - name: ngn
           image: ghcr.io/abi-jey/nagents/agent-server@sha256:2def52cc2843d1b7d599b91029b8a83c6e36bc97c4d71eae489dcb5eef578d50
           imagePullPolicy: IfNotPresent
-          # Override the image's legacy-server CMD; never bind ngn remotely.
+          # Explicit ngn serve command works with older images too; keep loopback.
           command:
             - ngn
           args:

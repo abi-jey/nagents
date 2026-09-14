@@ -18,11 +18,11 @@ Node 20.19 or newer installed:
 
 ```bash
 python -m pip install -e '.[web]'
-ngn serve --demo --workspace /path/to/project
+ngn serve --dev --demo --workspace /path/to/project
 ```
 
 For Poetry, use `poetry install -E web` instead of the editable pip command and
-launch with `poetry run ngn serve --demo --workspace
+launch with `poetry run ngn serve --dev --demo --workspace
 /path/to/project`. Omit `--demo` when you want configured live provider requests.
 
 Use a separate virtualenv and editable installation for each Git worktree.
@@ -76,26 +76,36 @@ typechecks the frontend, runs Vite, and writes `src/nagents/web/static/build.jso
 with hashes of its inputs and output assets. Generated assets and `node_modules/`
 are ignored by Git.
 
-In an editable source installation, `ngn serve` verifies those hashes at startup.
-Missing or stale assets trigger `npm ci` followed by `npm run build` in the
-frontend directory adjacent to the imported Python package. This includes source
-edits, additions, deletions, and lockfile changes after a Git pull. A failed build
-stops startup instead of serving an old UI. The first build, and builds after
-changes, need Node.js and access to the locked npm dependencies; a verified build
-starts without npm. Restart `ngn serve` after editing source; it is not a live
-file watcher. To build ahead of time or prepare for offline use:
+Plain `ngn serve` verifies and serves the existing bundle. It never installs npm
+dependencies, builds assets, or watches files, including in a source checkout.
+Build the assets explicitly before the first normal source launch:
 
 ```bash
 npm --prefix src/nagents/web-ui ci
 npm --prefix src/nagents/web-ui run build
+ngn serve --demo
 ```
+
+For development, use `ngn serve --dev` from an editable installation. Missing or
+stale assets trigger `npm ci` followed by `npm run build` in the frontend directory
+adjacent to the imported Python package. This includes source edits, additions,
+deletions, and lockfile changes after a Git pull. A failed build stops startup
+instead of serving an old UI. Builds need Node.js and access to the locked npm
+dependencies; a verified build starts without npm.
+
+Development mode watches frontend and Python source files. Changes restart the
+Python backend and rebuild stale frontend assets. Refresh the browser after the
+restart to load the new UI; this is not Vite hot module replacement. Reloading
+cancels active tasks, so use this mode for development. Leave off `--dev` for
+normal use and deployments.
 
 Wheels and deployed containers serve the same verified bundle, built during
 packaging. They do not install npm dependencies or rebuild at startup. A missing
 or damaged packaged bundle produces a reinstall error. Matching UI builds still
 require matching source revisions; pulling a checkout does not update an already
-deployed image. There is no separate Vite origin/proxy required: test the production
-client through `ngn serve`.
+deployed image. Docker defaults to the same `ngn serve` command without `--dev`,
+listening on loopback port 8765. Use the [private deployment guide](ngn-web-deployment.md)
+for its same-pod proxy setup. There is no separate Vite origin/proxy required.
 
 ## Try It Offline
 

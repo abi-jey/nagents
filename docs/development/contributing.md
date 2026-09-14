@@ -78,17 +78,21 @@ npm --prefix src/nagents/web-ui ci
 npm --prefix src/nagents/web-ui run typecheck
 npm --prefix src/nagents/web-ui test
 npm --prefix src/nagents/web-ui run build
-.venv/bin/ngn serve --demo
+.venv/bin/ngn serve --dev --demo
 ```
 
 Use Node.js `24.20.0` to match the current CI build. Vite emits assets into
-`src/nagents/web/static/`; build them before packaging or launching from source.
+`src/nagents/web/static/`; build them before packaging or launching without `--dev`.
 The wheel includes generated assets, while the source distribution also carries
 the frontend source and lockfile. Installing `[web]` adds optional Python HTTP
-dependencies, not a JavaScript build step. `ngn serve` never installs npm
-dependencies at startup. See the [web client guide](../guide/ngn-web.md) for
-operation and safety; it is separate from the
-[legacy API server](../guide/server.md), which remains the Docker default.
+dependencies, not a JavaScript build step. Plain `ngn serve` uses the verified
+bundle without building or reloading, and is also the Docker default.
+`ngn serve --dev` installs locked npm dependencies and builds when assets are
+missing or stale, then watches Python and frontend source to restart the backend
+and rebuild frontend changes. Refresh the browser after reload; active tasks are
+cancelled by a restart. Use a separate virtualenv and editable installation in
+each worktree. See the [web client guide](../guide/ngn-web.md) for operation and
+the [legacy API server](../guide/server.md) for its explicit launch command.
 
 ## Development Workflow
 
