@@ -328,14 +328,26 @@ jobs:
       - name: Verify bundled web assets and skills
         shell: python
         run: |
+          import hashlib
+          import json
           from pathlib import Path
           import tarfile
           import zipfile
 
           with zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
               wheel_files = wheel.namelist()
+              manifest = json.loads(wheel.read("nagents/web/static/build.json"))
+              assert manifest["version"] == 1
+              assert manifest["sources"] and manifest["assets"]
+              for path, digest in manifest["assets"].items():
+                  assert hashlib.sha256(wheel.read(f"nagents/web/static/{path}")).hexdigest() == digest, path
           with tarfile.open(next(Path("dist").glob("*.tar.gz"))) as sdist:
               sdist_files = [name.split("/", 1)[-1] for name in sdist.getnames()]
+              prefix = sdist.getnames()[0].split("/", 1)[0]
+              for path, digest in manifest["sources"].items():
+                  source = sdist.extractfile(f"{prefix}/src/nagents/web-ui/{path}")
+                  assert source is not None, path
+                  assert hashlib.sha256(source.read()).hexdigest() == digest, path
 
           assert "nagents/web/static/index.html" in wheel_files
           assert any(name.startswith("nagents/web/static/assets/") and name.endswith(".js") for name in wheel_files)

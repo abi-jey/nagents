@@ -215,8 +215,19 @@ Config is secret-free: `provider = "openai"`, `auth = "chatgpt"`, `api = "auto"`
 `data_dir = "/state/sessions"`. Omitting `model` lets the Harness replace its normal
 default with its Codex default. Chat credentials and routing stay separate from
 the optional transcription Secret described below. The pinned amd64 application image includes the React assets and
-Codex client; `command: [ngn]` overrides its legacy default CMD with `serve` and the
-exact loopback/workspace/config flags. Both images are pinned by digest.
+Codex client; `command: [ngn]` and its arguments explicitly select `serve` with the
+exact loopback/workspace/config flags, including for older images. New images
+default to `ngn serve` without development mode. Both images are pinned by digest.
+
+The image builds the same frontend as a local source installation with
+`npm ci` and `npm run build`. It packages the assets and their `build.json`
+manifest together; `ngn serve` verifies the bundle without rebuilding inside the
+container. New image builds also use a loopback bootstrap health check and
+discard its response body, including the process token. Startup logs include the
+UI build ID and asset directory. Compare the
+build ID with a local launch to check that both use identical frontend inputs and
+outputs. Updating local source does not update the pinned deployed image; build
+and roll out an image from the same revision to align them.
 
 The web runtime settings API stores its versioned `ngn_web_settings` row in the
 existing workspace SQLite database under `/state/sessions` on this same PVC.

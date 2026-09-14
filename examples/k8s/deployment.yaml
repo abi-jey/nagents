@@ -82,6 +82,8 @@ spec:
         - name: agent
           image: ghcr.io/abi-jey/nagents/agent-server:latest
           imagePullPolicy: Always
+          # The image defaults to ngn serve; retain this legacy HTTP/SSE API.
+          command: ["python", "-m", "nagents.server"]
           ports:
             - containerPort: 8080
               protocol: TCP

@@ -115,6 +115,7 @@ def _parser() -> argparse.ArgumentParser:
     serve = commands.add_parser("serve", parents=[common], help="Serve the local React web client (web extra)")
     serve.add_argument("--host", default="127.0.0.1", help="Loopback address only (default: 127.0.0.1)")
     serve.add_argument("--port", type=int, default=8765, help="Local HTTP port (default: 8765)")
+    serve.add_argument("--dev", action="store_true", help="Rebuild frontend assets and reload on source changes")
     login = commands.add_parser("login", parents=[common], help="Sign in to OpenAI with a ChatGPT device code")
     method = login.add_mutually_exclusive_group()
     method.add_argument(
@@ -361,6 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 port=args.port,
                 resume_session=getattr(args, "resume", ""),
                 continue_session=getattr(args, "continue_session", False),
+                dev=args.dev,
             )
             return 0
         harness = Harness(config)

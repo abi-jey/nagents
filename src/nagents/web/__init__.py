@@ -1,7 +1,11 @@
 """Optional, local-only web client for the ngn Harness, not nagents.server."""
 
+import hashlib
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from .assets import prepare_assets
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
@@ -18,14 +22,7 @@ def local_authority(host: str, port: int) -> str:
 
 
 def built_assets() -> Path:
-    directory = Path(__file__).parent / "static"
-    if not (directory / "index.html").is_file() or not (directory / "assets").is_dir():
-        raise ValueError(
-            "The ngn React assets are missing. In a source checkout run `npm --prefix src/nagents/web-ui ci` then "
-            "`npm --prefix src/nagents/web-ui run build`. For a packaged install, reinstall a release that includes web assets. "
-            "ngn serve never downloads or builds at startup."
-        )
-    return directory
+    return prepare_assets(Path(__file__).resolve().parent)
 
 
 def serve(
@@ -35,13 +32,14 @@ def serve(
     port: int = 8765,
     resume_session: str = "",
     continue_session: bool = False,
+    dev: bool = False,
 ) -> None:
     local_authority(host, port)
     try:
         import uvicorn
 
         from .app import create_app
-        from .subscriptions import MAX_FRAME
+        from .runtime import server_config
     except ModuleNotFoundError as error:
         if error.name not in {"fastapi", "starlette", "pydantic", "uvicorn", "anyio"}:
             raise
@@ -50,7 +48,14 @@ def serve(
             "virtualenv, run `pip install -e '.[web]'` (or `poetry install -E web`). "
             "The existing server extra also supplies these dependencies. Textual is not required."
         ) from error
+    if dev:
+        from .dev import serve_dev
+
+        serve_dev(config, host=host, port=port, resume_session=resume_session, continue_session=continue_session)
+        return
     assets = built_assets()
+    build_id = hashlib.sha256((assets / "build.json").read_bytes()).hexdigest()[:12]
+    print(f"ngn: React UI build {build_id} from {assets}", file=sys.stderr, flush=True)
     app = create_app(
         config,
         host=host,
@@ -59,15 +64,4 @@ def serve(
         resume_session=resume_session,
         continue_session=continue_session,
     )
-    # One process and one lifespan own every Harness resource. Never trust proxy headers.
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        proxy_headers=False,
-        access_log=False,
-        timeout_graceful_shutdown=3,
-        ws_max_size=MAX_FRAME,
-        ws_max_queue=16,
-        ws_per_message_deflate=False,
-    )
+    uvicorn.Server(server_config(app, host=host, port=port)).run()

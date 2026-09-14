@@ -4,6 +4,8 @@ WORKDIR /build/src/nagents/web-ui
 COPY src/nagents/web-ui/package.json src/nagents/web-ui/package-lock.json ./
 RUN npm ci
 COPY src/nagents/web-ui/ ./
+# Canonical build shared with `ngn serve --dev` and Python release CI.
+# Includes build.json so the installed runtime can verify the bundled assets.
 RUN npm run build
 
 FROM python:3.12-slim
@@ -47,8 +49,8 @@ ENV NAGENTS_SERVER_MEMORY=512m
 # Pre-pull the sandbox image so it's available without internet at runtime
 RUN docker pull python:3.12-slim || true
 
-EXPOSE 8080
-CMD ["python", "-m", "nagents.server"]
+EXPOSE 8765
+CMD ["ngn", "serve"]
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -fsS --max-time 4 -o /dev/null http://127.0.0.1:8765/api/bootstrap || exit 1
