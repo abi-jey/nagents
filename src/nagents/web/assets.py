@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .build_process import run_build_command
+
 _IGNORED_DIRECTORIES = {"node_modules", ".git", ".test-build", ".vite", ".cache", "__pycache__"}
 
 
@@ -100,9 +102,9 @@ def prepare_assets(web: Path, *, dev: bool = False) -> Path:
     # The same locked dependency install and build command are used in Docker and CI.
     # No shell and no paths from HarnessConfig/workspace are involved.
     try:
-        subprocess.run([npm, "ci"], cwd=source, check=True)
-        subprocess.run([npm, "run", "build"], cwd=source, check=True)
-    except (OSError, subprocess.CalledProcessError) as error:
+        run_build_command([npm, "ci"], cwd=source)
+        run_build_command([npm, "run", "build"], cwd=source)
+    except (OSError, subprocess.SubprocessError) as error:
         raise ValueError(
             f"Could not build the ngn React UI in {source}. Fix the npm error above and rerun `ngn serve --dev`. "
             "Stale assets will not be served."

@@ -79,16 +79,15 @@ def test_stale_source_build_uses_canonical_npm_commands(
     else:
         (web / "static" / "build.json").unlink()
 
-    def rebuild(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+    def rebuild(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         assert cwd == source
-        assert check
         if command[1:] == ["run", "build"]:
             (web / "static" / "assets" / "app.js").write_text("new build", encoding="utf-8")
             _stamp(web)
         return subprocess.CompletedProcess(command, 0)
 
     run = Mock(side_effect=rebuild)
-    monkeypatch.setattr("nagents.web.assets.subprocess.run", run)
+    monkeypatch.setattr("nagents.web.assets.run_build_command", run)
     monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: "/tools/npm")
     # A different current directory/workspace must never choose a different frontend.
     monkeypatch.chdir(tmp_path)
@@ -141,12 +140,12 @@ def test_failed_rebuild_never_falls_back_to_stale_assets(
 ) -> None:
     (web.parent / "web-ui" / "src" / "App.tsx").write_text("new source", encoding="utf-8")
 
-    def fail(command: list[str], *, cwd: Path, check: bool) -> subprocess.CompletedProcess[str]:
+    def fail(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         if (failure == "install" and command[1] == "ci") or (failure == "build" and command[1] == "run"):
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr("nagents.web.assets.subprocess.run", fail)
+    monkeypatch.setattr("nagents.web.assets.run_build_command", fail)
     monkeypatch.setattr("nagents.web.assets.shutil.which", lambda _: "/tools/npm")
     with pytest.raises(ValueError, match=r"Could not build|incomplete"):
         prepare_assets(web, dev=True)
@@ -157,20 +156,20 @@ def test_normal_source_launch_serves_existing_bundle_without_inspecting_source(
 ) -> None:
     (web.parent / "web-ui" / "src" / "App.tsx").write_text("unbuilt changes", encoding="utf-8")
     monkeypatch.setattr("nagents.web.assets.source_hashes", Mock(side_effect=AssertionError("No source inspection")))
-    monkeypatch.setattr("nagents.web.assets.subprocess.run", Mock(side_effect=AssertionError("No npm")))
+    monkeypatch.setattr("nagents.web.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
     assert prepare_assets(web) == web / "static"
 
 
 def test_normal_source_launch_does_not_build_missing_assets(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (web / "static" / "build.json").unlink()
-    monkeypatch.setattr("nagents.web.assets.subprocess.run", Mock(side_effect=AssertionError("No npm")))
+    monkeypatch.setattr("nagents.web.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
     with pytest.raises(ValueError, match="ngn serve --dev"):
         prepare_assets(web)
 
 
 def test_dev_requires_source_even_with_valid_packaged_assets(web: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (web.parent / "web-ui").rename(web.parent / "unrelated-source")
-    monkeypatch.setattr("nagents.web.assets.subprocess.run", Mock(side_effect=AssertionError("No npm")))
+    monkeypatch.setattr("nagents.web.assets.run_build_command", Mock(side_effect=AssertionError("No npm")))
     with pytest.raises(ValueError, match="editable source checkout"):
         prepare_assets(web, dev=True)
 
