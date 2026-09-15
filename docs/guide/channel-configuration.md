@@ -35,6 +35,7 @@ and a strict JSON object:
 | `plugin` | Required installed plugin ID from discovery. |
 | `enabled` | Required boolean controlling whether the connector runs. |
 | `auto_reply` | Optional boolean enabling automatic communication within the owning chat. |
+| `chat_approvals` | Optional boolean allowing the owning chat to decide tool approvals without a live browser subscriber. |
 | `config` | Public plugin fields, replacing the previous public configuration; defaults to `{}`. |
 | `secrets` | Private plugin fields; omitted values preserve existing secrets for the same plugin. An empty string clears a secret. |
 | `main_session_id` | Existing workspace root. Empty/omitted preserves the connection's main, or uses the active run's root for a new connection. |
@@ -91,6 +92,28 @@ including configuration changes, retain their approval requirements.
 Set `auto_reply: false` to disable that policy. Omitting it preserves the saved
 policy when editing the same plugin; new or replacement connectors default to
 false. `enabled` separately controls whether the connector is running.
+
+## In-Channel Approvals
+
+By default a `server_owned` (channel-origin) or background run needs a live
+browser subscriber to answer a tool approval; with no browser connected the
+approval is denied unattended. Set `chat_approvals: true` to let the session's
+durable owning chat decide instead.
+
+The host only honors a decision when every correlation field matches: an enabled
+connector that advertises `approvals` and renders prompts, the permanent owning
+conversation, and the run's single live pending approval
+(`session`, `run`, `call`). A recognized-but-stale interaction carries empty
+fields: it is consumed and never becomes model input, but it cannot approve
+anything. A connector returns decisions through the optional
+`Channel.approval` hook, paralleling `Channel.command`; connectors that do not
+render prompts leave the default `None` and are unaffected.
+
+Omitting `chat_approvals` preserves the saved policy when editing the same
+plugin; new or replacement connectors default to false. Enabling it means any
+trusted sender admitted by that connector can approve privileged tools in the
+owning chat, so combine it with `allowed_user_ids`/`allowed_usernames` and
+`private_chats_only` where appropriate.
 
 New saves use channel catalog version 2. Existing version 1 catalogs load with
 automatic messages disabled and are upgraded on Save, without a startup rewrite.

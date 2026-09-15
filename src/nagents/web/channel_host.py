@@ -18,6 +18,7 @@ from nagents.channels.runtime import _bind
 from nagents.channels.runtime import _envelope
 from nagents.channels.runtime import _failure
 from nagents.channels.runtime import inbound_content
+from nagents.channels.types import ChannelApproval
 from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelSend
 from nagents.channels.types import ChannelValue
@@ -328,6 +329,17 @@ class ChannelHost:
 
     async def source(self, id: str, channel: Channel) -> None:
         async def receive(message: ChannelMessage) -> None:
+            try:
+                approval = channel.approval(message)
+            except Exception:
+                approval = None  # Optional hook; a broken connector degrades to normal handling.
+            if approval is not None:
+                # A claimed approval interaction is never model input, even when it
+                # no longer correlates with a live pending decision.
+                await self.resolve_approval(id, approval)
+                self.changed.set()
+                await self.activities.refresh()
+                return
             envelope = _envelope(id, message)
             command = channel.command(message)
             while not self.closed:
@@ -352,6 +364,91 @@ class ChannelHost:
                 "error",
                 "Connector stopped. Check configuration and reconnect at an idle boundary.",
             )
+
+    async def resolve_approval(self, id: str, decision: ChannelApproval) -> bool:
+        """Apply one in-chat approval decision to the live pending, or ignore it.
+
+        The decision is honored only when it exactly matches this session's
+        permanently owning chat, an enabled connector that opted into in-chat
+        approvals, and the run's single live pending approval. Anything else is
+        dropped without side effects.
+        """
+        state = self.state
+        run = state.active
+        if (
+            run is None
+            or run.finished
+            or run.task.done()
+            or run.task.cancelling()
+            or not decision.conversation_id
+            or not decision.call_id
+            or decision.session_id != run.session_id
+            or decision.run_id != run.id
+        ):
+            return False
+        owner = await self.store.owner(run.session_id)
+        connection = self.catalog.connections.get(id)
+        channel = self.channels.get(id)
+        source = self.sources.get(id)
+        pending = run.pending
+        if (
+            owner is None
+            or owner.conflicted
+            or owner.channel != id
+            or owner.conversation_id != decision.conversation_id
+            or connection is None
+            or connection.enabled is not True
+            or connection.chat_approvals is not True
+            or self.catalog.connections.get(id) is not connection
+            or not self.catalog.allow_plugins
+            or self.state.harness.config.demo
+            or channel is None
+            or self.channels.get(id) is not channel
+            or "approvals" not in channel.capabilities
+            or source is None
+            or self.sources.get(id) is not source
+            or source.done()
+            or source.cancelling()
+        ):
+            return False
+        if (
+            state.active is not run
+            or run.pending is not pending
+            or pending is None
+            or pending.answer.done()
+            or pending.call_id != decision.call_id
+            or pending.record.get("run_id") != run.id
+        ):
+            return False
+        pending.answer.set_result(decision.allow)
+        return True
+
+    async def in_chat_approvals(self, session_id: str) -> bool:
+        """True when this session's owning chat may decide approvals without a browser."""
+        try:
+            owner = await self.store.owner(session_id)
+        except Exception:
+            return False
+        if owner is None or owner.conflicted or not owner.channel or not owner.conversation_id:
+            return False
+        channel = self.channels.get(owner.channel)
+        source = self.sources.get(owner.channel)
+        connection = self.catalog.connections.get(owner.channel)
+        return bool(
+            connection is not None
+            and connection.enabled is True
+            and connection.chat_approvals is True
+            and not self.closed
+            and self.catalog.allow_plugins
+            and not self.state.harness.config.demo
+            and channel is not None
+            and self.channels.get(owner.channel) is channel
+            and "approvals" in channel.capabilities
+            and source is not None
+            and self.sources.get(owner.channel) is source
+            and not source.done()
+            and not source.cancelling()
+        )
 
     async def stop_source(self, id: str) -> None:
         source = self.sources.pop(id, None)

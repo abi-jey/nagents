@@ -29,6 +29,7 @@ from nagents.events import ToolCallEvent
 from nagents.extensions import AgentPlugin
 from nagents.extensions import RunContext
 from nagents.types import Message
+from tests.test_channels_runtime import HANG_GUARD
 from tests.test_channels_runtime import MemoryChannel
 from tests.test_channels_runtime import OfflineProvider
 from tests.test_channels_runtime import assert_no_runtime_tasks
@@ -90,7 +91,7 @@ def test_public_listen_routes_notices_to_origin_and_preserves_shared_history_and
             observed.append(event)
 
         try:
-            await asyncio.wait_for(agent.listen("identity", on_event=observe), 3)
+            await asyncio.wait_for(agent.listen("identity", on_event=observe), HANG_GUARD)
             assert [event.phase for event in source.events] == [
                 "run_started",
                 "tool_requested",
@@ -445,7 +446,7 @@ def test_connector_failure_never_fails_model_or_retries_notices(
         provider = OfflineProvider(((ToolCallEvent(id="list-call", name="channel_list"),),))
         agent = make_agent(tmp_path / "hook-failure.db", provider).add_channel(source)
         try:
-            await asyncio.wait_for(agent.listen("identity"), 3)
+            await asyncio.wait_for(agent.listen("identity"), HANG_GUARD)
             assert [event.phase for event in source.events] == [
                 "run_started",
                 "tool_requested",
@@ -493,7 +494,7 @@ def test_failed_run_has_one_terminal_notice_even_when_done_precedes_cleanup_fail
 
         try:
             with pytest.raises((ChannelError, RuntimeError, BaseExceptionGroup)):
-                await asyncio.wait_for(agent.listen("identity", on_event=observe), 3)
+                await asyncio.wait_for(agent.listen("identity", on_event=observe), HANG_GUARD)
             assert [event.phase for event in source.events] == ["run_started", "failed"]
             assert "PRIVATE-" not in repr(source.events)
             assert (await rows(agent.session.db_path))[0][2] == "failed"
@@ -599,16 +600,16 @@ def test_cancellation_joins_hook_and_terminal_notice_before_close_without_cross_
             waiting = (
                 provider.started if cancel_at == "provider" else source.send_started if cancel_at == "tool" else started
             )
-            await asyncio.wait_for(waiting.wait(), 3)
-            await asyncio.wait_for(source.listen_finished.wait(), 3)
+            await asyncio.wait_for(waiting.wait(), HANG_GUARD)
+            await asyncio.wait_for(source.listen_finished.wait(), HANG_GUARD)
             listener.cancel()
-            await asyncio.wait_for(terminal.wait(), 3)
+            await asyncio.wait_for(terminal.wait(), HANG_GUARD)
             listener.cancel()
             await asyncio.sleep(0)
             assert source.closed == 0 and active == 1
             release_terminal.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(listener, 3)
+                await asyncio.wait_for(listener, HANG_GUARD)
             phases = [event.phase for event in source.events]
             assert phases[0] == "run_started" and phases[-1] == "cancelled"
             assert "tool_completed" not in phases and "completed" not in phases and "failed" not in phases
@@ -709,8 +710,8 @@ def test_agent_close_joins_inflight_notices_and_does_not_reclassify_a_completed_
         baseline = asyncio.all_tasks()
         listener = asyncio.create_task(agent.listen("identity"))
         try:
-            await asyncio.wait_for(started.wait(), 3)
-            await asyncio.wait_for(agent.close(), 3)
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
+            await asyncio.wait_for(agent.close(), HANG_GUARD)
             assert listener.cancelled() and source.closed == 1 and active == 0
             assert [event.phase for event in source.events] == [
                 "run_started",

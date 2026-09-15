@@ -253,6 +253,13 @@ Subclass `nagents.channels.Channel`. The required operations are
   unsupported ones explicitly. Return JSON-compatible results.
 - `command(message)` optionally returns `ChannelCommand(name, arguments)`
   synchronously without I/O. The host owns command policy, storage, and replies.
+- `approval(message)` optionally returns `ChannelApproval(conversation_id,
+  session_id, run_id, call_id, allow)` synchronously without I/O when it
+  recognizes a tap on a prompt it rendered; advertise `approvals`. A returned
+  value claims the interaction, so it is never model input. Return empty
+  correlation fields for a recognized-but-stale tap; the host validates every
+  field against its live pending approval and the owning-chat `chat_approvals`
+  policy before applying it.
 - `async activity(event: ChannelActivity) -> None` optionally manages typing or
   similar indicators. `conversation_id`, `thread_id`, `session_id`, and `active`
   identify the target and owner; an old stop must not stop a newer owner's work.
