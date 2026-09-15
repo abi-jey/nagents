@@ -5,6 +5,7 @@ logs
 *.wav
 .playwright-mcp
 .agents/chrome-context
+.agents/skills
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
