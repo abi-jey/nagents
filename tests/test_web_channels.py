@@ -19,8 +19,10 @@ from starlette.websockets import WebSocketDisconnect
 
 from nagents.channels.types import Channel
 from nagents.channels.types import ChannelActivity
+from nagents.channels.types import ChannelAttachment
 from nagents.channels.types import ChannelCommand
 from nagents.channels.types import ChannelDelivery
+from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelMessage
 from nagents.channels.types import ChannelPlugin
 from nagents.channels.types import ChannelSend
@@ -55,12 +57,21 @@ pytestmark = pytest.mark.requires_posix
 
 
 class FakeChannel(Channel):
+    capabilities = ("receive", "send_text", "fetch_attachment")
+
     def __init__(self, name: str) -> None:
         self.name = name
         self.incoming: asyncio.Queue[tuple[ChannelMessage, asyncio.Future[None]]] = asyncio.Queue()
         self.deliveries: list[ChannelSend] = []
         self.activities: list[ChannelActivity] = []
+        self.attachments: dict[str, tuple[bytes, str]] = {}
         self.closed = False
+
+    async def fetch_attachment(self, attachment: ChannelAttachment) -> tuple[bytes, str]:
+        result = self.attachments.get(attachment.reference)
+        if result is None:
+            raise ChannelError("Fixture attachment is unavailable")
+        return result
 
     async def listen(self, receive: ChannelReceiver) -> None:
         while True:

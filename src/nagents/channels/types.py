@@ -170,6 +170,11 @@ class ChannelMessage:
     event_type: str = "message"
     attachments: tuple[ChannelAttachment, ...] = ()
     metadata: dict[str, ChannelValue] = field(default_factory=dict)
+    # Optional generic presentation fields; untrusted transport data, never authority.
+    sent_at: float = 0.0
+    sender_name: str = ""
+    sender_username: str = ""
+    conversation_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -322,6 +327,16 @@ class Channel(ABC):
 
     async def action(self, name: str, arguments: dict[str, ChannelValue]) -> dict[str, ChannelValue]:
         raise ChannelError(f"Unsupported channel action: {name}")
+
+    async def fetch_attachment(self, attachment: ChannelAttachment) -> tuple[bytes, str]:
+        """Download a referenced attachment for model input.
+
+        Only connectors that advertise ``fetch_attachment`` in ``capabilities``
+        need to implement this. Return the raw bytes and the effective media type
+        within the host's caps; raise a sanitized ``ChannelError`` otherwise. The
+        host never treats the returned content as instructions.
+        """
+        raise ChannelError("This connector does not support attachment downloads")
 
     def command(self, message: ChannelMessage) -> ChannelCommand | None:
         """Recognize an explicit transport command without doing I/O."""

@@ -1,5 +1,6 @@
 import { preview, text } from "../../api/events.js";
-import type { ActivityReply, Snapshot, WireEvent } from "../../types.js";
+import type { ActivityReply, MessagePart, Snapshot, WireEvent } from "../../types.js";
+import type { ChannelMeta } from "./channelMessage.js";
 import { channelMessage, sameUserMessage } from "./channelMessage.js";
 
 export type Entry = {
@@ -54,6 +55,8 @@ export type Entry = {
   originId?: string;
   provenance?: string;
   channelContext?: boolean;
+  channel?: ChannelMeta;
+  parts?: MessagePart[];
   queued?: boolean;
   historyIndex?: number;
   historyId?: string;
@@ -66,6 +69,25 @@ export type Entry = {
 
 export function ingressIdentity(value: unknown): string {
   return typeof value === "string" ? value : typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : "";
+}
+
+// Only well-formed backend parts become previewable attachments; anything else is
+// dropped rather than rendered, so a forged event cannot inject markup or URLs.
+export function messageParts(event: WireEvent): MessagePart[] | undefined {
+  if (!Array.isArray(event.parts)) return undefined;
+  const parts = event.parts.flatMap((part): MessagePart[] => {
+    if (!part || typeof part !== "object" || Array.isArray(part)) return [];
+    const value = part as Record<string, unknown>;
+    if (value.type === "text" && typeof value.text === "string") return [{ type: "text", text: value.text }];
+    if (value.type === "image" && typeof value.media_type === "string" && typeof value.data_base64 === "string")
+      return [{ type: "image", media_type: value.media_type, data_base64: value.data_base64 }];
+    if (value.type === "document" && typeof value.media_type === "string" && typeof value.data_base64 === "string")
+      return [{ type: "document", media_type: value.media_type, title: typeof value.title === "string" ? value.title : "", data_base64: value.data_base64 }];
+    if (value.type === "audio" && typeof value.format === "string" && typeof value.data_base64 === "string")
+      return [{ type: "audio", format: value.format, data_base64: value.data_base64 }];
+    return [];
+  });
+  return parts.length ? parts : undefined;
 }
 
 export function sameTranscriptUser(left: Pick<Entry, "historyId" | "ingressId" | "messageId" | "originId" | "taskId">,
@@ -184,10 +206,12 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         text: typeof event.text === "string" ? message.text : previous.text,
         sourceVerified, origin: message.origin, originId: message.originId,
         provenance: message.provenance, channelContext: message.channelContext,
+        // A stable row keeps the same metadata object so identical replays stay value-equal.
+        channel: previous.channel ?? message.channel, parts: previous.parts ?? messageParts(event),
         runId: previous.runId || runId }, index);
     }
     return save({ ...entries[index], kind: "user", ...message, ...scope, historyId, ingressId,
-      sourceVerified,
+      sourceVerified, parts: messageParts(event),
       messageId: messageId || entries[index]?.messageId,
       queued: event.queued === true }, index, !!message.origin && index < 0 && !event.saved);
   }
@@ -719,6 +743,7 @@ export function fromHistory({
           ingress_id: message.ingress_id,
           source_verified: message.source_verified,
           source: message.role === "user" ? message.source : undefined,
+          parts: message.role === "user" ? message.parts : undefined,
           saved: true,
           ...identity,
         });

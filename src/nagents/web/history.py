@@ -21,6 +21,10 @@ from nagents.channels.store import InboxStore
 from nagents.channels.store import finish_on_cancel
 from nagents.extensions import AgentPlugin
 from nagents.harness.runtime import _HarnessSession
+from nagents.types import AudioContent
+from nagents.types import DocumentContent
+from nagents.types import ImageContent
+from nagents.types import TextContent
 
 from .routing import RoutingStore
 
@@ -170,6 +174,7 @@ class WebHistory(_HarnessSession):
             "tool_calls": [
                 {"id": call.id, "name": call.name, "arguments": call.arguments} for call in message.tool_calls
             ],
+            "parts": self._project_parts(message.content),
             "message_id": "",
             "ingress_id": "",
             "source_verified": False,
@@ -211,6 +216,30 @@ class WebHistory(_HarnessSession):
                 record["stored_content"] = str(row["content"])
         record.update(message_id=message_id, ingress_id=f"inbox-{row['origin_id']}", source_verified=True)
         return record
+
+    @staticmethod
+    def _project_parts(content: object) -> list[dict[str, object]]:
+        """JSON-safe multimodal parts for the browser; text parts keep the raw text."""
+        if not isinstance(content, list):
+            return []
+        parts: list[dict[str, object]] = []
+        for part in content:
+            if isinstance(part, TextContent):
+                parts.append({"type": "text", "text": part.text})
+            elif isinstance(part, ImageContent):
+                parts.append({"type": "image", "media_type": part.media_type, "data_base64": part.base64_data})
+            elif isinstance(part, DocumentContent):
+                parts.append(
+                    {
+                        "type": "document",
+                        "media_type": part.media_type,
+                        "title": part.title or "",
+                        "data_base64": part.base64_data,
+                    }
+                )
+            elif isinstance(part, AudioContent):
+                parts.append({"type": "audio", "format": part.format, "data_base64": part.base64_data})
+        return parts
 
     async def snapshot(self, session_id: str) -> list[dict[str, object]]:
         def read() -> list[dict[str, object]]:

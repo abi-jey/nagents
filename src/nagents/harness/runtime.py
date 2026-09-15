@@ -28,6 +28,8 @@ from nagents.extensions import AgentPlugin
 from nagents.provider.codex import DEFAULT_CODEX_MODEL
 from nagents.provider.codex import CodexProvider
 from nagents.session import SessionManager
+from nagents.types import ContentPart
+from nagents.types import TextContent
 
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
@@ -61,6 +63,13 @@ if TYPE_CHECKING:
 
 async def _deny(request: ApprovalRequest) -> bool:
     return False
+
+
+def _prompt_text(prompt: str | list["ContentPart"]) -> str:
+    """Plain-text projection of a run prompt for titles and wake-up plumbing."""
+    if isinstance(prompt, str):
+        return prompt
+    return "\n".join(part.text for part in prompt if isinstance(part, TextContent))
 
 
 class _HarnessSession(SessionManager):
@@ -344,7 +353,7 @@ class Harness:
         if self._queue is not None:
             await self._queue.put(event)
 
-    async def run(self, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
+    async def run(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         async with aclosing(self._run(prompt)) as events:
             async for event in events:
                 yield event
@@ -391,7 +400,7 @@ class Harness:
 
     async def _run(
         self,
-        prompt: str,
+        prompt: str | list[ContentPart],
         *,
         task_id: str = "",
         trigger: str = "human",
@@ -407,14 +416,15 @@ class Harness:
         status and explicit continuation handles within this process. This is not a durable job queue.
         """
         with self.operation("run"):
-            if not prompt.strip():
+            prompt_text = _prompt_text(prompt)
+            if not prompt_text.strip():
                 raise ValueError("Prompt must not be empty")
             await self.initialize()
             if not self._is_subagent:
                 async with aiosqlite.connect(self.agent.session.db_path) as db:
                     await db.execute(
                         "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
-                        (" ".join(prompt.split())[:80], self.session_id),
+                        (" ".join(prompt_text.split())[:80], self.session_id),
                     )
                     await db.commit()
             if self._closed:
@@ -425,17 +435,17 @@ class Harness:
 
             async def produce() -> None:
                 self.tasks.begin(session_id, reset_budget=not self._is_subagent and not task_id and trigger == "human")
-                message: str | None = prompt
+                message: str | list[ContentPart] | None = prompt
                 final: DoneEvent | None = None
                 try:
                     if task_id:
-                        self.tasks.continue_task(task_id, prompt, trigger=trigger)
+                        self.tasks.continue_task(task_id, prompt_text, trigger=trigger)
                         message = await self.tasks.notification(wait_for_tasks=True)
                     elif notifications:
                         self.tasks._ready.extend(notifications)
                         message = await self.tasks.notification()
                     elif trigger == "wakeup":
-                        message = await self.tasks.wakeup_notification(prompt)
+                        message = await self.tasks.wakeup_notification(prompt_text)
                     while message is not None:
                         failed = False
                         async with aclosing(

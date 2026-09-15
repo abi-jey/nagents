@@ -33,6 +33,7 @@ from nagents.provider import CodexCredentials
 from nagents.provider import CodexProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
+from nagents.types import ContentPart
 from nagents.types import Message as SessionMessage
 from nagents.web import built_assets
 from nagents.web import local_authority
@@ -78,7 +79,7 @@ class ControlledHarness(Harness):
         with patch.object(self.tools, "instructions", return_value=""), patch.object(self.tools, "discover_skills"):
             await super().initialize()
 
-    async def run(self, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
+    async def run(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         try:
             yield TextChunkEvent(chunk="partial text")
             if prompt == "approval":

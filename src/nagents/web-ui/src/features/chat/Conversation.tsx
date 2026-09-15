@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ExecutionRecord } from "./ExecutionRecord.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
+import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import {
   groupTranscript,
@@ -132,10 +133,12 @@ export function TranscriptItems({
                     : entry.kind === "followup"
                       ? `Human follow-up ${entry.followup}`
                        : "Status"}
-              {entry.origin && <span className="origin-badge">{entry.origin}</span>}
+              {entry.origin && !entry.channel && <span className="origin-badge">{entry.origin}</span>}
               {entry.queued && <span className="origin-badge">Queued / awaiting confirmation</span>}
             </div>
+            {entry.channel && <ChannelHeader meta={entry.channel} />}
             <MessageContent text={entry.text} />
+            {entry.channel && <ChannelAttachments parts={entry.parts} />}
             {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}
               open={disclosures.get(`source:${entry.id}`) ?? false} onToggle={(event) => toggle(`source:${entry.id}`, event.currentTarget.open)}>
               <summary>{entry.channelContext ? "Channel context (unverified)" : "Message provenance"}</summary>

@@ -11,11 +11,13 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
+from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.runtime import ChannelRuntime
 from nagents.channels.runtime import _Instructions
 from nagents.channels.runtime import _bind
 from nagents.channels.runtime import _envelope
 from nagents.channels.runtime import _failure
+from nagents.channels.runtime import inbound_content
 from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelSend
 from nagents.channels.types import ChannelValue
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelMessage
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
+    from nagents.types import ContentPart
     from nagents.types import ToolDefinition
 
     from .catalog import ConnectionInput
@@ -182,6 +185,24 @@ class ChannelHost:
         if runtime is not None:
             runtime._active = True
         self.runtime = runtime
+
+    async def inbound_content(self, channel_id: str, prompt: str) -> str | list[ContentPart]:
+        """Format a stored channel prompt for model input.
+
+        A trusted header replaces the raw JSON envelope. Connectors that advertise
+        ``fetch_attachment`` contribute native image/document parts under fixed
+        caps; unsupported or failed fetches degrade to bounded text notes. Plain
+        prompts (no channel prefix) pass through unchanged.
+        """
+        if not prompt.startswith(_INBOUND_PREFIX):
+            return prompt
+        try:
+            payload = json.loads(prompt[len(_INBOUND_PREFIX) :])
+        except ValueError:
+            return prompt
+        if not isinstance(payload, dict):
+            return prompt
+        return await inbound_content(self.channels.get(channel_id), payload)
 
     async def channel_list(self) -> list[dict[str, ChannelValue]]:
         """Discover connected channels and their action schemas."""

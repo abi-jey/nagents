@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING
 from typing import cast
 
 import aiosqlite
 import pytest
 
-from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.types import ChannelActivity
 from nagents.channels.types import ChannelMessage
 from nagents.channels.types import ChannelSend
@@ -30,6 +28,22 @@ if TYPE_CHECKING:
     from nagents.types import Message
     from tests.test_subagents import FakeProvider
     from tests.test_web_channels import Site
+
+
+def channel_fields(content: str) -> dict[str, str]:
+    """Read the trusted header of a formatted inbound channel message."""
+    header, _, _ = content.partition("\n\n")
+    stamp, separator, rest = header.partition("] ")
+    if stamp.startswith("[") and separator:
+        header = rest
+    labels = {"user": "sender_id", "chat": "conversation_id", "message": "message_id", "reply": "reply_to"}
+    parsed: dict[str, str] = {}
+    for field in [part.strip() for part in header.split(" · ")]:
+        label, _, value = field.partition(" ")
+        if label in ("user", "chat", "message", "reply", "thread"):
+            parsed[labels.get(label, "thread_id")] = value
+    return parsed
+
 
 pytestmark = pytest.mark.requires_posix
 
@@ -121,7 +135,7 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
                 await release.wait()
                 yield TextDoneEvent(text="web work finished")
                 return
-            source = cast("dict[str, str]", json.loads(content.removeprefix(_INBOUND_PREFIX)))
+            source = channel_fields(content)
             if messages[-1].role == "tool":
                 yield TextDoneEvent(text="answer " + source["message_id"])
                 return

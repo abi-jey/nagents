@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import SessionInfo
+    from nagents.types import ContentPart
 
     from .routing import Work
     from .settings import WebSettings
@@ -337,12 +338,17 @@ class WebState:
             }
         )
 
-    async def produce(self, run: Run, prompt: str, *, task_id: str = "") -> None:
+    async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
         notices = run.notices = ChannelNotices(self, run)
         try:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
-            source = self.harness.wake(prompt, task_id=task_id) if run.background else self.harness.run(prompt)
+            if run.background:
+                if not isinstance(prompt, str):
+                    raise ValueError("Background wake prompts must be text")
+                source = self.harness.wake(prompt, task_id=task_id)
+            else:
+                source = self.harness.run(prompt)
             async with aclosing(source) as events:
                 async for event in events:
                     if isinstance(event, ErrorEvent):
@@ -395,7 +401,10 @@ class WebState:
             try:
                 await self.harness.resume(run.session_id)
                 with self.history.admitted(work, run.id):
-                    await self.produce(run, work.prompt)
+                    prompt: str | list[ContentPart] = (
+                        await self.channels.inbound_content(work.channel, work.prompt) if work.channel else work.prompt
+                    )
+                    await self.produce(run, prompt)
             except asyncio.CancelledError:
                 run.outcome = "cancelled"
                 raise

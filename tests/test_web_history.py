@@ -11,7 +11,6 @@ from typing import cast
 import aiosqlite
 import pytest
 
-from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.extensions import AgentPlugin
@@ -69,7 +68,9 @@ def test_channel_web_and_unlinked_identical_envelopes_have_authoritative_distinc
             "list[Message]", app.client.portal.call(app.state.harness.agent.session.get_history, session_id)
         )
         original = messages[0].content
-        assert isinstance(original, str) and original.startswith(_INBOUND_PREFIX)
+        assert isinstance(original, str)
+        assert original.startswith("fixture · user sender · chat chat-a · message ")
+        assert original.endswith("\n\nreal channel input")
         app.submit(original, session=session_id, id=shared_id)
         app.idle()
         app.client.portal.call(
@@ -150,7 +151,9 @@ def test_pre_run_hook_write_cannot_steal_ingress_identity_and_rewrites_keep_real
         assert rows[0]["source_verified"] is False and rows[0]["message_id"] == ""
         assert rows[1]["source_verified"] is True and rows[1]["message_id"] == "source-event"
         assert rows[1]["content"] == "input"
-        assert str(rows[1]["stored_content"]).startswith("wrapped: " + _INBOUND_PREFIX)
+        assert str(rows[1]["stored_content"]).startswith(
+            "wrapped: fixture · user sender · chat chat-a · message source-event"
+        )
         assert cast("dict[str, object]", rows[1]["source"])["text"] == "input"
         assert len(received(app)) == 1 and received(app)[0]["history_id"] == rows[1]["history_id"]
 
