@@ -117,6 +117,26 @@ def test_web_channel_runtime_receives_the_workspace(tmp_path: Path, monkeypatch:
         assert runtime.workspace == app.state.harness.workspace
 
 
+def test_web_channel_send_exposes_and_forwards_attachments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        app.configure()
+        # The web host registers its own channel_send wrapper; it must advertise
+        # attachments, or the model never sees the parameter.
+        tool = app.state.harness.agent.tool_registry.get("channel_send")
+        assert tool is not None
+        attachments = tool.parameters["properties"]["attachments"]
+        assert attachments["type"] == "array" and attachments["items"]["type"] == "string"
+        workspace = app.state.harness.workspace
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "note.txt").write_text("hello", encoding="utf-8")
+        assert app.client.portal is not None
+        result = app.client.portal.call(app.state.channels.channel_send, "fixture", "chat-a", "", "", "", ["note.txt"])
+        assert result["message_ids"]
+        delivery = app.channels[0].deliveries[-1]
+        assert [item.filename for item in delivery.files] == ["note.txt"]
+        assert delivery.files[0].data == b"hello"
+
+
 def test_failed_fetch_stays_a_bounded_note_in_model_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with site(tmp_path, monkeypatch) as app:
         app.configure()
