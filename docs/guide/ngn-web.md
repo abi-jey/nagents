@@ -287,16 +287,16 @@ This is a **trusted local-user tool, not a sandbox or multi-user service**. Othe
 processes/users with access to your loopback interface may access it. Do not expose
 the standalone server through a reverse proxy, public tunnel, port forward, or
 shared remote desktop. For administrator-managed **password-free Tailscale access**,
-see the [private deployment guide](ngn-web-deployment.md). That setup keeps ngn on
-same-pod loopback behind nginx, uses HTTPS without Funnel or NodePort exposure,
+see the [private deployment guide](ngn-web-deployment.md). That setup runs the
+same `ngn serve` process on one owner-approved workload, explicitly bound off
+loopback (`--host 0.0.0.0`), using HTTPS without Funnel or NodePort exposure,
 and is not a general remote-access mode. Tailscale ACLs/grants and trusted cluster
 networking are the access boundary: everyone who can reach the Service shares
 the trusted-user workspace, sessions, and approvals, with no multi-user isolation.
 ClusterIP is not public Internet exposure, but cluster clients can also reach it
-and forge headers. Host/HTTPS Origin, fetch-metadata checks, and the per-process
-CSRF token protect browser requests, not against malicious authorized network
-clients that can obtain the bootstrap token. nginx strips incoming Authorization
-headers before forwarding to ngn; there is no web login prompt.
+and forge headers. Same-origin fetch-metadata checks and the per-process CSRF
+token protect browser requests, not against malicious authorized network
+clients that can obtain the bootstrap token; there is no web login prompt.
 
 Live approved shell/custom tools can access the host with your account's rights.
 Closing the web server does not remove saved conversations or undo approved edits.

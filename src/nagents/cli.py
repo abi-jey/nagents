@@ -118,7 +118,11 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("prompt", nargs="*", help="Prompt text, or - to read from standard input")
     commands.add_parser("sessions", parents=[common], help="List this workspace's saved sessions")
     serve = commands.add_parser("serve", parents=[common], help="Serve the local React web client (web extra)")
-    serve.add_argument("--host", default="127.0.0.1", help="Loopback address only (default: 127.0.0.1)")
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Loopback address (default: 127.0.0.1) or an explicit IP such as 0.0.0.0 to bind beyond loopback",
+    )
     serve.add_argument("--port", type=int, default=8765, help="Local HTTP port (default: 8765)")
     serve.add_argument("--dev", action="store_true", help="Rebuild frontend assets and reload on source changes")
     login = commands.add_parser(

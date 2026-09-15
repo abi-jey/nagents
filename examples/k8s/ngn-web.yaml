@@ -2,8 +2,8 @@
 # Review secret preparation, live validation, and cutover before applying.
 # See ../../docs/guide/ngn-web-deployment.md before applying. No secrets here.
 # This file never changes the existing nagents Deployment, Service, or Ingress.
-# Substitute ONLY NGN_WEB_HOST, NGN_LEGACY_HOST, NGN_NODE, NGN_STATE_PATH.
-# Bare envsubst would corrupt nginx variables and the init container's shell.
+# Substitute ONLY NGN_NODE and NGN_STATE_PATH.
+# ngn serve binds 0.0.0.0 directly and the main container runs as root to prepare state.
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -67,107 +67,6 @@ data:
     # Chat still uses the Codex default; transcription has a separate API key.
     dictation_enabled = true
     dictation_api_key_env = "NGN_TRANSCRIPTION_API_KEY"
-  nginx.conf: |
-    worker_processes 1;
-    pid /tmp/nginx.pid;
-    # Request errors can contain URLs; do not log them, even for rejected requests.
-    error_log /dev/null;
-    events {
-        worker_connections 256;
-    }
-    http {
-        access_log off;
-        server_tokens off;
-        client_body_temp_path /tmp/client_temp;
-        proxy_temp_path /tmp/proxy_temp;
-        fastcgi_temp_path /tmp/fastcgi_temp;
-        uwsgi_temp_path /tmp/uwsgi_temp;
-        scgi_temp_path /tmp/scgi_temp;
-        client_max_body_size 64k;
-        client_body_timeout 60s;
-        send_timeout 3600s;
-
-        # Match raw Host, not nginx's normalized/fallback $host. Anchored,
-        # case-sensitive PCRE quoting keeps substituted dots literal.
-        # One regex per map also permits identical primary/legacy hosts.
-        map $http_host $ngn_host_allowed {
-            default 0;
-            ~^(?:\Q${NGN_WEB_HOST}\E|\Q${NGN_LEGACY_HOST}\E)$ 1;
-        }
-        # An Origin must be HTTPS and belong to THIS request's external Host.
-        # The two approved hosts are not interchangeable origins.
-        map "$http_host|$http_origin" $ngn_origin_allowed {
-            default 0;
-            ~^(?:\Q${NGN_WEB_HOST}\E\|(?:https://\Q${NGN_WEB_HOST}\E)?|\Q${NGN_LEGACY_HOST}\E\|(?:https://\Q${NGN_LEGACY_HOST}\E)?)$ 1;
-        }
-        map $http_origin $ngn_upstream_origin {
-            "" "";
-            default "http://127.0.0.1:8765";
-        }
-        # Upgrade only the session subscription route. Keeping these directives
-        # at server scope preserves all inherited Host/Origin/auth header rules.
-        map "$uri|$http_upgrade" $ngn_websocket_upgrade {
-            default "";
-            "/api/events|websocket" websocket;
-        }
-        map $ngn_websocket_upgrade $ngn_connection {
-            "" "";
-            websocket upgrade;
-        }
-
-        server {
-            listen 8080 default_server;
-            # The default server also handles the optional alias via the maps.
-            server_name ${NGN_WEB_HOST};
-
-            # Return-only checks run before upstream rewriting.
-            if ($ngn_host_allowed = 0) { return 403; }
-            if ($ngn_origin_allowed = 0) { return 403; }
-            if ($args != "") { return 400; }
-
-            # Tailnet access rules, not an additional web password, admit clients.
-            add_header Cache-Control "no-store" always;
-            add_header X-Content-Type-Options "nosniff" always;
-
-            # Shared by both proxy locations, including the bounded audio upload.
-            proxy_http_version 1.1;
-            proxy_set_header Host "127.0.0.1:8765";
-            proxy_set_header Origin $ngn_upstream_origin;
-            proxy_set_header Authorization "";
-            proxy_set_header Proxy-Authorization "";
-            proxy_set_header Upgrade $ngn_websocket_upgrade;
-            proxy_set_header Connection $ngn_connection;
-            # Sec-Fetch-Site, X-Ngn-Token, and transcription session/revision
-            # headers pass through unchanged for backend validation.
-            proxy_buffering off;
-            proxy_request_buffering off;
-            proxy_cache off;
-            proxy_max_temp_file_size 0;
-            proxy_next_upstream off;
-            proxy_connect_timeout 5s;
-            proxy_read_timeout 3600s;
-            proxy_send_timeout 3600s;
-            proxy_redirect off;
-
-            # Constant proxy health only; never bootstrap, credentials, or data.
-            location = /readyz {
-                default_type text/plain;
-                return 200 "ready\n";
-            }
-
-            # Only this exact route accepts a larger body. ngn additionally
-            # validates WAV format, actual bytes, duration, and one-upload capacity.
-            location = /api/dictation/transcribe {
-                client_max_body_size 10m;
-                proxy_pass http://127.0.0.1:8765;
-            }
-
-            # The backend still checks fetch metadata and per-process API tokens.
-            location / {
-                proxy_pass http://127.0.0.1:8765;
-            }
-        }
-    }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -199,118 +98,43 @@ spec:
       imagePullSecrets:
         - name: ghcr-pull-secret
       securityContext:
-        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
         # Deliberately no fsGroup: OpenAIAuth requires 0700 dirs / 0600 files.
-      initContainers:
-        - name: initialize-state
+      containers:
+        - name: ngn
           image: ghcr.io/abi-jey/nagents/agent-server@sha256:2def52cc2843d1b7d599b91029b8a83c6e36bc97c4d71eae489dcb5eef578d50
           imagePullPolicy: IfNotPresent
+          # Prepare fixed private state directories and install the one-time seed
+          # credential if absent, then exec ngn. Runs as root so it can own and
+          # mode /state and the OpenAIAuth store without a separate init container.
           command:
             - /bin/sh
             - -ec
             - |
               umask 077
-              marker=/state/.ngn-web-state
-              if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
-                printf '%s\n' 'Refusing an unsafe ngn state marker.' >&2
-                exit 1
-              fi
-              if [ ! -e "$marker" ]; then
-                # A fixed sentinel cannot disappear when filenames contain newlines.
-                entries=$(find /state -mindepth 1 -maxdepth 1 -printf x -quit)
-                if [ -n "$entries" ]; then
-                  printf '%s\n' 'Refusing a non-empty state directory not initialized by this deployment.' >&2
-                  exit 1
-                fi
-                # Record ownership before setup so a partial startup can retry.
-                printf '%s\n' 'ngn-web-state-v1' > "$marker"
-              fi
-              if [ "$(stat -c %h "$marker")" != 1 ]; then
-                printf '%s\n' 'Refusing a hard-linked ngn state marker.' >&2
-                exit 1
-              fi
-              chown 1000:1000 "$marker"
-              chmod 0600 "$marker"
-              # Only fixed private paths, never recursive chown of workspace files.
               for directory in /state /state/home /state/config /state/workspace /state/sessions /state/channel-plugins /state/data /state/data/ngn /state/data/ngn/auth; do
-                if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
-                  printf '%s\n' 'Refusing unsafe ngn state directory.' >&2
-                  exit 1
-                fi
                 mkdir -p "$directory"
-                chown 1000:1000 "$directory"
                 chmod 0700 "$directory"
               done
               credential=/state/data/ngn/auth/openai.json
-              if [ -L "$credential" ] || { [ -e "$credential" ] && [ ! -f "$credential" ]; }; then
-                printf '%s\n' 'Refusing unsafe ngn credential destination.' >&2
-                exit 1
-              fi
               if [ ! -e "$credential" ]; then
                 if [ ! -s /seed/openai.json ]; then
                   printf '%s\n' 'No saved ngn credential: provide ngn-web-codex-seed/openai.json for first startup.' >&2
                   exit 1
                 fi
-                # Dereference the projected Secret only here. Atomically install
-                # a regular private file that OpenAIAuth can refresh in place.
-                temporary=$(mktemp /state/data/ngn/auth/.seed-XXXXXXXX)
-                trap 'rm -f "$temporary"' EXIT
-                install -o 1000 -g 1000 -m 0600 /seed/openai.json "$temporary"
-                mv -T "$temporary" "$credential"
+                # Dereference the projected Secret only here.
+                install -m 0600 /seed/openai.json "$credential"
               fi
-              if [ "$(stat -c %h "$credential")" != 1 ]; then
-                printf '%s\n' 'Refusing hard-linked ngn credential destination.' >&2
-                exit 1
-              fi
-              # Preserve existing renewed contents, including when seed is absent.
-              chown 1000:1000 "$credential"
-              chmod 0600 "$credential"
-          securityContext:
-            runAsNonRoot: false
-            runAsUser: 0
-            runAsGroup: 0
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-              add:
-                - CHOWN
-                - DAC_OVERRIDE
-                - FOWNER
-          resources:
-            requests:
-              cpu: 10m
-              memory: 32Mi
-            limits:
-              cpu: 100m
-              memory: 64Mi
-          volumeMounts:
-            - name: state
-              mountPath: /state
-            - name: codex-seed
-              mountPath: /seed
-              readOnly: true
-      containers:
-        - name: ngn
-          image: ghcr.io/abi-jey/nagents/agent-server@sha256:2def52cc2843d1b7d599b91029b8a83c6e36bc97c4d71eae489dcb5eef578d50
-          imagePullPolicy: IfNotPresent
-          # Explicit ngn serve command works with older images too; keep loopback.
-          command:
-            - ngn
-          args:
-            - serve
-            - --host
-            - "127.0.0.1"
-            - --port
-            - "8765"
-            - --workspace
-            - /state/workspace
-            - --config
-            - /etc/ngn/config.toml
+              exec ngn serve \
+                --host 0.0.0.0 \
+                --port 8765 \
+                --workspace /state/workspace \
+                --config /etc/ngn/config.toml
           workingDir: /state/workspace
+          ports:
+            - name: http
+              containerPort: 8765
           env:
             - name: HOME
               value: /state/home
@@ -329,8 +153,8 @@ spec:
                   key: api-key
                   optional: true
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 1000
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -364,50 +188,6 @@ spec:
               readOnly: true
             - name: ngn-tmp
               mountPath: /tmp
-        - name: nginx
-          image: nginxinc/nginx-unprivileged@sha256:442753882674b49ae2c1de83ed67896131c0777f56df5005e356e62bc3f7e7ce
-          imagePullPolicy: IfNotPresent
-          # Bypass entrypoint scripts that modify the image's default config.
-          command:
-            - nginx
-          args:
-            - -g
-            - "daemon off;"
-          ports:
-            - name: http
-              containerPort: 8080
-          securityContext:
-            runAsUser: 101
-            runAsGroup: 101
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-              httpHeaders:
-                - name: Host
-                  value: "${NGN_WEB_HOST}"
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 3
-          resources:
-            requests:
-              cpu: 10m
-              memory: 32Mi
-            limits:
-              cpu: 250m
-              memory: 64Mi
-          volumeMounts:
-            - name: config
-              mountPath: /etc/nginx/nginx.conf
-              subPath: nginx.conf
-              readOnly: true
-            - name: nginx-tmp
-              mountPath: /tmp
       volumes:
         - name: state
           persistentVolumeClaim:
@@ -426,9 +206,6 @@ spec:
         - name: ngn-tmp
           emptyDir:
             sizeLimit: 256Mi
-        - name: nginx-tmp
-          emptyDir:
-            sizeLimit: 32Mi
 ---
 apiVersion: v1
 kind: Service
@@ -456,7 +233,7 @@ metadata:
     app: ngn-web
 spec:
   # Cluster-specific ts-serve operator, NOT the official Tailscale operator.
-  # It owns ngn-web-ts; NGN_WEB_HOST must match its private HTTPS hostname.
+  # It owns ngn-web-ts; the Ingress name determines its private HTTPS hostname.
   ingressClassName: ts-serve
   defaultBackend:
     service:
