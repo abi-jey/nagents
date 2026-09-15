@@ -53,6 +53,12 @@ from nagents.types import TextContent
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
 
+# The listener serializes several durable SQLite transactions (runtime _receive/
+# _worker), each an asyncio.to_thread round-trip, so a loaded runner multiplies
+# per-op latency. This bound turns a genuine hang into a failure; it must never
+# gate normal progress.
+HANG_GUARD = 60.0
+
 
 class OfflineProvider(Provider):
     def __init__(self, rounds: tuple[tuple[Event, ...], ...] = ()) -> None:
@@ -207,7 +213,7 @@ def make_agent(path: Path, provider: OfflineProvider, *plugins: AgentPlugin) -> 
 async def cancel(task: asyncio.Task[None]) -> None:
     task.cancel()
     with suppress(asyncio.CancelledError):
-        await asyncio.wait_for(task, 3)
+        await asyncio.wait_for(task, HANG_GUARD)
 
 
 async def rows(path: Path) -> list[tuple[str, str, str, str]]:
@@ -273,7 +279,7 @@ def test_simultaneous_channels_share_one_serial_history_and_never_auto_send(tmp_
         async def observe(event: ChannelEvent) -> None:
             observed.append(event)
 
-        await asyncio.wait_for(ChannelRuntime(agent, (left, right), "identity").listen(on_event=observe), 3)
+        await asyncio.wait_for(ChannelRuntime(agent, (left, right), "identity").listen(on_event=observe), HANG_GUARD)
         history = await agent.session.get_history("identity")
         incoming = notifications(history)
         assert {event["channel"] for event in incoming} == {"left", "right"}
@@ -458,8 +464,8 @@ def test_cancelled_active_run_leaves_queued_work_for_reopen_without_replay(tmp_p
         source = MemoryChannel("left", (inbound("active"), inbound("queued")))
         runtime = ChannelRuntime(agent, (source,), "identity")
         listener = asyncio.create_task(runtime.listen())
-        await asyncio.wait_for(provider.started.wait(), 3)
-        await asyncio.wait_for(source.listen_finished.wait(), 3)
+        await asyncio.wait_for(provider.started.wait(), HANG_GUARD)
+        await asyncio.wait_for(source.listen_finished.wait(), HANG_GUARD)
         await cancel(listener)
         assert [(row[1], row[2]) for row in await rows(path)] == [("active", "interrupted"), ("queued", "queued")]
         assert provider.active == 0 and provider.closed_generators == 1
@@ -502,16 +508,16 @@ def test_public_listen_source_activity_is_scoped_and_always_stops(tmp_path: Path
 
         listener = asyncio.create_task(agent.listen("identity", on_event=observe))
         if outcome == "cancelled":
-            await asyncio.wait_for(provider.started.wait(), 3)
+            await asyncio.wait_for(provider.started.wait(), HANG_GUARD)
             await cancel(listener)
         elif outcome == "failed":
             with pytest.raises(ChannelError, match="execution failed"):
-                await asyncio.wait_for(listener, 3)
+                await asyncio.wait_for(listener, HANG_GUARD)
         elif outcome == "observer-failed":
             with pytest.raises(ValueError, match="Observer failed"):
-                await asyncio.wait_for(listener, 3)
+                await asyncio.wait_for(listener, HANG_GUARD)
         else:
-            await asyncio.wait_for(listener, 3)
+            await asyncio.wait_for(listener, HANG_GUARD)
         assert source.activities == [
             ChannelActivity("origin-room", True, "origin-thread", "identity"),
             ChannelActivity("origin-room", False, "origin-thread", "identity"),
@@ -563,7 +569,7 @@ def test_source_activity_failure_is_bounded_sanitized_and_does_not_fail_turn(
         async def observe(event: ChannelEvent) -> None:
             observed.append(event)
 
-        await asyncio.wait_for(agent.listen("identity", on_event=observe), 3)
+        await asyncio.wait_for(agent.listen("identity", on_event=observe), HANG_GUARD)
         assert len(provider.requests) == 1 and (await rows(agent.session.db_path))[0][2] == "completed"
         assert [event.active for event in source.activities] == [True, False]
         assert controls == 0 and source.closed == 1
@@ -596,15 +602,15 @@ def test_cancel_during_activity_start_joins_stop_before_connector_close(tmp_path
         source = SlowIndicator("source", (inbound(),))
         agent.add_channel(source)
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(starting.wait(), 3)
+        await asyncio.wait_for(starting.wait(), HANG_GUARD)
         listener.cancel()
-        await asyncio.wait_for(stopping.wait(), 3)
+        await asyncio.wait_for(stopping.wait(), HANG_GUARD)
         listener.cancel()
         await asyncio.sleep(0)
         assert source.closed == 0
         release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(listener, 3)
+            await asyncio.wait_for(listener, HANG_GUARD)
         assert source.closed == 1 and not provider.requests
         assert [event.active for event in source.activities] == [True, False]
         assert (await rows(agent.session.db_path))[0][2] == "interrupted"
@@ -693,7 +699,7 @@ def test_pending_capacity_waits_without_full_receiver_spin_and_is_stop_cancellab
 
         runtime._store.admit = counted  # type: ignore[method-assign]
         listener = asyncio.create_task(runtime.listen())
-        await asyncio.wait_for(provider.started.wait(), 3)
+        await asyncio.wait_for(provider.started.wait(), HANG_GUARD)
         await asyncio.sleep(0.05)
         assert sum(len(source.acknowledged) for source in sources) == 1
         assert len(await rows(agent.session.db_path)) == 1
@@ -764,12 +770,12 @@ def test_cancel_during_locked_claim_wakes_callbacks_before_connector_drain(
             monkeypatch.setattr(runtime, "_worker", worker)
             listener = asyncio.create_task(runtime.listen())
             try:
-                await asyncio.wait_for(claim_started.wait(), 3)
+                await asyncio.wait_for(claim_started.wait(), HANG_GUARD)
                 listener.cancel()
-                await asyncio.wait_for(draining.wait(), 3)
+                await asyncio.wait_for(draining.wait(), HANG_GUARD)
                 writer.rollback()
                 # wait_for would itself hang if shielded cleanup deadlocked on cancellation.
-                done, _ = await asyncio.wait((listener,), timeout=3)
+                done, _ = await asyncio.wait((listener,), timeout=HANG_GUARD)
                 assert listener in done, "Cleanup did not wake the connector's backpressured callback"
                 with pytest.raises(asyncio.CancelledError):
                     await listener
@@ -799,10 +805,10 @@ def test_capacity_releases_after_completion_and_drains_finite_sources(tmp_path: 
         source = MemoryChannel("left", (inbound("one"), inbound("two"), inbound("three")))
         agent = make_agent(tmp_path / "drain.db", provider)
         listener = asyncio.create_task(ChannelRuntime(agent, (source,), "identity", inbox_limit=1).listen())
-        await asyncio.wait_for(provider.started.wait(), 3)
+        await asyncio.wait_for(provider.started.wait(), HANG_GUARD)
         assert source.acknowledged == ["one"]
         provider.release.set()
-        await asyncio.wait_for(listener, 3)
+        await asyncio.wait_for(listener, HANG_GUARD)
         assert source.acknowledged == ["one", "two", "three"]
         assert len(provider.requests) == 3
         assert all(row[2] == "completed" for row in await rows(agent.session.db_path))
@@ -827,7 +833,7 @@ def test_listener_owner_is_per_resolved_database_and_session_and_idle_waits(tmp_
 
         runtime._store.claim = counted_claim  # type: ignore[method-assign, assignment]
         listener = asyncio.create_task(runtime.listen())
-        await asyncio.wait_for(channel.listening.wait(), 3)
+        await asyncio.wait_for(channel.listening.wait(), HANG_GUARD)
         conflicting = make_agent(tmp_path / "." / "owner.db", OfflineProvider())
         with pytest.raises(ChannelError, match="already owns"):
             await ChannelRuntime(conflicting, (MemoryChannel("other"),), "identity").listen()
@@ -853,7 +859,7 @@ def test_connector_failures_are_sanitized_and_cleanup_every_opened_connector(tmp
         good = MemoryChannel("good", finite=stage == "close")
         agent = make_agent(tmp_path / "failure.db", OfflineProvider())
         with pytest.raises((ChannelError, BaseExceptionGroup)) as caught:
-            await asyncio.wait_for(ChannelRuntime(agent, (bad, good), "identity").listen(), 3)
+            await asyncio.wait_for(ChannelRuntime(agent, (bad, good), "identity").listen(), HANG_GUARD)
         assert "secret" not in str(caught.value) and "credential" not in str(caught.value)
         assert bad.closed == good.closed == 1
         assert agent.plugins == [] and agent.tool_registry.names() == []
@@ -969,8 +975,8 @@ def test_agent_close_cancels_active_send_repairs_history_and_leaves_no_orphans(t
         source.send_release.clear()
         agent.add_channel(source)
         listener = asyncio.create_task(agent.listen(session_id="identity"))
-        await asyncio.wait_for(source.send_started.wait(), 3)
-        await asyncio.wait_for(agent.close(), 3)
+        await asyncio.wait_for(source.send_started.wait(), HANG_GUARD)
+        await asyncio.wait_for(agent.close(), HANG_GUARD)
         assert listener.done() and listener.cancelled()
         assert source.closed == 1 and len(source.sent) == 1
         assert audit.after == ["identity"]
@@ -1001,14 +1007,14 @@ def test_registry_collision_is_rejected_and_cleanup_only_removes_owned_identitie
         original_plugins = agent.plugins
         source = MemoryChannel("left", finite=False)
         listener = asyncio.create_task(ChannelRuntime(agent, (source,), "identity").listen())
-        await asyncio.wait_for(source.listening.wait(), 3)
+        await asyncio.wait_for(source.listening.wait(), HANG_GUARD)
         own_tool = agent.tool_registry.get("channel_send")
         assert own_tool and own_tool.func
         replacement = agent.tool_registry.register(user_tool, name="channel_send")
         added_plugin = AgentPlugin()
         agent.plugins.append(added_plugin)
         source.stop.set()
-        await asyncio.wait_for(listener, 3)
+        await asyncio.wait_for(listener, HANG_GUARD)
         assert agent.tool_registry.get("channel_send") is replacement
         assert agent.tool_registry.get("user_tool") is preserved
         assert agent.tool_registry.names() == ["user_tool", "channel_send"]
@@ -1139,7 +1145,7 @@ def test_catalog_and_arguments_are_copied_and_validated_without_capability_autho
         channel.capabilities = ("receive",)  # Descriptive hints are not an authorization policy.
         agent = make_agent(tmp_path / "tools.db", OfflineProvider())
         listener = asyncio.create_task(ChannelRuntime(agent, (channel,), "identity").listen())
-        await asyncio.wait_for(channel.listening.wait(), 3)
+        await asyncio.wait_for(channel.listening.wait(), HANG_GUARD)
 
         async def execute(name: str, arguments: dict[str, ChannelValue]) -> ToolResultEvent:
             return await agent.tool_executor.execute(ToolCall("id", name, arguments))
@@ -1245,7 +1251,7 @@ def test_cancelled_transaction_finishes_commit_then_retry_deduplicates(tmp_path:
             assert release.wait(3)
 
         transaction = asyncio.create_task(store._transaction(insert))
-        assert await asyncio.to_thread(writing.wait, 3)
+        assert await asyncio.to_thread(writing.wait, HANG_GUARD)
         transaction.cancel()
         await asyncio.sleep(0)
         assert not transaction.done()
@@ -1272,7 +1278,7 @@ def test_connector_failure_stops_an_active_run_and_repeated_cancel_joins_close(t
         source = FailingSource("left")
         agent = make_agent(tmp_path / "source_failure.db", provider)
         with pytest.raises(ChannelError, match="listen failed"):
-            await asyncio.wait_for(ChannelRuntime(agent, (source,), "identity").listen(), 3)
+            await asyncio.wait_for(ChannelRuntime(agent, (source,), "identity").listen(), HANG_GUARD)
         assert provider.closed_generators == 1 and provider.active == 0
         assert (await rows(agent.session.db_path))[0][2] == "interrupted"
         assert source.closed == 1
@@ -1288,15 +1294,15 @@ def test_connector_failure_stops_an_active_run_and_repeated_cancel_joins_close(t
 
         slow = SlowClose("left", finite=False)
         listener = asyncio.create_task(ChannelRuntime(agent, (slow,), "identity").listen())
-        await asyncio.wait_for(slow.listening.wait(), 3)
+        await asyncio.wait_for(slow.listening.wait(), HANG_GUARD)
         listener.cancel()
-        await asyncio.wait_for(close_started.wait(), 3)
+        await asyncio.wait_for(close_started.wait(), HANG_GUARD)
         listener.cancel()
         await asyncio.sleep(0)
         assert not listener.done()
         close_release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(listener, 3)
+            await asyncio.wait_for(listener, HANG_GUARD)
         assert slow.closed == 1 and agent.tool_registry.names() == []
         assert_no_runtime_tasks()
         await agent.close()
@@ -1314,7 +1320,7 @@ def test_shared_provider_explicit_retry_policy_is_preserved_for_unrelated_reques
         listeners: list[asyncio.Task[None]] = []
         for agent, source in zip(agents, sources, strict=True):
             listeners.append(asyncio.create_task(ChannelRuntime(agent, (source,), "identity").listen()))
-            await asyncio.wait_for(source.listening.wait(), 3)
+            await asyncio.wait_for(source.listening.wait(), HANG_GUARD)
             assert provider.retry_config is original_retry
             async for _ in provider.generate([Message(role="user", content="unrelated request")]):
                 pass
@@ -1348,7 +1354,7 @@ def test_invalid_connector_response_has_unknown_outcome_after_one_effect(tmp_pat
         source = InvalidResponse("left", finite=False)
         agent = make_agent(tmp_path / "invalid_response.db", OfflineProvider())
         listener = asyncio.create_task(ChannelRuntime(agent, (source,), "identity").listen())
-        await asyncio.wait_for(source.listening.wait(), 3)
+        await asyncio.wait_for(source.listening.wait(), HANG_GUARD)
         arguments: dict[str, ChannelValue] = (
             {"channel": "left", "destination": "room", "text": "effect"}
             if stage == "send"
