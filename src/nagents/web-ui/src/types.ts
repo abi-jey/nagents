@@ -49,6 +49,13 @@ export type RetainedTask = {
   activation: number;
   trigger: "delegation" | "human" | "wakeup" | "notification";
 };
+// Native parts returned by the backend for a saved multimodal message.
+export type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "image"; media_type: string; data_base64: string }
+  | { type: "document"; media_type: string; title: string; data_base64: string }
+  | { type: "audio"; format: string; data_base64: string };
+
 export type Snapshot = {
   session_id: string;
   activity_cursor?: number;
@@ -65,6 +72,7 @@ export type Snapshot = {
     source_verified?: boolean;
     message_id?: string;
     source?: unknown;
+    parts?: MessagePart[];
     content: string;
     name: string;
     tool_call_id: string;

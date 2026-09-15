@@ -120,7 +120,8 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     const old = previous[index];
     next.push(entry.kind === "user"
       ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, activity: old.activity,
-          origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext }
+          origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext,
+          channel: entry.channel, parts: entry.parts }
       : { ...entry, ...old, historyId: entry.historyId, resultHistoryId: entry.resultHistoryId,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
           text: entry.kind === "assistant" ? entry.text : old.text,

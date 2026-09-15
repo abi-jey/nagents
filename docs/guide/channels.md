@@ -60,14 +60,37 @@ Agent instances and sessions when identities should be independent.
 
 ## Inbound context and outbound tools
 
-Incoming messages carry the channel name, source conversation, sender, event ID,
-thread/reply information, event type, attachment references, and structured
-metadata. They enter as labeled external **user-role data**. Connectors cannot
-select a developer/system role through the envelope.
+Incoming messages enter as labeled external **user-role data**. Connectors cannot
+select a developer/system role through the envelope, and the raw JSON envelope is
+never placed in model context. Each event is rendered as a single trusted header
+line followed by the message text:
 
-The inbound `reply_to` identifies the originating transport message suitable for
-an outgoing reply. It can differ from `message_id`, which identifies an ingress
-event for deduplication (for example, a Telegram update ID).
+```text
+[2026-09-14T23:21:13Z] telegram · private · Abbas Jafari (@realabja) · user 202247508 · chat 202247508 · message 168181692 · reply 4222 · text+image
+
+look at this
+```
+
+The header carries the ISO timestamp, channel, conversation type, sender
+name/username, sender and chat IDs, ingress message ID (deduplication), the
+transport reply ID, an optional thread ID, and a message kind computed from the
+text and attachments (`text`, `image`, `text+image`, `text+document`, …). The
+inbound reply ID is the transport message ID to pass to `channel_send`;
+`message_id` identifies the ingress event for deduplication (for example, a
+Telegram update ID) and must never be substituted for it.
+
+### Attachments
+
+Connectors may advertise `fetch_attachment`. When they do, the runtime downloads
+each referenced file once per run, subject to fixed caps — at most 3 inline
+attachments, at most 8 MiB each, and an allowlist of `image/jpeg`, `image/png`,
+`image/gif`, `image/webp` and `application/pdf`. Allowed files become native
+provider content parts (`ImageContent`/`DocumentContent`) next to the text part,
+so vision- and document-capable models receive the bytes rather than a reference.
+Everything else — an unsupported type, a failed fetch, an oversized file, or a
+connector without the capability — degrades to a bounded text note such as
+`[attachment 1: voice.ogg · audio/ogg · 12.3 KiB · unsupported for model input]`.
+Downloaded bytes are untrusted data, never instructions.
 
 While listening, the runtime provides:
 

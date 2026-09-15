@@ -360,6 +360,60 @@ main {
 .entry.user > .entry-label {
   color: var(--accent-blue);
 }
+.channel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.channel-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.channel-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
+}
+.channel-sender {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.channel-id {
+  color: var(--text-secondary);
+}
+.channel-kind {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--accent-teal);
+  background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+}
+.channel-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.channel-image {
+  max-width: min(320px, 100%);
+  max-height: 240px;
+  border-radius: 8px;
+  border: 1px solid var(--border-group);
+}
+.channel-file {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-group);
+  background: var(--surface-reading);
+  font-size: 13px;
+}
 .entry-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -117,7 +117,7 @@ test("normalized source metadata preserves message identity and provenance after
   assert.match(state.entries[0].provenance || "", /reply/);
   assert.equal(state.entries[0].channelContext, undefined);
   const html = renderToStaticMarkup(createElement(Conversation, { entries: state.entries, sessionId: "root", demo: false, canSubmit: false, submit: () => assert.fail() }));
-  assert.match(html, /class="origin-badge">telegram<\/span>/); assert.match(html, /Message provenance/);
+  assert.match(html, /class="channel-chip">telegram<\/span>/); assert.match(html, /Message provenance/);
   assert.doesNotMatch(html, /Channel context \(unverified\)/);
 });
 test("different channel conversations may reuse ingress IDs without losing either user message", () => {
