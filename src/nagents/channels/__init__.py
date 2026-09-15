@@ -14,6 +14,7 @@ from .types import ChannelEventHandler
 from .types import ChannelExecutionEvent
 from .types import ChannelExecutionPhase
 from .types import ChannelFactory
+from .types import ChannelFile
 from .types import ChannelMessage
 from .types import ChannelPlugin
 from .types import ChannelReceiver
@@ -34,6 +35,7 @@ __all__ = [
     "ChannelExecutionEvent",
     "ChannelExecutionPhase",
     "ChannelFactory",
+    "ChannelFile",
     "ChannelMessage",
     "ChannelPlugin",
     "ChannelReceiver",

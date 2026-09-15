@@ -144,6 +144,7 @@ class Harness:
         self.tasks = SubagentManager(self)
         self.tasks.register()
         self.agent.tool_executor = HarnessExecutor(self, self.tools)
+        self.agent.workspace = self.workspace
         profile = config.profile(config.agent)
         if profile.model:
             self.config.model = profile.model

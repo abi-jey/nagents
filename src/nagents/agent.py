@@ -207,6 +207,10 @@ class Agent:
             ...
     """
 
+    # Set by the Harness, or an embedding application, to allow bounded workspace
+    # file reads (for example outbound channel attachments). None disables them.
+    workspace: Path | None = None
+
     def __init__(
         self,
         provider: Provider,
@@ -656,7 +660,9 @@ class Agent:
             raise ValueError("An explicit nonblank session_id is required for the agent identity")
         if any(name != channel.name for name, channel in self._channels.items()):
             raise ValueError("An attached channel changed its name")
-        runtime = ChannelRuntime(self, tuple(self._channels.values()), session_id, user_id, inbox_limit)
+        runtime = ChannelRuntime(
+            self, tuple(self._channels.values()), session_id, user_id, inbox_limit, workspace=self.workspace
+        )
         self._close_task = None
         self._channel_listening = True
         self._channel_listener_task = asyncio.current_task()
