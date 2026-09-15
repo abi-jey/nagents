@@ -29,10 +29,14 @@ SECURITY_HEADERS = {
 
 
 class LocalOnly:
-    def __init__(self, app: "ASGIApp", *, authority: str, token: str) -> None:
+    def __init__(self, app: "ASGIApp", *, authority: str, token: str, enforce_authority: bool = True) -> None:
         self.app = app
         self.authority = authority
         self.token = token
+        # A non-loopback bind has no single trusted authority to compare against,
+        # so the exact Host/Origin checks are skipped. The per-process token,
+        # same-origin fetch metadata, query, method, and path checks still apply.
+        self.enforce_authority = enforce_authority
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
         if scope["type"] == "websocket":
@@ -46,8 +50,8 @@ class LocalOnly:
             if (
                 scope["path"] != "/api/events"
                 or scope["query_string"]
-                or headers.getlist("host") != [self.authority]
-                or headers.getlist("origin") != [f"http://{self.authority}"]
+                or (self.enforce_authority and headers.getlist("host") != [self.authority])
+                or (self.enforce_authority and headers.getlist("origin") != [f"http://{self.authority}"])
                 or headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}
                 or len(protocols) != 2
                 or protocols.count("ngn.events.v1") != 1
@@ -74,12 +78,13 @@ class LocalOnly:
 
         headers = Headers(scope=scope)
         origin = f"http://{self.authority}"
-        if headers.getlist("host") != [self.authority]:
+        if self.enforce_authority and headers.getlist("host") != [self.authority]:
             await reject(403, "Untrusted Host. Open the exact loopback URL printed by ngn serve.")
             return
-        if (headers.getlist("origin") and headers.getlist("origin") != [origin]) or headers.get(
-            "sec-fetch-site", ""
-        ) not in {"", "none", "same-origin"}:
+        if headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}:
+            await reject(403, "Same-origin requests only.")
+            return
+        if self.enforce_authority and headers.getlist("origin") and headers.getlist("origin") != [origin]:
             await reject(403, "Same-origin requests only.")
             return
         path = scope["path"]
@@ -99,7 +104,7 @@ class LocalOnly:
             await reject(405, "Method not allowed.")
             return
         if method in {"POST", "PUT", "DELETE"}:
-            if headers.getlist("origin") != [origin]:
+            if self.enforce_authority and headers.getlist("origin") != [origin]:
                 await reject(403, "An exact same-origin Origin header is required.")
                 return
             if path == "/api/dictation/transcribe":

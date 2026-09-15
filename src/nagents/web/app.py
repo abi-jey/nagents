@@ -31,6 +31,7 @@ from nagents.harness import Harness
 from nagents.provider import CodexProvider
 
 from . import built_assets
+from . import is_loopback_host
 from . import local_authority
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
@@ -104,6 +105,7 @@ def create_app(
     harness_factory: Callable[["HarnessConfig"], Harness] = Harness,
 ) -> FastAPI:
     authority = local_authority(host, port)
+    enforce_authority = is_loopback_host(host)
     directory = built_assets() if assets is None else assets
     token = secrets.token_urlsafe(32)
     state: WebState
@@ -170,7 +172,7 @@ def create_app(
                 await _join(cleanup)
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(LocalOnly, authority=authority, token=token)
+    app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request: Request, error: RequestValidationError) -> JSONResponse:

@@ -110,7 +110,12 @@ class ControlledHarness(Harness):
 
 @asynccontextmanager
 async def client_app(
-    tmp_path: Path, *, controlled: bool = True, config: HarnessConfig | None = None
+    tmp_path: Path,
+    *,
+    controlled: bool = True,
+    config: HarnessConfig | None = None,
+    host: str = "127.0.0.1",
+    base_url: str = URL,
 ) -> AsyncIterator[tuple["FastAPI", httpx.AsyncClient, dict[str, str], list[Harness]]]:
     assets = tmp_path / "static"
     assets.mkdir(exist_ok=True)
@@ -126,14 +131,14 @@ async def client_app(
         harnesses.append(harness)
         return harness
 
-    app = create_app(config, assets=assets, harness_factory=factory)
+    app = create_app(config, host=host, assets=assets, harness_factory=factory)
     assert not harnesses  # Construction happens on the lifespan's running loop.
     async with (
         app.router.lifespan_context(app),
-        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=URL) as client,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base_url) as client,
     ):
         bootstrap = (await client.get("/api/bootstrap")).json()
-        headers = {"Origin": URL, "X-Ngn-Token": bootstrap["token"]}
+        headers = {"Origin": base_url, "X-Ngn-Token": bootstrap["token"]}
         yield app, client, headers, harnesses
     assert harnesses[0]._closed
 
@@ -208,10 +213,36 @@ def test_cli_serve_parsing_and_no_textual(tmp_path: Path, monkeypatch: pytest.Mo
         assert start.call_args.kwargs["port"] == 8765
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.0.2", "evil.localhost", "127.0.0.1.example.com"])
-def test_remote_bind_rejected(host: str) -> None:
-    with pytest.raises(ValueError, match="loopback"):
+@pytest.mark.parametrize("host", ["evil.localhost", "127.0.0.1.example.com", "localhost.evil"])
+def test_non_ip_host_rejected(host: str) -> None:
+    with pytest.raises(ValueError, match="explicit IP address"):
         local_authority(host, 8765)
+
+
+@pytest.mark.parametrize(
+    ("host", "authority"),
+    [("0.0.0.0", "0.0.0.0:8765"), ("::", "[::]:8765"), ("192.168.0.2", "192.168.0.2:8765")],
+)
+def test_explicit_ip_bind_allowed(host: str, authority: str) -> None:
+    assert local_authority(host, 8765) == authority
+
+
+def test_non_loopback_bind_relaxes_authority_but_keeps_token(tmp_path: Path) -> None:
+    async def check() -> None:
+        remote = "http://ngn.example.ts.net:8765"
+        async with client_app(tmp_path, host="0.0.0.0", base_url=remote) as (_, client, headers, _):
+            # A foreign Host and Origin are accepted when explicitly bound off loopback.
+            assert (await client.get("/")).status_code == 200
+            assert (await client.get("/api/bootstrap", headers={"Origin": "http://anything.test"})).status_code == 200
+            # The per-process CSRF token is still required for API routes.
+            assert (await client.get("/api/sessions")).status_code == 403
+            assert (await client.get("/api/sessions", headers=headers)).status_code == 200
+            # Cross-site fetch metadata is still rejected.
+            assert (
+                await client.get("/api/sessions", headers={**headers, "Sec-Fetch-Site": "cross-site"})
+            ).status_code == 403
+
+    asyncio.run(check())
 
 
 def test_missing_dependencies_and_assets(tmp_path: Path) -> None:
