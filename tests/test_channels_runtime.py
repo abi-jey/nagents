@@ -435,6 +435,9 @@ def test_transport_reply_id_is_distinct_from_ingress_dedup_id(tmp_path: Path) ->
         assert "Never substitute the ingress message id for the reply id" in instructions
         send = next(tool for tool in request.tools if tool.name == "channel_send")
         assert "Remote transport message ID" in send.parameters["properties"]["reply_to"]["description"]
+        attachments = send.parameters["properties"]["attachments"]
+        assert attachments["type"] == "array" and attachments["items"]["type"] == "string"
+        assert "workspace-relative" in attachments["description"]
         assert source.sent == [ChannelSend("-100", "explicit reply", "7", "42")]
         assert source.acknowledged == ["9001", "9001"]
         stored = await rows(agent.session.db_path)

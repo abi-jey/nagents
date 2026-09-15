@@ -100,6 +100,22 @@ While listening, the runtime provides:
 | `channel_send` | Send text to an explicit channel and destination, optionally a thread or reply target. |
 | `channel_action` | Invoke an advertised connector-specific operation, such as editing a message. |
 
+### Outbound attachments
+
+`channel_send` accepts `attachments`: up to three workspace-relative file paths.
+The runtime resolves each path inside the workspace (no absolute paths, `..`,
+symlinks, or directories), reads at most 20 MiB per file and 30 MiB total, infers
+the media type from the extension, and hands the bytes to the connector as
+`ChannelFile` values. The text may be empty when files are present.
+
+The connector decides formatting and may advertise `send_files`: the Telegram
+connector uploads JPEG/PNG as photos (`sendPhoto`) and everything else as
+documents (`sendDocument`), using the text as the caption when it fits Telegram's
+1024-unit limit and sending a separate message otherwise. A connector that does
+not implement outbound files raises a sanitized `ChannelError`, so a model never
+believes an attachment was delivered when it was not. Attachments are explicit,
+approval-covered tool arguments; nothing is read or uploaded silently.
+
 These use the normal Agent tool registry/executor and plugin hooks. Existing
 tool names are not overwritten. Listener-owned tools and its request-local
 instructions are removed during cleanup.

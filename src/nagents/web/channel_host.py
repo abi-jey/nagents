@@ -175,7 +175,12 @@ class ChannelHost:
         self.runtime = None
         self.instructions.update([])
         runtime = (
-            ChannelRuntime(self.state.harness.agent, tuple(self.channels.values()), self.state.selected_session_id)
+            ChannelRuntime(
+                self.state.harness.agent,
+                tuple(self.channels.values()),
+                self.state.selected_session_id,
+                workspace=self.state.harness.workspace,
+            )
             if self.channels
             else None
         )

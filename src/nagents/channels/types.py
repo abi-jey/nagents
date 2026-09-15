@@ -178,6 +178,19 @@ class ChannelMessage:
 
 
 @dataclass(frozen=True)
+class ChannelFile:
+    """A bounded local file the application explicitly attaches to one outbound message.
+
+    The runtime reads workspace files and hands their bytes to the connector; a
+    connector decides how to format or upload them and may reject support.
+    """
+
+    filename: str
+    media_type: str
+    data: bytes
+
+
+@dataclass(frozen=True)
 class ChannelSend:
     """An explicit outgoing message selected by the application or model."""
 
@@ -186,6 +199,7 @@ class ChannelSend:
     thread_id: str = ""
     reply_to: str = ""
     attachments: tuple[ChannelAttachment, ...] = ()
+    files: tuple[ChannelFile, ...] = ()
     metadata: dict[str, ChannelValue] = field(default_factory=dict)
 
 

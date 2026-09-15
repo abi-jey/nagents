@@ -5,6 +5,7 @@ Tool registration with automatic schema extraction.
 import inspect
 import logging
 import re
+import types
 from collections.abc import Callable
 from typing import Any
 from typing import Union
@@ -144,8 +145,8 @@ class ToolRegistry:
         origin = get_origin(t)
         args = get_args(t)
 
-        # Handle Optional[X] -> X | None
-        if origin is Union:
+        # Handle Optional[X] and PEP 604 X | None -> X
+        if origin is Union or origin is types.UnionType:
             # Filter out NoneType
             non_none_args = [a for a in args if a is not type(None)]
             if len(non_none_args) == 1:

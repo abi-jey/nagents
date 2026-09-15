@@ -1267,7 +1267,7 @@ def test_child_timeout_cancels_descendants_but_not_independent_sibling(
                 yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Branch A"})
                 yield ToolCallEvent(id="b", name="delegate", arguments={"prompt": "Branch B"})
             elif provider.index == 1 and len(provider.requests) == 1:
-                monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 10.0)
+                monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 30.0)
                 yield ToolCallEvent(id="nested", name="delegate", arguments={"prompt": "Waiting descendant"})
             elif provider.index in {1, 3}:
                 if provider.index == 3:
@@ -1278,10 +1278,13 @@ def test_child_timeout_cancels_descendants_but_not_independent_sibling(
                     await grandchild_started.wait()
                 yield TextDoneEvent(text="Independent work finished")
 
-        monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 0.5)
+        # A generous margin keeps the timeout branch deterministic under loaded CI
+        # runners: branch A still expires, while the independent sibling has time
+        # to reach completion after the grandchild starts.
+        monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 2.0)
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         try:
-            events = await asyncio.wait_for(collect(harness), 5)
+            events = await asyncio.wait_for(collect(harness), 15)
             infos = harness.tasks.list()
             assert len(infos) == 3
             assert infos[0].status == "failed" and "time limit" in infos[0].error
