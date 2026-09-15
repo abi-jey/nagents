@@ -5,6 +5,7 @@ from .runtime import dispatch_channel_execution_event
 from .types import Channel
 from .types import ChannelAction
 from .types import ChannelActivity
+from .types import ChannelApproval
 from .types import ChannelAttachment
 from .types import ChannelCommand
 from .types import ChannelDelivery
@@ -26,6 +27,7 @@ __all__ = [
     "Channel",
     "ChannelAction",
     "ChannelActivity",
+    "ChannelApproval",
     "ChannelAttachment",
     "ChannelCommand",
     "ChannelDelivery",

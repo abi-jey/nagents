@@ -61,6 +61,7 @@ class Pending:
     call_id: str
     answer: asyncio.Future[bool]
     record: dict[str, object] = field(default_factory=dict)
+    in_chat: bool = False
 
 
 @dataclass
@@ -231,6 +232,7 @@ class WebState:
             and not self.bus.listening(run.session_id)
             and run.pending is not None
             and not run.pending.answer.done()
+            and not run.pending.in_chat
         ):
             run.pending.answer.set_result(False)
 
@@ -258,22 +260,29 @@ class WebState:
                 },
             )
             return True
+        in_chat = False
+        if (run.background or run.server_owned) and not self.bus.listening(run.session_id):
+            # A browser subscriber is normally required. An opted-in owning chat
+            # may instead decide the approval from the channel itself.
+            in_chat = await self.channels.in_chat_approvals(run.session_id)
+            if not in_chat:
+                self.publish(
+                    run,
+                    {
+                        "event": "notice",
+                        "text": "Unattended approval was denied; no action was taken.",
+                        "task_id": request.task_id,
+                        "activation": request.activation,
+                        "call_id": request.id,
+                        "tool": request.tool,
+                    },
+                )
+                return False
         if self.active is not run or run.finished or run.task.done() or run.task.cancelling():
             return False
-        if (run.background or run.server_owned) and not self.bus.listening(run.session_id):
-            self.publish(
-                run,
-                {
-                    "event": "notice",
-                    "text": "Unattended approval was denied; no action was taken.",
-                    "task_id": request.task_id,
-                    "activation": request.activation,
-                    "call_id": request.id,
-                    "tool": request.tool,
-                },
-            )
-            return False
-        pending = Pending(secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future())
+        pending = Pending(
+            secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future(), in_chat=in_chat
+        )
         pending.record = {"event": "approval", **asdict(request), "approval_id": pending.id, "run_id": run.id}
         run.pending = pending
         approved = False

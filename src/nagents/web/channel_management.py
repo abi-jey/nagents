@@ -48,7 +48,16 @@ if TYPE_CHECKING:
 
 NAMES = ("channel_configuration", "channel_configure")
 MAX_RESULTS = 32
-_CONFIGURATION_FIELDS = {"revision", "plugin", "enabled", "auto_reply", "config", "secrets", "main_session_id"}
+_CONFIGURATION_FIELDS = {
+    "revision",
+    "plugin",
+    "enabled",
+    "auto_reply",
+    "chat_approvals",
+    "config",
+    "secrets",
+    "main_session_id",
+}
 _CONNECTOR_STATES = {"running", "idle", "disabled", "error", "unavailable"}
 
 
@@ -103,6 +112,10 @@ class ChannelManagement(AgentPlugin):
                                     "auto_reply": {
                                         "type": "boolean",
                                         "description": "Allow automatic communication within the durable owning chat, including owned-session scheduled work. Privileged tools retain approval. Omit to preserve the same connector's saved policy; defaults to false for a new connector.",
+                                    },
+                                    "chat_approvals": {
+                                        "type": "boolean",
+                                        "description": "Allow the durable owning chat to decide tool approvals from the channel without a live browser subscriber. Omit to preserve the same connector's saved policy; defaults to false for a new connector.",
                                     },
                                     "config": {"type": "object"},
                                     "secrets": {"type": "object"},
@@ -198,7 +211,7 @@ class ChannelManagement(AgentPlugin):
     async def channel_configure(
         self, connection_id: str, configuration: dict[str, ChannelValue]
     ) -> dict[str, ChannelValue]:
-        """Queue ONE approved connection configuration per active trusted web run. Supply connection_id and strict ConnectionInput JSON: revision, plugin, enabled, auto_reply, config, secrets, main_session_id. auto_reply is an optional boolean for automatic owning-chat communication; omission preserves the same connector's saved policy. Put private fields in secrets (omitted values preserve, empty strings clear); config replaces public fields. Empty main_session_id preserves the existing main or uses the active run root. QUEUED is not saved or running: apply only at idle after this run succeeds, retaining revision checks. Failure/cancellation/restart discard it. Use channel_configuration status on a later turn."""
+        """Queue ONE approved connection configuration per active trusted web run. Supply connection_id and strict ConnectionInput JSON: revision, plugin, enabled, auto_reply, chat_approvals, config, secrets, main_session_id. auto_reply is an optional boolean for automatic owning-chat communication; chat_approvals is an optional boolean allowing the durable owning chat to decide approvals without a browser; omission preserves the same connector's saved policy. Put private fields in secrets (omitted values preserve, empty strings clear); config replaces public fields. Empty main_session_id preserves the existing main or uses the active run root. QUEUED is not saved or running: apply only at idle after this run succeeds, retaining revision checks. Failure/cancellation/restart discard it. Use channel_configuration status on a later turn."""
         run = await self._active()
         if self._pending or self._last_run_id == run.id:
             raise ChannelError("Only one channel configuration may be queued per run; finish this run first.")
