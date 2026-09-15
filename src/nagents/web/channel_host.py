@@ -224,7 +224,13 @@ class ChannelHost:
             raise self.failure(error, "list") from None
 
     async def channel_send(
-        self, channel: str, destination: str, text: str, thread_id: str = "", reply_to: str = ""
+        self,
+        channel: str,
+        destination: str,
+        text: str,
+        thread_id: str = "",
+        reply_to: str = "",
+        attachments: list[str] | None = None,
     ) -> dict[str, ChannelValue]:
         """Send once to an explicit channel and destination. Never use an ingress ID as reply_to."""
         try:
@@ -233,7 +239,7 @@ class ChannelHost:
             owner = await self.execution_owner()
             if owner is not None and (channel, destination) != (owner.channel, owner.conversation_id):
                 raise ChannelError("Channel destination is outside this session's chat ownership")
-            result = await self.runtime._channel_send(channel, destination, text, thread_id, reply_to)
+            result = await self.runtime._channel_send(channel, destination, text, thread_id, reply_to, attachments)
             self.check_result(result)
             return result
         except Exception as error:
