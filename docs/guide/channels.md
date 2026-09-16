@@ -281,8 +281,10 @@ Four optional Channel methods support richer hosts:
 
 The standalone `Agent.listen(session_id=...)` API keeps one shared identity. The
 [web host](ngn-web.md#channels-telegram-chats-and-session-binding) adds a routing
-policy: each external chat starts with a fresh session and can reattach only to
-sessions permanently owned by its `(connection ID, conversation ID)`. Ownership
+policy: each external chat starts with a fresh session, reattaches to sessions
+permanently owned by its `(connection ID, conversation ID)`, and may adopt an
+otherwise unowned workspace root (such as one created in the web UI) on attach.
+A root owned by another chat is never adopted. Ownership
 survives detachment, connector replacement, restart, and Trash/Restore; outbound
 tools, typing, and execution notices follow that owner even when the chat selects
 another session with `/new`. Web follow-ups and scheduled work in historical

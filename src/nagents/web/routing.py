@@ -190,6 +190,19 @@ class RoutingStore(InboxStore):
         cls._own(db, session_id, channel, conversation_id)
         return session_id
 
+    @classmethod
+    def adoptable_root(cls, db: sqlite3.Connection, session_id: str, channel: str, conversation_id: str) -> str:
+        """Attach this chat to an existing unowned root, adopting it permanently.
+
+        A root already owned by another chat (or conflicted) is never taken over;
+        ownership is recorded in the caller's transaction, before any dispatch.
+        """
+        cls.root(db, session_id)
+        if cls._owner(db, session_id) is not None:
+            raise HTTPException(404, _UNAVAILABLE)
+        cls._own(db, session_id, channel, conversation_id)
+        return session_id
+
     @staticmethod
     def _quarantine_work(db: sqlite3.Connection) -> None:
         # Retain rejected work and provenance, but don't let it consume queue
@@ -213,25 +226,43 @@ class RoutingStore(InboxStore):
 
     @staticmethod
     def _chat_sessions(db: sqlite3.Connection, channel: str, conversation: str) -> str:
-        with closing(
-            db.execute(
-                "SELECT h.id, h.title FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
-                "JOIN ngn_web_session_owners o ON o.session_id = h.id "
-                "WHERE o.channel = ? AND o.conversation_id = ? AND o.conflicted = 0 ORDER BY h.rowid DESC LIMIT 100",
-                (channel, conversation),
-            )
-        ) as cursor:
-            roots = cursor.fetchall()
+        def rows(statement: str, parameters: tuple[str, ...]) -> list[tuple[str, str]]:
+            with closing(db.execute(statement, parameters)) as cursor:
+                return [(str(row[0]), str(row[1] or "")) for row in cursor.fetchall()]
+
+        owned = rows(
+            "SELECT h.id, h.title FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
+            "JOIN ngn_web_session_owners o ON o.session_id = h.id "
+            "WHERE o.channel = ? AND o.conversation_id = ? AND o.conflicted = 0 ORDER BY h.rowid DESC LIMIT 100",
+            (channel, conversation),
+        )
+        # Roots with no owner yet are chat-creatable web sessions; a trusted chat
+        # may attach one and adopt it. Foreign-owned roots are never listed.
+        available = rows(
+            "SELECT h.id, h.title FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
+            "WHERE NOT EXISTS (SELECT 1 FROM ngn_web_session_owners o WHERE o.session_id = h.id) "
+            "ORDER BY h.rowid DESC LIMIT 100",
+            (),
+        )
         lines = ["Sessions:"]
         units = 10
-        for id, title in roots:
+        for id, title in owned:
             line = f"{id} — {title or 'New session'}"
             length = len(line.encode("utf-16-le")) // 2 + 1
             if units + length > 3500:
                 lines.append("More sessions are available in the web UI.")
-                break
+                return "\n".join(lines)
             lines.append(line)
             units += length
+        if available:
+            lines.append("Available to attach (send /session ID to adopt):")
+            for id, title in available:
+                line = f"{id} — {title or 'New session'}"
+                length = len(line.encode("utf-16-le")) // 2 + 1
+                if units + length > 3500:
+                    break
+                lines.append(line)
+                units += length
         return "\n".join(lines)
 
     async def acknowledgement(self, work: Work) -> str:
@@ -350,12 +381,18 @@ class RoutingStore(InboxStore):
                     ack = self._chat_sessions(db, channel, conversation)
                 elif command.name in {"session", "new"}:
                     if command.name == "session" and argument.startswith("default "):
+                        candidate = argument.removeprefix("default ").strip()
                         try:
-                            default = self.chat_root(
-                                db, argument.removeprefix("default ").strip(), channel, conversation
-                            )
-                            ack = f"Default session: {default}"
+                            selected = self.chat_root(db, candidate, channel, conversation)
                         except HTTPException:
+                            try:
+                                selected = self.adoptable_root(db, candidate, channel, conversation)
+                            except HTTPException:
+                                selected = ""
+                        if selected:
+                            default = selected
+                            ack = f"Default session: {default}"
+                        else:
                             ack = _UNAVAILABLE
                     elif command.name == "new" or argument == "new":
                         if row and not recovered:
@@ -368,10 +405,18 @@ class RoutingStore(InboxStore):
                         ack = f"Session: {target}"
                     elif argument:
                         candidate = main if argument == "main" else default if argument == "default" else argument
+                        selected = ""
                         try:
-                            target = self.chat_root(db, candidate, channel, conversation)
-                            ack = f"Session: {target}"
+                            selected = self.chat_root(db, candidate, channel, conversation)
                         except HTTPException:
+                            try:
+                                selected = self.adoptable_root(db, candidate, channel, conversation)
+                            except HTTPException:
+                                selected = ""
+                        if selected:
+                            target = selected
+                            ack = f"Session: {target}"
+                        else:
                             ack = _UNAVAILABLE
                     if not ack:
                         ack = f"Session: {target}"

@@ -62,7 +62,7 @@ async def receive(store: RoutingStore, room: str, id: str, text: str = "/session
     return await store._transaction(read)
 
 
-def test_commands_list_only_chat_history_and_do_not_adopt_admin_or_foreign_roots(tmp_path: Path) -> None:
+def test_commands_list_chat_history_and_adopt_only_unowned_roots(tmp_path: Path) -> None:
     async def run() -> None:
         store = await store_at(tmp_path / "owners.db")
         first = (await receive(store, "room-a", "a")).session_id
@@ -73,20 +73,40 @@ def test_commands_list_only_chat_history_and_do_not_adopt_admin_or_foreign_roots
         assert await store.owner("ngn-main") is None
         listed = await receive(store, "room-a", "list", "/sessions")
         assert first in listed.acknowledgement and second in listed.acknowledgement
-        assert foreign not in listed.acknowledgement and "ngn-main" not in listed.acknowledgement
+        assert "Available to attach" in listed.acknowledgement and "ngn-main" in listed.acknowledgement
+        # A foreign-owned root is never listed or adopted.
+        assert foreign not in listed.acknowledgement
         rejected: list[str] = []
-        for index, argument in enumerate(
-            (foreign, "ngn-main", "ngn-unknown", "main", f"default {foreign}", "default ngn-main")
-        ):
+        for index, argument in enumerate((foreign, "ngn-unknown", f"default {foreign}")):
             denied = await receive(store, "room-a", f"deny-{index}", f"/session {argument}")
             assert denied.session_id == second
             rejected.append(denied.acknowledgement)
         assert len(set(rejected)) == 1
+        # An unowned web-created root is adopted on attach and then permanently owned.
+        adopted = await receive(store, "room-a", "adopt", "/session ngn-main")
+        assert adopted.session_id == "ngn-main"
+        assert await store.owner("ngn-main") == ChatOwner("bridge", "room-a")
+        steal = await receive(store, "room-b", "steal", "/session ngn-main")
+        assert steal.session_id == foreign
+        assert await store.owner("ngn-main") == ChatOwner("bridge", "room-a")
         assert (await receive(store, "room-a", "default", "/session default")).session_id == first
         assert (await receive(store, "room-a", "set-default", f"/session default {second}")).session_id == first
         assert (await receive(store, "room-a", "back", "/session default")).session_id == second
         assert await store.owner(foreign) == ChatOwner("bridge", "room-b")
-        assert await store.owner("ngn-main") is None
+
+    asyncio.run(run())
+
+
+def test_default_session_command_adopts_an_unowned_root(tmp_path: Path) -> None:
+    async def run() -> None:
+        store = await store_at(tmp_path / "defaults.db")
+        first = (await receive(store, "room-a", "a")).session_id
+        assert await store.owner(first) == ChatOwner("bridge", "room-a")
+        selected = await receive(store, "room-a", "set-default", "/session default ngn-main")
+        assert selected.session_id == first
+        assert selected.acknowledgement == "Default session: ngn-main"
+        assert await store.owner("ngn-main") == ChatOwner("bridge", "room-a")
+        assert (await receive(store, "room-a", "use-default", "/session default")).session_id == "ngn-main"
 
     asyncio.run(run())
 

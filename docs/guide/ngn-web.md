@@ -209,7 +209,8 @@ deleting it forever:
 1. In **Channels**, change any connection whose **main session** is this root to
    another existing root and save. Disabled connections also count.
 2. In each attached channel conversation, use `/new`, or `/sessions` followed by
-   `/session ID`, to attach another root owned by **that same chat**. If this was
+   `/session ID`, to attach another root owned by **that same chat** (an unowned
+   root is adopted on attach). If this was
    its default root, use `/session default ID`
    to move that default too. This command changes the default reference; the
    current attachment changes through `/session ID`.
@@ -470,13 +471,19 @@ Telegram's host commands allow an explicit change:
 
 | Command | Purpose |
 | --- | --- |
-| `/sessions` | List only this chat's owned, active sessions; never unowned admin roots or another chat's roots. |
+| `/sessions` | List this chat's owned, active sessions, plus unowned workspace roots it can adopt; never another chat's roots. |
 | `/session` | Report the chat's current session. |
-| `/session <session-id>` | Attach to an existing session owned by this chat. |
-| `/session main` | Attach to the configured main session only if this chat already owns it. |
+| `/session <session-id>` | Attach to a session owned by this chat, or adopt an existing unowned root. Another chat's root is refused. |
+| `/session main` | Attach to the configured main session, adopting it if it is unowned. |
 | `/session default` | Return to this chat's owned default session. |
-| `/session default <session-id>` | Set an already-owned default without changing the current attachment. |
+| `/session default <session-id>` | Set the default to an owned or unowned root without changing the current attachment. |
 | `/new <title>` | Create and attach a new chat-owned session; old ownership remains. |
+
+Attaching an **unowned** root (typically created in the web UI) adopts it: the
+chat becomes its permanent owner, exactly as `/new` does, and no other chat can
+take it over afterwards. A root already owned by a different chat is never
+adopted, listed, or attached. Ownership is recorded in the same transaction that
+binds the conversation, before any accepted message is dispatched.
 
 Commands are handled by the host rather than sent to a model as ordinary work.
 Their acknowledgements return to the originating chat. Pending messages retain
