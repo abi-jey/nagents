@@ -206,9 +206,11 @@ connector authenticates on `open()` with `getMe`, not during import/construction
 | `/session default` | Return to the chat's default session. |
 | `/session default <session-id>` | Set an already-owned default without changing current attachment. |
 | `/new <title>` | Create and attach a fresh owned root; keep old ownership. |
+| `/compact` | Compact the chat's bound session, replacing its history with a summary. |
 
 Recognized commands are handled by the host with an acknowledgement to the
-originating chat. Pending inputs keep the session target assigned at admission
+originating chat. `/compact` runs compaction work on the bound session and
+reports the result instead of returning a cached acknowledgement. Pending inputs keep the session target assigned at admission
 even if a later command changes the binding. Connector parsing alone does not
 change standalone `Agent.listen()` sessions. A slash command is host-specific;
 it is not a universal Agent Skills activation format. In ordinary incoming text,

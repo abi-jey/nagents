@@ -36,6 +36,7 @@ class Work:
     thread_id: str
     reply_to: str
     acknowledgement: str
+    command: str = ""
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ _RECOVERED = (
     "This chat's previous session is unavailable. A new isolated session was created; please send your request again."
 )
 _MIGRATED = "Session routing permissions changed. Use /sessions to view sessions available to this chat."
-_UNKNOWN = "Unknown session command. Use /sessions, /session [ID|main|default|new], or /new [title]."
+_UNKNOWN = "Unknown session command. Use /sessions, /session [ID|main|default|new], /new [title], or /compact."
 
 
 class RoutingStore(InboxStore):
@@ -69,10 +70,13 @@ class RoutingStore(InboxStore):
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, channel TEXT NOT NULL, "
                 "message_id TEXT NOT NULL, prompt TEXT NOT NULL, conversation_id TEXT NOT NULL DEFAULT '', "
                 "thread_id TEXT NOT NULL DEFAULT '', reply_to TEXT NOT NULL DEFAULT '', "
-                "acknowledgement TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'queued', "
+                "acknowledgement TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '', "
+                "status TEXT NOT NULL DEFAULT 'queued', "
                 "UNIQUE(channel, message_id))"
             )
             db.execute("CREATE INDEX IF NOT EXISTS ngn_web_inbox_pending ON ngn_web_inbox(status, id)")
+            if "command" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
+                db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN command TEXT NOT NULL DEFAULT ''")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS ngn_web_deleted_messages ("
                 "channel TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(channel, message_id))"
@@ -361,6 +365,7 @@ class RoutingStore(InboxStore):
             else:
                 target = default = self.new_chat_root(db, channel, conversation, fresh_title)
             ack = ""
+            kind = ""
             recovered = False
             try:
                 self.chat_root(db, target, channel, conversation)
@@ -379,6 +384,13 @@ class RoutingStore(InboxStore):
                 argument = command.arguments.strip()
                 if command.name == "sessions":
                     ack = self._chat_sessions(db, channel, conversation)
+                elif command.name == "compact":
+                    # Compaction is model work, not a cached reply: admit it as the
+                    # chat's current session and let the host run it when idle.
+                    if argument:
+                        ack = _UNKNOWN
+                    else:
+                        kind = "compact"
                 elif command.name in {"session", "new"}:
                     if command.name == "session" and argument.startswith("default "):
                         candidate = argument.removeprefix("default ").strip()
@@ -430,7 +442,7 @@ class RoutingStore(InboxStore):
             )
             db.execute(
                 "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, conversation_id, thread_id, "
-                "reply_to, acknowledgement) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "reply_to, acknowledgement, command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     target,
                     channel,
@@ -440,6 +452,7 @@ class RoutingStore(InboxStore):
                     payload["thread_id"],
                     payload["reply_to"],
                     ack,
+                    kind,
                 ),
             )
 
@@ -470,7 +483,7 @@ class RoutingStore(InboxStore):
             self._quarantine_work(db)
             row = db.execute(
                 "SELECT id, session_id, channel, message_id, prompt, conversation_id, thread_id, reply_to, "
-                f"acknowledgement FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
+                f"acknowledgement, command FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
                 parameters,
             ).fetchone()
             if row is None:

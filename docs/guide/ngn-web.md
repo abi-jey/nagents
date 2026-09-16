@@ -478,6 +478,7 @@ Telegram's host commands allow an explicit change:
 | `/session default` | Return to this chat's owned default session. |
 | `/session default <session-id>` | Set the default to an owned or unowned root without changing the current attachment. |
 | `/new <title>` | Create and attach a new chat-owned session; old ownership remains. |
+| `/compact` | Compact the chat's bound session: its history is replaced by a summary. |
 
 Attaching an **unowned** root (typically created in the web UI) adopts it: the
 chat becomes its permanent owner, exactly as `/new` does, and no other chat can
@@ -488,6 +489,8 @@ binds the conversation, before any accepted message is dispatched.
 Commands are handled by the host rather than sent to a model as ordinary work.
 Their acknowledgements return to the originating chat. Pending messages retain
 their admitted session target when a later command changes the binding.
+`/compact` is the exception: it compacts the bound session rather than answering
+from a cached reply, and reports the resulting message counts back to the chat.
 
 Unowned, foreign, hidden, and unknown session targets receive the same rejection;
 commands do not disclose whether those IDs exist. Only trusted local management

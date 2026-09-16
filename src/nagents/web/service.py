@@ -437,6 +437,50 @@ class WebState:
             self.finish(run)
         return "interrupted" if run.outcome == "cancelled" else run.outcome
 
+    async def compact_work(self, work: Work) -> str:
+        """Compact the chat's bound session on demand from an explicit command."""
+        await self.channels.store.validate_work(work)
+        if self.channels.closed:
+            return "queued"
+        run = Run(work.session_id, server_owned=True, message_id=work.message_id)
+        if work.channel:
+            run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
+        self.active = run
+        self.publish(run, {"event": "run_started", "message_id": work.message_id, "channel": work.channel})
+        self.status()
+
+        async def execute() -> None:
+            note = "Compaction failed. Context was not changed."
+            try:
+                await self.harness.resume(run.session_id)
+                done = await self.harness.compact()
+                run.outcome = "completed"
+                await self.send(run, _event_record(done))
+                note = f"Context compacted: {done.original_message_count} messages summarized into {done.new_message_count}."
+            except asyncio.CancelledError:
+                run.outcome = "cancelled"
+                raise
+            except Exception:
+                run.outcome = "failed"
+                await self.send(
+                    run, {"event": "error", "message": "Compaction failed. Session history was not changed."}
+                )
+            finally:
+                # A UI selection made during this run takes effect only after
+                # producer cleanup, never underneath the shared Harness.
+                self.harness.session_id = self.selected_session_id
+                self.harness.tools.read_hashes.clear()
+            await self.channels.reply(work, note)
+
+        run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")
+        try:
+            await _join(run.task)
+        except asyncio.CancelledError:
+            run.outcome = "cancelled"
+        finally:
+            self.finish(run)
+        return "interrupted" if run.outcome == "cancelled" else run.outcome
+
     def finish(self, run: Run) -> None:
         if run.finished:
             return
