@@ -257,7 +257,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
     assert all(task.done() for task in app.state.web.channels.tasks)
 
 
-def test_chat_roots_reject_unowned_main_and_keep_history_and_typing_isolated(
+def test_chat_roots_adopt_unowned_main_and_keep_history_and_typing_isolated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
@@ -278,9 +278,15 @@ def test_chat_roots_reject_unowned_main_and_keep_history_and_typing_isolated(
         assert [
             (event.active, event.thread_id) for event in app.channels[0].activities if event.conversation_id == "chat-a"
         ] == [(True, "thread-a"), (False, "thread-a")]
+        # The unowned workspace main is adopted on attach and then permanently owned.
         app.emit("/session main")
         app.idle()
-        assert app.bindings()["chat-a"] == bindings["chat-a"]
+        assert app.bindings()["chat-a"] == app.main
+        assert f"Session: {app.main}" in app.channels[0].deliveries[-1].text
+        # Another chat still cannot take over the now-owned root.
+        app.emit("/session main", "chat-b")
+        app.idle()
+        assert app.bindings()["chat-b"] == bindings["chat-b"]
         assert "Session not found" in app.channels[0].deliveries[-1].text
         app.emit("/new")
         app.idle()
@@ -300,7 +306,6 @@ def test_chat_roots_reject_unowned_main_and_keep_history_and_typing_isolated(
         assert bindings["chat-a"] in app.channels[0].deliveries[-1].text
         assert owned in app.channels[0].deliveries[-1].text
         assert bindings["chat-b"] not in app.channels[0].deliveries[-1].text
-        assert app.main not in app.channels[0].deliveries[-1].text
 
 
 def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -322,7 +327,7 @@ def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkey
         assert [row["content"] for row in initial_history if row["role"] == "user"] == ["hold"]
         app.emit("pending", id="pending-id")
         before = app.bindings()["chat-a"]
-        app.emit("/session main", id="attach-id")
+        app.emit("/session ngn-not-in-this-workspace", id="attach-id")
         assert app.bindings()["chat-a"] == before
         before_new = app.roots()
         app.emit("/new New title", id="new-id")
