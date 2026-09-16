@@ -515,13 +515,15 @@ class ChannelHost:
     async def activity(self, session_id: str, active: bool, source: dict[str, str] | None = None) -> None:
         await self.activities.set(session_id, active, source or {})
 
-    async def acknowledgement(self, work: Work) -> None:
-        text = await self.store.acknowledgement(work)
+    async def reply(self, work: Work, text: str) -> None:
         channel = self.channels.get(work.channel)
         if channel is None:
             raise ChannelError("Command source is unavailable")
         async with asyncio.timeout(15):
             await channel.send(ChannelSend(work.conversation_id, text, work.thread_id, work.reply_to))
+
+    async def acknowledgement(self, work: Work) -> None:
+        await self.reply(work, await self.store.acknowledgement(work))
 
     async def claim(self) -> Work | None:
         # Cancellation of RoutingStore.claim_work itself joins its transaction,
@@ -564,7 +566,9 @@ class ChannelHost:
                             return
                         status = "failed"
                         try:
-                            if work.acknowledgement:
+                            if work.command == "compact":
+                                status = await self.state.compact_work(work)
+                            elif work.acknowledgement:
                                 await self.acknowledgement(work)
                                 status = "completed"
                             else:
