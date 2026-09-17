@@ -83,7 +83,7 @@ export class TrashController {
     catch (cause) {
       stale = cause instanceof RequestError && [409, 410].includes(cause.status);
       this.update({ error: (cause instanceof Error ? cause.message : "Trash operation failed.") +
-        (stale ? " Trash has been refreshed. Review it before trying again." : " No operation was retried.") });
+        " No operation was retried." + (stale ? " Refresh Trash before retrying." : "") });
       throw cause;
     } finally {
       this.update({ pending: "" });

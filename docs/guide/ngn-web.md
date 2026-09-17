@@ -195,28 +195,25 @@ It removes logical database records, not backups or SQLite free pages.
 
 #### Activity And Routing Guards
 
-Moving to Trash and deleting forever retain the idle, active-work, and routing
-guards. Admission returns `409` while the Harness is busy or the root has queued
-or running inbox work, pending wakeups, or retained descendant task handles.
-Finish or cancel running work first. Retained handles can still resume child
-conversations; after those tasks finish, restart ngn to expire the handles before
-deleting their root. Child histories are kept: deletion never guesses ownership
-from a session prefix, a task name, or text in old messages.
+Moving to Trash and deleting forever retain the idle, active-work, and
+in-memory-process guards. Admission returns `409` while the Harness is busy, a
+descendant task handle is retained, descendant tasks are still running, or the
+root has pending wakeups. Finish or cancel running work first. Retained handles
+can still resume child conversations; after those tasks finish, restart ngn to
+expire the handles before deleting their root. Child histories are kept:
+deletion never guesses ownership from a session prefix, a task name, or text in
+old messages.
 
-Channel routing must be moved explicitly before moving a root to Trash or
-deleting it forever:
-
-1. In **Channels**, change any connection whose **main session** is this root to
-   another existing root and save. Disabled connections also count.
-2. In each attached channel conversation, use `/new`, or `/sessions` followed by
-   `/session ID`, to attach another root owned by **that same chat** (an unowned
-   root is adopted on attach). If this was
-   its default root, use `/session default ID`
-   to move that default too. This command changes the default reference; the
-   current attachment changes through `/session ID`.
-3. Let already accepted messages and command replies finish, then retry deletion.
-   Reattachment never reroutes messages already in the inbox. Removing or disabling
-   a connector alone does not detach its saved conversation bindings.
+Channel attachments and queued inbox work never block deletion. Deletion wins:
+deleting a bound root detaches that channel conversation, so its next inbound
+creates a fresh chat root and is processed as ordinary input with no recovery
+notice. A conversation that only used the deleted root as its default stays on
+its surviving root. A connection whose **main session** was deleted is
+repointed to a surviving root; the connector stays enabled. Pending inbound work
+is marked terminal and its `(channel, message_id)` identity is recorded, so a
+late connector redelivery cannot re-execute deleted work. Historical
+session-owner identities are retained; deleting an ID never transfers its chat
+ownership, and a restored root may be re-adopted with `/session ID`.
 
 Soft deletion changes active-list membership while retaining the root's history
 and related stored input. Restore atomically reinstates that membership and title.
@@ -224,8 +221,7 @@ Permanent purge removes the root's content while retaining content-free
 channel/message deduplication keys and historical session-owner identities, so
 late channel redelivery cannot execute deleted work or transfer a reused session
 ID to another chat. Workspace files, unrelated roots and child histories, saved
-settings, channel configuration, and private credentials are preserved. Deletion
-does not silently detach channels or discard pending background work.
+settings, channel configuration, and private credentials are preserved.
 
 Cancellation joins the SQLite transaction and selection/subscription cleanup
 before releasing the idle boundary, avoiding partially applied membership changes.
