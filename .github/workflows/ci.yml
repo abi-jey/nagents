@@ -148,13 +148,15 @@ jobs:
   # WINDOWS TESTS
   # =============================================================================
   test-windows:
-    name: Test Windows (py${{ matrix.python-version }})
+    name: Test Windows (py${{ matrix.python-version }}, shard ${{ matrix.group }}/${{ matrix.shards }})
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.11', '3.12', '3.13', '3.14']
+        shards: [3]
+        group: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,7 +176,10 @@ jobs:
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
       - name: Run portable tests (POSIX harness cases are marked)
-        run: pytest tests/ -n auto -v -rs
+        shell: bash
+        run: |
+          pytest $(python .github/scripts/shard_tests.py --shards ${{ matrix.shards }} --group ${{ matrix.group }}) \
+            -n auto -v -rs
 
   # =============================================================================
   # BUMP VERSION (runs only after all tests pass)
