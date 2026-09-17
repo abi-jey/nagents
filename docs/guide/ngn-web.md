@@ -682,6 +682,13 @@ duration. Missing credentials and demo mode are reported clearly without opening
 the microphone or making a provider request. No provider credential is returned
 to the browser.
 
+The **Context compaction** section in Settings selects the automatic trigger:
+the provider default, a token window, a message count, or off. The choice is a
+persisted workspace override applied to the shared Harness on the next run. A
+`messages` threshold counts stored conversation messages; a `tokens` window
+compacts near 70% of the given context size. Manual `Harness.compact()` (and the
+channel `/compact` command) always remain available.
+
 #### Upload Contract
 
 `POST /api/dictation/transcribe` accepts only a raw `audio/wav` body and also
@@ -735,8 +742,11 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `dictation_model` | Trimmed, nonblank compatible transcription model ID, at most 200 printable characters |
 | `dictation_language` | Empty for automatic detection, or a two-letter lowercase language code |
 | `dictation_max_seconds` | Integer, 1 through 300; effective recording duration is capped by the administrator's startup limit |
+| `compact_trigger` | One of `auto` (provider default), `tokens`, `messages`, or `off` |
+| `compact_tokens` | Integer, 1,024 through 10,000,000; the total context window used when `compact_trigger` is `tokens` |
+| `compact_messages` | Integer, 1 through 10,000; the conversation length used when `compact_trigger` is `messages` |
 
-POST requires all sixteen values plus the write-only `api_key` field. Unknown
+POST requires all nineteen values plus the write-only `api_key` field. Unknown
 fields, numeric strings, booleans used as numbers, and nonfinite numbers are
 rejected with HTTP 422, as are invalid provider combinations (for example,
 `litellm` without an endpoint, `chatgpt` with a custom endpoint, credentials in
@@ -748,6 +758,13 @@ unavailable ID. Permission ceilings and per-call approvals remain enforced.
 Existing sessions, history, provider credentials, and tools are retained. New
 children inherit the current model; retained children keep their prior state
 under the existing child continuation contract.
+
+`compact_trigger = auto` leaves the provider's context-limit default in place,
+`tokens` compacts near 70% of `compact_tokens`, `messages` compacts once the
+conversation reaches `compact_messages`, and `off` disables automatic compaction.
+The choice applies to the shared Harness on the next run and persists with the
+other overrides; manual `Harness.compact()` and the channel `/compact` command
+remain available regardless.
 
 An optional `api_key` stores a write-only key for the submitted provider; an
 empty value leaves any stored key unchanged. `clear_api_key` removes it. A

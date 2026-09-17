@@ -17,6 +17,9 @@ export type SettingsValues = {
   dictation_model: string;
   dictation_language: string;
   dictation_max_seconds: number;
+  compact_trigger: string;
+  compact_tokens: number;
+  compact_messages: number;
 };
 
 export type SettingsProfile = {
