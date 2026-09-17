@@ -20,6 +20,7 @@ from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskNotification
 from nagents.harness.types import TaskStarted
 from nagents.types import ToolCall
+from tests.hang_guard import HANG_GUARD
 from tests.test_subagents import FakeProvider
 from tests.test_subagents import assert_balanced
 from tests.test_subagents import collect
@@ -72,7 +73,7 @@ def test_native_scheduler_callback_acknowledges_without_holding_run(
 
         harness.wakeup_handler = schedule
         try:
-            events = await asyncio.wait_for(collect(harness), 5)
+            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert calls == [(harness.tasks.list()[0].id if child else "", 90120.5, "Check progress")]
             assert all({"schedule_wakeup", "wake_up_in"} <= set(schema) for p in providers for schema in p.schemas)
             history = await harness.task_history(calls[0][0]) if child else await harness.history()
@@ -243,7 +244,7 @@ def test_closed_grandchild_wakes_same_immediate_parent_then_main(
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         try:
-            initial = await asyncio.wait_for(collect(harness, "ROOT"), 5)
+            initial = await asyncio.wait_for(collect(harness, "ROOT"), HANG_GUARD)
             infos = {info.prompt: info for info in harness.tasks.list()}
             a, b, sibling = infos["A"], infos["B"], infos["SIBLING"]
             assert a.status == ("failed" if failed_parent else "completed")
@@ -347,7 +348,7 @@ def test_parent_becomes_unavailable_during_wake_never_receives_or_reroutes_resul
                 return [event async for event in harness.wake("Wake B", task_id=b.id)]
 
             task = asyncio.create_task(wake())
-            await asyncio.wait_for(waiting.wait(), 5)
+            await asyncio.wait_for(waiting.wait(), HANG_GUARD)
             if invalid == "missing":
                 harness.tasks._infos[b.id].parent_task_id = "missing"
             elif invalid == "cancelled":
@@ -355,7 +356,7 @@ def test_parent_becomes_unavailable_during_wake_never_receives_or_reroutes_resul
             else:
                 harness.tasks._children.pop(a.id)
             release.set()
-            events = await asyncio.wait_for(task, 5)
+            events = await asyncio.wait_for(task, HANG_GUARD)
             assert any(isinstance(event, ErrorEvent) and "not forwarded to Main" in event.message for event in events)
             assert any(isinstance(event, TaskCompleted) and event.task_id == b.id for event in events)
             assert not any(isinstance(event, TaskNotification) and event.cause == "completion" for event in events)
@@ -435,7 +436,7 @@ def test_wake_cancellation_joins_children_without_reactivating_parent(
                 if stop == "aclose":
                     async for event in stream:
                         if isinstance(event, TaskNotification) and event.cause == "wakeup":
-                            await asyncio.wait_for(waiting.wait(), 5)
+                            await asyncio.wait_for(waiting.wait(), HANG_GUARD)
                             break
                 else:
 
@@ -443,10 +444,10 @@ def test_wake_cancellation_joins_children_without_reactivating_parent(
                         return [event async for event in stream]
 
                     task = asyncio.create_task(consume())
-                    await asyncio.wait_for(waiting.wait(), 5)
+                    await asyncio.wait_for(waiting.wait(), HANG_GUARD)
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
-                        await asyncio.wait_for(task, 5)
+                        await asyncio.wait_for(task, HANG_GUARD)
             assert all(worker.done() for worker in harness.tasks._workers.values())
             assert len(providers) == 5 and providers[-1].closed
             assert next(info for info in harness.tasks.list() if info.prompt == "A").activation == 0
@@ -491,7 +492,7 @@ def test_completion_observation_precedes_immediate_parent_delivery_boundary(
             assert not any(isinstance(event, TaskNotification) and event.source_task_id == b.id for event in events)
             assert not notifications(await harness.task_history(a.id))
             release.set()
-            await asyncio.wait_for(task, 5)
+            await asyncio.wait_for(task, HANG_GUARD)
             notes = [event for event in events if isinstance(event, TaskNotification) and event.source_task_id == b.id]
             assert len(notes) == 1 and notes[0].recipient_task_id == a.id
             assert "B_INITIAL_PRIVATE" not in str(await harness.history())
@@ -601,7 +602,7 @@ def test_busy_root_wake_rejects_overlap_and_cancellation_runs_hooks(
 
         task = asyncio.create_task(wake())
         try:
-            await asyncio.wait_for(waiting.wait(), 5)
+            await asyncio.wait_for(waiting.wait(), HANG_GUARD)
             with pytest.raises(RuntimeError, match="busy"):
                 _ = [event async for event in harness.wake("Overlap")]
             with pytest.raises(RuntimeError, match="busy"):
@@ -609,7 +610,7 @@ def test_busy_root_wake_rejects_overlap_and_cancellation_runs_hooks(
             assert len(providers[0].requests) == 1
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 5)
+                await asyncio.wait_for(task, HANG_GUARD)
             assert cleaned == [harness.session_id]
             assert not harness._busy and harness._worker is None
             assert_balanced(await harness.history())
@@ -710,7 +711,7 @@ def test_followup_rejects_starting_ancestor_without_losing_original_notification
             assert harness.tasks.list() == retained and harness.tasks._workers == workers
             assert harness.tasks._used == budget == 5 and len(providers) == 6
             release.set()
-            await asyncio.wait_for(task, 5)
+            await asyncio.wait_for(task, HANG_GUARD)
             deliveries = [event for event in events if isinstance(event, TaskNotification)]
             assert [(event.source_task_id, event.recipient_task_id, event.cause) for event in deliveries] == [
                 (b.id, b.id, "wakeup"),
@@ -773,15 +774,15 @@ def test_scheduler_suppressing_cancellation_cannot_restart_model_after_single_ca
         harness.wakeup_handler = schedule
         consumer = asyncio.create_task(collect(harness, "Schedule"))
         try:
-            await asyncio.wait_for(scheduling.wait(), 5)
+            await asyncio.wait_for(scheduling.wait(), HANG_GUARD)
             if child:
-                await asyncio.wait_for(parent_waiting.wait(), 5)
+                await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
             requests = [len(provider.requests) for provider in providers]
             producer = harness._worker
             assert producer is not None
             consumer.cancel()
             # asyncio.wait does not issue another cancellation when its timeout expires.
-            done, _ = await asyncio.wait((consumer,), timeout=5)
+            done, _ = await asyncio.wait((consumer,), timeout=HANG_GUARD)
             assert consumer in done, "A single consumer cancellation must finish owned cleanup"
             with pytest.raises(asyncio.CancelledError):
                 await consumer

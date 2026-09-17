@@ -23,6 +23,7 @@ from nagents.harness.dictation import MAX_RESPONSE_BYTES
 from nagents.harness.dictation import REQUEST_SECONDS
 from nagents.harness.dictation import DictationError
 from nagents.harness.dictation import VoiceDictation
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -44,7 +45,7 @@ def wav_bytes(*, frames: int = 1600, channels: int = 1, rate: int = 16000, width
 
 
 async def wait_until(predicate: Callable[[], bool]) -> None:
-    async with asyncio.timeout(3):
+    async with asyncio.timeout(HANG_GUARD):
         while not predicate():
             await asyncio.sleep(0.005)
 
@@ -75,7 +76,7 @@ class FakeMicrophone:
 
     def start(self) -> None:
         self._call("start")
-        assert self.start_release.wait(3), "test did not release fake start"
+        assert self.start_release.wait(HANG_GUARD), "test did not release fake start"
         callback = cast("Callable[[bytes, int, object, object], None]", self.kwargs["callback"])
         callback(self.audio, len(self.audio) // 2, object(), self.status)
         self.started.set()
@@ -88,7 +89,7 @@ class FakeMicrophone:
 
     def close(self) -> None:
         self._call("close")
-        assert self.close_release.wait(3), "test did not release fake close"
+        assert self.close_release.wait(HANG_GUARD), "test did not release fake close"
         self.closed.set()
 
 
@@ -244,7 +245,7 @@ def test_capture_cap_stops_and_closes_without_upload(
 
     async def scenario() -> None:
         service = VoiceDictation(config)
-        async with asyncio.timeout(2):
+        async with asyncio.timeout(HANG_GUARD):
             result = await service.capture()
         assert 44 < len(result) <= BYTES_PER_SECOND + 44
         if by_frames:

@@ -24,6 +24,7 @@ from nagents.web.service import Run
 from nagents.web.service import WebState
 from nagents.web.subscriptions import Subscriber
 from nagents.web.wakeups import Chain
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import client_app
 from tests.test_web_subscription_lifecycle import Peer
 
@@ -264,7 +265,7 @@ def test_cancel_during_transaction_joins_atomic_outcome_and_cleanup(
             def blocked(db: sqlite3.Connection, id: str, selected: str) -> str:
                 result = original(db, id, selected)
                 entered.set()
-                assert release.wait(5)
+                assert release.wait(HANG_GUARD)
                 if rollback:
                     raise ValueError("injected transaction failure")
                 return result
@@ -312,7 +313,7 @@ def test_admission_racing_delete_cannot_recreate_root(tmp_path: Path, monkeypatc
 
             def blocked(db: sqlite3.Connection, id: str, selected: str) -> str:
                 entered.set()
-                assert release.wait(5)
+                assert release.wait(HANG_GUARD)
                 return original(db, id, selected)
 
             monkeypatch.setattr(deletion, "_delete_rows", blocked)

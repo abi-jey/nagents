@@ -29,7 +29,7 @@ from nagents.events import ToolCallEvent
 from nagents.extensions import AgentPlugin
 from nagents.extensions import RunContext
 from nagents.types import Message
-from tests.test_channels_runtime import HANG_GUARD
+from tests.hang_guard import HANG_GUARD
 from tests.test_channels_runtime import MemoryChannel
 from tests.test_channels_runtime import OfflineProvider
 from tests.test_channels_runtime import assert_no_runtime_tasks

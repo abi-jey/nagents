@@ -29,6 +29,7 @@ from nagents.web.trash import PURGE_BATCH
 from nagents.web.trash import SessionTrash
 from nagents.web.trash import TrashItem
 from nagents.web.wakeups import Chain
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import client_app
 from tests.test_web_deletion import quiet
 from tests.test_web_deletion import rows
@@ -491,7 +492,7 @@ def test_cancelled_mutations_join_atomic_commit_or_rollback(
 
             def block() -> None:
                 entered.set()
-                assert release.wait(5)
+                assert release.wait(HANG_GUARD)
                 if rollback:
                     raise ValueError("injected transaction failure")
 
@@ -662,7 +663,7 @@ def test_periodic_purge_runs_at_idle_and_shutdown_joins_task(
             state.trash.interval = 0.001
             state.trash.task = asyncio.create_task(state.trash._poll())
             clock.value += 30 * DAY
-            await asyncio.wait_for(cleaned.wait(), 2)
+            await asyncio.wait_for(cleaned.wait(), HANG_GUARD)
             task = state.trash.task
             assert not task.done() and state.active is None
         assert task.done() and state.trash.closed and not state.mutating

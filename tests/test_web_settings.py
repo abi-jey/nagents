@@ -26,6 +26,7 @@ from nagents.types import Message
 from nagents.web.app import create_app
 from nagents.web.settings import SettingsValues
 from nagents.web.settings import WebSettings
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import URL
 from tests.test_web import ControlledHarness
 from tests.test_web import LiveStream
@@ -1077,7 +1078,7 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
                     client.post("/api/settings/reset" if reset else "/api/settings", json=body, headers=headers)
                 )
                 try:
-                    await asyncio.wait_for(entered.wait(), 5)
+                    await asyncio.wait_for(entered.wait(), HANG_GUARD)
                     assert harness.config.model == values["model"]
                     assert (await client.get("/api/settings", headers=headers)).json() == before
                     assert (await client.get("/api/bootstrap")).json()["model"] == before["values"]["model"]
@@ -1096,11 +1097,11 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
                 finally:
                     release.set()
                 if fail_commit:
-                    response = await asyncio.wait_for(request, 5)
+                    response = await asyncio.wait_for(request, HANG_GUARD)
                     assert response.status_code == 500
                 else:
                     with pytest.raises(asyncio.CancelledError):
-                        await asyncio.wait_for(request, 5)
+                        await asyncio.wait_for(request, HANG_GUARD)
             after = (await client.get("/api/settings", headers=headers)).json()
             assert after["values"] == (before["values"] if fail_commit else values)
             assert after["persisted"] == (before["persisted"] if fail_commit else not reset)

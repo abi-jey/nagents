@@ -21,6 +21,7 @@ from nagents.channels.types import ChannelValue
 from nagents.web.catalog import Connection
 from nagents.web.channel_privacy import CredentialGuard
 from nagents.web.channel_privacy import CredentialProtectionError
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import FakeChannel
 from tests.test_web_channels import site
 
@@ -269,7 +270,7 @@ def test_retired_credentials_remain_protected_after_rotation_disable_and_delete(
             assert deleted.status_code == 200
             app.client.portal.call(created[0].release.set)
             with pytest.raises(ChannelError) as error:
-                pending.result(timeout=5)
+                pending.result(timeout=HANG_GUARD)
             assert TOKEN not in str(error.value) and error.value.outcome_unknown is True
             for credential in (TOKEN, ROTATED):
                 with pytest.raises(CredentialProtectionError):

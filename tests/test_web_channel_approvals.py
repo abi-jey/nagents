@@ -24,6 +24,7 @@ from nagents.web.catalog import Connection
 from nagents.web.service import Pending
 from nagents.web.service import Run
 from nagents.web.service import WebState
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import ControlledHarness
 
 if TYPE_CHECKING:
@@ -194,7 +195,7 @@ def test_owning_chat_decision_resolves_pending_without_model_input(tmp_path: Pat
         async with fixture(tmp_path) as f:
             pending = install_pending(f)
             await tap(f, allow=decision == "allow")
-            assert await asyncio.wait_for(pending.answer, 2) is (decision == "allow")
+            assert await asyncio.wait_for(pending.answer, HANG_GUARD) is (decision == "allow")
             assert not await f.state.channels.store.has_pending()
             assert f.run.pending is pending  # Cleared by the approval handler, not the channel.
 
