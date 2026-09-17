@@ -347,9 +347,11 @@ def test_recovered_dangling_binding_or_queued_ack_cannot_replay_trash(tmp_path: 
             envelope = json.dumps(
                 dict(message_id="new", conversation_id="conversation", thread_id="", reply_to="", text="new input")
             )
-            with pytest.raises(HTTPException) as error:
-                await state.trash.restore(root, str(item["deletion_id"]))
-            assert error.value.status_code == 409
+            # Restore now succeeds even though a dangling binding and queued
+            # acknowledgement were injected after deletion; the private text
+            # still must never replay.
+            restored = await state.trash.restore(root, str(item["deletion_id"]))
+            assert restored["restored_session_id"] == root
             await state.channels.store.receive("fixture", envelope, state.selected_session_id, None)
             work = await state.channels.store.claim_work()
             assert work is not None and work.session_id != root and work.message_id == "new"
@@ -360,8 +362,8 @@ def test_recovered_dangling_binding_or_queued_ack_cannot_replay_trash(tmp_path: 
             assert await rows(state, "SELECT prompt, status FROM ngn_web_inbox WHERE message_id = 'queued'") == [
                 ("private", "failed")
             ]
-            assert not await rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root)
-            assert await rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", root)
+            assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
+            assert not await rows(state, "SELECT * FROM ngn_web_session_trash WHERE id = ?", root)
 
     asyncio.run(run())
 
@@ -374,15 +376,9 @@ def test_recovered_dangling_binding_or_queued_ack_cannot_replay_trash(tmp_path: 
         "retained",
         "worker",
         "wakeup",
-        "main",
-        "disabled-main",
-        "binding",
-        "default",
-        "queued",
-        "running",
     ],
 )
-def test_soft_delete_keeps_existing_work_and_routing_guards(tmp_path: Path, clock: Clock, guard: str) -> None:
+def test_soft_delete_keeps_process_owned_work_guards(tmp_path: Path, clock: Clock, guard: str) -> None:
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
@@ -399,9 +395,34 @@ def test_soft_delete_keeps_existing_work_and_routing_guards(tmp_path: Path, cloc
                 )
             elif guard == "worker":
                 state.harness.tasks._workers["worker"] = worker
-            elif guard == "wakeup":
+            else:
                 state.wakeups.schedule(root, "run", Chain(), "", 86400, "later")
-            elif guard in {"main", "disabled-main"}:
+            try:
+                response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+                assert response.status_code == 409, response.text
+                assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
+                assert not await rows(state, "SELECT * FROM ngn_web_session_trash")
+                assert state.selected_session_id == root
+            finally:
+                state.active = None
+                state.harness._busy = ""
+                state.harness.tasks._infos.clear()
+                state.harness.tasks._workers.clear()
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("guard", ["main", "disabled-main", "binding", "default", "queued", "running"])
+def test_soft_delete_releases_routing_attachments_and_pending_work(tmp_path: Path, clock: Clock, guard: str) -> None:
+    async def run() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            root = state.selected_session_id
+            await state.harness.new_session()
+            if guard in {"main", "disabled-main"}:
                 state.channels.catalog.connections["fixture"] = Connection(
                     plugin="fixture", enabled=guard == "main", config={}, secrets={}, main_session_id=root
                 )
@@ -421,19 +442,24 @@ def test_soft_delete_keeps_existing_work_and_routing_guards(tmp_path: Path, cloc
                     db.execute("UPDATE ngn_web_inbox SET status = ?", (guard,))
 
                 await state.channels.store._transaction(pending)
-            try:
-                response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
-                assert response.status_code == 409, response.text
-                assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
-                assert not await rows(state, "SELECT * FROM ngn_web_session_trash")
-                assert state.selected_session_id == root
-            finally:
-                state.active = None
-                state.harness._busy = ""
-                state.harness.tasks._infos.clear()
-                state.harness.tasks._workers.clear()
-                worker.cancel()
-                await asyncio.gather(worker, return_exceptions=True)
+            response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+            assert response.status_code == 200, response.text
+            assert not await rows(state, "SELECT * FROM harness_sessions WHERE id = ?", root)
+            assert len(await rows(state, "SELECT * FROM ngn_web_session_trash")) == 1
+            if guard in {"main", "disabled-main"}:
+                assert state.channels.catalog.connections["fixture"].main_session_id == state.selected_session_id
+                assert state.channels.catalog.connections["fixture"].enabled is (guard == "main")
+            elif guard in {"binding", "default"}:
+                bindings = await state.channels.store.bindings()
+                if guard == "binding":
+                    assert not bindings
+                else:
+                    assert bindings == [
+                        {"channel": "fixture", "conversation_id": "conversation", "session_id": "other"}
+                    ]
+            elif guard == "queued" or guard == "running":
+                assert await rows(state, "SELECT prompt, status FROM ngn_web_inbox") == [("keep work", "interrupted")]
+                assert await rows(state, "SELECT * FROM ngn_web_deleted_messages") == []
 
     asyncio.run(run())
 
@@ -722,32 +748,45 @@ def test_expiry_scan_moves_past_full_blocked_batch_and_revisits_repaired_rows(tm
         async with client_app(tmp_path) as (app, _, _, _):
             state = cast("WebState", app.state.web)
             await quiet(state)
+            foreign = await state.harness.new_session()
+            foreign_messages = [
+                await state.history.add_message(foreign, Message(role="user", content=f"foreign history {index}"))
+                for index in range(PURGE_BATCH)
+            ]
             blocked: list[str] = []
             for _ in range(PURGE_BATCH):
-                root = state.selected_session_id
+                root = await state.harness.new_session()
                 await state.history.add_message(root, Message(role="user", content="blocked history retained"))
                 await deletion.delete_session(state, root)
                 blocked.append(root)
                 clock.value += 1
-            healthy = state.selected_session_id
+            healthy = await state.harness.new_session()
             await deletion.delete_session(state, healthy)
 
-            def recover(db: sqlite3.Connection) -> None:
-                db.executemany(
-                    "INSERT INTO ngn_web_bindings VALUES ('fixture', ?, ?, ?)",
-                    [(root, root, root) for root in blocked],
-                )
+            def corrupt(db: sqlite3.Connection) -> None:
+                # Cross-session history metadata is the remaining content guard.
+                for index, root in enumerate(blocked):
+                    db.execute(
+                        "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, status) "
+                        "VALUES (?, 'fixture', ?, 'blocked', 'completed')",
+                        (root, f"blocked-{index}"),
+                    )
+                    inbox_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    db.execute(
+                        "INSERT INTO ngn_web_message_origins(history_id, inbox_id) VALUES (?, ?)",
+                        (foreign_messages[index], inbox_id),
+                    )
 
-            await state.channels.store._transaction(recover)
+            await state.channels.store._transaction(corrupt)
             clock.value += 30 * DAY
             assert await state.trash.purge_expired() == []
             assert await state.trash.purge_expired() == [healthy]
             assert len(await rows(state, "SELECT * FROM ngn_web_session_trash")) == PURGE_BATCH
-            assert len(await rows(state, "SELECT * FROM ngn_web_bindings")) == PURGE_BATCH
-            assert len(await rows(state, "SELECT * FROM v2_messages")) == PURGE_BATCH
+            assert len(await rows(state, "SELECT * FROM ngn_web_message_origins")) == PURGE_BATCH
+            assert len(await rows(state, "SELECT * FROM v2_messages")) == 2 * PURGE_BATCH
 
             def repair(db: sqlite3.Connection) -> None:
-                db.execute("DELETE FROM ngn_web_bindings")
+                db.execute("DELETE FROM ngn_web_message_origins")
 
             await state.channels.store._transaction(repair)
             assert set(await state.trash.purge_expired()) == set(blocked)
