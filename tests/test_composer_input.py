@@ -232,7 +232,7 @@ def test_queue_can_be_cleared_without_stopping_current_run(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
-def test_input_policies_parse_from_flags_environment_and_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_input_policies_parse_from_flags_environment_and_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert HarnessConfig(workspace=tmp_path).submit_mode == "queue"
     assert HarnessConfig(workspace=tmp_path).tab_action == "agent"
     args = _parser().parse_args(["--submit-mode", "interrupt", "run", "--tab-action", "complete", "hello"])
@@ -241,8 +241,8 @@ def test_input_policies_parse_from_flags_environment_and_toml(tmp_path: Path, mo
     monkeypatch.setenv("NGN_TAB_ACTION", "focus")
     config = load_config(tmp_path)
     assert config.submit_mode == "interrupt" and config.tab_action == "focus"
-    path = tmp_path / "config.toml"
-    path.write_text('submit_mode = "queue"\ntab_action = "complete"\n')
+    path = tmp_path / "config.yaml"
+    path.write_text("submit_mode: queue\ntab_action: complete\n")
     config = load_config(tmp_path, path)
     assert config.submit_mode == "queue" and config.tab_action == "complete"
     with pytest.raises(ValueError, match="submit_mode"):

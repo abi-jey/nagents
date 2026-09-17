@@ -994,7 +994,7 @@ class NagentsApp(App[None]):
             self.push_screen(
                 DetailModal(
                     "DICTATION / OPT-IN",
-                    "Enable with --dictation or dictation_enabled = true in trusted TOML.\n\n"
+                    "Enable with --dictation or dictation_enabled = true in trusted YAML.\n\n"
                     "Install the voice extra and provide a separate transcription API key. "
                     "Ctrl+G or /dictate opens explicit recording controls; audio is never captured automatically. "
                     "The resulting text is an editable draft, never an automatically submitted message.",

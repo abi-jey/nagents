@@ -100,7 +100,7 @@ Truncation preserves valid UTF-8 and imposes no fixed 1,000-line cap. Explicit
 File/discovery bounds remain separate from the instruction token budget.
 
 `HarnessConfig.skill_token_limit` forwards the same allowance to the Agent,
-defaulting to 10,000 with the same integer range. Trusted flat TOML
+defaulting to 10,000 with the same integer range. Trusted flat YAML
 `skill_token_limit` and the `NGN_SKILL_TOKEN_LIMIT` environment default configure
 it for Harness clients. It covers both individual loads and aggregate explicit
 activation content, independently of ordinary tool-output and file-size bounds.

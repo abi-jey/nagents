@@ -107,9 +107,9 @@ def test_config_ignores_entire_untrusted_project_and_does_not_import(config: Har
     project.mkdir()
     marker = tmp_path / "imported"
     (project / "extension.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
-    (project / "config.toml").write_text(
-        'model = "injected"\nprovider = "anthropic"\nbase_url = "https://untrusted.invalid"\n'
-        'api_key_env = "UNRELATED_SECRET"\nplugins = ["extension.py:setup"]\n'
+    (project / "config.yaml").write_text(
+        "model: injected\nprovider: anthropic\nbase_url: https://untrusted.invalid\n"
+        'api_key_env: UNRELATED_SECRET\nplugins: ["extension.py:setup"]\n'
     )
     with pytest.warns(UserWarning, match="Ignoring untrusted project"):
         loaded = load_config(config.workspace)
@@ -118,7 +118,7 @@ def test_config_ignores_entire_untrusted_project_and_does_not_import(config: Har
     assert loaded.api_key_env == "OPENAI_API_KEY"
     assert not loaded.base_url and not loaded.plugins
     assert loaded.diagnostics and not marker.exists()
-    (project / "config.toml").write_text("not even valid TOML [")
+    (project / "config.yaml").write_text("not: [valid\n")
     with pytest.warns(UserWarning):
         assert load_config(config.workspace).model == "gpt-4.1"
 
@@ -133,56 +133,56 @@ def test_config_precedence_origins_profiles_and_xdg(
     assert load_config(config.workspace).model == "environment-model"
     user = tmp_path / "config/ngn"
     user.mkdir(parents=True)
-    (user / "config.toml").write_text('model = "user-model"\nplugins = ["./extension.py:setup"]\n')
+    (user / "config.yaml").write_text('model: user-model\nplugins: ["./extension.py:setup"]\n')
     loaded = load_config(config.workspace)
     assert loaded.model == "user-model"
     assert loaded.plugins == (f"{user / 'extension.py'}:setup",)
     assert loaded.data_dir == tmp_path / "data/ngn"
     project = config.workspace / ".ngn"
     project.mkdir()
-    project_config = project / "config.toml"
+    project_config = project / "config.yaml"
     project_config.write_text(
-        'model = "project-model"\nplugins = ["../extension.py:setup", "installed.module:setup"]\n'
-        'data_dir = "local-state"\nagent = "audit"\n'
-        '[profiles.audit]\nmode = "reviewer"\ninstructions = "Report regressions"\nmodel = "audit-model"\n'
+        'model: project-model\nplugins: ["../extension.py:setup", "installed.module:setup"]\n'
+        "data_dir: local-state\nagent: audit\n"
+        "profiles:\n  audit:\n    mode: reviewer\n    instructions: Report regressions\n    model: audit-model\n"
     )
     loaded = load_config(config.workspace, trust_project=True)
     assert loaded.model == "project-model" and loaded.provider == "gemini" and loaded.demo
     assert loaded.plugins == (f"{config.workspace / 'extension.py'}:setup", "installed.module:setup")
     assert loaded.data_dir == project / "local-state"
     assert loaded.profile("audit") == AgentProfile("reviewer", "Report regressions", "audit-model")
-    explicit = tmp_path / "explicit.toml"
-    explicit.write_text('model = "explicit-model"\n')
+    explicit = tmp_path / "explicit.yaml"
+    explicit.write_text("model: explicit-model\n")
     assert load_config(config.workspace, explicit, trust_project=True).model == "explicit-model"
     assert load_config(config.workspace, project_config).plugins == loaded.plugins
-    assert load_config(config.workspace, user / "config.toml", trust_project=True).model == "user-model"
+    assert load_config(config.workspace, user / "config.yaml", trust_project=True).model == "user-model"
 
 
 @pytest.mark.parametrize(
-    "toml",
+    "document",
     [
-        'api_key = "never-store-this"',
-        "unknown = 1",
-        'demo = "false"',
-        "model = 3",
-        'plugins = "extension.py:setup"',
-        'plugins = ["extension.py"]',
-        "plugins = [3]",
-        "shell_timeout = false",
-        "max_output = true",
-        'provider = "missing"',
-        'base_url = "https://user:secret@example.invalid"',
-        'base_url = "https://example.invalid?key=secret"',
-        'api_key_env = "literal-secret-key"',
-        '[profiles.build]\nmode = "build"',
-        '[profiles.audit]\nmode = "permissive"',
-        "[profiles.audit]\ninstructions = 3",
-        "model = [",
+        "api_key: never-store-this",
+        "unknown: 1",
+        'demo: "false"',
+        "model: 3",
+        "plugins: extension.py:setup",
+        'plugins: ["extension.py"]',
+        "plugins: [3]",
+        "shell_timeout: false",
+        "max_output: true",
+        "provider: missing",
+        'base_url: "https://user:secret@example.invalid"',
+        'base_url: "https://example.invalid?key=secret"',
+        "api_key_env: literal-secret-key",
+        "profiles:\n  build:\n    mode: build",
+        "profiles:\n  audit:\n    mode: permissive",
+        "profiles:\n  audit:\n    instructions: 3",
+        "model: [",
     ],
 )
-def test_strict_config_rejects_invalid_and_secret_fields(config: HarnessConfig, tmp_path: Path, toml: str) -> None:
-    path = tmp_path / "explicit.toml"
-    path.write_text(toml)
+def test_strict_config_rejects_invalid_and_secret_fields(config: HarnessConfig, tmp_path: Path, document: str) -> None:
+    path = tmp_path / "explicit.yaml"
+    path.write_text(document)
     with pytest.raises(ValueError):
         load_config(config.workspace, path)
 
@@ -191,7 +191,7 @@ def test_provider_aliases_and_missing_explicit_config(config: HarnessConfig, tmp
     assert set(ProviderType) <= set(PROVIDERS.values())
     assert PROVIDERS["openai"] is ProviderType.OPENAI_COMPATIBLE
     with pytest.raises(FileNotFoundError):
-        load_config(config.workspace, tmp_path / "missing.toml")
+        load_config(config.workspace, tmp_path / "missing.yaml")
 
 
 @pytest.mark.requires_posix

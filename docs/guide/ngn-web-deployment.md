@@ -220,8 +220,8 @@ restart after checking active runs and pending wakeups.
 Chat can remain on its existing Codex login. The transcription client does not
 forward that OAuth credential to the file-transcription API or fall back to
 another provider's key. Its default model is `gpt-4o-mini-transcribe`, with language
-auto-detection and a 120-second administrator ceiling. Existing trusted TOML,
-`NGN_DICTATION_*`, and CLI configuration select backend defaults; TOML/CLI values
+auto-detection and a 120-second administrator ceiling. Existing trusted YAML,
+`NGN_DICTATION_*`, and CLI configuration select backend defaults; YAML/CLI values
 take precedence over environment defaults when explicitly supplied.
 
 Settings exposes the enabled preference, model, language, and recording limit,

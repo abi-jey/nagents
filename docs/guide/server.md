@@ -49,7 +49,7 @@ export NAGENTS_MCP_ENABLED=false
 
 Choose a writable, private state directory. Session, config, tool, and MCP paths
 otherwise default under `/data`, which may not be writable on a local host.
-Server configuration uses `NAGENTS_*` environment variables, not ngn's TOML or
+Server configuration uses `NAGENTS_*` environment variables, not ngn's YAML or
 `NGN_*` settings. The server may load the checkout's `.env` if `python-dotenv` is
 installed; do not depend on that optional behavior for secret provisioning.
 

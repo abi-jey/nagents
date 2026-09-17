@@ -249,7 +249,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
     home = tmp_path / "home"
     project = home / "project"
     (project / "ngn").mkdir(parents=True)
-    (project / "ngn/config.toml").write_text('model = "untrusted-model"\n')
+    (project / "ngn/config.yaml").write_text("model: untrusted-model\n")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", "")

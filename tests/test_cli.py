@@ -143,9 +143,9 @@ def test_demo_sessions_and_resume(
 def test_profile_activation_model_precedence_over_cli(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], profile_model: str
 ) -> None:
-    config = tmp_path / "config.toml"
+    config = tmp_path / "config.yaml"
     config.write_text(
-        f'model = "top-level-model"\nagent = "audit"\n[profiles.audit]\nmode = "reviewer"\nmodel = "{profile_model}"\n'
+        f'model: top-level-model\nagent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: "{profile_model}"\n'
     )
     assert (
         main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "--model", "cli-model", "doctor"]) == 0
