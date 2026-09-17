@@ -14,6 +14,8 @@ import aiosqlite
 import httpx
 import pytest
 
+from nagents.compactor import Messages
+from nagents.compactor import Tokens
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
@@ -41,6 +43,7 @@ LEGACY_FIELDS = (
 )
 DICTATION_FIELDS = ("dictation_enabled", "dictation_model", "dictation_language", "dictation_max_seconds")
 PROVIDER_FIELDS = ("provider", "base_url", "api", "auth", "api_key_env")
+COMPACTION_FIELDS = ("compact_trigger", "compact_tokens", "compact_messages")
 
 
 def legacy_values(version: int, values: dict[str, object]) -> dict[str, object]:
@@ -109,7 +112,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 assert (
                     set(body["values"])
                     == set(SettingsValues.model_fields)
-                    == {*LEGACY_FIELDS, *DICTATION_FIELDS, *PROVIDER_FIELDS}
+                    == {*LEGACY_FIELDS, *DICTATION_FIELDS, *PROVIDER_FIELDS, *COMPACTION_FIELDS}
                 )
                 assert body["providers"] == sorted(body["providers"]) and "openai" in body["providers"]
                 assert body["apis"] == ["auto", "chat_completions", "responses", "messages"]
@@ -479,6 +482,20 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
         ("dictation_max_seconds", True),
         ("dictation_max_seconds", 120.0),
         ("dictation_max_seconds", "120"),
+        ("compact_trigger", "sometimes"),
+        ("compact_trigger", "AUTO"),
+        ("compact_trigger", ""),
+        ("compact_trigger", True),
+        ("compact_tokens", 1023),
+        ("compact_tokens", 10000001),
+        ("compact_tokens", True),
+        ("compact_tokens", 2048.0),
+        ("compact_tokens", "2048"),
+        ("compact_messages", 0),
+        ("compact_messages", 10001),
+        ("compact_messages", False),
+        ("compact_messages", 2.0),
+        ("compact_messages", "100"),
         *[
             (name, "SECRET-forbidden")
             for name in (
@@ -518,6 +535,46 @@ def test_settings_strict_invalid_values(tmp_path: Path, field: str, value: objec
             assert isinstance(response.json()["detail"], str) and "SECRET" not in response.text
             assert (await client.get("/api/settings", headers=headers)).json() == before
             assert SettingsValues.current(harnesses[0]).model_dump() == before["values"]
+
+    asyncio.run(check())
+
+
+def test_compaction_criteria_apply_to_the_live_agent(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
+            harness = harnesses[0]
+            before = (await client.get("/api/settings", headers=headers)).json()
+            assert before["values"]["compact_trigger"] == "auto"
+            assert harness.agent.compactor == "self" and harness.agent.compact_on is None
+            tokens = {**before["values"], "compact_trigger": "tokens", "compact_tokens": 50000}
+            saved = await client.post(
+                "/api/settings", json={"revision": before["revision"], "values": tokens}, headers=headers
+            )
+            assert saved.status_code == 200
+            assert harness.agent.compactor == "self"
+            assert isinstance(harness.agent.compact_on, Tokens) and harness.agent.compact_on.total == 50000
+            assert harness.agent.compact_on.input == 40000 and harness.agent.compact_on.output == 5000
+            assert SettingsValues.current(harness).compact_trigger == "tokens"
+            messages = {**saved.json()["values"], "compact_trigger": "messages", "compact_messages": 7}
+            saved = await client.post(
+                "/api/settings", json={"revision": saved.json()["revision"], "values": messages}, headers=headers
+            )
+            assert saved.status_code == 200
+            assert isinstance(harness.agent.compact_on, Messages) and harness.agent.compact_on.length == 7
+            assert SettingsValues.current(harness).compact_messages == 7
+            off = {**saved.json()["values"], "compact_trigger": "off"}
+            saved = await client.post(
+                "/api/settings", json={"revision": saved.json()["revision"], "values": off}, headers=headers
+            )
+            assert saved.status_code == 200
+            assert harness.agent.compactor is None and harness.agent.compact_on is None
+            assert SettingsValues.current(harness).compact_trigger == "off"
+            reset = await client.post(
+                "/api/settings/reset", json={"revision": saved.json()["revision"]}, headers=headers
+            )
+            assert reset.status_code == 200
+            assert reset.json()["values"]["compact_trigger"] == "auto"
+            assert harness.agent.compactor == "self" and harness.agent.compact_on is None
 
     asyncio.run(check())
 

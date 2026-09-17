@@ -232,6 +232,15 @@ The `compact()` method returns a `CompactionDoneEvent` with:
 | `session_id` | Session that was compacted |
 | `compaction_session_id` | Session used for compaction |
 
+### Compact from ngn
+
+The `ngn` TUI exposes `/compact`, and the ngn web Settings dialog configures the
+automatic criteria under **Context compaction** (`compact_trigger` plus
+`compact_tokens` or `compact_messages`). An attached channel chat can also send
+`/compact` to compact its bound session. See
+[Runtime Settings](ngn-web.md#runtime-settings) for the accepted values. Manual
+compaction always works even when the automatic trigger is `off`.
+
 ---
 
 ## Compaction Events

@@ -15,6 +15,7 @@ test("compact settings keep provider and preference fields behind native advance
     shell_timeout: 30, max_output: 16384, max_file_bytes: 1048576, max_tool_rounds: 100,
     max_subagent_depth: 2, dictation_enabled: true, dictation_model: "gpt-4o-mini-transcribe",
     dictation_language: "", dictation_max_seconds: 60,
+    compact_trigger: "tokens", compact_tokens: 120000, compact_messages: 80,
   };
   const snapshot: SettingsReply = {
     values, defaults: values, profiles: [{ name: "build", mode: "build", model: "" }],
@@ -41,8 +42,14 @@ test("compact settings keep provider and preference fields behind native advance
   assert.match(html, /<details class="settings-disclosure"><summary>Execution limits<\/summary>/);
   assert.match(html, /<details class="settings-disclosure"><summary>Connection and startup defaults<\/summary>[\s\S]*Reset to startup defaults[\s\S]*<\/details>/);
   assert.match(html, /<details class="settings-help settings-connection"><summary>Dictation details/);
+  assert.match(html, /<details class="settings-disclosure"><summary>Context compaction<\/summary>/);
+  assert.match(html, /id="settings-compact_trigger"[\s\S]*?<option value="off">Off<\/option>/);
+  assert.match(html, /id="settings-compact_tokens"[^>]*inputmode="numeric"/i);
+  assert.match(html, /id="settings-compact_messages"[^>]*inputmode="numeric"/i);
+  assert.ok(html.indexOf("<summary>Execution limits</summary>") < html.indexOf("<summary>Context compaction</summary>"));
+  assert.ok(html.indexOf("<summary>Context compaction</summary>") < html.indexOf("<summary>Connection and startup defaults</summary>"));
   for (const key of Object.keys(values)) assert.ok(html.includes(`id="settings-${key}"`), key);
-  for (const constraint of ["600 seconds", "300 seconds", "two lowercase", "API key environment name", "Provider default"])
+  for (const constraint of ["600 seconds", "300 seconds", "two lowercase", "API key environment name", "Provider default", "10,000,000 tokens", "1 to 10,000 messages"])
     assert.ok(html.toLowerCase().includes(constraint.toLowerCase()), constraint);
   assert.match(html, /id="settings-provider-key"[^>]*type="password"/);
   assert.doesNotMatch(html, /id="settings-dictation[^"]*key[^"]*"[^>]*type="password"/);
