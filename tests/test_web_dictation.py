@@ -26,6 +26,7 @@ from nagents.provider import CodexProvider
 from nagents.web import dictation as web_dictation
 from nagents.web.app import WebState
 from nagents.web.wakeups import Chain
+from tests.hang_guard import HANG_GUARD
 from tests.test_dictation import BODY_SECRET
 from tests.test_dictation import SECRET
 from tests.test_dictation import FakeNetwork
@@ -153,7 +154,7 @@ class UploadRequest:
         self.input.put_nowait({"type": "http.disconnect"})
 
     async def response(self) -> httpx.Response:
-        await asyncio.wait_for(self.task, 3)
+        await asyncio.wait_for(self.task, HANG_GUARD)
         start = next(message for message in self.messages if message["type"] == "http.response.start")
         body = b"".join(
             message.get("body", b"") for message in self.messages if message["type"] == "http.response.body"
@@ -398,10 +399,10 @@ def test_admission_blocks_all_mutations_before_second_body(tmp_path: Path, netwo
             network.release.clear()
             first = UploadRequest(app, headers)
             if phase == "body":
-                await asyncio.wait_for(first.reading.wait(), 3)
+                await asyncio.wait_for(first.reading.wait(), HANG_GUARD)
             else:
                 first.body(AUDIO)
-                await asyncio.wait_for(network.entered.wait(), 3)
+                await asyncio.wait_for(network.entered.wait(), HANG_GUARD)
             assert state.mutating
             second = UploadRequest(app, headers)
             assert (await second.response()).status_code == 409
@@ -450,7 +451,7 @@ def test_upstream_cleanup_is_joined_even_with_repeated_cancellation(
         async with dictation_app(tmp_path) as (app, _, headers, state):
             request = UploadRequest(app, headers)
             request.body(AUDIO)
-            await asyncio.wait_for(network.entered.wait(), 3)
+            await asyncio.wait_for(network.entered.wait(), HANG_GUARD)
             active = state.dictation._active
             assert active is not None
             closing: list[asyncio.Task[None]] = []
@@ -461,7 +462,7 @@ def test_upstream_cleanup_is_joined_even_with_repeated_cancellation(
             else:
                 request.task.cancel()
             try:
-                await asyncio.wait_for(network.cleanup_entered.wait(), 3)
+                await asyncio.wait_for(network.cleanup_entered.wait(), HANG_GUARD)
                 request.task.cancel()
                 await asyncio.sleep(0)
                 request.task.cancel()
@@ -478,10 +479,10 @@ def test_upstream_cleanup_is_joined_even_with_repeated_cancellation(
             finally:
                 network.cleanup_release.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(request.task, 3)
+                await asyncio.wait_for(request.task, HANG_GUARD)
             for task in closing:
                 with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(task, 3)
+                    await asyncio.wait_for(task, HANG_GUARD)
             assert network.closed and network.exit_calls == 1
             assert active.task.done() and active.finished.is_set()
             assert active.voice._closed and active.voice._upload_task is None
@@ -500,10 +501,10 @@ def test_lifespan_shutdown_joins_upload_before_harness_close(
             request = UploadRequest(app, headers)
             if phase == "upstream":
                 request.body(AUDIO)
-                await asyncio.wait_for(network.entered.wait(), 3)
+                await asyncio.wait_for(network.entered.wait(), HANG_GUARD)
             else:
                 request.body(AUDIO[:100], more=True)
-                await asyncio.wait_for(request.reading.wait(), 3)
+                await asyncio.wait_for(request.reading.wait(), HANG_GUARD)
             active = state.dictation._active
             assert active is not None and not state.harness._closed
             close = state.harness.close
@@ -517,7 +518,7 @@ def test_lifespan_shutdown_joins_upload_before_harness_close(
             monkeypatch.setattr(state.harness, "close", close_harness)
         assert state.harness._closed and not state.mutating
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(request.task, 3)
+            await asyncio.wait_for(request.task, HANG_GUARD)
         assert active.task.done() and active.voice._closed and active.finished.is_set()
         assert len(network.requests) == int(phase == "upstream")
         if phase == "upstream":
@@ -568,7 +569,7 @@ def test_cancelled_lifespan_still_closes_harness_provider_and_auth(
 
         request = UploadRequest(app, headers)
         request.body(AUDIO)
-        await asyncio.wait_for(network.entered.wait(), 3)
+        await asyncio.wait_for(network.entered.wait(), HANG_GUARD)
         upload = state.dictation._active
         assert upload is not None
         with (
@@ -578,7 +579,7 @@ def test_cancelled_lifespan_still_closes_harness_provider_and_auth(
         ):
             shutdown = asyncio.create_task(exit_lifespan())
             try:
-                await asyncio.wait_for(network.cleanup_entered.wait(), 3)
+                await asyncio.wait_for(network.cleanup_entered.wait(), HANG_GUARD)
                 if cancellation == "anyio":
                     scopes[0].cancel()
                 else:
@@ -590,19 +591,19 @@ def test_cancelled_lifespan_still_closes_harness_provider_and_auth(
                 assert not shutdown.done() and not network.closed and not harness._closed
                 network.cleanup_release.set()
                 if cancellation == "repeated":
-                    await asyncio.wait_for(provider_entered.wait(), 3)
+                    await asyncio.wait_for(provider_entered.wait(), HANG_GUARD)
                     assert not shutdown.done() and harness._closed and not harness.closed
                     shutdown.cancel()
                     await asyncio.sleep(0)
                     assert not shutdown.done()
                     provider_release.set()
                 if cancellation == "anyio":
-                    await asyncio.wait_for(shutdown, 3)
+                    await asyncio.wait_for(shutdown, HANG_GUARD)
                 else:
                     with pytest.raises(asyncio.CancelledError):
-                        await asyncio.wait_for(shutdown, 3)
+                        await asyncio.wait_for(shutdown, HANG_GUARD)
                 with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(request.task, 3)
+                    await asyncio.wait_for(request.task, HANG_GUARD)
                 assert not completed
                 assert network.closed and network.exit_calls == 1
                 assert upload.finished.is_set() and upload.task.done() and upload.voice._closed
@@ -617,7 +618,7 @@ def test_cancelled_lifespan_still_closes_harness_provider_and_auth(
             finally:
                 network.cleanup_release.set()
                 provider_release.set()
-                await asyncio.wait_for(asyncio.gather(shutdown, request.task, return_exceptions=True), 3)
+                await asyncio.wait_for(asyncio.gather(shutdown, request.task, return_exceptions=True), HANG_GUARD)
                 await harness.close()
         assert not (asyncio.all_tasks() - baseline)
 
@@ -638,15 +639,15 @@ def test_anyio_disconnect_cancellation_shields_only_cleanup(tmp_path: Path, monk
 
             request = UploadRequest(scoped_app, headers)
             request.body(AUDIO)
-            await asyncio.wait_for(network.entered.wait(), 3)
+            await asyncio.wait_for(network.entered.wait(), HANG_GUARD)
             scopes[0].cancel()
             try:
-                await asyncio.wait_for(network.cleanup_entered.wait(), 3)
+                await asyncio.wait_for(network.cleanup_entered.wait(), HANG_GUARD)
                 await asyncio.sleep(0)
                 assert state.mutating and not request.task.done()
             finally:
                 network.cleanup_release.set()
-            await asyncio.wait_for(request.task, 3)
+            await asyncio.wait_for(request.task, HANG_GUARD)
             assert network.closed and network.exit_calls == 1
             assert not state.mutating and state.dictation._active is None
 
@@ -677,7 +678,7 @@ def test_due_wakeup_defers_until_upload_cleanup(tmp_path: Path, network: FakeNet
     async def check() -> None:
         async with dictation_app(tmp_path) as (app, _, headers, state):
             request = UploadRequest(app, headers)
-            await asyncio.wait_for(request.reading.wait(), 3)
+            await asyncio.wait_for(request.reading.wait(), HANG_GUARD)
             executed = asyncio.Event()
             wakeups = state.wakeups
             wakeups.execute = AsyncMock(side_effect=lambda _: executed.set())
@@ -688,7 +689,7 @@ def test_due_wakeup_defers_until_upload_cleanup(tmp_path: Path, network: FakeNet
             assert not executed.is_set() and result["wakeup_id"] in wakeups.pending
             request.disconnect()
             assert (await request.response()).status_code == 400
-            await asyncio.wait_for(executed.wait(), 3)
+            await asyncio.wait_for(executed.wait(), HANG_GUARD)
             assert not state.mutating and not network.requests
 
     asyncio.run(check())
@@ -722,7 +723,7 @@ def test_captured_config_is_used_through_delayed_body(tmp_path: Path, network: F
         async with dictation_app(tmp_path, config) as (app, _, headers, state):
             with patch.object(state.settings, "dictation_config", wraps=state.settings.dictation_config) as snapshot:
                 request = UploadRequest(app, headers)
-                await asyncio.wait_for(request.reading.wait(), 3)
+                await asyncio.wait_for(request.reading.wait(), HANG_GUARD)
                 snapshot.assert_called_once_with()
                 # Deliberately mutate test state outside the guarded API to prove
                 # the request does not reread mutable preferences during upload.

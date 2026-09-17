@@ -15,6 +15,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.extensions import AgentPlugin
 from nagents.types import Message
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import site
 from tests.test_web_routing import users
 
@@ -244,7 +245,7 @@ def test_cancellation_racing_commit_keeps_atomic_identity_and_does_not_replay(
             def blocked(db: sqlite3.Connection) -> tuple[int, dict[str, object]]:
                 result = operation(db)
                 reached.set()
-                assert release.wait(5)
+                assert release.wait(HANG_GUARD)
                 return result
 
             return await transaction(blocked)
@@ -252,20 +253,20 @@ def test_cancellation_racing_commit_keeps_atomic_identity_and_does_not_replay(
         monkeypatch.setattr(app.state.history.store, "_transaction", delayed)
         accepted = app.submit("commit race")
         try:
-            assert reached.wait(5)
+            assert reached.wait(HANG_GUARD)
             active = app.state.active
             assert active is not None and app.client.portal is not None
             stopping = app.client.portal.start_task_soon(app.state.stop, active)
 
             async def cancelling() -> None:
-                async with asyncio.timeout(5):
+                async with asyncio.timeout(HANG_GUARD):
                     while not active.task.cancelling():
                         await asyncio.sleep(0.01)
 
             app.client.portal.call(cancelling)
         finally:
             release.set()
-        stopping.result(timeout=5)
+        stopping.result(timeout=HANG_GUARD)
         app.idle()
         rows = users(app, app.main)
         assert len(rows) == 1 and rows[0]["message_id"] == accepted["message_id"]

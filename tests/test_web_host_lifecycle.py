@@ -25,6 +25,7 @@ from nagents.types import Message
 from nagents.web.app import create_app
 from nagents.web.catalog import ChannelCatalog
 from nagents.web.subscriptions import Subscriber
+from tests.hang_guard import HANG_GUARD
 from tests.test_subagents import FakeProvider
 from tests.test_web_channels import FakeChannel
 from tests.test_web_channels import site
@@ -86,7 +87,7 @@ async def statuses(state: WebState) -> dict[str, str]:
 
 
 async def idle(state: WebState) -> None:
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HANG_GUARD):
         while True:
             pending = await state.channels.store.has_pending(available_channels=tuple(state.channels.channels))
             if not pending and state.active is None and not state.mutating:
@@ -95,13 +96,13 @@ async def idle(state: WebState) -> None:
 
 
 async def joined(task: asyncio.Task[None], state: WebState) -> None:
-    done, _ = await asyncio.wait({task}, timeout=5)
+    done, _ = await asyncio.wait({task}, timeout=HANG_GUARD)
     if not done:
         # A regression must fail rather than leave an uncancelled fake provider
         # hanging inside the production owner's deliberately shielded join.
         if state.active is not None:
             await state.stop(state.active)
-        await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(task, HANG_GUARD)
         pytest.fail("Host cleanup failed to stop and join its worker/producer")
     await task
 
@@ -140,7 +141,7 @@ def test_worker_cancellation_racing_ready_event_is_not_swallowed(
                 # the external cancellation. A direct wait must preserve it.
                 host.changed.set()
                 asyncio.get_running_loop().call_soon(worker.cancel)
-                done, _ = await asyncio.wait({worker}, timeout=1)
+                done, _ = await asyncio.wait({worker}, timeout=HANG_GUARD)
                 assert worker in done and worker.cancelled(), (
                     f"Worker swallowed cancellation: done={worker.done()}, cancelling={worker.cancelling()}"
                 )
@@ -172,7 +173,7 @@ def test_unstarted_claim_racing_sql_commit_is_requeued_before_shutdown_and_resta
                     result = operation(db)
                     if operation.__name__ == "claim":
                         reached.set()
-                        assert release.wait(10)
+                        assert release.wait(HANG_GUARD)
                     return result
 
                 return await transaction(blocked)
@@ -196,7 +197,7 @@ def test_unstarted_claim_racing_sql_commit_is_requeued_before_shutdown_and_resta
             finally:
                 release.set()
             if ending == "worker-cancel":
-                result = await asyncio.wait_for(asyncio.gather(worker, return_exceptions=True), 5)
+                result = await asyncio.wait_for(asyncio.gather(worker, return_exceptions=True), HANG_GUARD)
                 assert isinstance(result[0], asyncio.CancelledError)
                 closing = asyncio.create_task(state.channels.close())
             await joined(closing, state)
@@ -307,7 +308,7 @@ def test_graceful_shutdown_joins_inflight_ack_before_transport_cleanup(
                 assert not channel.closed and not closing.done() and not finished.is_set()
             finally:
                 release.set()
-            result = await asyncio.wait_for(asyncio.gather(closing, return_exceptions=True), 5)
+            result = await asyncio.wait_for(asyncio.gather(closing, return_exceptions=True), HANG_GUARD)
             assert isinstance(result[0], asyncio.CancelledError)
             assert channel.closed and finished.is_set() and len(channel.deliveries) == 1
             assert await statuses(state) == {"ack": "completed"}

@@ -38,6 +38,7 @@ from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.types import Message
 from nagents.types import ToolCall
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -430,7 +431,7 @@ def test_edit_rechecks_after_awaiting_approval(config: HarnessConfig, tmp_path: 
             await harness.initialize()
             await harness.tools.read_file("src/app.txt")
             task = asyncio.create_task(harness.tools.edit("src/app.txt", "old", "new"))
-            await asyncio.wait_for(waiting.wait(), 2)
+            await asyncio.wait_for(waiting.wait(), HANG_GUARD)
             if mutation == "content":
                 path.write_text("user change\n")
             elif mutation == "mode":
@@ -827,7 +828,7 @@ def test_run_aclose_and_cancellation_kill_shell_and_await_plugins(config: Harnes
 
         try:
             task = asyncio.create_task(consume())
-            await asyncio.wait_for(output_ready.wait(), 3)
+            await asyncio.wait_for(output_ready.wait(), HANG_GUARD)
             if cancel_consumer:
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -869,7 +870,7 @@ def test_concurrent_runs_and_session_mutations_rejected(config: HarnessConfig) -
 
         task = asyncio.create_task(consume())
         try:
-            await asyncio.wait_for(entered.wait(), 3)
+            await asyncio.wait_for(entered.wait(), HANG_GUARD)
             with pytest.raises(RuntimeError, match="busy"):
                 _ = [event async for event in harness.run("second")]
             for mutation in (
@@ -920,13 +921,13 @@ def test_cancellation_while_shell_spawns_reaps_process(config: HarnessConfig, mo
         harness.approval_handler = approve
         task = asyncio.create_task(harness.tools.shell("fixture"))
         try:
-            await asyncio.wait_for(spawned.wait(), 3)
+            await asyncio.wait_for(spawned.wait(), HANG_GUARD)
             task.cancel()
             await asyncio.sleep(0)
             assert not task.done()
             release.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 3)
+                await asyncio.wait_for(task, HANG_GUARD)
             assert processes[0].returncode is not None
             with pytest.raises(ProcessLookupError):
                 os.kill(processes[0].pid, 0)
@@ -963,7 +964,7 @@ def test_demo_cancellation_during_approval_does_not_write(config: HarnessConfig)
 
         task = asyncio.create_task(consume())
         try:
-            await asyncio.wait_for(entered.wait(), 3)
+            await asyncio.wait_for(entered.wait(), HANG_GUARD)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task

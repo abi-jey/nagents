@@ -26,6 +26,7 @@ from nagents.web.catalog import ChannelCatalog
 from nagents.web.catalog import Connection
 from nagents.web.catalog import SavedCatalog
 from nagents.web.routing import RoutingStore
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -203,7 +204,7 @@ def test_demo_enumerates_malicious_metadata_but_never_loads_or_starts_it(
         assert accepted.status_code == 200
 
         async def completed() -> None:
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(HANG_GUARD):
                 while True:
                     async with aiosqlite.connect(database) as db:
                         cursor = await db.execute(

@@ -19,6 +19,7 @@ from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.commands import Command
 from nagents.harness.commands import CommandRegistry
 from nagents.harness.commands import CommandResult
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -375,7 +376,7 @@ def test_callback_cancellation_and_error_propagate(harness: Harness) -> None:
         registry.register("failing", "Fail", handler=failing)
         task = asyncio.create_task(registry.execute("waiting"))
         try:
-            await asyncio.wait_for(started.wait(), 3)
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task

@@ -23,6 +23,7 @@ from nagents.harness.auth import CLIENT_ID
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.auth import OpenAIAuthError
 from nagents.harness.auth import _tokens
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -206,7 +207,7 @@ def test_deadline_interrupts_pending_poll(monkeypatch: pytest.MonkeyPatch) -> No
             auth = OpenAIAuth()
             authorization = replace(await auth.start_device_login(), expires_at=monotonic() + 0.03)
             with pytest.raises(OpenAIAuthError, match="expired"):
-                await asyncio.wait_for(auth.complete_device_login(authorization), timeout=1)
+                await asyncio.wait_for(auth.complete_device_login(authorization), HANG_GUARD)
             assert not auth.path.exists()
 
     asyncio.run(scenario())
@@ -303,13 +304,13 @@ def test_failed_login_never_replaces_saved_tokens(monkeypatch: pytest.MonkeyPatc
             task = asyncio.create_task(auth.complete_device_login(authorization))
             try:
                 if failure == "cancel":
-                    await asyncio.wait_for(pending.wait(), 1)
+                    await asyncio.wait_for(pending.wait(), HANG_GUARD)
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
                         await task
                 else:
                     with pytest.raises(OpenAIAuthError) as caught:
-                        await asyncio.wait_for(task, 1)
+                        await asyncio.wait_for(task, HANG_GUARD)
                     assert ACCESS not in "".join(traceback.format_exception(caught.value))
                 assert auth.path.read_bytes() == before
             finally:
@@ -382,7 +383,7 @@ def test_logout_during_refresh_does_not_resurrect_login(monkeypatch: pytest.Monk
             auth = OpenAIAuth()
             auth._save(_tokens(token_data(expires_in=1)))
             task = asyncio.create_task(auth.credentials())
-            await asyncio.wait_for(pending.wait(), 1)
+            await asyncio.wait_for(pending.wait(), HANG_GUARD)
             auth.logout()
             release.set()
             with pytest.raises(OpenAIAuthError, match="removed during refresh"):

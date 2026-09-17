@@ -15,6 +15,7 @@ from nagents.tui.dictation import DictationModal
 from nagents.tui.screens import DetailModal
 from nagents.tui.tasks import TaskScreen
 from nagents.tui.widgets import Composer
+from tests.hang_guard import HANG_GUARD
 from tests.test_subagents import setup_harness
 from tests.test_tui import FakeHarness
 from tests.test_tui import idle
@@ -54,7 +55,7 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
         async with app.run_test(size=(100, 32)) as pilot:
             await idle(app, pilot)
             await send(app, pilot, "Delegate one task")
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 await blocked.wait()
                 while not harness.tasks.list() or harness.tasks.list()[0].status != "completed":
                     await pilot.pause(0.01)
@@ -65,7 +66,7 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
             task_id = app.screen.selected_id
             app.screen.query_one("#task-followup", TextArea).load_text("Human child follow-up")
             await pilot.click("#task-send")
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 while harness.tasks.list()[0].followups != 1 or harness.tasks.list()[0].status != "completed":
                     await pilot.pause(0.01)
             assert app._active is active and app.busy

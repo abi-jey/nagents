@@ -10,6 +10,7 @@ import pytest
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
 from nagents.types import ToolCall
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,7 +44,7 @@ def test_custom_tool_changed_during_approval_fails_closed(tmp_path: Path, name: 
         definition = harness.agent.register_tool(original, name=name)
         task = asyncio.create_task(harness.agent.tool_executor.execute(ToolCall("call", name, {"path": "fixture.txt"})))
         try:
-            await asyncio.wait_for(approving.wait(), 3)
+            await asyncio.wait_for(approving.wait(), HANG_GUARD)
             if mutation == "register":
                 harness.agent.register_tool(replacement, name=name)
             elif mutation == "function":
@@ -53,7 +54,7 @@ def test_custom_tool_changed_during_approval_fails_closed(tmp_path: Path, name: 
             else:
                 harness.agent.tool_registry.clear()
             release.set()
-            result = await asyncio.wait_for(task, 3)
+            result = await asyncio.wait_for(task, HANG_GUARD)
             assert result.error and "changed during approval" in result.error
             assert result.id == "call" and result.name == name
             assert not calls

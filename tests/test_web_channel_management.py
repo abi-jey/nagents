@@ -21,6 +21,7 @@ from nagents.web.catalog import SavedCatalog
 from nagents.web.channel_host import ChannelHost
 from nagents.web.channel_management import NAMES
 from nagents.web.channel_management import ChannelManagement
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import FakeChannel
 from tests.test_web_channels import site
 
@@ -91,7 +92,7 @@ def _body(app: Site, **values: ChannelValue) -> dict[str, ChannelValue]:
 
 
 async def _wait(event: asyncio.Event) -> None:
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(HANG_GUARD):
         await event.wait()
 
 
@@ -149,7 +150,7 @@ def _hold(app: Site) -> None:
     app.submit("hold")
 
     async def started() -> None:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(HANG_GUARD):
             while not app.providers[0].requests:
                 await asyncio.sleep(0.001)
 
@@ -548,7 +549,7 @@ def test_shutdown_joins_inflight_apply_and_closes_connector(tmp_path: Path, monk
             await asyncio.sleep(0)
             assert host.closed and host.management.closed and not task.done()
             release_open.set()
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 await task
 
         app.client.portal.call(shutdown)

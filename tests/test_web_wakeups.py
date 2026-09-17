@@ -25,6 +25,7 @@ from nagents.web.app import WebState
 from nagents.web.wakeups import Chain
 from nagents.web.wakeups import Wakeup
 from nagents.web.wakeups import Wakeups
+from tests.hang_guard import HANG_GUARD
 from tests.test_subagents import FakeProvider
 from tests.test_web import LiveStream
 from tests.test_web import client_app
@@ -149,7 +150,7 @@ def test_service_owns_timer_loop_and_bounds_activity(monkeypatch: pytest.MonkeyP
         scheduler.start()
         clock.now += 10
         scheduler.changed.set()
-        await asyncio.wait_for(executed.wait(), 5)
+        await asyncio.wait_for(executed.wait(), HANG_GUARD)
         scheduler.schedule("ngn-first", "human", Chain(), "", 100, "cancel on shutdown")
         await scheduler.close()
         assert all(task.done() for task in scheduler._tasks)
@@ -385,7 +386,7 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
             session_id = state.harness.session_id
             stream = LiveStream(app, headers, session_id, "start")
             foreground: list[dict[str, object]] = []
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 while True:
                     approval = await stream.output.get()
                     foreground.append(approval)
@@ -402,7 +403,7 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
             }
             assert (await client.post("/api/approval", json=decision, headers=headers)).status_code == 200
             assert (await client.post("/api/approval", json=decision, headers=headers)).status_code == 409
-            await asyncio.wait_for(stream.task, 5)
+            await asyncio.wait_for(stream.task, HANG_GUARD)
             while not stream.output.empty():
                 foreground.append(stream.output.get_nowait())
             reads = [event for event in foreground if event["event"] == "tool_result" and event["id"] == "shared-call"]
@@ -463,7 +464,7 @@ def test_large_real_tool_results_are_byte_bounded_without_subscribers(
             session_id = state.harness.session_id
             await client.post("/api/run", json={"session_id": session_id, "prompt": "start"}, headers=headers)
             clock.now += 10
-            await asyncio.wait_for(state.wakeups.tick(), 5)
+            await asyncio.wait_for(state.wakeups.tick(), HANG_GUARD)
             assert len(providers[0].requests) == 4 and state.active is None
             activity = (await client.get(f"/api/activity/{session_id}/0", headers=headers)).json()
             events = activity["events"]
@@ -518,7 +519,7 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
             second = (await client.post("/api/sessions/new", json={}, headers=headers)).json()["session_id"]
             stream = LiveStream(app, headers, second, "busy second")
             started = await stream.event("run_started")
-            await asyncio.wait_for(busy.wait(), 5)
+            await asyncio.wait_for(busy.wait(), HANG_GUARD)
             clock.now += 10
             await state.wakeups.tick()
             assert not waking.is_set() and len(state.wakeups.pending) == 1
@@ -529,7 +530,7 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
             assert len(state.wakeups.pending) == 1  # Unrelated human chain cancellation.
             cursor = state.wakeups.cursor
             tick = asyncio.create_task(state.wakeups.tick())
-            await asyncio.wait_for(waking.wait(), 5)
+            await asyncio.wait_for(waking.wait(), HANG_GUARD)
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["active_session_id"] == first and bootstrap["active_run_background"] is True
             active = state.active
@@ -557,7 +558,7 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
                 assert result.status_code == 200
             else:
                 release.set()
-            await asyncio.wait_for(tick, 5)
+            await asyncio.wait_for(tick, HANG_GUARD)
             assert cleaned.is_set() and active.task.done() and state.active is None
             assert len(state.wakeups.pending) == (0 if cancel_background else 1)
             assert state.harness.session_id == second
@@ -592,7 +593,7 @@ def test_originating_foreground_cancellation_removes_timers_and_joins(
         async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, _, clock):
             stream = LiveStream(app, headers, state.harness.session_id, "start")
             started = await stream.event("run_started")
-            await asyncio.wait_for(blocked.wait(), 5)
+            await asyncio.wait_for(blocked.wait(), HANG_GUARD)
             assert len(state.wakeups.pending) == 1
             if action == "cancel":
                 assert (
@@ -645,7 +646,7 @@ def test_unattended_write_shell_and_custom_approvals_fail_closed(
             cursor = state.wakeups.cursor
             clock.now += 10
             with patch("asyncio.create_subprocess_exec", side_effect=AssertionError("Must not start shell")) as shell:
-                await asyncio.wait_for(state.wakeups.tick(), 5)
+                await asyncio.wait_for(state.wakeups.tick(), HANG_GUARD)
                 shell.assert_not_called()
             events = (await client.get(f"/api/activity/{session_id}/{cursor}", headers=headers)).json()["events"]
             results = [event for event in events if event["event"] == "tool_result"]
@@ -757,7 +758,7 @@ def test_shutdown_joins_active_scheduler_and_its_background_run(
             )
             clock.now += 10
             state.wakeups.changed.set()
-            await asyncio.wait_for(started.wait(), 5)
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
             active = state.active
             assert active is not None and active.background
             assert len(state.wakeups.pending) == 1
