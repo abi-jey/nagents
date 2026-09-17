@@ -95,7 +95,7 @@ jobs:
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
       - name: Run tests
-        run: pytest tests/ -n auto --dist loadfile -v --cov=nagents --cov-report=xml --cov-report=term-missing
+        run: pytest tests/ -n auto -v --cov=nagents --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage
         if: matrix.python-version == '3.12'
@@ -142,7 +142,7 @@ jobs:
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
       - name: Run tests
-        run: pytest tests/ -n auto --dist loadfile -v -o faulthandler_timeout=60
+        run: pytest tests/ -n auto -v -o faulthandler_timeout=60
 
   # =============================================================================
   # WINDOWS TESTS
@@ -174,7 +174,7 @@ jobs:
         run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
 
       - name: Run portable tests (POSIX harness cases are marked)
-        run: pytest tests/ -n auto --dist loadfile -v -rs
+        run: pytest tests/ -n auto -v -rs
 
   # =============================================================================
   # BUMP VERSION (runs only after all tests pass)
