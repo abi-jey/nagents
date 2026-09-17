@@ -59,14 +59,14 @@ metadata:
   labels:
     app: ngn-web
 data:
-  config.toml: |
-    provider = "openai"
-    auth = "chatgpt"
-    api = "auto"
-    data_dir = "/state/sessions"
+  config.yaml: |
+    provider: openai
+    auth: chatgpt
+    api: auto
+    data_dir: /state/sessions
     # Chat still uses the Codex default; transcription has a separate API key.
-    dictation_enabled = true
-    dictation_api_key_env = "NGN_TRANSCRIPTION_API_KEY"
+    dictation_enabled: true
+    dictation_api_key_env: NGN_TRANSCRIPTION_API_KEY
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -130,7 +130,7 @@ spec:
                 --host 0.0.0.0 \
                 --port 8765 \
                 --workspace /state/workspace \
-                --config /etc/ngn/config.toml
+                --config /etc/ngn/config.yaml
           workingDir: /state/workspace
           ports:
             - name: http

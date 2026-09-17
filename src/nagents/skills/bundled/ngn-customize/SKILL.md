@@ -38,28 +38,29 @@ for verification, not additional files automatically loaded by the skill tool.
 
 ## Configure the Harness
 
-Settings are flat TOML. User config uses the XDG config location for
-`ngn/config.toml`. Workspace `.ngn/config.toml` is selected with
+Settings are flat YAML. User config uses the XDG config location for
+`ngn/config.yaml`. Workspace `.ngn/config.yaml` is selected with
 `--trust-project` or explicitly with `--config`. Precedence is defaults,
-`NGN_*` environment defaults, user TOML, trusted project TOML, explicit TOML,
+`NGN_*` environment defaults, user YAML, trusted project YAML, explicit YAML,
 then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
 `doctor` initializes trusted plugins, while `--demo` skips their execution.
 
-```toml
-provider = "openai"
-model = "gpt-4.1"
-api = "auto"
-auth = "api-key"
-api_key_env = "OPENAI_API_KEY"
-agent = "audit"
-max_tool_rounds = 30
-max_subagent_depth = 2
-skill_token_limit = 10000
-plugins = ["extensions.py:setup"]
+```yaml
+provider: openai
+model: gpt-4.1
+api: auto
+auth: api-key
+api_key_env: OPENAI_API_KEY
+agent: audit
+max_tool_rounds: 30
+max_subagent_depth: 2
+skill_token_limit: 10000
+plugins: ["extensions.py:setup"]
 
-[profiles.audit]
-mode = "reviewer"
-instructions = "Prioritize regressions and report the checks actually run."
+profiles:
+  audit:
+    mode: reviewer
+    instructions: Prioritize regressions and report the checks actually run.
 ```
 
 `AgentProfile` has `mode`, `instructions`, and `model`. Built-in `build` and
@@ -67,11 +68,11 @@ instructions = "Prioritize regressions and report the checks actually run."
 those names. A profile's nonempty model is selected on activation; inspect the
 effective model rather than assuming the top-level model always wins.
 
-TOML plugin paths and `data_dir` resolve relative to the config file. CLI
-`--plugin` paths resolve relative to the invoking directory. TOML plugin lists
-replace earlier lists; CLI entries append. Profile tables merge by name, with a
-later same-name table replacing that profile. Provider secrets come from the
-named environment variable, never literal TOML values.
+YAML plugin paths and `data_dir` resolve relative to the config file. CLI
+`--plugin` paths resolve relative to the invoking directory. YAML plugin lists
+replace earlier lists; CLI entries append. Profile entries merge by name, with a
+later same-name entry replacing that profile. Provider secrets come from the
+named environment variable, never literal YAML values.
 
 Other configuration groups: `shell_timeout`, `max_output` (bytes),
 `max_file_bytes`, and `max_tool_rounds`; `theme`, `theme_background`, `animations`,
@@ -156,7 +157,7 @@ connections: await `connect_all()`, then register the callable wrappers from
 server dynamically, `await manager.add_server(config)` returns its new wrappers.
 The embedding application owns `disconnect_all()` during shutdown; keep it alive
 for the intended tool lifetime rather than closing it after setup. These remain
-custom tools subject to the Harness executor. There is no TOML MCP-server table
+custom tools subject to the Harness executor. There is no YAML MCP-server table
 or automatic child inheritance; trusted Python composition supplies the wiring.
 
 ### Hooks and executor boundary
@@ -291,7 +292,7 @@ batch. There is no restart or background polling requirement.
 
 Each load defaults to 10,000 estimated tokens: `ceil(len(text.encode("utf-8"))/4)`
 with UTF-8-safe truncation, not a provider tokenizer or 1,000-line limit. Explicit
-multi-skill activation shares that aggregate budget. Trusted Harness TOML
+multi-skill activation shares that aggregate budget. Trusted Harness YAML
 `skill_token_limit` or `NGN_SKILL_TOKEN_LIMIT` sets the same allowance (integer
 1–100,000, default 10,000), independently of the manifest cap. All sources share
 the top-level single-line metadata parser; extra and nested fields are ignored.

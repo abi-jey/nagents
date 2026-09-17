@@ -69,7 +69,7 @@ mapping, or access to a paid provider account.
   configured to send Option as Meta. Most shortcuts use Ctrl rather than Command;
   copying also accepts Command+C when the terminal forwards it. Mouse selections
   copy on release, and local macOS copying uses `pbcopy`, including in Terminal.
-- macOS configuration stays at `~/.config/ngn/config.toml` and state at
+- macOS configuration stays at `~/.config/ngn/config.yaml` and state at
   `~/.local/share/ngn`, unless XDG settings override them; ngn does not switch to
   `~/Library/Application Support` on this platform.
 - Use consistent on-disk casing when selecting a workspace: case variants can
@@ -182,7 +182,7 @@ uv run --no-project --python .venv/bin/python --env-file .env ngn --provider ope
 
 Use only a file you trust. Keep it out of version control and do not include its
 contents in logs, screenshots, or bug reports. The filename is a launcher option;
-the secret value is never a CLI argument or TOML field.
+the secret value is never a CLI argument or YAML field.
 
 ### Headless-only install
 
@@ -273,7 +273,7 @@ The JSON command should emit JSON Lines with `schema_version: 1` and finish with
 a `done` event. `--demo` makes no model requests, runs no shell commands, performs
 no workspace edits, and skips Python plugins. It can list visible workspace paths
 and saves demo conversations in local state storage. It is not a no-filesystem-I/O
-mode. TOML parsing and validation still happen in demo mode.
+mode. YAML parsing and validation still happen in demo mode.
 
 For an interactive check, start `ngn --demo` through your selected environment,
 then try `demo approval`, `demo subagents`, `/help`, and session resume. The
@@ -288,8 +288,8 @@ approval is a preview only; approving it does not edit a file.
 | TUI needs a terminal | Use a real interactive terminal, or `ngn run --json "prompt"` in a script. |
 | uv tries to synchronize the project or use `uv.lock` | Use `uv pip install --python ...` and `uv run --no-project --python ...`; do not substitute `uv sync` or bare project-managed `uv run`. |
 | Changes do not appear in an isolated `uvx` run | It is non-editable. Use the local editable workflow for development, or `uvx --no-cache --isolated --from '/absolute/path/nagents[tui]' ngn --demo` for a fresh build. |
-| Missing API key | Configure an environment-variable **name** with `api_key_env`, set its value outside TOML, or use eligible OpenAI device login. `--demo` needs neither. |
-| A setting in the environment seems ignored | TOML has higher priority than `NGN_*` defaults. Check [precedence](ngn-configuration.md#precedence). |
+| Missing API key | Configure an environment-variable **name** with `api_key_env`, set its value outside YAML, or use eligible OpenAI device login. `--demo` needs neither. |
+| A setting in the environment seems ignored | YAML has higher priority than `NGN_*` defaults. Check [precedence](ngn-configuration.md#precedence). |
 | New fields or extras are unavailable | Compare the installed distribution with the current source. `v0.5.0` includes `voice` and `tui`, but not the new `web` extra. |
 
 Continue with the [usage guide](ngn.md) and the

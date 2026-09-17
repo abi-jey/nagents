@@ -61,7 +61,7 @@ and performs no workspace edits or shell commands. It does save demo
 conversations locally. Send `demo approval` to try a change-preview dialog or
 `demo subagents` to exercise three native async jobs without provider calls.
 
-For a real model, set the provider key outside TOML and launch through the same
+For a real model, set the provider key outside YAML and launch through the same
 environment, for example `poetry run ngn --auth api-key --model MODEL_ID` or
 `uv run --no-project --python .venv/bin/python ngn --auth api-key --model MODEL_ID`.
 With the environment activated, use `ngn run --json "your prompt"` for headless
@@ -85,11 +85,11 @@ hidden or referenced with `--api-key-env`, and `ngn login --status`/`ngn logout`
 manage the saved selection. See the guide for credential storage and `--auth`
 selection. Saved credentials are never sent to custom endpoints.
 
-Configuration uses top-level TOML, **not `[ngn]` sections**. Priority is built-ins
-< saved `ngn login` selection < `NGN_*` environment defaults < global TOML <
-trusted project TOML < explicit TOML < CLI. The global file is
-`~/.config/ngn/config.toml` (respecting `XDG_CONFIG_HOME`); workspace
-`.ngn/config.toml` needs `--trust-project`, or explicit selection with `--config`.
+Configuration uses top-level YAML, **not an `ngn:` wrapper**. Priority is built-ins
+< saved `ngn login` selection < `NGN_*` environment defaults < global YAML <
+trusted project YAML < explicit YAML < CLI. The global file is
+`~/.config/ngn/config.yaml` (respecting `XDG_CONFIG_HOME`); workspace
+`.ngn/config.yaml` needs `--trust-project`, or explicit selection with `--config`.
 Any explicitly selected config file is trusted.
 See the [full schema and recipes](docs/guide/ngn-configuration.md) for types,
 defaults, ranges, profile replacement, relative paths, and LiteLLM endpoints.

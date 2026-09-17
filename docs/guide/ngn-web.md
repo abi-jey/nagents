@@ -659,7 +659,7 @@ model supporting JSON output and, when supplied, the singular `language` paramet
 
 Inject the transcription key into the backend's environment using your secret
 management tooling, then select its variable name without putting the key in
-TOML, browser settings, URLs, or the image:
+YAML, browser settings, URLs, or the image:
 
 ```bash
 ngn serve --dictation \
@@ -669,7 +669,7 @@ ngn serve --dictation \
 ```
 
 This assumes `NGN_TRANSCRIPTION_API_KEY` has already been supplied to the process.
-The existing `NGN_DICTATION_*` defaults and trusted TOML options also work with
+The existing `NGN_DICTATION_*` defaults and trusted YAML options also work with
 `serve`. The backend endpoint defaults to `https://api.openai.com/v1`; endpoint
 and API-key-variable selection remain administrator-managed. See the
 [deployment guide](ngn-web-deployment.md#transcription-credentials) for a runtime
@@ -787,7 +787,7 @@ configuration. Write-only keys live in a separate `ngn_web_provider_keys` table
 in the same private database; both are deleted on reset. The override applies
 across sessions and web-server restarts for that resolved workspace. One process
 must own the workspace; this is not multi-process settings synchronization.
-ConfigMap/TOML, CLI, profile and initial authentication/model resolution
+ConfigMap/YAML, CLI, profile and initial authentication/model resolution
 establish startup defaults **before** the saved override is applied. Reset
 deletes the rows, so later restarts use any newly changed trusted defaults. The
 CLI/TUI do not load this web-only override.

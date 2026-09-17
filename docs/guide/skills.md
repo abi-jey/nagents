@@ -185,14 +185,14 @@ Inspect `truncated`, `estimated_tokens`, and `token_limit` in the
 load result. Prefer concise instructions over increasing the budget blindly.
 
 The Harness forwards its trusted `skill_token_limit` configuration to this same
-Agent budget. Configure it in flat TOML:
+Agent budget. Configure it in flat YAML:
 
-```toml
-skill_token_limit = 10000
+```yaml
+skill_token_limit: 10000
 ```
 
 Or supply `NGN_SKILL_TOKEN_LIMIT=10000` as an environment default. Both accept
-integers from 1 through 100,000; TOML takes precedence over the environment
+integers from 1 through 100,000; YAML takes precedence over the environment
 default under the normal configuration rules. This one allowance controls each
 load and the aggregate content of explicit activations, across CLI, TUI, and web
 Harness execution. It is distinct from `max_output` and `max_file_bytes`.
