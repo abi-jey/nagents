@@ -108,6 +108,7 @@ nav:
       - Types: api/types.md
       - Events: api/events.md
       - Session: api/session.md
+      - Context Statistics: api/context-stats.md
       - Channels: api/channels.md
       - Channel Execution Events: api/channel-execution-events.md
       - Tools: api/tools.md

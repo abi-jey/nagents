@@ -300,6 +300,10 @@ def create_app(
     async def session_snapshot(session_id: RootId) -> dict[str, object]:
         return await state.snapshot(session_id)
 
+    @app.get("/api/sessions/{session_id}/context")
+    async def session_context(session_id: RootId) -> dict[str, object]:
+        return await state.context_stats(session_id)
+
     @app.delete("/api/sessions/{session_id}")
     async def remove_session(session_id: RootId, body: DeleteSessionInput) -> dict[str, object]:
         return await delete_session(state, session_id, permanent=body.permanent)

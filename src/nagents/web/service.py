@@ -219,6 +219,16 @@ class WebState:
             "active_run_id": active.id if active else "",
         }
 
+    async def context_stats(self, session_id: str) -> dict[str, object]:
+        """Read-only estimated context breakdown for a root session.
+
+        Safe to call at any idle time: it reads persisted history and the
+        configured request inputs without mutating state or exposing credentials.
+        """
+        if session_id not in {session.id for session in await self.list_sessions()}:
+            raise HTTPException(404, "Session not found in this workspace.")
+        return (await self.harness.context_stats(session_id)).as_dict()
+
     def user_message(self, run_id: str, record: dict[str, object]) -> None:
         run = self.active
         if run is not None and run.id == run_id:

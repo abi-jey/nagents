@@ -9,6 +9,7 @@
   "include": [
     "src/api/*.ts",
     "src/features/chat/transcript*.ts",
+    "src/features/context/*.ts",
     "src/features/settings/*.ts",
     "src/features/dictation/*.ts",
     "src/features/dictation/pcm-worklet.js"

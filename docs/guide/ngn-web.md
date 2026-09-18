@@ -330,6 +330,7 @@ contract below.
 | `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
 | `POST settings/reset` | `{revision}` restores startup defaults and deletes the saved override; idle only |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
+| `GET sessions/{session_id}/context` | Read-only estimated token breakdown of the request that session would send; safe while idle and during a run |
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
@@ -361,6 +362,40 @@ The compatibility `POST run` stream remains request-owned and is not resumable;
 closing it cancels that run. New browser input uses `POST messages` and the
 WebSocket subscription instead. Subscription replay replays observations, never
 executes a prompt or tool again.
+
+### Context Statistics
+
+The header shows a compact **Context** indicator: total estimated input tokens
+against the model context window when that window is known. Expanding it lists
+the per-component estimate — system prompt, tool definitions, skills, the
+user/assistant/tool history split, and media/attachments — plus the total,
+remaining space, and the last provider-reported input tokens when available. The
+**Tool definitions** row is called out separately because tool schemas can
+dominate a request.
+
+`GET /api/sessions/{session_id}/context` backs the indicator. It is read-only,
+does not select the session, run the model, or change prompt content, and it
+never returns credentials. `GET /api/sessions` (which the client calls on
+connect, select, and reconnect) does not include the breakdown; the indicator
+fetches it once the harness is idle for the selected root. The numbers are the
+same character/byte estimates described in the
+[Context Statistics API](../api/context-stats.md), not tokenizer counts.
+
+The response shape is:
+
+```typescript
+type ContextStats = {
+  components: { key: string; label: string; tokens: number }[]; // stable order, sums to total_tokens
+  total_tokens: number;
+  context_window: number | null; // null when the model window is unknown
+  remaining_tokens: number | null;
+  observed_prompt_tokens: number | null;
+  observed_completion_tokens: number | null;
+  provider: string;
+  model: string;
+  estimate_method: string;
+};
+```
 
 ### Trash API Contract
 

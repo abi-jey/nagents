@@ -80,6 +80,20 @@ export type Snapshot = {
   }[];
 };
 
+export type ContextComponent = { key: string; label: string; tokens: number };
+
+export type ContextStats = {
+  components: ContextComponent[];
+  total_tokens: number;
+  context_window: number | null;
+  remaining_tokens: number | null;
+  observed_prompt_tokens: number | null;
+  observed_completion_tokens: number | null;
+  provider: string;
+  model: string;
+  estimate_method: string;
+};
+
 export type Approval = {
   run_id: string;
   approval_id: string;

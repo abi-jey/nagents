@@ -14,6 +14,7 @@ import "../features/dictation/dictation.css";
 import "../features/settings/settings.css";
 import "../features/channels/channels.css";
 import { useClient } from "./useClient";
+import { ContextIndicator } from "../features/context/ContextIndicator";
 import { restoreDeletionFocus } from "../api/deletion";
 
 export function App() {
@@ -77,6 +78,12 @@ export function App() {
               {config ? `${config.agent}: ${config.model}` : "Local harness"}
             </span>
           </div>
+          <ContextIndicator
+            stats={client.context.stats}
+            error={client.context.error}
+            open={client.context.open}
+            setOpen={client.context.setOpen}
+          />
         </header>
         <SessionSidebar
           workspace={config?.workspace || ""}
