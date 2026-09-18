@@ -19,6 +19,12 @@ delivery dates. See the [README](README.md) for installation and usage.
   SQLite session persistence and migrations, context compaction, and batch APIs
   for supported providers. Trusted Python lifecycle hooks, context transforms,
   and replaceable compaction strategies extend the text agent loop.
+- Typed context statistics: a read-only estimate of the input a request carries
+  (system prompt, request-local instructions, tool schemas, skill text, history
+  split by role, and media), its total, and the known model context window and
+  remaining space. Values reuse the existing character/byte heuristics; they are
+  not tokenizer counts, and cached tokens and attachments are approximate. The
+  `Agent.context_stats()` API and the ngn web client both surface the breakdown.
 - Usage events, retry/backoff handling, and HTTP/SSE debug logging. These are not
   an integrated tracing or cost-monitoring system.
 - OpenAI Realtime WebSocket sessions with audio input/output, transcription events,
@@ -30,6 +36,22 @@ tool/MCP reload. Its bundled chat UI has been removed from the current source;
 [legacy server guide](docs/guide/server.md) for its single-operator security
 boundary. These implementations do not imply identical capabilities across the
 core library, server, and ngn clients.
+
+## Channels and Connectors
+
+- One persistent Agent identity can be fed by multiple attached connectors through
+  `Agent.add_channel()` and `await agent.listen()`. The model chooses outbound
+  sends and actions through the normal tool registry/executor; final assistant
+  text is retained locally and is not broadcast automatically.
+- Independently installable connector packages build on this API, including the
+  Telegram bot, GitHub Issues, and Twilio voice connectors. Connectors are
+  published and versioned separately from the core distribution, so connector
+  availability does not track a core release; installing a package alone never
+  imports, connects, or activates it.
+- Inbound envelopes enter as labeled user-role data and fetched attachment bytes
+  are untrusted. Outbound attachments and connector actions are explicit,
+  approval-covered tool arguments. The ngn web host adds per-chat routing and
+  durable `(connection, conversation)` ownership on top of this shared model.
 
 ## ngn Clients
 
@@ -48,10 +70,12 @@ the [ngn usage guide](docs/guide/ngn.md).
   distributed orchestration system or A2A protocol implementation.
 - API-key providers and separate ChatGPT/Codex subscription authentication, plus
   opt-in microphone dictation that produces an editable draft, not a sent prompt.
-- A new local React/Vite web client launched by `ngn serve`, backed by the same
-  harness rather than the legacy API server. This is a source-checkout feature,
-  **not included in `v0.5.0`**. See the [web client guide](docs/guide/ngn-web.md)
-  for its current scope and limitations; it is not a remote hosting service.
+- A local React/Vite web client launched by `ngn serve`, backed by the same
+  harness rather than the legacy API server. It adds workspace session navigation,
+  web-side settings and channel management, and read-only context inspection. This
+  is a source-checkout feature, **not included in `v0.5.0`**. See the
+  [web client guide](docs/guide/ngn-web.md) for its current scope and limitations;
+  it is not a remote hosting service.
 
 ## Remaining Directions
 
@@ -66,9 +90,12 @@ commitments to complete every provider's API surface:
 - **Skills and multi-agent interoperability:** A reusable skills library,
   composition patterns, shared-context coordination beyond local delegation,
   and A2A discovery/communication remain proposals.
-- **Observability:** Langfuse/OpenTelemetry tracing, cost monitoring, and prompt
-  management remain planned/research only. Existing logs, usage events, and
-  extension hooks are not automatic instrumentation or an exporter integration.
+- **Observability and context accounting:** Langfuse/OpenTelemetry tracing, cost
+  monitoring, and prompt management remain planned/research only. Context
+  statistics are an estimate; tokenizer-accurate counts where a provider exposes
+  them, persisted trends, and cost projection are follow-ups, not current
+  behavior. Existing logs, usage events, and extension hooks are not automatic
+  instrumentation or an exporter integration.
 - **Documentation and validation:** Expand provider-specific examples, migration
   and best-practice guides, performance guidance, and coverage of supported API
   combinations and their limitations.

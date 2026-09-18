@@ -17,6 +17,7 @@ and compaction for the same session.
         - initialize
         - run
         - run_simple
+        - context_stats
         - register_tool
         - add_channel
         - listen

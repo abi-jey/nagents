@@ -45,6 +45,8 @@ from .compactor import Compactor
 from .compactor import Messages
 from .compactor import Tokens
 from .compactor import generate_compaction_session_id
+from .context_stats import ContextStats
+from .context_stats import estimate_context_stats
 from .events import DoneEvent
 from .events import ErrorEvent
 from .events import Event
@@ -350,6 +352,8 @@ class Agent:
         self._session_tokens: dict[str, int] = {}
         # Main-generation usage observed by this agent, not persisted history or compactor billing.
         self._session_usage: dict[str, TokenUsage] = {}
+        # Last single generation's real usage per session, for context-stat comparison.
+        self._last_usage: dict[str, TokenUsage] = {}
 
         # Flag to request compaction during run (set by trigger_compaction())
         self._compaction_requested: bool = False
@@ -1357,6 +1361,44 @@ class Agent:
 
         return result
 
+    async def context_stats(self, session_id: str) -> ContextStats:
+        """Estimate the token breakdown of the request this session would send.
+
+        Read-only: it assembles the same system prompt, tool schemas, skill
+        catalog and history that the next text request uses, without calling the
+        provider or changing session state. Values are character/byte heuristics;
+        see :func:`nagents.estimate_context_stats` for what is included.
+
+        Explicit ``$skill`` activation text is request-local and never persisted,
+        so it is not part of an idle estimate.
+
+        Args:
+            session_id: Session to account for.
+
+        Raises:
+            ValueError: If the session does not exist.
+        """
+        self._check_channel_access()
+        if not await self.session.session_exists(session_id):
+            raise ValueError(f"Session '{session_id}' not found")
+        history = await self.session.get_history(session_id)
+        messages = self._filter_unsupported_audio(list(history))
+        tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else []
+        if tools and self.save_tool_outputs:
+            tools = _inject_save_to(tools)
+        skill_manifest = render_skill_manifest(self.skills.values()) if self.skill_discoverer is not None else ""
+        observed = self._last_usage.get(session_id)
+        return estimate_context_stats(
+            system_prompt=self.system_prompt or "",
+            tools=tools,
+            skill_manifest=skill_manifest,
+            messages=messages,
+            context_window=get_model_context_limit(self.provider),
+            provider=self.provider.provider_type.value,
+            model=self.provider.model,
+            observed=observed,
+        )
+
     async def run(
         self,
         user_message: str | list[ContentPart] | Message | None = None,
@@ -1681,6 +1723,11 @@ class Agent:
                         last_usage = replace(event.usage)
                         # Context size remains the latest prompt, not accumulated billing usage.
                         self._session_tokens[session_id] = last_usage.prompt_tokens
+                        self._last_usage[session_id] = TokenUsage(
+                            prompt_tokens=last_usage.prompt_tokens,
+                            completion_tokens=last_usage.completion_tokens,
+                            total_tokens=last_usage.total_tokens,
+                        )
                     event.usage = replace(last_usage, session=replace(session_usage))
 
                     if isinstance(event, TextChunkEvent):

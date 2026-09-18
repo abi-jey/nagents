@@ -6,6 +6,7 @@ import { useDictation } from "../features/dictation/useDictation";
 import { promptFailure } from "../features/dictation/draft";
 import { recordingSupport } from "../features/dictation/browser";
 import { useChannels } from "../features/channels/useChannels";
+import { useContextStats } from "../features/context/useContext";
 import { deleteSessionFromView, SessionDeletion, type DeletionState } from "../api/deletion";
 import { purgeTrash, readTrash, restoreTrash, saveRetention, type TrashItem } from "../api/trash";
 import { TrashController, type TrashDependencies } from "../features/sessions/trashController";
@@ -63,6 +64,11 @@ export function useClient() {
   });
   const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
   const token = sessions.config?.token || "";
+  const context = useContextStats(
+    token,
+    sessions.sessionId,
+    !busy && !sessions.externalRun && !sessions.activityOnly && !chat.approval.pending,
+  );
   const dependencies: TrashDependencies = {
     read: (signal) => readTrash(token, signal), save: (revision, days) => saveRetention(token, revision, days),
     restore: (item) => restoreTrash(token, item), purge: (item) => purgeTrash(token, item), restored: sessions.restored,
@@ -210,6 +216,7 @@ export function useClient() {
 
   return {
     sessions,
+    context,
     deletion,
     deletionController,
     canDeleteSession,
