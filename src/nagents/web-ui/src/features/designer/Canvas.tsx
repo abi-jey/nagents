@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Design } from "./types";
-import { PORTS, anchor, connect, endpoints, linkPath, nearestEndpoint, type Endpoint, type LinkRef } from "./connections";
+import { PORTS, anchor, connect, endpoints, linkPath, nearestEndpoint, type Anchor, type Endpoint, type LinkRef } from "./connections";
 import { fitViewport, panViewport, resizeViewport, zoomViewport, type Point, type Viewport } from "./viewport";
 
-interface ConnectionDraft { fixed: Endpoint; moving: "source" | "target"; previous?: LinkRef; cursor: Point; start: Point; moved: boolean; dragging: boolean }
+interface ConnectionDraft { fixed: Endpoint; moving: "source" | "target"; previous?: LinkRef; cursor: Anchor; start: Point; moved: boolean; dragging: boolean }
 
 export function Canvas({ design, selected, select, change, runningAgents }: {
   design: Design; selected: string; select: (id: string) => void;
@@ -74,7 +74,7 @@ export function Canvas({ design, selected, select, change, runningAgents }: {
   const activeEdge = selectedLink && design.agents[selectedLink.source]?.invokes.find((edge) => edge.agent === selectedLink.target);
   const activeEnds = selectedLink && activeEdge ? endpoints(selectedLink.source, activeEdge) : [];
   const fixed = draft && anchor(position(draft.fixed.agent), draft.fixed.port, draft.fixed.offset);
-  const cursor = draft && { ...draft.cursor, dx: 0, dy: 0 };
+   const cursor = draft?.cursor;
   return <div className="designer-canvas">
     <div className="designer-tabs"><button aria-label="Zoom in" title="Zoom in" disabled={viewport.scale >= 4} onClick={() => setViewport((current) => zoomViewport(current, 1.25))}>+</button><button aria-label="Zoom out" title="Zoom out" disabled={viewport.scale <= .05} onClick={() => setViewport((current) => zoomViewport(current, .8))}>−</button><button onClick={() => setViewport((current) => fitViewport(current, ids.map(position)))}>Fit</button><button onClick={() => {
       const levels = new Map<string, number>([[design.entrypoint, 0]]), queue = [design.entrypoint];
@@ -88,7 +88,13 @@ export function Canvas({ design, selected, select, change, runningAgents }: {
       onPointerDown={(event) => { if (draftRef.current) { updateDraft(); return; } setSelectedLink(undefined); drag.current = "__pan"; previous.current = { x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId); }}
       onPointerMove={(event) => {
         const connection = draftRef.current;
-        if (connection) { updateDraft({ ...connection, cursor: localPoint(event.clientX, event.clientY), moved: connection.moved || Math.hypot(event.clientX - connection.start.x, event.clientY - connection.start.y) > 4 }); return; }
+         if (connection) {
+           const point = localPoint(event.clientX, event.clientY);
+           const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-agent-id]")?.getAttribute("data-agent-id");
+           const target = hit && design.agents[hit] ? nearestEndpoint(hit, position(hit), point) : undefined;
+           const cursor = target ? anchor(position(target.agent), target.port, target.offset) : { ...point, dx: 0, dy: 0 };
+           updateDraft({ ...connection, cursor, moved: connection.moved || Math.hypot(event.clientX - connection.start.x, event.clientY - connection.start.y) > 4 }); return;
+         }
         if (!drag.current) return;
         if (drag.current === "__pan") {
           const dx = event.clientX - previous.current.x, dy = event.clientY - previous.current.y;
@@ -100,17 +106,20 @@ export function Canvas({ design, selected, select, change, runningAgents }: {
       <defs><marker id="designer-arrow" markerWidth="8" markerHeight="8" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" /></marker><pattern id="designer-dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle className="designer-grid-dot" cx="1" cy="1" r=".8" /></pattern></defs>
       <rect x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#designer-dots)" />
       {ids.flatMap((id) => design.agents[id].invokes.map((edge) => {
-        const [from, to] = endpoints(id, edge), a = anchor(position(id), from.port, from.offset), b = anchor(position(edge.agent), to.port, to.offset);
+         const [from, to] = endpoints(id, edge);
+         const reconnecting = draft?.previous?.source === id && draft.previous.target === edge.agent;
+         const a = reconnecting && draft.moving === "source" ? draft.cursor : anchor(position(id), from.port, from.offset);
+         const b = reconnecting && draft.moving === "target" ? draft.cursor : anchor(position(edge.agent), to.port, to.offset);
         const selected = selectedLink?.source === id && selectedLink.target === edge.agent;
         return <g key={`${id}:${edge.agent}`} className={selected ? "designer-link selected" : "designer-link"}>
-          <path className="designer-edge-hit" d={linkPath(a, b)} role="button" tabIndex={0} aria-label={`Delegation ${id} to ${edge.agent}`} aria-pressed={selected}
+           <path className="designer-edge-hit" style={reconnecting ? { pointerEvents: "none" } : undefined} d={linkPath(a, b)} role="button" tabIndex={0} aria-label={`Delegation ${id} to ${edge.agent}`} aria-pressed={selected}
             onPointerDown={(event) => { event.stopPropagation(); updateDraft(); setSelectedLink({ source: id, target: edge.agent }); }}
             onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedLink({ source: id, target: edge.agent }); } }} />
           <path className="designer-edge" pointerEvents="none" markerEnd="url(#designer-arrow)" d={linkPath(a, b)}><title>{edge.description}</title></path>
           <text className="designer-edge-label" pointerEvents="none" x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 9} textAnchor="middle">delegate</text>
         </g>;
       }))}
-      {fixed && cursor && draft && <path className="designer-edge-preview" pointerEvents="none" d={draft.moving === "target" ? linkPath(fixed, cursor) : linkPath(cursor, fixed)} />}
+       {fixed && cursor && draft && !draft.previous && <path className="designer-edge-preview" pointerEvents="none" markerEnd="url(#designer-arrow)" d={draft.moving === "target" ? linkPath(fixed, cursor) : linkPath(cursor, fixed)} />}
       {ids.map((id) => {
         const p = position(id), agent = design.agents[id];
         return <g key={id} data-agent-id={id} transform={`translate(${p.x},${p.y})`} className={`designer-node ${selected === id ? "selected" : ""} ${runningAgents.has(id) ? "running" : ""}`}
@@ -132,8 +141,10 @@ export function Canvas({ design, selected, select, change, runningAgents }: {
         </g>;
       })}
       {selectedLink && activeEnds.length === 2 && activeEnds.map((endpoint, index) => {
-        const point = anchor(position(endpoint.agent), endpoint.port, endpoint.offset), moving = index === 0 ? "source" : "target";
-        return <circle key={moving} data-agent-id={endpoint.agent} className="designer-reconnect" cx={point.x} cy={point.y} r="7" role="button" tabIndex={0}
+         const moving = index === 0 ? "source" : "target";
+         const reconnecting = !!draft?.previous && draft.moving === moving;
+         const point = reconnecting ? draft.cursor : anchor(position(endpoint.agent), endpoint.port, endpoint.offset);
+         return <circle key={moving} pointerEvents={draft?.previous ? "none" : undefined} data-agent-id={endpoint.agent} className="designer-reconnect" cx={point.x} cy={point.y} r="7" role="button" tabIndex={0}
           aria-label={`Reconnect ${moving} of ${selectedLink.source} to ${selectedLink.target}`}
           onPointerDown={(event) => beginConnection(endpoint, event, { link: selectedLink, moving, fixed: activeEnds[1 - index] })}
           onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); beginConnection(endpoint, undefined, { link: selectedLink, moving, fixed: activeEnds[1 - index] }); } }}><title>Drag to reconnect {moving}</title></circle>;

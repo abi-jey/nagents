@@ -179,7 +179,7 @@ class DesignedHarness(Harness):
         self.agent.plugins.append(ExecutionEvents())
         for selected in self.definition.tools:
             name = selected.ref.removeprefix("builtin.")
-            self.agent.register_tool(self.tools.builtins[name], name=name, description=selected.description or None)
+            self.agent.register_tool(self.tools.builtins[name], name=name)
         self.tools.builtins.pop("delegate", None)
         if self.definition.invokes:
             self.tools.builtins["delegate"] = self.delegate
@@ -245,7 +245,7 @@ class DesignedHarness(Harness):
                         self.agent.tool_registry.register(
                             tool.func,
                             name=tool.name,
-                            description=selected.description or tool.description,
+                            description=tool.description,
                             parameters=tool.parameters,
                         )
             self._design_initialized = True

@@ -109,6 +109,15 @@ def test_connection_anchors_roundtrip_and_reject_invalid_offsets() -> None:
         Invocation(agent="assistant", source_offset=1.1)
 
 
+def test_tool_definitions_are_read_only_in_designer_yaml() -> None:
+    for ref in ("builtin.read_file", "search_docs"):
+        with pytest.raises(ValueError, match="read-only"):
+            ToolSelection(ref=ref, description="Changed tool semantics")
+        assert ToolSelection(ref=ref, description="").ref == ref
+    with pytest.raises(ValueError):
+        ToolSelection.model_validate({"ref": "builtin.read_file", "parameters": {"type": "object"}})
+
+
 def test_instruction_snapshot_is_independent_of_later_edits(tmp_path: Path) -> None:
     path = tmp_path / "instructions.md"
     path.write_text("Original", encoding="utf-8")
@@ -126,7 +135,7 @@ def test_general_agent_tools_and_delegation_are_explicit(tmp_path: Path) -> None
         design = parse(STARTER)
         design.agents["researcher"] = AgentDefinition(instructions=Instructions(text="Only research."))
         design.agents["assistant"].invokes = [Invocation(agent="researcher", description="Research documents")]
-        design.agents["researcher"].tools = [ToolSelection(ref="builtin.read_file", description="Read research notes")]
+        design.agents["researcher"].tools = [ToolSelection(ref="builtin.read_file")]
         # The standalone/TUI runtime never opens serve-only channel bindings.
         design.channels = {"telegram": "assistant"}
         root = DesignedHarness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True), design)
@@ -137,7 +146,7 @@ def test_general_agent_tools_and_delegation_are_explicit(tmp_path: Path) -> None
             try:
                 assert child.agent.system_prompt == "Only research."
                 assert child.agent.tool_registry.names() == ["read_file"]
-                assert child.agent.tool_registry.get_all()[0].description == "Read research notes"
+                assert "SHA-256 snapshot" in child.agent.tool_registry.get_all()[0].description
             finally:
                 await child.close()
             with pytest.raises(ValueError, match="not connected"):
@@ -283,9 +292,7 @@ for line in sys.stdin:
         design.mcp_servers["docs"] = MCPDefinition(
             command=sys.executable, args=["-u", str(server)], secrets={"DOCS_TOKEN": "primary_key"}
         )
-        design.agents["assistant"].mcp = [
-            MCPSelection(server="docs", tools=[ToolSelection(ref="search_docs", description="Search selected docs")])
-        ]
+        design.agents["assistant"].mcp = [MCPSelection(server="docs", tools=[ToolSelection(ref="search_docs")])]
         harness = DesignedHarness(HarnessConfig(tmp_path, data_dir=tmp_path / "data"), design)
         approvals: list[str] = []
 
@@ -302,7 +309,7 @@ for line in sys.stdin:
             verify_model: bool = False,
         ) -> AsyncIterator[Event]:
             assert tools is not None and len(tools) == 1
-            assert tools[0].description == "Search selected docs"
+            assert tools[0].description == "Search docs"
             assert tools[0].parameters["required"] == ["query"]
             if messages[-1].role == "tool":
                 assert messages[-1].content == "question:authenticated"
@@ -400,6 +407,10 @@ def test_web_designer_chat_and_pinned_continuation(tmp_path: Path) -> None:
             response = await client.post("/api/designer/validate", json={"source": STARTER})
             assert response.status_code == 200, response.text
             assert response.json()["preview"]["assistant"]["tools"] == []
+            catalog = (await client.get("/api/designer")).json()
+            assert catalog["experimental"] is True
+            assert "SHA-256 snapshot" in catalog["tool_definitions"]["read_file"]["description"]
+            assert "path" in catalog["tool_definitions"]["read_file"]["parameters"]["properties"]
             response = await client.post("/api/designer/run", json={"source": STARTER, "prompt": "Hello"})
             assert response.status_code == 200, response.text
             run = response.json()

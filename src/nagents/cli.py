@@ -62,7 +62,9 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--api-key-env", help="Environment variable containing the API key, never the key itself")
     common.add_argument("--auth", choices=("auto", "api-key", "chatgpt"), help="Authentication method (default: auto)")
     common.add_argument("--agent", "-a", help="Agent profile (built-ins: agent, build, reviewer)")
-    common.add_argument("--design", type=Path, help="Load a YAML agent design (requires the designer extra)")
+    common.add_argument(
+        "--design", type=Path, help="Load an experimental YAML agent design (requires the designer extra)"
+    )
     common.add_argument("--design-agent", default="", help="Agent ID within --design (default: entrypoint)")
     common.add_argument(
         "--max-subagent-depth",
