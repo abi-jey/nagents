@@ -16,10 +16,12 @@ export interface Design {
   providers: Record<string, { type: string; model: string; base_url: string; api: string; api_version: string; secret: string; auth?: "api-key" | "chatgpt" }>;
   mcp_servers: Record<string, { transport: "stdio"; command: string; args: string[]; env: Record<string, string>; secrets: Record<string, string> }>;
   agents: Record<string, AgentDefinition>; layout: Record<string, { x: number; y: number }>;
+  channels?: Record<string, string>;
 }
 export interface TraceRecord { sequence: number; kind: string; timestamp: string; data: Record<string, unknown> }
 export interface RunSummary { id: string; agent: string; status: string; created: string; revision: string }
 export interface TraceReply extends RunSummary {
+  channel_session?: boolean;
   design: string; events: TraceRecord[];
   approval: { approval_id?: string; id?: string; description?: string; preview?: string };
 }
@@ -32,6 +34,7 @@ export function removeAgent(design: Design, id: string): Design {
   if (Object.keys(design.agents).length <= 1) return design;
   const next = structuredClone(design);
   delete next.agents[id]; delete next.layout[id];
+  if (next.channels) next.channels = Object.fromEntries(Object.entries(next.channels).filter(([, agent]) => agent !== id));
   for (const agent of Object.values(next.agents)) agent.invokes = agent.invokes.filter((edge) => edge.agent !== id);
   if (next.entrypoint === id) next.entrypoint = Object.keys(next.agents)[0];
   return next;

@@ -134,7 +134,7 @@ class ChannelNotices:
             and not self._producer.done()
             and (terminal or not self._producer.cancelling())
             and (terminal or not run.chain.cancelled)
-            and state.harness.session_id == self.session_id
+            and state.running_harness.session_id == self.session_id
             and not state.channels.closed
             and state.channels.catalog.allow_plugins
             and not state.harness.config.demo
@@ -184,7 +184,7 @@ class ChannelNotices:
             return
         caller = asyncio.current_task()
         pending = self.run.pending
-        harness = self.state.harness
+        harness = self.state.running_harness
 
         def waiting() -> bool:
             worker = harness._worker

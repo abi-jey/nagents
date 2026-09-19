@@ -29,7 +29,7 @@ _ORIGINAL = {"channel_send": ChannelHost.channel_send, "channel_list": ChannelHo
 
 async def automatic_reply(state: WebState, run: Run, request: ApprovalRequest) -> bool:
     host = state.channels
-    harness = state.harness
+    harness = state.running_harness
     task = asyncio.current_task()
     producer = run.task
     ingress = state.history.ingress.get()

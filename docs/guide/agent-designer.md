@@ -4,6 +4,43 @@ Agent Designer is a web canvas for creating general-purpose agents, chatting wit
 them, and inspecting their execution. Open **Agent Designer** from the `ngn serve`
 header. The terminal client can run its YAML definitions; the canvas is web-only.
 
+## Channels (ngn serve only)
+
+Use **Agent Designer → Channels → Configure connections** to create or edit a
+Telegram or other installed channel connection using the existing Channels form.
+Refresh connections, select the agent for each connection, then choose
+**Save & apply channel routes**. This saves the YAML and publishes a resolved
+instruction snapshot for new channel conversations.
+
+```yaml
+channels:
+  telegram: assistant
+  support-bot: support
+```
+
+Keys are existing connection IDs, not plugin names; values are agent IDs in this
+design. Connector settings and write-only credentials remain in the web host's
+channel store. YAML contains no bot tokens. Each connection has one active design
+route; remove it from its previous design and apply before assigning another.
+
+Channel listeners and routing are supported **only by `ngn serve`**. Loading this
+YAML in the TUI or standalone runtime does not open channels or add channel tools.
+The web host continues to own one listener per connection and the durable inbox.
+
+Existing conversations retain their current runtime and history. In Telegram,
+use `/new` after applying a route to start with the selected designed agent. The
+first run pins its resolved definition to that session; subsequent Telegram and
+web messages use that snapshot, including after a server restart. Publishing a
+new revision or removing a route affects new conversations, not existing ones.
+
+Routed roots receive the normal scoped channel tools. Existing auto-reply,
+in-chat approval, chat ownership, queue, and cancellation rules still apply.
+Delegated agents retain only their explicit tools and instructions; they do not
+inherit channel tools. Channel runs also appear in the Designer execution history
+with model context and request traces.
+
+## Designer basics
+
 Install the current checkout with the `web` extra and build the frontend as
 described in [web development](../development/contributing.md#web-client-development).
 `ngn serve --demo` exercises the editor and inspector without model calls or MCP
