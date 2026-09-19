@@ -63,8 +63,15 @@ def test_designer_chatgpt_auth_is_endpoint_bound_and_demo_stays_offline(tmp_path
         design = parse(serialize(design))
         harness = DesignedHarness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True), design)
         try:
-            with patch.object(
-                harness.openai_auth, "credentials", side_effect=AssertionError("Demo must not resolve credentials")
+            with (
+                patch.object(
+                    harness.openai_auth, "credentials", side_effect=AssertionError("Demo must not resolve credentials")
+                ),
+                patch.object(
+                    harness.tools,
+                    "instructions",
+                    side_effect=AssertionError("Designed agents must not read implicit workspace instructions"),
+                ),
             ):
                 events = [event async for event in harness.run("Hello")]
             assert isinstance(events[-1], DoneEvent)
@@ -89,6 +96,17 @@ def test_definition_roundtrip_and_atomic_conflict(tmp_path: Path) -> None:
         parse(serialize(type(design).model_validate(design.document()))).agents["assistant"].generation.model_fields_set
         == set()
     )
+
+
+def test_connection_anchors_roundtrip_and_reject_invalid_offsets() -> None:
+    design = parse(STARTER)
+    design.agents["assistant"].invokes = [
+        Invocation(agent="assistant", source_port="bottom", source_offset=0.25, target_port="top", target_offset=0.8)
+    ]
+    loaded = parse(serialize(design))
+    assert loaded.agents["assistant"].invokes == design.agents["assistant"].invokes
+    with pytest.raises(ValueError):
+        Invocation(agent="assistant", source_offset=1.1)
 
 
 def test_instruction_snapshot_is_independent_of_later_edits(tmp_path: Path) -> None:
@@ -366,7 +384,11 @@ def test_designer_approvals_busy_slot_and_cancellation(tmp_path: Path) -> None:
 def test_web_designer_chat_and_pinned_continuation(tmp_path: Path) -> None:
     async def drive() -> None:
         (tmp_path / "assets").mkdir()
-        app = create_app(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True), assets=tmp_path)
+        app = create_app(
+            HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True),
+            assets=tmp_path,
+            harness_factory=lambda config: DesignedHarness(config, parse(STARTER)),
+        )
         async with (
             app.router.lifespan_context(app),
             httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8765") as client,

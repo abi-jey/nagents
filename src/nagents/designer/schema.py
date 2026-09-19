@@ -74,6 +74,10 @@ class MCPSelection(Definition):
 class Invocation(Definition):
     agent: str
     description: str = ""
+    source_port: Literal["top", "right", "bottom", "left"] = "right"
+    target_port: Literal["top", "right", "bottom", "left"] = "left"
+    source_offset: float = Field(default=0.5, ge=0, le=1)
+    target_offset: float = Field(default=0.5, ge=0, le=1)
 
 
 class Generation(Definition):

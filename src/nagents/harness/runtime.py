@@ -105,6 +105,10 @@ class Harness:
         """Optional definition-driven construction; ordinary profiles use cloning."""
         return None
 
+    def load_project_instructions(self) -> None:
+        """Coding harnesses discover workspace instructions during initialization."""
+        self.tools.instructions(Path("AGENTS.md"))
+
     def __init__(self, config: "HarnessConfig", *, allow_subagents: bool = True) -> None:
         self.config = config
         self.allow_subagents = allow_subagents
@@ -260,7 +264,7 @@ class Harness:
                         "CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
                     )
                     await db.commit()
-                self.tools.instructions(Path("AGENTS.md"))
+                self.load_project_instructions()
                 await self.agent.refresh_skills()
                 self.refresh_instructions()
                 if (

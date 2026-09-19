@@ -1,8 +1,13 @@
 export interface ToolSelection { ref: string; description: string }
+export type Port = "top" | "right" | "bottom" | "left";
+export interface Invocation {
+  agent: string; description: string;
+  source_port?: Port; target_port?: Port; source_offset?: number; target_offset?: number;
+}
 export interface AgentDefinition {
   name: string; provider: string; instructions: { text: string; file: string };
   tools: ToolSelection[]; mcp: { server: string; tools: ToolSelection[] }[];
-  invokes: { agent: string; description: string }[]; max_tool_rounds: number;
+  invokes: Invocation[]; max_tool_rounds: number;
 }
 export interface Design {
   version: 1; id: string; entrypoint: string;

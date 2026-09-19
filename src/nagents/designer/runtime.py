@@ -121,6 +121,9 @@ class ExecutionEvents(AgentPlugin):
 class DesignedHarness(Harness):
     supports_child_custom_tools = True
 
+    def load_project_instructions(self) -> None:
+        """Definitions already own their explicit, resolved instructions."""
+
     @property
     def mode(self) -> str:
         # Definition IDs are names, not implicit coding/reviewer policy presets.

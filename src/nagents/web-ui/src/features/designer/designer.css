@@ -74,9 +74,15 @@
 .designer-node text { fill: var(--text-reading); font: 12px system-ui; user-select: none; }
 .designer-node text.designer-node-detail { font-size: 10px; fill: var(--text-secondary); }
 .designer-node .designer-node-mark { fill: var(--accent-teal); }
-.designer-node .designer-port { fill: var(--surface-output); stroke: var(--accent-violet); cursor: crosshair; }
-.designer-node .designer-port:hover { fill: var(--accent-violet); }
+.designer-node .designer-port { cursor: crosshair; }
+.designer-port-hit { fill: transparent; stroke: none; }
+.designer-port-dot { fill: var(--surface-output); stroke: var(--accent-violet); }
+.designer-port:hover .designer-port-dot, .designer-port:focus-visible .designer-port-dot { fill: var(--accent-violet); }
 .designer-edge { fill: none; stroke: var(--border-control); stroke-width: 1.2; }
+.designer-edge-hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; pointer-events: stroke; }
+.designer-link.selected .designer-edge { stroke: var(--accent-violet); stroke-width: 2; }
+.designer-edge-preview { fill: none; stroke: var(--accent-violet); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.designer-reconnect { fill: var(--surface-reading); stroke: var(--accent-violet); stroke-width: 2; cursor: crosshair; }
 .designer-edge-label { fill: var(--text-secondary); font: 9px system-ui; }
 #designer-arrow path { fill: var(--border-control); }
 .designer-grid-dot { fill: var(--border-group); opacity: .55; }

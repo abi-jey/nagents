@@ -11,7 +11,12 @@ processes. Demo replies are scripted and do not execute delegation.
 
 The designer uses the web harness's shared color and control tokens. The compact
 canvas supports pan/zoom, automatic arrangement, and click-to-connect delegation
-ports. **Test & inspect** opens a collapsible chat/debug dock; the default step
+ports on all four sides. Drag a port to another agent, or click the source and
+target ports. Dropping on an agent's border attaches at that position. Select an
+existing link to expose its source and target handles; drag either handle to
+reconnect to another side or another agent. Dropping on empty space or pressing
+Escape cancels the change and preserves the original link. **Test & inspect**
+opens a collapsible chat/debug dock; the default step
 list hides per-token noise while **All raw events** retains access to every record.
 The canvas follows the panel's dimensions when resized, including when opening
 the inspector. In test chat, **Ctrl+Enter** or **Cmd+Enter** sends a message;
@@ -141,6 +146,12 @@ synthesis lifecycle. Children use their own configured provider, instructions,
 and tools. They do not inherit the parent's conversation or system instructions.
 Existing root-owned concurrency/execution quotas and configured depth limits apply.
 There is no automatic pipeline or durable task replay.
+
+Each invocation can also store visual `source_port` / `target_port` (`top`,
+`right`, `bottom`, or `left`) and `source_offset` / `target_offset` (0–1 along
+the side). These attachment positions round-trip through YAML; they do not alter
+the delegation tool contract. Reconnecting to another agent changes the actual
+allowed delegation target.
 
 ## Inspect execution
 
