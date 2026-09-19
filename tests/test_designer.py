@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -38,6 +39,7 @@ from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.types import ToolDefinition
 from nagents.web.app import create_app
+from nagents.web.designer import Designer
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -79,6 +81,36 @@ def test_designer_chatgpt_auth_is_endpoint_bound_and_demo_stays_offline(tmp_path
             await harness.close()
 
     asyncio.run(drive())
+
+
+def test_designer_example_uses_current_provider_configuration(tmp_path: Path) -> None:
+    config = HarnessConfig(
+        tmp_path,
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        api="chat_completions",
+        api_version="2025-01-01",
+    )
+    state = SimpleNamespace(
+        harness=SimpleNamespace(
+            config=config,
+            agent=SimpleNamespace(provider=SimpleNamespace(model="deepseek/deepseek-chat")),
+            login_store=SimpleNamespace(selection=lambda: None),
+        )
+    )
+    designer = Designer.__new__(Designer)
+    designer.state = state
+    designer.config = HarnessConfig(tmp_path, provider="openai", model="gpt-4.1")
+
+    design = parse(designer.example())
+    provider = design.providers["primary"]
+    assert provider.type == "openrouter"
+    assert provider.model == "deepseek/deepseek-chat"
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.api == "chat_completions"
+    assert provider.api_version == "2025-01-01"
+    assert design.secrets["primary_key"].name == "OPENROUTER_API_KEY"
 
 
 def test_definition_roundtrip_and_atomic_conflict(tmp_path: Path) -> None:
