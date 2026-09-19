@@ -1,8 +1,20 @@
-# Agent Designer
+# Agent Designer (Experimental)
 
 Agent Designer is a web canvas for creating general-purpose agents, chatting with
 them, and inspecting their execution. Open **Agent Designer** from the `ngn serve`
 header. The terminal client can run its YAML definitions; the canvas is web-only.
+
+The Designer is **experimental**. Its editor and definition format are evolving.
+Choose **New** to open the creation dialog: enter the design ID and first agent,
+configure the provider, API contract and credential reference, then **Create
+design**. Creation saves the YAML without making a model request. The design ID
+is shown in the status bar rather than edited in the agent sidebar.
+
+Tool selection is configurable; registered tool definitions are read-only.
+Expand a selected built-in tool to inspect its canonical description and schema.
+MCP discovery shows the server's definitions. Nonempty tool-description overrides
+in older YAML must be removed; descriptions and parameters come from the library
+or MCP server. Agent instructions and delegation guidance remain configurable.
 
 ## Channels (ngn serve only)
 
@@ -41,8 +53,8 @@ with model context and request traces.
 
 ## Designer basics
 
-The test dock's **Chat history** lists conversations; selecting one restores its
-persisted messages across every turn. **New chat** starts a separate conversation.
+The right-hand chat panel's **Chat history** lists conversations; selecting one restores its
+persisted messages across every turn. Choose **＋ New chat** in that list to start a separate conversation.
 Sending continues the selected conversation by default. **Execution history**
 selects an individual run for debugging without reducing the visible chat to that
 run. Existing conversations keep their pinned agent and provider configuration.
@@ -68,7 +80,7 @@ target ports. Dropping on an agent's border attaches at that position. Select an
 existing link to expose its source and target handles; drag either handle to
 reconnect to another side or another agent. Dropping on empty space or pressing
 Escape cancels the change and preserves the original link. **Test & inspect**
-opens a collapsible chat/debug dock; the default step
+opens chat on the right and an execution inspector below the canvas; the default step
 list hides per-token noise while **All raw events** retains access to every record.
 The canvas follows the panel's dimensions when resized, including when opening
 the inspector. In test chat, **Ctrl+Enter** or **Cmd+Enter** sends a message;
@@ -132,7 +144,6 @@ agents:
       text: Research the delegated question. Cite the files you used.
     tools:
       - ref: builtin.read_file
-        description: Read a workspace document to support your research.
       - ref: builtin.list_files
     generation:
       max_tokens: 4096
@@ -181,7 +192,6 @@ mcp:
   - server: docs
     tools:
       - ref: search_docs
-        description: Search the documentation index.
 ```
 
 **Start & discover tools** explicitly launches the configured subprocess, shows

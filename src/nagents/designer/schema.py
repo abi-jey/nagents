@@ -57,6 +57,14 @@ class ToolSelection(Definition):
     ref: str
     description: str = ""
 
+    @model_validator(mode="after")
+    def registered_definition(self) -> ToolSelection:
+        if self.description:
+            raise ValueError(
+                "Tool definitions are read-only; remove the description override and use the registered tool documentation"
+            )
+        return self
+
 
 class MCPDefinition(Definition):
     transport: Literal["stdio"] = "stdio"

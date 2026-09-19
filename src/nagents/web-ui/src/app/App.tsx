@@ -60,7 +60,7 @@ export function App() {
       </a>
       <main inert={designerOpen}>
         <header className="topbar">
-          <button disabled={!config || busy || client.operating || dictation.unfinished} onClick={() => setDesignerOpen(true)}>Agent Designer</button>
+          <button title="Experimental agent designer" disabled={!config || busy || client.operating || dictation.unfinished} onClick={() => setDesignerOpen(true)}>Agent Designer</button>
           <button
             className="nav-toggle"
             aria-label="Toggle sessions"

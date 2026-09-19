@@ -3,6 +3,7 @@ import { request } from "../../api/client";
 import { Canvas } from "./Canvas";
 import { Resources } from "./Resources";
 import { ProviderSettings } from "./ProviderSettings";
+import { NewDesignDialog } from "./NewDesignDialog";
 import { ChannelRoutes } from "./ChannelRoutes";
 import { TestPrompt } from "./TestPrompt";
 import { Icon } from "../../components/Icon";
@@ -12,6 +13,8 @@ import "./designer.css";
 
 export function Designer({ token, close, configureChannels }: { token: string; close: () => void; configureChannels: () => void }) {
   const [design, setDesign] = useState<Design>();
+  const [newDesign, setNewDesign] = useState<Design>();
+  const [toolDefinitions, setToolDefinitions] = useState<Record<string, unknown>>({});
   const [source, setSource] = useState("");
   const [yamlDirty, setYamlDirty] = useState(false);
   const [revision, setRevision] = useState("");
@@ -60,9 +63,10 @@ export function Designer({ token, close, configureChannels }: { token: string; c
     return result.design;
   }
   async function refresh() {
-    const catalog = await api<{ designs: string[]; starter: string; example: string; tools: string[]; runs: RunSummary[]; conversations: RunSummary[]; demo: boolean }>("");
+    const catalog = await api<{ designs: string[]; starter: string; example: string; tools: string[]; tool_definitions: Record<string, unknown>; runs: RunSummary[]; conversations: RunSummary[]; demo: boolean }>("");
     setNames(catalog.designs); setTools(catalog.tools); setRuns(catalog.runs); setDemo(catalog.demo);
     setConversations(catalog.conversations);
+    setToolDefinitions(catalog.tool_definitions);
     return catalog;
   }
   useEffect(() => { void action(async () => { const catalog = await refresh(); await validate(catalog.starter); if (catalog.conversations[0]) openRun(catalog.conversations[0].id); }); }, []);
@@ -139,12 +143,12 @@ export function Designer({ token, close, configureChannels }: { token: string; c
   return <section className="designer" aria-label="Agent Designer">
     <header className="designer-toolbar">
       <button className="designer-back" onClick={close} title="Back to chat" aria-label="Back to chat"><Icon name="chat" /></button>
-      <div className="designer-brand"><span>ngn</span><span className="designer-divider">/</span><h1>Agent Designer</h1></div>
+       <div className="designer-brand"><span>ngn</span><span className="designer-divider">/</span><h1>Agent Designer</h1><small className="designer-experimental">Experimental</small></div>
       <select aria-label="Open saved design" value="" disabled={pending} onChange={(event) => void action(async () => {
         const result = await api<{ source: string; revision: string }>(`/designs/${event.target.value}`);
         await validate(result.source); setRevision(result.revision);
       })}><option value="">Open design…</option>{names.map((id) => <option key={id}>{id}</option>)}</select>
-      <button disabled={pending} onClick={() => void action(async () => { const catalog = await refresh(); await validate(catalog.starter); setRevision(""); })}>New</button>
+       <button disabled={busy} onClick={() => void action(async () => { const catalog = await refresh(); const initial = await api<{ design: Design }>("/validate", { source: catalog.starter }); setNewDesign(initial.design); })}>New</button>
       <button disabled={busy} onClick={() => void action(async () => { const catalog = await refresh(); await validate(catalog.example); setRevision(""); setPrompt("Ask analyst to calculate 17 × 23 and verify the result, then summarize its answer."); setContinueRun(false); setDebugOpen(true); setNotice("Example loaded. Send starts the selected provider and traces delegation."); })}>{demo ? "Example team" : "Live example"}</button>
       <span className="designer-toolbar-spacer" />
       <button disabled={!design || pending} onClick={() => void action(async () => { await validate(await currentSource()); setNotice("Definition is valid. Preview refreshed; no connections opened."); })}>Validate</button>
@@ -163,6 +167,7 @@ export function Designer({ token, close, configureChannels }: { token: string; c
       setTab(name);
     })}>{name}</button>)}<span className="designer-toolbar-spacer" /><span className="designer-mode">{demo ? "Offline demo" : "Live providers"} · {design ? Object.keys(design.agents).length : 0} agents{reply?.status === "running" ? " · Running" : ""}</span></nav>
     {design && <>
+       <div className={`designer-body${debugOpen ? " with-chat" : ""}`}>
       <div className="designer-definition">
         <aside className="designer-agents" inert={yamlDirty}>
           <h2>Agents <span>{Object.keys(design.agents).length}</span></h2>{Object.entries(design.agents).map(([id, value]) => <button className="designer-agent-item" key={id} aria-pressed={id === selected} onClick={() => setSelected(id)}><Icon name="channels" size={15} /><span>{value.name || id}</span>{id === design.entrypoint && <small title="Entry agent">●</small>}</button>)}
@@ -171,7 +176,6 @@ export function Designer({ token, close, configureChannels }: { token: string; c
           <button disabled={!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(draftName) || !!design.agents[draftName]} onClick={() => { edit({ ...design, agents: { ...design.agents, [draftName]: newAgent() } }); setSelected(draftName); setDraftName(""); }}>Add agent</button>
           </details><div className="designer-agent-actions"><button disabled={!agent} onClick={() => { let id = `${selected}-copy`; while (design.agents[id]) id += "2"; edit({ ...design, agents: { ...design.agents, [id]: structuredClone(agent!) } }); setSelected(id); }}>Copy</button>
           <button disabled={Object.keys(design.agents).length < 2} onClick={() => { const next = removeAgent(design, selected); edit(next); setSelected(next.entrypoint); }}>Remove</button></div>
-          <details className="designer-design-settings"><summary>Design settings</summary><label>Design ID<input value={design.id} onChange={(e) => { edit({ ...design, id: e.target.value }); setRevision(""); }} /></label></details>
         </aside>
         <div className="designer-workspace">
           {tab === "canvas" && <Canvas design={design} selected={selected} select={setSelected} change={edit} runningAgents={runningAgents} />}
@@ -210,7 +214,7 @@ export function Designer({ token, close, configureChannels }: { token: string; c
           <details><summary>Tools ({agent.tools.length})</summary>{tools.map((tool) => {
             const chosen = agent.tools.find((item) => item.ref.replace("builtin.", "") === tool);
             return <div key={tool}><label className="designer-check"><input type="checkbox" checked={!!chosen} onChange={(e) => editAgent({ tools: e.target.checked ? [...agent.tools, { ref: `builtin.${tool}`, description: "" }] : agent.tools.filter((item) => item !== chosen) })} />{tool}</label>
-              {chosen && <textarea aria-label={`${tool} model-facing description`} placeholder="Default tool documentation" value={chosen.description} onChange={(e) => editAgent({ tools: agent.tools.map((item) => item === chosen ? { ...item, description: e.target.value } : item) })} />}</div>;
+               {chosen && <details><summary>{tool} definition · read-only</summary><pre>{JSON.stringify(toolDefinitions[tool], null, 2)}</pre></details>}</div>;
           })}</details>
           <details><summary>Delegation targets ({agent.invokes.length})</summary>{Object.keys(design.agents).map((id) => {
             const edge = agent.invokes.find((item) => item.agent === id);
@@ -221,7 +225,7 @@ export function Designer({ token, close, configureChannels }: { token: string; c
             const selection = agent.mcp.find((item) => item.server === id);
             return <div key={id}><label className="designer-check"><input type="checkbox" checked={!!selection} onChange={(e) => editAgent({ mcp: e.target.checked ? [...agent.mcp, { server: id, tools: [] }] : agent.mcp.filter((item) => item !== selection) })} />{id}</label>
               {selection && <label>Tool names (comma separated)<input value={selection.tools.map((item) => item.ref).join(", ")} onChange={(e) => editAgent({ mcp: agent.mcp.map((item) => item === selection ? { ...item, tools: e.target.value.split(",").map((name) => name.trim()).filter(Boolean).map((ref) => ({ ref, description: selection.tools.find((tool) => tool.ref === ref)?.description || "" })) } : item) })} /></label>}</div>;
-          })}<p>Configure servers in Resources. Tool descriptions can also be overridden in YAML.</p></details>
+           })}<p>Configure servers in Resources. MCP tool schemas and descriptions come from the server and are read-only; discover tools to inspect them in Preview.</p></details>
            <details><summary>Advanced</summary><label>Instruction file<input placeholder="agents/instructions.md" value={agent.instructions.file} onChange={(e) => editAgent({ instructions: { ...agent.instructions, file: e.target.value } })} /></label>
            {([ ["temperature", "Temperature", 0, 2], ["max_tokens", "Maximum output tokens", 1, undefined], ["top_p", "Top P", 0, 1] ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} step={key === "max_tokens" ? 1 : 0.05} placeholder="Provider default" value={agent.generation?.[key] ?? ""} onChange={(e) => { const generation = { ...agent.generation }; if (e.target.value === "") delete generation[key]; else generation[key] = Number(e.target.value); editAgent({ generation }); }} /></label>)}
            <label>Stop sequences (one per line)<textarea value={agent.generation?.stop?.join("\n") || ""} onChange={(e) => { const generation = { ...agent.generation }; if (e.target.value) generation.stop = e.target.value.split("\n"); else delete generation.stop; editAgent({ generation }); }} /></label>
@@ -231,7 +235,7 @@ export function Designer({ token, close, configureChannels }: { token: string; c
       </div>
       {debugOpen && <div className="designer-execution">
         <section className="designer-chat"><div className="designer-panel-heading"><h2><Icon name="chat" size={15} />{continueRun && reply ? reply.agent : selected}</h2><small>{reply ? `${reply.status} · ${reply.revision.slice(0, 8)}` : "New conversation"}</small></div>
-           <div className="designer-tabs"><select aria-label="Chat history" value={reply?.session_id || conversation.current.id} disabled={busy} onChange={(e) => { const chat = conversations.find((item) => item.session_id === e.target.value); if (chat) openRun(chat.id); }}><option value="">New conversation</option>{conversations.map((chat) => <option key={chat.session_id} value={chat.session_id}>{chat.agent} · {chat.created.slice(0, 19)}</option>)}{reply && !conversations.some((chat) => chat.session_id === reply.session_id) && <option value={reply.session_id}>Current conversation</option>}</select><button disabled={busy} onClick={() => { openRun(""); setPrompt(""); }}>New chat</button></div>
+            <select aria-label="Chat history" value={reply?.session_id || conversation.current.id} disabled={busy} onChange={(e) => { if (!e.target.value) { openRun(""); setPrompt(""); return; } const chat = conversations.find((item) => item.session_id === e.target.value); if (chat) openRun(chat.id); }}><option value="">＋ New chat</option>{conversations.map((chat) => <option key={chat.session_id} value={chat.session_id}>{chat.agent} · {chat.created.slice(0, 19)}</option>)}{reply && !conversations.some((chat) => chat.session_id === reply.session_id) && <option value={reply.session_id}>Current conversation</option>}</select>
            <select aria-label="Execution history" value={runId} disabled={busy} onChange={(e) => openRun(e.target.value)}><option value="">Inspect execution…</option>{runs.filter((run) => !reply || run.session_id === reply.session_id).map((run) => <option key={run.id} value={run.id}>{run.agent} · {run.status} · {run.created.slice(0, 19)}</option>)}{runId && !runs.some((run) => run.id === runId) && <option value={runId}>Current run</option>}</select>
            <div className="designer-transcript" aria-live="polite">{messages.map((message) => <article key={message.id}><strong>{message.role === "user" ? "You" : reply?.agent || selected}</strong><p>{message.text}</p></article>)}</div>
           {reply?.approval?.approval_id && <div className="designer-approval"><h3>Approval requested</h3><p>{reply.approval.description}</p><pre>{reply.approval.preview}</pre>{["allow", "deny"].map((decision) => <button key={decision} disabled={pending} onClick={() => void action(async () => {
@@ -249,8 +253,17 @@ export function Designer({ token, close, configureChannels }: { token: string; c
           <div className="designer-trace-columns"><ol>{visible.map((record) => <li key={record.sequence}><button aria-pressed={record.sequence === inspectedData?.sequence} onClick={() => setInspected(record)}><small>{record.sequence} · {String(record.data.agent_id || "run")}</small>{record.kind.replaceAll("_", " ")}</button></li>)}</ol>
             <div className="designer-record">{inspectedBody !== undefined && <><h3>Wire payload</h3><pre tabIndex={0}>{formatBody(inspectedBody)}</pre><details><summary>Event metadata</summary><pre>{JSON.stringify(inspectedData, null, 2)}</pre></details></>}{inspectedBody === undefined && <pre tabIndex={0}>{inspectedData ? JSON.stringify(inspectedData, null, 2) : "Send a message to inspect context, requests, tools and delegated tasks."}</pre>}</div></div>
         </section>
-      </div>}
-      <footer className="designer-statusbar"><span>{design.id} · {revision ? "Saved definition" : "Draft"}</span><span>{Object.values(design.agents).reduce((count, item) => count + item.invokes.length, 0)} delegation links</span><button onClick={() => setDebugOpen(!debugOpen)}>{debugOpen ? "Hide test panel" : "Open test chat & inspector"}</button></footer>
-    </>}
-  </section>;
+       </div>}
+       </div>
+       <footer className="designer-statusbar"><span>{design.id} · {revision ? "Saved definition" : "Draft"}</span><span>{Object.values(design.agents).reduce((count, item) => count + item.invokes.length, 0)} delegation links</span><button onClick={() => setDebugOpen(!debugOpen)}>{debugOpen ? "Hide test panel" : "Open test chat & inspector"}</button></footer>
+     </>}
+     {newDesign && <NewDesignDialog template={newDesign} names={names} close={() => setNewDesign(undefined)} create={async (next) => {
+       const encoded = await api<{ source: string }>("/serialize", next);
+       const validated = await api<{ design: Design; preview: Record<string, unknown> }>("/validate", { source: encoded.source });
+       const saved = await api<{ revision: string }>("/save", { source: encoded.source, revision: "" });
+       setDesign(validated.design); setPreview(validated.preview); setSource(encoded.source); setYamlDirty(false);
+       setRevision(saved.revision); setSelected(next.entrypoint); setTab("canvas"); openRun(""); setPrompt("");
+       setNames((current) => [...new Set([...current, next.id])].sort()); setNewDesign(undefined); setNotice(`Created ${next.id}.`);
+     }} />}
+   </section>;
 }

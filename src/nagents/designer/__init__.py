@@ -1,1 +1,1 @@
-"""Optional YAML-defined agents and their execution inspector."""
+"""Experimental YAML-defined agents and their execution inspector."""

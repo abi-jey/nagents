@@ -41,6 +41,7 @@ from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 from nagents.observation import observer
 from nagents.provider.codex import CodexProvider
+from nagents.tools.registry import ToolRegistry
 
 from .service import Pending
 from .service import Run
@@ -279,10 +280,18 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
     @app.get("/api/designer")
     async def catalog() -> dict[str, object]:
         designer = get()
+        registry = ToolRegistry()
+        for name in BUILTINS:
+            registry.register(designer.state.harness.tools.builtins[name], name=name)
         return {
+            "experimental": True,
             "designs": designer.files.list(),
             "starter": designer.starter(),
             "tools": list(BUILTINS),
+            "tool_definitions": {
+                tool.name: {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+                for tool in registry.get_all()
+            },
             "runs": await designer.traces.runs(),
             "conversations": await designer.traces.conversations(),
             "demo": designer.config.demo,
