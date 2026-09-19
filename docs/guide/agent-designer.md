@@ -13,6 +13,9 @@ The designer uses the web harness's shared color and control tokens. The compact
 canvas supports pan/zoom, automatic arrangement, and click-to-connect delegation
 ports. **Test & inspect** opens a collapsible chat/debug dock; the default step
 list hides per-token noise while **All raw events** retains access to every record.
+The canvas follows the panel's dimensions when resized, including when opening
+the inspector. In test chat, **Ctrl+Enter** or **Cmd+Enter** sends a message;
+plain Enter inserts a newline.
 
 For an online demonstration, launch without `--demo`, open the designer and click
 **Live example**. This loads a coordinator and analyst using the host's provider.

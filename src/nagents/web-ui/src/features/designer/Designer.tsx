@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { request } from "../../api/client";
 import { Canvas } from "./Canvas";
 import { Resources } from "./Resources";
+import { TestPrompt } from "./TestPrompt";
 import { Icon } from "../../components/Icon";
 import { appendTrace, newAgent, removeAgent, traceMatches } from "./types";
 import type { AgentDefinition, Design, RunSummary, TraceRecord, TraceReply } from "./types";
@@ -34,16 +35,18 @@ export function Designer({ token, close }: { token: string; close: () => void })
   const [demo, setDemo] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const polling = useRef(0);
+  const operating = useRef(false);
   const busy = pending || reply?.status === "running";
 
   async function api<T>(path: string, body?: object, method?: string): Promise<T> {
     return (await request(`designer${path}`, token, body, undefined, method)).json() as Promise<T>;
   }
   async function action(work: () => Promise<void>) {
-    if (pending) return;
+    if (operating.current) return;
+    operating.current = true;
     setPending(true); setError(""); setNotice("");
     try { await work(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Designer operation failed"); }
-    finally { setPending(false); }
+    finally { operating.current = false; setPending(false); }
   }
   async function validate(text: string) {
     const result = await api<{ design: Design; preview: Record<string, unknown> }>("/validate", { source: text });
@@ -196,9 +199,9 @@ export function Designer({ token, close }: { token: string; close: () => void })
           {reply?.approval?.approval_id && <div className="designer-approval"><h3>Approval requested</h3><p>{reply.approval.description}</p><pre>{reply.approval.preview}</pre>{["allow", "deny"].map((decision) => <button key={decision} disabled={pending} onClick={() => void action(async () => {
             await request("approval", token, { run_id: runId, approval_id: reply.approval.approval_id, call_id: reply.approval.id, decision });
           })}>{decision}</button>)}</div>}
-          <label className="designer-prompt"><span className="sr-only">Message</span><textarea placeholder={`Message ${continueRun && reply ? reply.agent : selected}…`} value={prompt} onChange={(e) => setPrompt(e.target.value)} /></label>
+          <label className="designer-prompt"><span className="sr-only">Message</span><TestPrompt target={continueRun && reply ? reply.agent : selected} value={prompt} change={setPrompt} canSend={!busy} send={() => void action(run)} /></label>
           <div className="designer-chat-actions">{runId && <label className="designer-check" title="Continue this conversation using its pinned agent definition"><input type="checkbox" checked={continueRun} onChange={(e) => setContinueRun(e.target.checked)} />Continue</label>}
-          <button className="designer-send" disabled={busy || !prompt.trim()} onClick={() => void action(run)}>Send</button>
+          <button className="designer-send" title="Ctrl+Enter or ⌘+Enter" disabled={busy || !prompt.trim()} onClick={() => void action(run)}>Send</button>
           <button disabled={reply?.status !== "running"} onClick={() => void action(async () => { await request("cancel", token, { run_id: runId }); })}>Cancel run</button>
           <button title="Delete trace" aria-label="Delete trace" disabled={!runId || busy} onClick={() => void action(async () => { await api(`/runs/${runId}`, {}, "DELETE"); setRunId(""); setTrace([]); setReply(undefined); await refresh(); })}><Icon name="trash" size={14} /></button></div>
         </section>
