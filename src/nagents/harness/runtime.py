@@ -135,6 +135,7 @@ class Harness:
         self.login_store = ProviderLoginStore()
         self._api_model = config.model
         self._initialized = False
+        self._session_created = False
         self._closed = False
         self._initialization_error = ""
         self._init_lock = asyncio.Lock()
@@ -238,57 +239,64 @@ class Harness:
             base += f"\nApplicable project context ({path}):\n{content}\n"
         self.agent.system_prompt = base
 
-    async def initialize(self) -> None:
-        """Initialize local sessions, instructions and trusted extensions. No provider I/O."""
+    async def initialize(self, *, create_session: bool = True) -> None:
+        """Initialize local sessions, instructions and trusted extensions. No provider I/O.
+
+        ``create_session=False`` is for read-only callers (listing, picking,
+        history) that must not register an empty session for the current run.
+        The current session is still created later, on first use, by ``run``,
+        ``new_session`` or a caller passing the default ``create_session=True``.
+        """
         if self._closed:
             raise RuntimeError("Harness is closed")
         async with self._init_lock:
-            if self._initialized:
-                return
-            if self._initialization_error:
-                raise RuntimeError(self._initialization_error)
-            try:
-                # pathlib's parents=True ignores mode for intermediate directories.
-                missing: list[Path] = []
-                directory = self.config.data_dir
-                while not directory.exists():
-                    missing.append(directory)
-                    directory = directory.parent
-                for directory in reversed(missing):
-                    directory.mkdir(mode=0o700, exist_ok=True)
-                self.agent.session.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                await self.agent.session.initialize()
-                self.agent.session.db_path.chmod(0o600)
-                async with aiosqlite.connect(self.agent.session.db_path) as db:
-                    await db.execute(
-                        "CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
-                    )
-                    await db.commit()
-                self.load_project_instructions()
-                await self.agent.refresh_skills()
-                self.refresh_instructions()
-                if (
-                    not self.config.demo
-                    and self.config.provider in {"openai", "openai_compatible"}
-                    and not self.config.base_url
-                    and self.config.api == "auto"
-                    and self.config.auth != "api-key"
-                    and (self.config.auth == "chatgpt" or self.openai_auth.logged_in())
-                ):
-                    await self._use_chatgpt()
-                if self.config.demo and self.config.plugins:
-                    self.diagnostics.append(
-                        "OFFLINE DEMO: configured Python plugins were not imported (trusted code could perform I/O)."
-                    )
-                else:
-                    for reference in self.config.plugins:
-                        await self.load_plugin(reference)
+            if not self._initialized:
+                if self._initialization_error:
+                    raise RuntimeError(self._initialization_error)
+                try:
+                    # pathlib's parents=True ignores mode for intermediate directories.
+                    missing: list[Path] = []
+                    directory = self.config.data_dir
+                    while not directory.exists():
+                        missing.append(directory)
+                        directory = directory.parent
+                    for directory in reversed(missing):
+                        directory.mkdir(mode=0o700, exist_ok=True)
+                    self.agent.session.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    await self.agent.session.initialize()
+                    self.agent.session.db_path.chmod(0o600)
+                    async with aiosqlite.connect(self.agent.session.db_path) as db:
+                        await db.execute(
+                            "CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
+                        )
+                        await db.commit()
+                    self.load_project_instructions()
+                    await self.agent.refresh_skills()
+                    self.refresh_instructions()
+                    if (
+                        not self.config.demo
+                        and self.config.provider in {"openai", "openai_compatible"}
+                        and not self.config.base_url
+                        and self.config.api == "auto"
+                        and self.config.auth != "api-key"
+                        and (self.config.auth == "chatgpt" or self.openai_auth.logged_in())
+                    ):
+                        await self._use_chatgpt()
+                    if self.config.demo and self.config.plugins:
+                        self.diagnostics.append(
+                            "OFFLINE DEMO: configured Python plugins were not imported (trusted code could perform I/O)."
+                        )
+                    else:
+                        for reference in self.config.plugins:
+                            await self.load_plugin(reference)
+                    self._initialized = True
+                except BaseException as exc:
+                    self._initialization_error = f"Harness initialization failed: {type(exc).__name__}: {exc}"
+                    self.diagnostics.append(self._initialization_error)
+                    raise
+            if create_session and not self._session_created:
                 await self.create_session(self.session_id)
-                self._initialized = True
-            except BaseException as exc:
-                self._initialization_error = f"Harness initialization failed: {type(exc).__name__}: {exc}"
-                self.diagnostics.append(self._initialization_error)
-                raise
+                self._session_created = True
 
     async def load_plugin(self, reference: str) -> None:
         module_name, separator, entry = reference.rpartition(":")
@@ -532,7 +540,7 @@ class Harness:
                     self._queue = None
 
     async def history(self) -> list["Message"]:
-        await self.initialize()
+        await self.initialize(create_session=False)
         return await self.agent.session.get_history(self.session_id)
 
     async def context_stats(self, session_id: str = "") -> "ContextStats":
@@ -545,7 +553,7 @@ class Harness:
         return await self.agent.context_stats(session_id or self.session_id)
 
     async def list_sessions(self) -> list[SessionInfo]:
-        await self.initialize()
+        await self.initialize(create_session=False)
         async with aiosqlite.connect(self.agent.session.db_path) as db:
             cursor = await db.execute(
                 "SELECT h.id, h.title, s.updated_at FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
@@ -556,18 +564,20 @@ class Harness:
 
     async def resume(self, id: str) -> None:
         with self.operation("resume"):
-            await self.initialize()
+            await self.initialize(create_session=False)
             if id not in {session.id for session in await self.list_sessions()}:
                 raise ValueError(f"Session {id!r} does not exist in this workspace")
             self.session_id = id
+            self._session_created = True
             self.tools.read_hashes.clear()
 
     async def new_session(self) -> str:
         with self.operation("new session"):
-            await self.initialize()
+            await self.initialize(create_session=False)
             session_id = f"ngn-{uuid.uuid4().hex[:16]}"
             await self.create_session(session_id)
             self.session_id = session_id
+            self._session_created = True
             self.tools.read_hashes.clear()
             return session_id
 

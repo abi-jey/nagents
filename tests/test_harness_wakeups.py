@@ -679,8 +679,8 @@ def test_followup_rejects_starting_ancestor_without_losing_original_notification
             a, b = infos["A"], infos["B"]
             original_initialize = Harness.initialize
 
-            async def pause_initialized_parent(child: Harness) -> None:
-                await original_initialize(child)
+            async def pause_initialized_parent(child: Harness, *, create_session: bool = True) -> None:
+                await original_initialize(child, create_session=create_session)
                 if child._task_id == a.id and child._activation == 1 and not child.tasks._active:
                     initialized.set()
                     await release.wait()

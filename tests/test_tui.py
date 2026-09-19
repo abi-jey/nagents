@@ -81,6 +81,7 @@ class FakeHarness:
         ]
         self.decisions: list[bool] = []
         self.resumed: list[str] = []
+        self.create_session_calls: list[bool] = []
         self.new_count = 0
         self.describe_count = 0
         self.fail_model = False
@@ -93,9 +94,10 @@ class FakeHarness:
     async def deny(self, request: ApprovalRequest) -> bool:
         return False
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, create_session: bool = True) -> None:
         self.initialized = True
         self._initialized = True
+        self.create_session_calls.append(create_session)
 
     async def refresh_skills(self) -> dict[str, Skill]:
         return {}
@@ -432,6 +434,37 @@ def test_sessions_resume_new_and_escape(tmp_path: Path) -> None:
             assert backend.new_count == 1
             assert not app.query(Turn)
             assert app.query_one("#welcome").display
+
+    asyncio.run(scenario())
+
+
+def test_resume_picker_opens_without_creating_a_session(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        app = NagentsApp(cast("Harness", backend), pick_session=True)
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            assert isinstance(app.screen, ChoiceModal)
+            # Choosing must not leave an empty session behind for this run.
+            assert backend.create_session_calls == [False]
+            app.screen.query_one(Input).value = "saved"
+            await pilot.pause()
+            await pilot.press("enter")
+            await idle(app, pilot)
+            assert backend.resumed == ["saved-1"]
+            assert [item.source for item in app.query(Markdown)] == ["Resumed answer"]
+
+    asyncio.run(scenario())
+
+
+def test_resume_with_an_id_does_not_create_an_empty_session(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        app = NagentsApp(cast("Harness", backend), resume_session="selected-id")
+        async with app.run_test() as pilot:
+            await idle(app, pilot)
+            assert backend.create_session_calls == [False]
+            assert backend.resumed == ["selected-id"]
 
     asyncio.run(scenario())
 
@@ -838,8 +871,14 @@ def test_initial_resume_precedes_history_once(tmp_path: Path, continue_session: 
 
 
 def test_initial_resume_options_are_exclusive(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="either"):
-        NagentsApp(cast("Harness", FakeHarness(tmp_path)), resume_session="session", continue_session=True)
+    backend = cast("Harness", FakeHarness(tmp_path))
+    for options in (
+        {"resume_session": "session", "continue_session": True},
+        {"resume_session": "session", "pick_session": True},
+        {"continue_session": True, "pick_session": True},
+    ):
+        with pytest.raises(ValueError, match="one of"):
+            NagentsApp(backend, **options)
 
 
 @pytest.mark.parametrize("selected", ["agent", "audit"])

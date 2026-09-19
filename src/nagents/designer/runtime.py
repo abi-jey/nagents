@@ -214,8 +214,8 @@ class DesignedHarness(Harness):
         if self.definition.invokes:
             self.agent.system_prompt += "\n\n" + self.delegation_description()
 
-    async def initialize(self) -> None:
-        await super().initialize()
+    async def initialize(self, *, create_session: bool = True) -> None:
+        await super().initialize(create_session=create_session)
         if self._design_initialized:
             return
         try:

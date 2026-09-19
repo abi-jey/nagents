@@ -126,9 +126,16 @@ class NagentsApp(App[None]):
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
 
-    def __init__(self, harness: Harness, *, resume_session: str = "", continue_session: bool = False) -> None:
-        if resume_session and continue_session:
-            raise ValueError("Choose either resume_session or continue_session, not both.")
+    def __init__(
+        self,
+        harness: Harness,
+        *,
+        resume_session: str = "",
+        continue_session: bool = False,
+        pick_session: bool = False,
+    ) -> None:
+        if sum(bool(value) for value in (resume_session, continue_session, pick_session)) > 1:
+            raise ValueError("Choose one of resume_session, continue_session, or pick_session.")
         super().__init__()
         self.harness = harness
         if not harness.config.animations:
@@ -136,6 +143,7 @@ class NagentsApp(App[None]):
         configure_theme(self, harness.config.theme, background=harness.config.theme_background)
         self._resume_session = resume_session
         self._continue_session = continue_session
+        self._pick_session = pick_session
         self._active: asyncio.Task[None] | None = None
         self._skill_completion_worker: Worker[None] | None = None
         self._backend_ready = False
@@ -528,9 +536,11 @@ class NagentsApp(App[None]):
     async def _initialize(self) -> None:
         if self._backend_ready:
             return
-        await self.harness.initialize()
         resume, self._resume_session = self._resume_session, ""
         continue_session, self._continue_session = self._continue_session, False
+        pick, self._pick_session = self._pick_session, False
+        # Resuming or choosing must not first register an empty session for this run.
+        await self.harness.initialize(create_session=not (resume or continue_session or pick))
         if resume:
             await self.harness.resume(resume)
         elif continue_session:
@@ -539,6 +549,8 @@ class NagentsApp(App[None]):
                 await self.harness.resume(sessions[0].id)
         self._backend_ready = True
         await self._load_history()
+        if pick:
+            await self._sessions()
 
     async def _load_history(self) -> None:
         history = await self.harness.history()

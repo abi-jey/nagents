@@ -121,7 +121,7 @@ def create_app(
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
         try:
-            await harness.initialize()
+            await harness.initialize(create_session=not (resume_session or continue_session))
             designer = Designer(state)
             await designer.traces.initialize()
             await state.history.initialize()

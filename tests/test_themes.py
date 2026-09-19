@@ -203,7 +203,7 @@ def test_cli_passes_theme_overrides_to_harness(tmp_path: Path, monkeypatch: pyte
     captured: list[HarnessConfig] = []
 
     class PreviewHarness:
-        async def initialize(self) -> None:
+        async def initialize(self, *, create_session: bool = True) -> None:
             pass
 
         def describe(self) -> str:
