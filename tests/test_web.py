@@ -39,6 +39,7 @@ from nagents.web import built_assets
 from nagents.web import local_authority
 from nagents.web import serve
 from nagents.web.app import create_app
+from tests.hang_guard import HANG_GUARD
 from tests.test_codex_provider import endpoint as codex_endpoint
 
 if TYPE_CHECKING:
@@ -189,7 +190,7 @@ class LiveStream:
                 self.output.put_nowait(json.loads(line))
 
     async def event(self, kind: str) -> dict[str, object]:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(HANG_GUARD):
             while True:
                 event = await self.output.get()
                 if event["event"] == kind:
@@ -199,7 +200,7 @@ class LiveStream:
         self.disconnected = True
         await self.input.put({"type": "http.disconnect"})
         with suppress(ClientDisconnect):
-            await asyncio.wait_for(self.task, 5)
+            await asyncio.wait_for(self.task, HANG_GUARD)
 
 
 def test_cli_serve_parsing_and_no_textual(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -487,7 +488,7 @@ def test_models_captures_provider_during_inflight_read(tmp_path: Path, monkeypat
             ):
                 task = asyncio.create_task(client.get("/api/models", headers=headers))
                 try:
-                    await asyncio.wait_for(started.wait(), 5)
+                    await asyncio.wait_for(started.wait(), HANG_GUARD)
                     harness.agent.provider = replacement
                     release.set()
                     response = await task
@@ -583,7 +584,7 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
                 cancelled = await client.post("/api/cancel", json={"run_id": pending["run_id"]}, headers=headers)
                 assert cancelled.status_code == 200
                 assert (await stream.event("run_finished"))["status"] == "cancelled"
-                await asyncio.wait_for(stream.task, 5)
+                await asyncio.wait_for(stream.task, HANG_GUARD)
                 assert harness.stopped.is_set() and harness.decisions == [False]
                 assert (await client.get("/api/bootstrap")).json()["active_run_id"] == ""
                 await stream.disconnect()
@@ -591,7 +592,7 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
                 if not stream.task.done():
                     stream.task.cancel()
                 with suppress(asyncio.CancelledError):
-                    await asyncio.wait_for(stream.task, 5)
+                    await asyncio.wait_for(stream.task, HANG_GUARD)
         assert harness.closed
 
     asyncio.run(check())
@@ -686,7 +687,7 @@ def test_stream_exact_approvals_and_conflicts(tmp_path: Path) -> None:
             ).status_code == 200
             assert (await stream.event("approval_closed"))["decision"] == "allow"
             assert (await stream.event("run_finished"))["status"] == "completed"
-            await asyncio.wait_for(stream.task, 5)
+            await asyncio.wait_for(stream.task, HANG_GUARD)
             assert harness.decisions == [False, True]
             assert (await client.post("/api/approval", json=body, headers=headers)).status_code == 409
             assert (await client.get("/api/sessions", headers=headers)).status_code == 200
@@ -712,7 +713,7 @@ def test_cancellation_joins_run_and_denies_pending(tmp_path: Path, action: str, 
                 assert (await client.post("/api/cancel", json={"run_id": "wrong"}, headers=headers)).status_code == 409
                 assert (await client.post("/api/cancel", json=body, headers=headers)).status_code == 200
                 assert (await stream.event("run_finished"))["status"] == "cancelled"
-                await asyncio.wait_for(stream.task, 5)
+                await asyncio.wait_for(stream.task, HANG_GUARD)
                 assert (await client.post("/api/cancel", json=body, headers=headers)).status_code == 409
             elif action == "disconnect":
                 await stream.disconnect()
@@ -722,7 +723,7 @@ def test_cancellation_joins_run_and_denies_pending(tmp_path: Path, action: str, 
         assert harness.stopped.is_set() and harness.closed
         assert True not in harness.decisions
         if action != "disconnect":
-            await asyncio.wait_for(stream.task, 5)
+            await asyncio.wait_for(stream.task, HANG_GUARD)
 
     asyncio.run(check())
 

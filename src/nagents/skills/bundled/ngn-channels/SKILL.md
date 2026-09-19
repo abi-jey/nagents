@@ -206,9 +206,11 @@ connector authenticates on `open()` with `getMe`, not during import/construction
 | `/session default` | Return to the chat's default session. |
 | `/session default <session-id>` | Set an already-owned default without changing current attachment. |
 | `/new <title>` | Create and attach a fresh owned root; keep old ownership. |
+| `/compact` | Compact the chat's bound session, replacing its history with a summary. |
 
 Recognized commands are handled by the host with an acknowledgement to the
-originating chat. Pending inputs keep the session target assigned at admission
+originating chat. `/compact` runs compaction work on the bound session and
+reports the result instead of returning a cached acknowledgement. Pending inputs keep the session target assigned at admission
 even if a later command changes the binding. Connector parsing alone does not
 change standalone `Agent.listen()` sessions. A slash command is host-specific;
 it is not a universal Agent Skills activation format. In ordinary incoming text,
@@ -253,6 +255,13 @@ Subclass `nagents.channels.Channel`. The required operations are
   unsupported ones explicitly. Return JSON-compatible results.
 - `command(message)` optionally returns `ChannelCommand(name, arguments)`
   synchronously without I/O. The host owns command policy, storage, and replies.
+- `approval(message)` optionally returns `ChannelApproval(conversation_id,
+  session_id, run_id, call_id, allow)` synchronously without I/O when it
+  recognizes a tap on a prompt it rendered; advertise `approvals`. A returned
+  value claims the interaction, so it is never model input. Return empty
+  correlation fields for a recognized-but-stale tap; the host validates every
+  field against its live pending approval and the owning-chat `chat_approvals`
+  policy before applying it.
 - `async activity(event: ChannelActivity) -> None` optionally manages typing or
   similar indicators. `conversation_id`, `thread_id`, `session_id`, and `active`
   identify the target and owner; an old stop must not stop a newer owner's work.

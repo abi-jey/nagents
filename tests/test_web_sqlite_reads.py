@@ -14,6 +14,7 @@ import pytest
 
 from nagents.harness.config import HarnessConfig
 from nagents.web.service import WebState
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import ControlledHarness
 from tests.test_web_deletion import rows
 
@@ -40,7 +41,7 @@ async def _exercise_pending_writer(
             db.execute("BEGIN IMMEDIATE")
             db.execute("UPDATE lock_fixture SET value = 2")
             writer_ready.set()
-            assert commit_requested.wait(5)
+            assert commit_requested.wait(HANG_GUARD)
             db.commit()
 
     def writer_is_pending() -> bool:
@@ -72,7 +73,7 @@ async def _exercise_pending_writer(
         # Park the actual helper's background read until the loop releases the
         # SHARED reader and observes native writer COMMIT/close. The helper's
         # unchanged 0.2s busy timeout is not a scheduler/fsync speed requirement.
-        assert query_ready.wait(5), "The event loop did not complete writer cleanup"
+        assert query_ready.wait(HANG_GUARD), "The event loop did not complete writer cleanup"
         db = connect(*args, **kwargs)
         db.set_trace_callback(observe_query)
         return db
@@ -89,7 +90,7 @@ async def _exercise_pending_writer(
                 async with reader.execute("SELECT value FROM lock_fixture") as cursor:
                     assert [row[0] for row in await cursor.fetchall()] == [1]
                 commit_requested.set()
-                await asyncio.wait_for(pending(), 3)
+                await asyncio.wait_for(pending(), HANG_GUARD)
                 assert not writer.done()
                 # Existing reader/writer connections are real SQLite handles.
                 # Only the helper's next connection is instrumented; it still
@@ -99,7 +100,9 @@ async def _exercise_pending_writer(
                     reading = asyncio.ensure_future(read_rows(state, "SELECT value FROM lock_fixture"))
                     entered = asyncio.create_task(read_entered.wait())
                     try:
-                        done, _ = await asyncio.wait({reading, entered}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+                        done, _ = await asyncio.wait(
+                            {reading, entered}, timeout=HANG_GUARD, return_when=asyncio.FIRST_COMPLETED
+                        )
                         assert done, "The read helper did not reach its SQLite boundary"
                         if reading.done():
                             await reading  # Propagate the synchronous negative control's assertion.

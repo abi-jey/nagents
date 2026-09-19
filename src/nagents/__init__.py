@@ -134,6 +134,12 @@ from .compactor import DEFAULT_COMPACT_PROMPT
 from .compactor import Compactor
 from .compactor import Messages
 from .compactor import Tokens
+from .context_stats import COMPONENT_LABELS
+from .context_stats import ESTIMATE_METHOD
+from .context_stats import ContextComponent
+from .context_stats import ContextStats
+from .context_stats import estimate_context_stats
+from .context_stats import estimate_tool_tokens
 from .events import AudioChunkEvent
 from .events import AudioTranscriptDeltaEvent
 from .events import CompactionDoneEvent
@@ -241,12 +247,14 @@ from .types import ToolDefinition
 
 __all__ = [
     "AUDIO_MIME_TYPES",
+    "COMPONENT_LABELS",
     "DEFAULT_CODEX_MODEL",
     "DEFAULT_COMPACTOR",
     "DEFAULT_COMPACT_PROMPT",
     "DEFAULT_REALTIME_MODEL",
     "DEFAULT_SKILL_TOKEN_LIMIT",
     "DOCUMENT_MIME_TYPES",
+    "ESTIMATE_METHOD",
     "IMAGE_MIME_TYPES",
     "MAX_SKILL_MANIFEST_TOKENS",
     "MAX_SKILL_TOKEN_LIMIT",
@@ -299,6 +307,8 @@ __all__ = [
     "Compactor",
     "CompositeSkillDiscoverer",
     "ContentPart",
+    "ContextComponent",
+    "ContextStats",
     "DirectorySkillDiscoverer",
     "DocumentContent",
     "DoneEvent",
@@ -374,8 +384,10 @@ __all__ = [
     "WAVFileAudioOutput",
     "budget_skill_content",
     "docker_run",
+    "estimate_context_stats",
     "estimate_messages_tokens",
     "estimate_skill_tokens",
+    "estimate_tool_tokens",
     "get_media_capabilities",
     "get_model_context_limit",
     "load_channel",

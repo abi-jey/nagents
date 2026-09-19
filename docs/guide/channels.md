@@ -257,11 +257,18 @@ Point the entry point at `my_connector:plugin` instead of the factory function.
 `load_channel` accepts either form. `writeOnly` marks credential fields for a
 host to store privately and redact from configuration responses.
 
-Three optional Channel methods support richer hosts:
+Four optional Channel methods support richer hosts:
 
 - `command(message)` recognizes an explicit transport command and returns a
   `ChannelCommand`, without doing I/O. The host decides which commands to handle
   and owns session routing and persistence.
+- `approval(message)` recognizes a decision for a prompt the host previously
+  rendered and returns a `ChannelApproval`, without doing I/O. Only connectors
+  that render prompts and advertise `approvals` implement it. Returning a value
+  claims the interaction, so it is never model input: the host applies a fully
+  validated decision or ignores it. A recognized-but-stale interaction carries
+  empty correlation fields. Hosts accept a decision only from the session's
+  permanent owning chat under the connection's `chat_approvals` policy.
 - `activity(event)` receives `ChannelActivity` start/stop notifications for typing
   or similar indicators. A connector must stop its keepalive tasks during close.
 - `on_event(event)` receives `ChannelExecutionEvent` through an optional, default
@@ -274,8 +281,10 @@ Three optional Channel methods support richer hosts:
 
 The standalone `Agent.listen(session_id=...)` API keeps one shared identity. The
 [web host](ngn-web.md#channels-telegram-chats-and-session-binding) adds a routing
-policy: each external chat starts with a fresh session and can reattach only to
-sessions permanently owned by its `(connection ID, conversation ID)`. Ownership
+policy: each external chat starts with a fresh session, reattaches to sessions
+permanently owned by its `(connection ID, conversation ID)`, and may adopt an
+otherwise unowned workspace root (such as one created in the web UI) on attach.
+A root owned by another chat is never adopted. Ownership
 survives detachment, connector replacement, restart, and Trash/Restore; outbound
 tools, typing, and execution notices follow that owner even when the chat selects
 another session with `/new`. Web follow-ups and scheduled work in historical

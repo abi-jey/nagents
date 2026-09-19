@@ -23,6 +23,7 @@ from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.provider import gateway
 from nagents.provider.gateway import GatewayHTTPClient
+from tests.hang_guard import HANG_GUARD
 from tests.test_gateway_provider import KEY
 from tests.test_gateway_provider import LEAK
 from tests.test_gateway_provider import endpoint
@@ -227,7 +228,7 @@ def test_catalog_timeout_or_cancellation_closes_connection(cancel: bool) -> None
         ):
             task = asyncio.create_task(provider.get_model_list())
             try:
-                await asyncio.wait_for(started.wait(), 5)
+                await asyncio.wait_for(started.wait(), HANG_GUARD)
                 if cancel:
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
@@ -235,7 +236,7 @@ def test_catalog_timeout_or_cancellation_closes_connection(cancel: bool) -> None
                 else:
                     with pytest.raises(ModelListError):
                         await task
-                await asyncio.wait_for(disconnected.wait(), 5)
+                await asyncio.wait_for(disconnected.wait(), HANG_GUARD)
                 assert provider.is_model_verified is None
             finally:
                 release.set()

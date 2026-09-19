@@ -1,0 +1,114 @@
+.context-indicator {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.context-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-group);
+  border-radius: 7px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.context-toggle:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-control);
+  color: var(--text-reading);
+}
+
+.context-toggle[aria-expanded="true"] {
+  border-color: var(--focus);
+  color: var(--text-reading);
+}
+
+.context-toggle-label {
+  color: var(--text-secondary);
+}
+
+.context-total {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  color: var(--accent-blue);
+}
+
+.context-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--border-control);
+  border-radius: 10px;
+  background: var(--surface-navigation);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.context-meter {
+  height: 6px;
+  margin-bottom: 10px;
+  border-radius: 3px;
+  background: var(--surface-control);
+  overflow: hidden;
+}
+
+.context-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--accent-blue);
+}
+
+.context-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.context-rows > li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.context-row-label {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-row-value {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  color: var(--text-reading);
+  flex-shrink: 0;
+}
+
+.context-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.context-total-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-group);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.context-note {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}

@@ -23,6 +23,7 @@ from nagents.tui.tasks import TaskScreen
 from nagents.tui.widgets import Composer
 from nagents.tui.widgets import ToolCard
 from nagents.tui.widgets import Turn
+from tests.hang_guard import HANG_GUARD
 from tests.test_tui import FakeHarness
 from tests.test_tui import idle
 from tests.test_tui import make_app
@@ -69,7 +70,7 @@ def test_three_offline_jobs_render_in_tui_and_tasks_view(tmp_path: Path) -> None
         async with app.run_test(size=(100, 30)) as pilot:
             await idle(app, pilot)
             await send(app, pilot, "demo subagents")
-            async with asyncio.timeout(10):
+            async with asyncio.timeout(HANG_GUARD):
                 while app.busy:
                     await pilot.pause(0.02)
             tasks = harness.tasks.list()

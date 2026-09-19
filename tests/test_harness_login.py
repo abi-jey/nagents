@@ -25,6 +25,7 @@ from nagents.provider import codex as codex_module
 from nagents.provider.codex import DEFAULT_CODEX_MODEL
 from nagents.provider.codex import CodexCredentials
 from nagents.provider.codex import CodexProvider
+from tests.hang_guard import HANG_GUARD
 
 
 class FakeAuth:
@@ -176,7 +177,7 @@ def test_cancel_login_awaits_polling_and_releases_operation(tmp_path: Path, monk
 
         task = asyncio.create_task(harness.login(show))
         try:
-            await asyncio.wait_for(fake.polling.wait(), timeout=2)
+            await asyncio.wait_for(fake.polling.wait(), HANG_GUARD)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -248,7 +249,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
     home = tmp_path / "home"
     project = home / "project"
     (project / "ngn").mkdir(parents=True)
-    (project / "ngn/config.toml").write_text('model = "untrusted-model"\n')
+    (project / "ngn/config.yaml").write_text("model: untrusted-model\n")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", "")

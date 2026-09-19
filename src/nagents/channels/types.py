@@ -229,6 +229,32 @@ class ChannelCommand:
 
 
 @dataclass(frozen=True)
+class ChannelApproval:
+    """A connector-recognized decision for a prompt the host previously rendered.
+
+    Only connectors that render approval prompts and advertise ``approvals``
+    return this from :meth:`Channel.approval`. Every correlation field is
+    validated by the host against its live pending approval; an interaction that
+    is recognized but no longer correlates (expired prompt, replaced run) carries
+    empty fields and must be ignored, never applied or enqueued as model input.
+    """
+
+    conversation_id: str = ""
+    session_id: str = ""
+    run_id: str = ""
+    call_id: str = ""
+    allow: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("conversation_id", "session_id", "run_id", "call_id"):
+            value = getattr(self, name)
+            if type(value) is not str or len(value) > 256 or (value and not value.isprintable()):
+                raise ValueError(f"ChannelApproval {name} must be a short printable string")
+        if type(self.allow) is not bool:
+            raise ValueError("ChannelApproval allow must be a boolean")
+
+
+@dataclass(frozen=True)
 class ChannelActivity:
     """Session activity for transport indicators, independent of model replies."""
 
@@ -354,6 +380,16 @@ class Channel(ABC):
 
     def command(self, message: ChannelMessage) -> ChannelCommand | None:
         """Recognize an explicit transport command without doing I/O."""
+        return None
+
+    def approval(self, message: ChannelMessage) -> ChannelApproval | None:
+        """Recognize a decision for a rendered approval prompt, without doing I/O.
+
+        Only connectors that render approval prompts and advertise ``approvals``
+        implement this. Returning a value claims the interaction: the host either
+        applies a fully validated decision or ignores it, and never enqueues it as
+        model input. Returning ``None`` leaves the message to normal handling.
+        """
         return None
 
     async def activity(self, event: ChannelActivity) -> None:

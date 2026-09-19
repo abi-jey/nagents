@@ -22,6 +22,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
+from nagents.compactor import Messages
+from nagents.compactor import Tokens
 from nagents.harness.config import API_NAMES
 from nagents.harness.config import PROVIDERS
 from nagents.harness.dictation import BYTES_PER_SECOND
@@ -37,7 +39,39 @@ MAX_SETTINGS_BYTES = 16384
 MAX_API_KEY_BYTES = 4096
 PROVIDER_APIS: tuple[str, ...] = tuple(name for name in API_NAMES if name != "completions")
 PROVIDER_AUTHS: tuple[str, ...] = ("auto", "api-key", "chatgpt")
+COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
+DEFAULT_COMPACT_TOKENS = 200_000
+DEFAULT_COMPACT_MESSAGES = 100
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _current_compaction(harness: "Harness") -> tuple[str, int, int]:
+    """Project the live agent's compaction criteria into settings fields."""
+    if harness.agent.compactor is None:
+        return "off", DEFAULT_COMPACT_TOKENS, DEFAULT_COMPACT_MESSAGES
+    configured = harness.agent.compact_on
+    if isinstance(configured, Messages):
+        return "messages", DEFAULT_COMPACT_TOKENS, configured.length
+    if isinstance(configured, Tokens):
+        window = configured.total or configured.input or DEFAULT_COMPACT_TOKENS
+        return "tokens", window, DEFAULT_COMPACT_MESSAGES
+    return "auto", DEFAULT_COMPACT_TOKENS, DEFAULT_COMPACT_MESSAGES
+
+
+def _apply_compaction(harness: "Harness", trigger: str, tokens: int, messages: int) -> None:
+    """Apply a validated criteria choice to the shared live agent."""
+    if trigger == "off":
+        harness.agent.compactor = None
+        harness.agent.compact_on = None
+        return
+    harness.agent.compactor = "self"
+    if trigger == "tokens":
+        harness.agent.compact_on = Tokens(total=tokens)
+    elif trigger == "messages":
+        harness.agent.compact_on = Messages(length=messages)
+    else:
+        # Provider default: context-limit-based, resolved per run.
+        harness.agent.compact_on = None
 
 
 class _SettingsValuesV1(BaseModel):
@@ -85,6 +119,16 @@ class SettingsValues(_SettingsValuesV2):
     api: str = Field(min_length=1, max_length=20)
     auth: str = Field(min_length=1, max_length=20)
     api_key_env: str = Field(min_length=1, max_length=64)
+    compact_trigger: str = Field(default="auto", min_length=1, max_length=20)
+    compact_tokens: int = Field(default=DEFAULT_COMPACT_TOKENS, ge=1024, le=10_000_000)
+    compact_messages: int = Field(default=DEFAULT_COMPACT_MESSAGES, ge=1, le=10_000)
+
+    @field_validator("compact_trigger")
+    @classmethod
+    def compaction_trigger(cls, value: object) -> object:
+        if isinstance(value, str) and value not in COMPACTION_TRIGGERS:
+            raise ValueError("Unsupported compaction trigger")
+        return value
 
     @field_validator("provider")
     @classmethod
@@ -126,6 +170,7 @@ class SettingsValues(_SettingsValuesV2):
     @classmethod
     def current(cls, harness: "Harness") -> "SettingsValues":
         config = harness.config
+        trigger, tokens, messages = _current_compaction(harness)
         return cls(
             model=harness.agent.provider.model,
             agent=config.agent,
@@ -143,6 +188,9 @@ class SettingsValues(_SettingsValuesV2):
             api=config.api,
             auth=config.auth,
             api_key_env=config.api_key_env,
+            compact_trigger=trigger,
+            compact_tokens=tokens,
+            compact_messages=messages,
         )
 
     def apply(self, harness: "Harness") -> None:
@@ -158,6 +206,7 @@ class SettingsValues(_SettingsValuesV2):
         config.max_subagent_depth = self.max_subagent_depth
         harness.agent.provider.model = self.model
         harness.agent.max_tool_rounds = self.max_tool_rounds
+        _apply_compaction(harness, self.compact_trigger, self.compact_tokens, self.compact_messages)
         harness.refresh_instructions()
 
 

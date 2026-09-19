@@ -27,6 +27,7 @@ from nagents.types import ContentPart
 from nagents.types import Message
 from nagents.types import TextContent
 from nagents.types import ToolCall
+from tests.hang_guard import HANG_GUARD
 from tests.test_extensions import OfflineProvider
 from tests.test_extensions import ReplacementStrategy
 from tests.test_extensions import collect
@@ -512,7 +513,7 @@ def test_cancellation_unwinds_discovery_loading_and_run_hooks(tmp_path: Path, bo
 
         agent.register_tool(work)
         task = asyncio.create_task(collect(agent, "$guide" if boundary == "load" else "go"))
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), HANG_GUARD)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

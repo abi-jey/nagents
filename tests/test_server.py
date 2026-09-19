@@ -33,6 +33,9 @@ if TYPE_CHECKING:
 
 pytest.importorskip("fastapi")
 
+# Progress deadlines, not latency assertions: slow runners must not flake.
+HANG_GUARD = 60.0
+
 TOKEN = "synthetic-server-token-not-a-real-secret"
 AUTH = ("authorization", f"Bearer {TOKEN}")
 
@@ -152,7 +155,7 @@ def request_app(
             "client": (client, 50000),
             "server": ("127.0.0.1", 8080),
         }
-        await asyncio.wait_for(server.app(scope, receive, send), timeout=3)
+        await asyncio.wait_for(server.app(scope, receive, send), timeout=HANG_GUARD)
         start = messages[0]
         assert start["type"] == "http.response.start"
         return HTTPResult(
@@ -460,7 +463,7 @@ def test_startup_shutdown_scheduler_lifecycle(server: ModuleType) -> None:
         assert scheduler._on_wakeup is not None
         await asyncio.sleep(0)
         await server._shutdown()
-        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(task, timeout=HANG_GUARD)
         assert scheduler._check_task is None
 
     asyncio.run(lifecycle())

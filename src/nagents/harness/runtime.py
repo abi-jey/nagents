@@ -50,6 +50,7 @@ from .types import TaskCompleted
 from .types import TaskMessage
 
 if TYPE_CHECKING:
+    from nagents.context_stats import ContextStats
     from nagents.events import CompactionDoneEvent
     from nagents.provider import Provider
     from nagents.types import GenerationConfig
@@ -529,6 +530,15 @@ class Harness:
     async def history(self) -> list["Message"]:
         await self.initialize()
         return await self.agent.session.get_history(self.session_id)
+
+    async def context_stats(self, session_id: str = "") -> "ContextStats":
+        """Estimate the request context for a session without running the model.
+
+        Read-only and safe to call while idle; it never changes the selected
+        session, prompt content, or model behavior.
+        """
+        await self.initialize()
+        return await self.agent.context_stats(session_id or self.session_id)
 
     async def list_sessions(self) -> list[SessionInfo]:
         await self.initialize()

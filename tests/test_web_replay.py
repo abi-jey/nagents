@@ -15,6 +15,7 @@ from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
 from nagents.web.replay import RunReplay
 from nagents.web.service import Run
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import site
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ def capture_archive(app: Site) -> dict[str, object]:
     app.submit("show archive")
 
     async def ready() -> None:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(HANG_GUARD):
             while True:
                 run = app.state.active
                 if run is not None and any(record.get("chunk") == "partial draft" for record in run.drafts.values()):
@@ -150,7 +151,7 @@ def test_ordered_archive_includes_scheduler_lifecycle_once(tmp_path: Path, monke
         app.submit("schedule")
 
         async def ready() -> None:
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 while app.state.active is None or not any(
                     record.get("chunk") == "waiting after schedule" for record in app.state.active.drafts.values()
                 ):

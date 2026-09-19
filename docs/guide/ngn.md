@@ -63,12 +63,12 @@ Use a model ID your provider account actually supports. `--base-url` and
 arguments or project configuration. Credentials are not copied from another
 coding assistant's configuration, and ngn does not automatically load `.env`.
 
-Use `api = "auto"` for provider-native defaults, or choose `chat_completions`,
+Use `api: auto` for provider-native defaults, or choose `chat_completions`,
 `responses`, `messages`, or `completions` for an endpoint supporting that route.
 Legacy Completions is a text-only library route: ngn rejects it during harness
 setup because coding requires conversation roles and tools.
 LiteLLM requires an explicit `base_url` and an API-key reference such as
-`api_key_env = "LITELLM_API_KEY"`; it does not use ChatGPT OAuth or require a
+`api_key_env: LITELLM_API_KEY`; it does not use ChatGPT OAuth or require a
 gateway SDK in ngn. See [provider recipes](ngn-configuration.md#provider-recipes).
 
 ## Composer and commands
@@ -124,8 +124,8 @@ ngn --submit-mode interrupt --tab-action complete
 ngn --tab-action focus
 ```
 
-The equivalent TOML settings are `submit_mode = "queue"` and
-`tab_action = "agent"`. Tab alternatives are `complete` for command completion
+The equivalent YAML settings are `submit_mode: queue` and
+`tab_action: agent`. Tab alternatives are `complete` for command completion
 and `focus` for ordinary widget navigation. They also accept `NGN_SUBMIT_MODE`
 and `NGN_TAB_ACTION` environment defaults.
 
@@ -175,10 +175,10 @@ semantic colors instead of sharing one accent. `theme_background` separately sel
 `"auto"`, `"terminal"`, or `"theme"`: follow the preset's automatic behavior,
 retain the terminal background, or use the theme background. For example:
 
-```toml
-theme = "ocean"
-theme_background = "terminal"
-animations = false
+```yaml
+theme: ocean
+theme_background: terminal
+animations: false
 ```
 
 The equivalent CLI choices make background variants easy to compare:
@@ -198,11 +198,11 @@ guessing whether the inherited background is light or dark.
 
 Each preset has a subtle three-column ASCII activity animation at eight frames
 per second; idle/error status states remain still. In the current checkout,
-`--no-animations`, `animations = false` in TOML, or `NGN_ANIMATIONS=false`
+`--no-animations`, `animations = false` in YAML, or `NGN_ANIMATIONS=false`
 disables the indicator, animated scrolling, and input cursor blinking.
 `TEXTUAL_ANIMATIONS=none` also disables these motions. Brief button-press feedback
-remains. Theme selection also accepts TOML `theme` and `NGN_THEME`; background
-selection has the `NGN_THEME_BACKGROUND` environment default. TOML overrides
+remains. Theme selection also accepts YAML `theme` and `NGN_THEME`; background
+selection has the `NGN_THEME_BACKGROUND` environment default. YAML overrides
 `NGN_*` environment defaults. These are color/motion presets, not a graphical
 Bot avatar or a separate team-view implementation.
 
@@ -211,18 +211,18 @@ Bot avatar or a separate team-view implementation.
 Microphone dictation is **off by default**. It is short-recording transcription
 into the composer, not realtime speech-to-speech and not an always-listening
 assistant. Install the optional `voice` extra alongside `tui` for `sounddevice`
-capture, then explicitly enable it in trusted, flat TOML:
+capture, then explicitly enable it in trusted, flat YAML:
 
-```toml
-dictation_enabled = true
-dictation_model = "gpt-4o-mini-transcribe"
-dictation_base_url = "https://api.openai.com/v1"
-dictation_api_key_env = "OPENAI_API_KEY"
-dictation_language = ""
-dictation_max_seconds = 120
+```yaml
+dictation_enabled: true
+dictation_model: gpt-4o-mini-transcribe
+dictation_base_url: https://api.openai.com/v1
+dictation_api_key_env: OPENAI_API_KEY
+dictation_language: ""
+dictation_max_seconds: 120
 ```
 
-Set the referenced API key outside TOML. The transcription settings are separate
+Set the referenced API key outside YAML. The transcription settings are separate
 from `provider`, `model`, `base_url`, and `api_key_env` for the conversation.
 For example, a conversation can use Anthropic, LiteLLM, or ChatGPT device login
 while dictation uses a separately configured transcription API.
@@ -313,7 +313,7 @@ of waiting indefinitely for a slot; a parent still working or waiting for its
 own children occupies a slot. Further limits are at most
 `min(max_tool_rounds, 12)` tool rounds per child, a five-minute child timeout,
 a 16,000-character delegation prompt, and
-12,000-character results. These are implementation limits, not extra TOML knobs.
+12,000-character results. These are implementation limits, not extra YAML knobs.
 Children use separate sessions/providers and share the parent's credential
 manager for in-process refresh coordination. They receive the delegated prompt
 and applicable instruction context, not a copy of the full parent conversation.
@@ -421,7 +421,7 @@ secret manager. A non-interactive `ngn login` without a method keeps the
 historical ChatGPT device-code behavior.
 
 The saved selection becomes this machine's provider default, but it is the
-lowest layer above built-ins: `NGN_*` environment variables, TOML files, and CLI
+lowest layer above built-ins: `NGN_*` environment variables, YAML files, and CLI
 flags all override it, and a stored key is used only when its environment
 variable is unset. `ngn login --status` prints the ChatGPT status and the active
 provider login without a network request.
@@ -477,13 +477,13 @@ interactive login, token refresh/storage, and route selection live in the harnes
 The `auth` configuration field and `--auth` accept:
 
 - `auto`: prefer a saved ChatGPT login only for the default OpenAI endpoint with
-  `api = "auto"`; otherwise use the configured API-key environment variable.
+  `api: auto`; otherwise use the configured API-key environment variable.
 - `api-key`: always use the configured API-key environment variable.
 - `chatgpt`: require the saved ChatGPT login and the Codex Responses route.
 
 Saved ChatGPT credentials are never sent to a custom `base_url`. Such endpoints
-use API-key authentication, and explicitly combining `auth = "chatgpt"` with a
-custom endpoint or an `api` override is rejected. Keep `api = "auto"` for
+use API-key authentication, and explicitly combining `auth: chatgpt` with a
+custom endpoint or an `api` override is rejected. Keep `api: auto` for
 ChatGPT/Codex login, even though its dedicated route uses Responses. Device login
 is disabled in offline demo mode.
 
@@ -555,8 +555,8 @@ after the subcommand; prefer supplying each option only once.
 | Common option | Meaning |
 | --- | --- |
 | `--workspace PATH`, `-C PATH` | Select an existing workspace directory. |
-| `--config PATH` | Load and explicitly trust a TOML file at any location. |
-| `--trust-project` | Also trust `<workspace>/.ngn/config.toml`. |
+| `--config PATH` | Load and explicitly trust a YAML file at any location. |
+| `--trust-project` | Also trust `<workspace>/.ngn/config.yaml`. |
 | `--provider NAME` | Select provider name/alias. |
 | `--model ID`, `-m ID` | Set top-level model selection. A profile's own model can supersede it on activation. |
 | `--base-url URL` | Override API endpoint. Never include credentials. |
@@ -581,9 +581,9 @@ after the subcommand; prefer supplying each option only once.
 | `--continue`, `-c` | Resume the latest session in this workspace, if any. |
 | `--resume ID` | Resume a specific session in this workspace. Mutually exclusive with `--continue`. |
 
-Not every TOML field has a matching CLI flag: `api_version`, `data_dir`,
-`shell_timeout`, `max_output`, `max_file_bytes`, and `max_tool_rounds` use TOML or
-their `NGN_*` defaults. Profile tables use TOML. Use the
+Not every YAML field has a matching CLI flag: `api_version`, `data_dir`,
+`shell_timeout`, `max_output`, `max_file_bytes`, and `max_tool_rounds` use YAML or
+their `NGN_*` defaults. Profile tables use YAML. Use the
 [configuration reference](ngn-configuration.md) for types and validation, and
 `--help` for the flags present in the particular source build.
 
@@ -604,37 +604,38 @@ and is not relocated by `data_dir`.
 
 ## Configuration
 
-User configuration is `~/.config/ngn/config.toml` (or under `$XDG_CONFIG_HOME`).
-Project configuration is `<workspace>/.ngn/config.toml` and requires
+User configuration is `~/.config/ngn/config.yaml` (or under `$XDG_CONFIG_HOME`).
+Project configuration is `<workspace>/.ngn/config.yaml` and requires
 `--trust-project` **or explicit selection of that file** with `--config`.
-`--config /any/path/settings.toml` explicitly trusts that file; its name and
-location need not be `.ngn/config.toml`. Settings are top-level TOML with no
-`[ngn]` wrapper; named profiles use `[profiles.NAME]`:
+`--config /any/path/settings.yaml` explicitly trusts that file; its name and
+location need not be `.ngn/config.yaml`. Settings are top-level YAML with no
+`ngn:` wrapper; named profiles live under a `profiles:` mapping:
 
-```toml
-provider = "openai"
-model = "gpt-4.1"
-api = "auto"
-auth = "auto"
-api_key_env = "OPENAI_API_KEY"
-agent = "build"
-shell_timeout = 60.0
-max_subagent_depth = 2
+```yaml
+provider: openai
+model: gpt-4.1
+api: auto
+auth: auto
+api_key_env: OPENAI_API_KEY
+agent: build
+shell_timeout: 60.0
+max_subagent_depth: 2
 
-[profiles.audit]
-mode = "reviewer"
-instructions = "Prioritize regressions and missing tests."
+profiles:
+  audit:
+    mode: reviewer
+    instructions: Prioritize regressions and missing tests.
 ```
 
-Precedence is built-in defaults, `NGN_*` environment defaults, user TOML, trusted
-project TOML, explicit TOML, then CLI flags. `NGN_MODEL`, `NGN_PROVIDER`,
+Precedence is built-in defaults, `NGN_*` environment defaults, user YAML, trusted
+project YAML, explicit YAML, then CLI flags. `NGN_MODEL`, `NGN_PROVIDER`,
 `NGN_AUTH`, and `NGN_API_KEY_ENV` are examples of environment defaults. Plugin
-paths in TOML resolve relative to that file; explicit `--plugin` paths resolve
-relative to the shell's current directory. `data_dir` in TOML is also relative
-to that file, not the workspace. TOML plugin lists replace earlier lists; CLI
-`--plugin` entries append. Profiles merge by name, but a later same-name table
+paths in YAML resolve relative to that file; explicit `--plugin` paths resolve
+relative to the shell's current directory. `data_dir` in YAML is also relative
+to that file, not the workspace. YAML plugin lists replace earlier lists; CLI
+`--plugin` entries append. Profiles merge by name, but a later same-name entry
 replaces the whole profile, with omitted fields resetting to profile defaults.
-No literal API keys belong in TOML.
+No literal API keys belong in YAML.
 
 See the [full configuration reference](ngn-configuration.md) for every accepted
 field, exact types/defaults/ranges, provider recipes, and the distinction between
@@ -661,7 +662,7 @@ The catalog refreshes at incoming text boundaries, before each model request,
 and before/after every tool invocation. Changes therefore become available during
 the same turn without restarting ngn. Each load defaults to a 10,000-token
 approximation based on UTF-8 bytes divided by four, with UTF-8-safe truncation
-and a bounded aggregate allowance for explicit activation. Trusted TOML
+and a bounded aggregate allowance for explicit activation. Trusted YAML
 `skill_token_limit = 10000` or the `NGN_SKILL_TOKEN_LIMIT` environment default
 configures this same allowance (integer 1–100,000). All discovery sources share
 the top-level single-line metadata parser; extra and nested metadata is ignored. Loading adds task
@@ -764,7 +765,7 @@ MCP implementation details to the terminal widgets.
 ## Trust and permissions
 
 - Global configuration and an explicitly selected `--config` file are trusted.
-- Project `.ngn/config.toml` is ignored unless `--trust-project` is supplied or
+- Project `.ngn/config.yaml` is ignored unless `--trust-project` is supplied or
   that file is explicitly selected with `--config`.
   Review it and referenced Python code before enabling it.
 - `--plugin path.py:setup` explicitly trusts that Python code. Installed-module

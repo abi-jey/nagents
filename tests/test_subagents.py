@@ -37,6 +37,7 @@ from nagents.harness.types import TaskStarted
 from nagents.provider.codex import CodexProvider
 from nagents.types import Message
 from nagents.types import ToolCall
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -187,8 +188,8 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
         task = asyncio.create_task(consume())
         try:
             await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), 3)
-            await asyncio.wait_for(productive.wait(), 3)
-            await asyncio.wait_for(preliminary.wait(), 3)
+            await asyncio.wait_for(productive.wait(), HANG_GUARD)
+            await asyncio.wait_for(preliminary.wait(), HANG_GUARD)
             assert not task.done()
             assert len([event for event in observed if isinstance(event, TaskStarted)]) == count
             acks = [event for event in observed if isinstance(event, ToolResultEvent) and event.name == "delegate"]
@@ -204,7 +205,7 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
             assert len(names) == count
             assert all(not provider.closed for provider in providers)
             release.set()
-            await asyncio.wait_for(task, 5)
+            await asyncio.wait_for(task, HANG_GUARD)
             assert len([event for event in observed if isinstance(event, DoneEvent)]) == 1
             assert isinstance(observed[-1], DoneEvent) and observed[-1].final_text == "Combined child findings"
             completions = [event for event in observed if isinstance(event, TaskCompleted)]
@@ -267,10 +268,10 @@ def test_ready_results_are_batched_and_custom_context_hooks_still_run(
         harness.agent.plugins.append(Context())
         task = asyncio.create_task(collect(harness))
         try:
-            await asyncio.wait_for(parent_waiting.wait(), 3)
+            await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
             continue_parent.set()
-            events = await asyncio.wait_for(task, 3)
+            events = await asyncio.wait_for(task, HANG_GUARD)
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 2
             notes = notifications(await harness.history())
             assert len(notes) == 1
@@ -310,7 +311,7 @@ def test_child_failure_is_delivered_once_without_exception_secrets(
             monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 0.05)
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
         try:
-            events = await asyncio.wait_for(collect(harness), 5)
+            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             completed = [event for event in events if isinstance(event, TaskCompleted)]
             assert len(completed) == 1 and completed[0].error and not completed[0].result
             assert len(notifications(await harness.history())) == 1
@@ -354,7 +355,7 @@ def test_parent_interruption_awaits_children_and_does_not_close_shared_auth_earl
             if method == "aclose":
                 async for event in stream:
                     if isinstance(event, ToolResultEvent) and event.name == "delegate":
-                        await asyncio.wait_for(child_started.wait(), 3)
+                        await asyncio.wait_for(child_started.wait(), HANG_GUARD)
                         await stream.aclose()
                         break
             else:
@@ -363,14 +364,14 @@ def test_parent_interruption_awaits_children_and_does_not_close_shared_auth_earl
                     return [event async for event in stream]
 
                 task = asyncio.create_task(consume())
-                await asyncio.wait_for(child_started.wait(), 3)
-                await asyncio.wait_for(parent_waiting.wait(), 3)
+                await asyncio.wait_for(child_started.wait(), HANG_GUARD)
+                await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
                 if method == "cancel":
                     task.cancel()
                 else:
                     await harness.close()
                 with pytest.raises(asyncio.CancelledError):
-                    await asyncio.wait_for(task, 3)
+                    await asyncio.wait_for(task, HANG_GUARD)
             assert all(worker.done() for worker in harness.tasks._workers.values())
             assert all(provider.closed for provider in providers[1:])
             assert harness.tasks.list()[0].status == "cancelled"
@@ -412,15 +413,15 @@ def test_full_ui_queue_cancellation_does_not_deadlock(tmp_path: Path, monkeypatc
             async for event in stream:
                 if isinstance(event, TextChunkEvent):
                     break
-            await asyncio.wait_for(child_started.wait(), 3)
+            await asyncio.wait_for(child_started.wait(), HANG_GUARD)
 
             async def full() -> None:
                 while harness._queue is not None and not harness._queue.full():
                     await asyncio.sleep(0)
 
-            await asyncio.wait_for(full(), 3)
+            await asyncio.wait_for(full(), HANG_GUARD)
             assert harness._queue is not None and harness._queue.full()
-            await asyncio.wait_for(stream.aclose(), 3)
+            await asyncio.wait_for(stream.aclose(), HANG_GUARD)
             assert all(worker.done() for worker in harness.tasks._workers.values())
             assert providers[1].closed
         finally:
@@ -482,7 +483,7 @@ def test_repeated_cancellation_waits_for_child_provider_cleanup(
         harness.tasks.begin(harness.session_id)
         try:
             await harness.tasks.delegate("Review")
-            await asyncio.wait_for(closing.wait(), 3)
+            await asyncio.wait_for(closing.wait(), HANG_GUARD)
             with pytest.raises(ValueError, match="concurrently"):
                 await harness.tasks.delegate("Cannot reuse a slot before cleanup")
             stop = asyncio.create_task(harness.tasks.end())
@@ -493,7 +494,7 @@ def test_repeated_cancellation_waits_for_child_provider_cleanup(
             assert not providers[1].closed
             release.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(stop, 3)
+                await asyncio.wait_for(stop, HANG_GUARD)
             assert providers[1].closed
             assert all(worker.done() for worker in harness.tasks._workers.values())
             assert harness.tasks.list()[0].status == "cancelled"
@@ -546,7 +547,7 @@ def test_parent_failure_does_not_autocontinue_and_cancels_jobs(tmp_path: Path, m
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         try:
-            events = await asyncio.wait_for(collect(harness), 3)
+            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert any(isinstance(event, ErrorEvent) for event in events)
             assert len(providers[0].requests) == 2
             assert harness.tasks.list()[0].status == "cancelled"
@@ -620,7 +621,7 @@ def test_auto_continuations_share_one_total_budget(tmp_path: Path, monkeypatch: 
         monkeypatch.setattr(subagents, "MAX_TASKS", 2)
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         try:
-            events = await asyncio.wait_for(collect(harness), 5)
+            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert len(providers) == 3
             assert len([event for event in events if isinstance(event, TaskStarted)]) == 2
             assert any(
@@ -789,7 +790,7 @@ def test_genuine_offline_children_use_existing_demo_provider(tmp_path: Path) -> 
             ack = await harness.tasks.delegate("Inspect the workspace read-only")
             assert ack["status"] == "running"
             assert harness.tasks.list()[0].status == "running"
-            notification = await asyncio.wait_for(harness.tasks.notification(), 5)
+            notification = await asyncio.wait_for(harness.tasks.notification(), HANG_GUARD)
             assert notification is not None and "OFFLINE DEMO" in notification
             assert harness.tasks.list()[0].status == "completed"
             assert [entry.id for entry in await harness.list_sessions()] == [harness.session_id]
@@ -834,7 +835,7 @@ def test_recursive_tree_depth_permission_ceiling_and_fail_fast_slots(
         harness, providers = setup_harness(tmp_path, monkeypatch, script, agent=mode)
         harness.config.max_subagent_depth = depth
         try:
-            events = await asyncio.wait_for(collect(harness), 5)
+            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             infos = harness.tasks.list()
             assert len(infos) == min(depth, subagents.MAX_CONCURRENT)
             assert [info.depth for info in infos] == list(range(1, len(infos) + 1))
@@ -1057,7 +1058,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
         harness.tools.builtins["pause"] = pause
         task = asyncio.create_task(collect(harness))
         try:
-            await asyncio.wait_for(parent_waiting.wait(), 3)
+            await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
             info = harness.tasks.list()[0]
             monkeypatch.setattr(subagents, "MAX_TASKS", 1)
@@ -1067,7 +1068,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             monkeypatch.setattr(subagents, "MAX_TASKS", 8)
             accepted = [event async for event in harness.continue_task(info.id, "Human message while parent busy")]
             assert len(accepted) == 1
-            await asyncio.wait_for(child_waiting.wait(), 3)
+            await asyncio.wait_for(child_waiting.wait(), HANG_GUARD)
             with pytest.raises(RuntimeError, match="Child is busy"):
                 _ = [event async for event in harness.continue_task(info.id, "Do not silently queue this")]
             assert harness.tasks._used == 2 and harness.tasks.list()[0].followups == 1
@@ -1075,7 +1076,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             release_child.set()
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
             release_parent.set()
-            events = await asyncio.wait_for(task, 5)
+            events = await asyncio.wait_for(task, HANG_GUARD)
             assert len([event for event in events if isinstance(event, TaskMessage)]) == 1
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 2
             assert_balanced(await harness.history())
@@ -1115,14 +1116,14 @@ def test_manual_descendant_followup_reaches_immediate_parent_not_root_model(
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
         task = asyncio.create_task(collect(harness))
         try:
-            await asyncio.wait_for(ancestor_waiting.wait(), 3)
+            await asyncio.wait_for(ancestor_waiting.wait(), HANG_GUARD)
             descendant = next(info for info in harness.tasks.list() if info.depth == 2)
-            await asyncio.wait_for(harness.tasks._workers[descendant.id], 3)
+            await asyncio.wait_for(harness.tasks._workers[descendant.id], HANG_GUARD)
             _ = [event async for event in harness.continue_task(descendant.id, "Human to grandchild")]
-            await asyncio.wait_for(harness.tasks._workers[descendant.id], 3)
+            await asyncio.wait_for(harness.tasks._workers[descendant.id], HANG_GUARD)
             assert harness.tasks._used == 3
             release_ancestor.set()
-            events = await asyncio.wait_for(task, 5)
+            events = await asyncio.wait_for(task, HANG_GUARD)
             ancestor = next(info for info in harness.tasks.list() if info.depth == 1)
             parent_history = await harness.task_history(ancestor.id)
             root_history = await harness.history()
@@ -1177,7 +1178,7 @@ def test_followup_and_retention_limits_and_cancelled_children_are_not_replayed(
                 return [event async for event in harness.continue_task(info.id, "Explicit continuation")]
 
             task = asyncio.create_task(consume())
-            await asyncio.wait_for(child_waiting.wait(), 3)
+            await asyncio.wait_for(child_waiting.wait(), HANG_GUARD)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -1232,17 +1233,17 @@ def test_tree_shutdown_under_backpressure_and_repeated_close_cancellation(
             async for event in stream:
                 if isinstance(event, TextChunkEvent):
                     break
-            await asyncio.wait_for(grandchild_waiting.wait(), 3)
+            await asyncio.wait_for(grandchild_waiting.wait(), HANG_GUARD)
             assert len(harness.tasks.list()) == 3
             stop = asyncio.create_task(harness.close())
-            await asyncio.wait_for(closing.wait(), 3)
+            await asyncio.wait_for(closing.wait(), HANG_GUARD)
             stop.cancel()
             await asyncio.sleep(0)
             stop.cancel()
             assert not stop.done()
             release_close.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(stop, 5)
+                await asyncio.wait_for(stop, HANG_GUARD)
             await harness.close()
             assert all(provider.closed for provider in providers)
             assert all(info.status == "cancelled" for info in harness.tasks.list())
@@ -1370,10 +1371,10 @@ def test_cancellation_fails_closed_for_shared_approval_queue(
         harness.approval_handler = approve
         task = asyncio.create_task(collect(harness))
         try:
-            await asyncio.wait_for(approving.wait(), 3)
+            await asyncio.wait_for(approving.wait(), HANG_GUARD)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 5)
+                await asyncio.wait_for(task, HANG_GUARD)
             assert len(approvals) == 1
             assert not list(tmp_path.glob("child-*.txt"))
             assert all(info.status == "cancelled" for info in harness.tasks.list())
@@ -1414,7 +1415,7 @@ def test_continuation_intersects_retained_ancestor_ceiling(
 
         harness.approval_handler = approve
         try:
-            await asyncio.wait_for(collect(harness), 5)
+            await asyncio.wait_for(collect(harness), HANG_GUARD)
             infos = harness.tasks.list()
             assert len(infos) == depth and all(info.mode == "build" for info in infos)
             ancestor, descendant = infos[0], infos[-1]
@@ -1468,15 +1469,15 @@ def test_cancelled_child_with_cleanup_error_cannot_continue(
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         task = asyncio.create_task(collect(harness))
         try:
-            await asyncio.wait_for((started if phase == "execution" else closing).wait(), 3)
+            await asyncio.wait_for((started if phase == "execution" else closing).wait(), HANG_GUARD)
             worker = harness.tasks._workers[harness.tasks.list()[0].id]
             task.cancel()
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(HANG_GUARD):
                 while not worker.cancelling():
                     await asyncio.sleep(0)
             release_close.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 5)
+                await asyncio.wait_for(task, HANG_GUARD)
             info = harness.tasks.list()[0]
             worker = harness.tasks._workers[info.id]
             assert worker.cancelled() and providers[1].closed

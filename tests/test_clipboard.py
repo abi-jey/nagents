@@ -22,6 +22,7 @@ from nagents.tui import clipboard as clipboard_module
 from nagents.tui.clipboard import copy_native
 from nagents.tui.widgets import Composer
 from nagents.tui.widgets import Turn
+from tests.hang_guard import HANG_GUARD
 from tests.test_tui import FakeHarness
 from tests.test_tui import idle
 from tests.test_tui import make_app
@@ -166,7 +167,7 @@ def test_mouse_input_burst_copies_final_selection(tmp_path: Path, editor: bool) 
             ):
                 app.post_message(event)
             # Raw messages and deferred refresh callbacks drain on separate ticks.
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(HANG_GUARD):
                 while not app.clipboard:
                     await pilot.pause()
             assert app.clipboard == ("alpha" if editor else "alpha "), (
@@ -188,7 +189,7 @@ def test_code_selection_copies_code_without_highlight_markup(tmp_path: Path) -> 
             fence = app.query_one("MarkdownFence")
             app.screen.selections = {fence.query_one("#code-content"): Selection(None, None)}
             app.screen.post_message(TextSelected())
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(HANG_GUARD):
                 while not app.clipboard:
                     await pilot.pause()
             assert "def greet():\n    return 'hello'" in app.clipboard

@@ -23,6 +23,9 @@ const values: SettingsValues = {
   dictation_model: "gpt-4o-mini-transcribe",
   dictation_language: "",
   dictation_max_seconds: 60,
+  compact_trigger: "auto",
+  compact_tokens: 200000,
+  compact_messages: 100,
 };
 const reply: SettingsReply = {
   values,
@@ -52,6 +55,31 @@ const reply: SettingsReply = {
 test("settings drafts round-trip exact API keys and numeric values", () => {
   const parsed = parseDraft(createDraft(values), reply.profiles);
   assert.deepEqual(parsed, { ok: true, values });
+});
+
+test("compaction criteria round-trip and reject unsupported triggers or limits", () => {
+  const parsed = parseDraft(
+    { ...createDraft(values), compact_trigger: "tokens", compact_tokens: " 50000 ", compact_messages: "7" },
+    reply.profiles,
+  );
+  assert.equal(parsed.ok && parsed.values.compact_trigger, "tokens");
+  assert.equal(parsed.ok && parsed.values.compact_tokens, 50000);
+  assert.equal(parsed.ok && parsed.values.compact_messages, 7);
+  const trigger = parseDraft({ ...createDraft(values), compact_trigger: "sometimes" }, reply.profiles);
+  assert.ok(!trigger.ok && trigger.errors.compact_trigger);
+  for (const [key, bad] of [
+    ["compact_tokens", "1023"],
+    ["compact_tokens", "10000001"],
+    ["compact_tokens", "1.5"],
+    ["compact_tokens", " "],
+    ["compact_messages", "0"],
+    ["compact_messages", "10001"],
+    ["compact_messages", "2.0"],
+    ["compact_messages", "1e3"],
+  ] as const) {
+    const invalid = parseDraft({ ...createDraft(values), [key]: bad }, reply.profiles);
+    assert.ok(!invalid.ok && invalid.errors[key], `${key}=${bad}`);
+  }
 });
 
 test("model IDs are trimmed without inventing or restricting model choices", () => {

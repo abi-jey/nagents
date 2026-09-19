@@ -52,12 +52,7 @@ from nagents.types import Message
 from nagents.types import TextContent
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
-
-# The listener serializes several durable SQLite transactions (runtime _receive/
-# _worker), each an asyncio.to_thread round-trip, so a loaded runner multiplies
-# per-op latency. This bound turns a genuine hang into a failure; it must never
-# gate normal progress.
-HANG_GUARD = 60.0
+from tests.hang_guard import HANG_GUARD
 
 
 class OfflineProvider(Provider):
@@ -1248,7 +1243,7 @@ def test_cancelled_transaction_finishes_commit_then_retry_deduplicates(tmp_path:
                 ("identity", "left", "accepted", "{}"),
             )
             writing.set()
-            assert release.wait(3)
+            assert release.wait(HANG_GUARD)
 
         transaction = asyncio.create_task(store._transaction(insert))
         assert await asyncio.to_thread(writing.wait, HANG_GUARD)

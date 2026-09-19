@@ -24,6 +24,7 @@ from nagents.extensions import AgentPlugin
 from nagents.extensions import RunContext
 from nagents.types import GenerationConfig
 from nagents.types import ToolDefinition
+from tests.hang_guard import HANG_GUARD
 from tests.test_extensions import OfflineProvider
 
 
@@ -100,7 +101,7 @@ def test_fluent_attachment_and_listener_exclusive_ownership(tmp_path: Path) -> N
         with pytest.raises(ValueError, match="already attached"):
             agent.add_channel(IdleChannel())
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(channel.started.wait(), 5)
+        await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
         try:
             with pytest.raises(RuntimeError, match="already executing"):
                 await agent.listen("other")
@@ -117,7 +118,7 @@ def test_fluent_attachment_and_listener_exclusive_ownership(tmp_path: Path) -> N
             with pytest.raises(RuntimeError, match="listener owns"):
                 await agent.clear_session("identity")
         finally:
-            await asyncio.wait_for(agent.close(), 5)
+            await asyncio.wait_for(agent.close(), HANG_GUARD)
         assert listener.cancelled() and channel.closed
         assert not agent._channel_listening and agent._active_runs == 0
 
@@ -161,14 +162,14 @@ def test_close_rejects_new_work_through_provider_cleanup_and_allows_reuse(tmp_pa
         agent = Agent(provider, SessionManager(tmp_path / "reuse.db"), compactor=None).add_channel(channel)
         await agent.initialize()
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(channel.started.wait(), 5)
+        await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
         closing = asyncio.create_task(agent.close())
         try:
-            await asyncio.wait_for(provider.closing.wait(), 5)
+            await asyncio.wait_for(provider.closing.wait(), HANG_GUARD)
             assert listener.cancelled() and channel.closed
             assert not agent._channel_listening
             with pytest.raises(RuntimeError, match="closing"):
-                await asyncio.wait_for(agent.listen("replacement"), 1)
+                await asyncio.wait_for(agent.listen("replacement"), HANG_GUARD)
             with pytest.raises(RuntimeError, match="closing"):
                 async for _ in agent.run("outside", session_id="identity"):
                     pass
@@ -185,7 +186,7 @@ def test_close_rejects_new_work_through_provider_cleanup_and_allows_reuse(tmp_pa
                 agent.add_channel(IdleChannel("second"))
         finally:
             provider.release_close.set()
-            await asyncio.wait_for(closing, 5)
+            await asyncio.wait_for(closing, HANG_GUARD)
         assert agent._active_runs == 0 and not agent.is_initialized
         await agent.close()
         assert provider.close_calls == 1
@@ -201,8 +202,8 @@ def test_close_rejects_new_work_through_provider_cleanup_and_allows_reuse(tmp_pa
         # Even an idle listener reopens its resource lifetime, without a model run.
         channel.started.clear()
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(channel.started.wait(), 5)
-        await asyncio.wait_for(agent.close(), 5)
+        await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
+        await asyncio.wait_for(agent.close(), HANG_GUARD)
         assert listener.cancelled() and provider.close_calls == 3
 
     asyncio.run(scenario())
@@ -259,12 +260,12 @@ def test_concurrent_close_callers_join_cleanup_despite_repeated_cancellation(tmp
         channel = ClosingChannel()
         agent = Agent(provider, SessionManager(tmp_path / "cancel-close.db"), compactor=None).add_channel(channel)
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(channel.started.wait(), 5)
+        await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
         first = asyncio.create_task(agent.close())
         second = asyncio.create_task(agent.close())
         third = asyncio.create_task(agent.close())
         try:
-            await asyncio.wait_for(channel.closing.wait(), 5)
+            await asyncio.wait_for(channel.closing.wait(), HANG_GUARD)
             first.cancel()
             second.cancel()
             await asyncio.sleep(0)
@@ -273,7 +274,7 @@ def test_concurrent_close_callers_join_cleanup_despite_repeated_cancellation(tmp
             assert not first.done() and not second.done() and not third.done()
             assert channel.close_calls == 1 and provider.close_calls == 0
             channel.release_close.set()
-            await asyncio.wait_for(provider.closing.wait(), 5)
+            await asyncio.wait_for(provider.closing.wait(), HANG_GUARD)
             first.cancel()
             second.cancel()
             await asyncio.sleep(0)
@@ -282,7 +283,7 @@ def test_concurrent_close_callers_join_cleanup_despite_repeated_cancellation(tmp
         finally:
             channel.release_close.set()
             provider.release_close.set()
-            results = await asyncio.wait_for(asyncio.gather(first, second, third, return_exceptions=True), 5)
+            results = await asyncio.wait_for(asyncio.gather(first, second, third, return_exceptions=True), HANG_GUARD)
         assert isinstance(results[0], asyncio.CancelledError)
         assert isinstance(results[1], asyncio.CancelledError)
         assert results[2] is None and listener.cancelled()
@@ -313,9 +314,9 @@ def test_close_preserves_failures_and_attempts_all_resources(tmp_path: Path, mon
         monkeypatch.setattr(agent._batch_client, "close", close_batch)
         first = asyncio.create_task(agent.close())
         second = asyncio.create_task(agent.close())
-        await asyncio.wait_for(provider.closing.wait(), 5)
+        await asyncio.wait_for(provider.closing.wait(), HANG_GUARD)
         provider.release_close.set()
-        results = await asyncio.wait_for(asyncio.gather(first, second, return_exceptions=True), 5)
+        results = await asyncio.wait_for(asyncio.gather(first, second, return_exceptions=True), HANG_GUARD)
         error = results[0]
         assert isinstance(error, ExceptionGroup) and results[1] is error
         assert [str(item) for item in error.exceptions] == ["provider cleanup failed", "batch cleanup failed"]
@@ -351,7 +352,7 @@ def test_nested_after_run_cleanup_retains_channel_ownership(tmp_path: Path) -> N
             provider, SessionManager(tmp_path / "nested.db"), compactor=None, plugins=[Cleanup()]
         ).add_channel(FiniteChannel())
         try:
-            await asyncio.wait_for(agent.listen("identity"), 5)
+            await asyncio.wait_for(agent.listen("identity"), HANG_GUARD)
             assert cleaned == ["nested", "identity"]
             assert await agent.session.get_history("identity") == []
             assert await agent.session.get_history("nested") == []
@@ -391,17 +392,17 @@ def test_after_run_rejects_self_close_but_can_clear_during_shutdown(tmp_path: Pa
             OfflineProvider(), SessionManager(tmp_path / "hook-close.db"), compactor=None, plugins=[Cleanup()]
         ).add_channel(FiniteChannel())
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.wait_for(started.wait(), HANG_GUARD)
         if external_close:
             closing = asyncio.create_task(agent.close())
             await asyncio.sleep(0)
             assert agent._closing
             release.set()
-            await asyncio.wait_for(closing, 5)
+            await asyncio.wait_for(closing, HANG_GUARD)
             assert listener.cancelled()
         else:
             release.set()
-            await asyncio.wait_for(listener, 5)
+            await asyncio.wait_for(listener, HANG_GUARD)
             await agent.close()
         assert cleaned.is_set() and await agent.session.get_history("identity") == []
         assert not agent._cleanup_tasks and agent._active_runs == 0
@@ -457,7 +458,7 @@ def test_early_close_waits_for_retained_provider_generator_before_handoff(tmp_pa
         await anext(events)
         closing = asyncio.create_task(events.aclose())
         try:
-            await asyncio.wait_for(provider.cleaning.wait(), 5)
+            await asyncio.wait_for(provider.cleaning.wait(), HANG_GUARD)
             with pytest.raises(RuntimeError, match="already executing"):
                 await agent.listen("identity")
             closing.cancel()
@@ -468,14 +469,14 @@ def test_early_close_waits_for_retained_provider_generator_before_handoff(tmp_pa
         finally:
             provider.release_cleanup.set()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(closing, 5)
+                await asyncio.wait_for(closing, HANG_GUARD)
         assert order == (["provider"] if simple else ["provider", "hook"])
         with pytest.raises(StopAsyncIteration):
             await anext(provider.source)
         assert not agent._cleanup_tasks and agent._active_runs == 0
         listener = asyncio.create_task(agent.listen("identity"))
-        await asyncio.wait_for(channel.started.wait(), 5)
-        await asyncio.wait_for(agent.close(), 5)
+        await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
+        await asyncio.wait_for(agent.close(), HANG_GUARD)
         assert listener.cancelled()
 
     asyncio.run(scenario())

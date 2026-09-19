@@ -45,6 +45,7 @@ from nagents.tui.widgets import Composer
 from nagents.tui.widgets import ToolCard
 from nagents.tui.widgets import Turn
 from nagents.types import Message
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -185,7 +186,7 @@ def make_app(backend: FakeHarness) -> NagentsApp:
 
 async def idle(app: NagentsApp, pilot: Pilot[None]) -> None:
     try:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(HANG_GUARD):
             while True:
                 await pilot.pause(0.01)
                 if not app.busy and (not app._queued_prompts or app._queue_paused):
@@ -661,7 +662,7 @@ def test_real_harness_demo_approval_and_resume(tmp_path: Path, allow: bool) -> N
         async with app.run_test(size=(100, 30)) as pilot:
             await idle(app, pilot)
             await send(app, pilot, "demo approval")
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 while True:
                     await pilot.pause(0.02)
                     if isinstance(app.screen, ApprovalModal) and app.screen.is_mounted:
@@ -759,7 +760,7 @@ def test_long_approval_is_scrollable_without_truncating(tmp_path: Path) -> None:
             await pilot.pause()
             assert isinstance(app.screen, ApprovalModal)
             scroll = app.screen.query_one(".approval-content", VerticalScroll)
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 while scroll.max_scroll_y == 0:
                     await pilot.pause()
             assert scroll.max_scroll_y > 100
@@ -940,7 +941,7 @@ def test_motion_preference_covers_activity_and_textual_scrolling(tmp_path: Path,
                 await pilot.pause()
             else:
                 # Reduced motion reaches its final value on a later animator tick.
-                async with asyncio.timeout(5):
+                async with asyncio.timeout(HANG_GUARD):
                     await app.animator.wait_until_complete()
                 assert conversation.scroll_y == 1
             assert app.animator.is_being_animated(conversation, "scroll_y") is expected_motion

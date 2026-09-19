@@ -51,6 +51,27 @@ export const executionLimits = [
 export const providerApis = ["auto", "chat_completions", "responses", "messages"] as const;
 export const providerAuths = ["auto", "api-key", "chatgpt"] as const;
 
+export const compactionTriggers = ["auto", "tokens", "messages", "off"] as const;
+
+export const compactionLimits = [
+  {
+    key: "compact_tokens",
+    label: "Token window",
+    unit: "tokens",
+    min: 1024,
+    max: 10000000,
+    help: "1,024 to 10,000,000 tokens of context. Compaction runs near 70% of this window.",
+  },
+  {
+    key: "compact_messages",
+    label: "Message count",
+    unit: "messages",
+    min: 1,
+    max: 10000,
+    help: "1 to 10,000 messages in the conversation before compacting.",
+  },
+] as const;
+
 export function createDraft(values: SettingsValues): SettingsDraft {
   return {
     model: values.model,
@@ -69,6 +90,9 @@ export function createDraft(values: SettingsValues): SettingsDraft {
     dictation_model: values.dictation_model,
     dictation_language: values.dictation_language,
     dictation_max_seconds: String(values.dictation_max_seconds),
+    compact_trigger: values.compact_trigger,
+    compact_tokens: String(values.compact_tokens),
+    compact_messages: String(values.compact_messages),
   };
 }
 
@@ -104,6 +128,9 @@ export function parseDraft(
     dictation_model: draft.dictation_model.trim(),
     dictation_language: draft.dictation_language,
     dictation_max_seconds: Number(draft.dictation_max_seconds.trim()),
+    compact_trigger: draft.compact_trigger,
+    compact_tokens: 0,
+    compact_messages: 0,
   };
   if (
     !values.model ||
@@ -146,7 +173,9 @@ export function parseDraft(
       !Number.isSafeInteger(values.dictation_max_seconds) ||
       values.dictation_max_seconds < 1 || values.dictation_max_seconds > 300)
     errors.dictation_max_seconds = "Enter a whole number from 1 to 300 seconds. The administrator's ceiling also applies.";
-  for (const limit of executionLimits) {
+  if (!(compactionTriggers as readonly string[]).includes(values.compact_trigger))
+    errors.compact_trigger = "Choose a supported compaction trigger.";
+  for (const limit of [...executionLimits, ...compactionLimits]) {
     const raw = draft[limit.key].trim();
     const value = Number(raw);
     const timeout = limit.key === "shell_timeout";

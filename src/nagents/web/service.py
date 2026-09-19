@@ -61,6 +61,7 @@ class Pending:
     call_id: str
     answer: asyncio.Future[bool]
     record: dict[str, object] = field(default_factory=dict)
+    in_chat: bool = False
 
 
 @dataclass
@@ -218,6 +219,16 @@ class WebState:
             "active_run_id": active.id if active else "",
         }
 
+    async def context_stats(self, session_id: str) -> dict[str, object]:
+        """Read-only estimated context breakdown for a root session.
+
+        Safe to call at any idle time: it reads persisted history and the
+        configured request inputs without mutating state or exposing credentials.
+        """
+        if session_id not in {session.id for session in await self.list_sessions()}:
+            raise HTTPException(404, "Session not found in this workspace.")
+        return (await self.harness.context_stats(session_id)).as_dict()
+
     def user_message(self, run_id: str, record: dict[str, object]) -> None:
         run = self.active
         if run is not None and run.id == run_id:
@@ -231,6 +242,7 @@ class WebState:
             and not self.bus.listening(run.session_id)
             and run.pending is not None
             and not run.pending.answer.done()
+            and not run.pending.in_chat
         ):
             run.pending.answer.set_result(False)
 
@@ -258,22 +270,29 @@ class WebState:
                 },
             )
             return True
+        in_chat = False
+        if (run.background or run.server_owned) and not self.bus.listening(run.session_id):
+            # A browser subscriber is normally required. An opted-in owning chat
+            # may instead decide the approval from the channel itself.
+            in_chat = await self.channels.in_chat_approvals(run.session_id)
+            if not in_chat:
+                self.publish(
+                    run,
+                    {
+                        "event": "notice",
+                        "text": "Unattended approval was denied; no action was taken.",
+                        "task_id": request.task_id,
+                        "activation": request.activation,
+                        "call_id": request.id,
+                        "tool": request.tool,
+                    },
+                )
+                return False
         if self.active is not run or run.finished or run.task.done() or run.task.cancelling():
             return False
-        if (run.background or run.server_owned) and not self.bus.listening(run.session_id):
-            self.publish(
-                run,
-                {
-                    "event": "notice",
-                    "text": "Unattended approval was denied; no action was taken.",
-                    "task_id": request.task_id,
-                    "activation": request.activation,
-                    "call_id": request.id,
-                    "tool": request.tool,
-                },
-            )
-            return False
-        pending = Pending(secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future())
+        pending = Pending(
+            secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future(), in_chat=in_chat
+        )
         pending.record = {"event": "approval", **asdict(request), "approval_id": pending.id, "run_id": run.id}
         run.pending = pending
         approved = False
@@ -418,6 +437,50 @@ class WebState:
                 # producer cleanup, never underneath the shared Harness.
                 self.harness.session_id = self.selected_session_id
                 self.harness.tools.read_hashes.clear()
+
+        run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")
+        try:
+            await _join(run.task)
+        except asyncio.CancelledError:
+            run.outcome = "cancelled"
+        finally:
+            self.finish(run)
+        return "interrupted" if run.outcome == "cancelled" else run.outcome
+
+    async def compact_work(self, work: Work) -> str:
+        """Compact the chat's bound session on demand from an explicit command."""
+        await self.channels.store.validate_work(work)
+        if self.channels.closed:
+            return "queued"
+        run = Run(work.session_id, server_owned=True, message_id=work.message_id)
+        if work.channel:
+            run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
+        self.active = run
+        self.publish(run, {"event": "run_started", "message_id": work.message_id, "channel": work.channel})
+        self.status()
+
+        async def execute() -> None:
+            note = "Compaction failed. Context was not changed."
+            try:
+                await self.harness.resume(run.session_id)
+                done = await self.harness.compact()
+                run.outcome = "completed"
+                await self.send(run, _event_record(done))
+                note = f"Context compacted: {done.original_message_count} messages summarized into {done.new_message_count}."
+            except asyncio.CancelledError:
+                run.outcome = "cancelled"
+                raise
+            except Exception:
+                run.outcome = "failed"
+                await self.send(
+                    run, {"event": "error", "message": "Compaction failed. Session history was not changed."}
+                )
+            finally:
+                # A UI selection made during this run takes effect only after
+                # producer cleanup, never underneath the shared Harness.
+                self.harness.session_id = self.selected_session_id
+                self.harness.tools.read_hashes.clear()
+            await self.channels.reply(work, note)
 
         run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")
         try:

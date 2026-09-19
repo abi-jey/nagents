@@ -9,6 +9,7 @@ import pytest
 
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import FakeChannel
 from tests.test_web_host_lifecycle import application
 from tests.test_web_host_lifecycle import idle
@@ -61,7 +62,7 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
         host.changed.set()
         started = asyncio.create_task(provider_started.wait())
         try:
-            await asyncio.wait_for(validated.wait(), 3)
+            await asyncio.wait_for(validated.wait(), HANG_GUARD)
             assert state.active is None and not providers[0].requests
             assert await statuses(state) == {"validation-race": "running"}
             closing = asyncio.create_task(host.close() if shutdown == "host" else context.__aexit__(None, None, None))
@@ -71,7 +72,9 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
                 await until(lambda: host.tasks[1].cancelling() > 0)
                 assert host.closed and not closing.done() and state.active is None
                 release_validation.set()
-                done, _ = await asyncio.wait((closing, started), return_when=asyncio.FIRST_COMPLETED, timeout=3)
+                done, _ = await asyncio.wait(
+                    (closing, started), return_when=asyncio.FIRST_COMPLETED, timeout=HANG_GUARD
+                )
                 stacks = {
                     task.get_name(): [(frame.f_code.co_name, frame.f_lineno) for frame in task.get_stack()]
                     for task in asyncio.all_tasks()

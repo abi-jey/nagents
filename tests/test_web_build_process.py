@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from nagents.web.build_process import run_build_command
+from tests.hang_guard import HANG_GUARD
 
 
 def test_failed_build_reports_exit_status(tmp_path: Path) -> None:
@@ -48,14 +49,14 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + HANG_GUARD
         heartbeat = tmp_path / "heartbeat"
         while not heartbeat.exists():
             assert driver.poll() is None, "Build driver exited before spawning children"
             assert time.monotonic() < deadline, "Build subprocess did not start"
             time.sleep(0.02)
         driver.send_signal(stop_signal)
-        assert driver.wait(timeout=5) != 0
+        assert driver.wait(timeout=HANG_GUARD) != 0
         # If the grandchild survived, its monotonic heartbeat would keep advancing.
         last_write = heartbeat.stat().st_mtime_ns
         time.sleep(0.15)
@@ -63,7 +64,7 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
     finally:
         if driver.poll() is None:
             driver.kill()
-            driver.wait(timeout=5)
+            driver.wait(timeout=HANG_GUARD)
         pid_file = tmp_path / "build-pid"
         if pid_file.exists():
             with suppress(ProcessLookupError):

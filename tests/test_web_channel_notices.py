@@ -33,6 +33,7 @@ from nagents.web.channel_notices import ChannelNotices
 from nagents.web.service import Pending
 from nagents.web.service import Run
 from nagents.web.service import WebState
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import ControlledHarness
 
 if TYPE_CHECKING:
@@ -472,7 +473,7 @@ def test_producer_cancellation_emits_terminal_and_repeated_cleanup_is_joined(tmp
 
             task = asyncio.create_task(producer())
             f.run.task = task
-            await asyncio.wait_for(f.channel.entered.wait(), 2)
+            await asyncio.wait_for(f.channel.entered.wait(), HANG_GUARD)
             for _ in range(2):
                 task.cancel()
                 await asyncio.sleep(0)

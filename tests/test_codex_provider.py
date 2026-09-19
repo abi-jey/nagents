@@ -39,6 +39,7 @@ from nagents.types import Message
 from nagents.types import TextContent
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
+from tests.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -221,7 +222,7 @@ def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypa
             provider.set_http_logger(http_logger)
             first = asyncio.create_task(provider.get_model_list())
             try:
-                await asyncio.wait_for(started.wait(), 5)
+                await asyncio.wait_for(started.wait(), HANG_GUARD)
                 current.access_token = ACCESS + "-rotated"
                 current.account_id = "account-456"
                 current.residency = "us"
@@ -450,7 +451,7 @@ def test_catalog_timeout_and_cancellation_close_connection(monkeypatch: pytest.M
         async with endpoint(monkeypatch, handle), CodexProvider(credentials, timeout=2) as provider:
             task = asyncio.create_task(provider.get_model_list())
             try:
-                await asyncio.wait_for(started.wait(), 5)
+                await asyncio.wait_for(started.wait(), HANG_GUARD)
                 if cancel:
                     task.cancel()
                     with pytest.raises(asyncio.CancelledError):
@@ -458,7 +459,7 @@ def test_catalog_timeout_and_cancellation_close_connection(monkeypatch: pytest.M
                 else:
                     with pytest.raises(ModelListError):
                         await task
-                await asyncio.wait_for(disconnected.wait(), 5)
+                await asyncio.wait_for(disconnected.wait(), HANG_GUARD)
             finally:
                 release.set()
 
@@ -869,7 +870,7 @@ def test_interruption_closes_stream(monkeypatch: pytest.MonkeyPatch, cancel: boo
                         await task
                 else:
                     await stream.aclose()
-                await asyncio.wait_for(disconnected.wait(), 1)
+                await asyncio.wait_for(disconnected.wait(), HANG_GUARD)
             finally:
                 release.set()
                 await stream.aclose()

@@ -195,27 +195,25 @@ It removes logical database records, not backups or SQLite free pages.
 
 #### Activity And Routing Guards
 
-Moving to Trash and deleting forever retain the idle, active-work, and routing
-guards. Admission returns `409` while the Harness is busy or the root has queued
-or running inbox work, pending wakeups, or retained descendant task handles.
-Finish or cancel running work first. Retained handles can still resume child
-conversations; after those tasks finish, restart ngn to expire the handles before
-deleting their root. Child histories are kept: deletion never guesses ownership
-from a session prefix, a task name, or text in old messages.
+Moving to Trash and deleting forever retain the idle, active-work, and
+in-memory-process guards. Admission returns `409` while the Harness is busy, a
+descendant task handle is retained, descendant tasks are still running, or the
+root has pending wakeups. Finish or cancel running work first. Retained handles
+can still resume child conversations; after those tasks finish, restart ngn to
+expire the handles before deleting their root. Child histories are kept:
+deletion never guesses ownership from a session prefix, a task name, or text in
+old messages.
 
-Channel routing must be moved explicitly before moving a root to Trash or
-deleting it forever:
-
-1. In **Channels**, change any connection whose **main session** is this root to
-   another existing root and save. Disabled connections also count.
-2. In each attached channel conversation, use `/new`, or `/sessions` followed by
-   `/session ID`, to attach another root owned by **that same chat**. If this was
-   its default root, use `/session default ID`
-   to move that default too. This command changes the default reference; the
-   current attachment changes through `/session ID`.
-3. Let already accepted messages and command replies finish, then retry deletion.
-   Reattachment never reroutes messages already in the inbox. Removing or disabling
-   a connector alone does not detach its saved conversation bindings.
+Channel attachments and queued inbox work never block deletion. Deletion wins:
+deleting a bound root detaches that channel conversation, so its next inbound
+creates a fresh chat root and is processed as ordinary input with no recovery
+notice. A conversation that only used the deleted root as its default stays on
+its surviving root. A connection whose **main session** was deleted is
+repointed to a surviving root; the connector stays enabled. Pending inbound work
+is marked terminal and its `(channel, message_id)` identity is recorded, so a
+late connector redelivery cannot re-execute deleted work. Historical
+session-owner identities are retained; deleting an ID never transfers its chat
+ownership, and a restored root may be re-adopted with `/session ID`.
 
 Soft deletion changes active-list membership while retaining the root's history
 and related stored input. Restore atomically reinstates that membership and title.
@@ -223,8 +221,7 @@ Permanent purge removes the root's content while retaining content-free
 channel/message deduplication keys and historical session-owner identities, so
 late channel redelivery cannot execute deleted work or transfer a reused session
 ID to another chat. Workspace files, unrelated roots and child histories, saved
-settings, channel configuration, and private credentials are preserved. Deletion
-does not silently detach channels or discard pending background work.
+settings, channel configuration, and private credentials are preserved.
 
 Cancellation joins the SQLite transaction and selection/subscription cleanup
 before releasing the idle boundary, avoiding partially applied membership changes.
@@ -333,6 +330,7 @@ contract below.
 | `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
 | `POST settings/reset` | `{revision}` restores startup defaults and deletes the saved override; idle only |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
+| `GET sessions/{session_id}/context` | Read-only estimated token breakdown of the request that session would send; safe while idle and during a run |
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
@@ -364,6 +362,40 @@ The compatibility `POST run` stream remains request-owned and is not resumable;
 closing it cancels that run. New browser input uses `POST messages` and the
 WebSocket subscription instead. Subscription replay replays observations, never
 executes a prompt or tool again.
+
+### Context Statistics
+
+The header shows a compact **Context** indicator: total estimated input tokens
+against the model context window when that window is known. Expanding it lists
+the per-component estimate — system prompt, tool definitions, skills, the
+user/assistant/tool history split, and media/attachments — plus the total,
+remaining space, and the last provider-reported input tokens when available. The
+**Tool definitions** row is called out separately because tool schemas can
+dominate a request.
+
+`GET /api/sessions/{session_id}/context` backs the indicator. It is read-only,
+does not select the session, run the model, or change prompt content, and it
+never returns credentials. `GET /api/sessions` (which the client calls on
+connect, select, and reconnect) does not include the breakdown; the indicator
+fetches it once the harness is idle for the selected root. The numbers are the
+same character/byte estimates described in the
+[Context Statistics API](../api/context-stats.md), not tokenizer counts.
+
+The response shape is:
+
+```typescript
+type ContextStats = {
+  components: { key: string; label: string; tokens: number }[]; // stable order, sums to total_tokens
+  total_tokens: number;
+  context_window: number | null; // null when the model window is unknown
+  remaining_tokens: number | null;
+  observed_prompt_tokens: number | null;
+  observed_completion_tokens: number | null;
+  provider: string;
+  model: string;
+  estimate_method: string;
+};
+```
 
 ### Trash API Contract
 
@@ -470,17 +502,26 @@ Telegram's host commands allow an explicit change:
 
 | Command | Purpose |
 | --- | --- |
-| `/sessions` | List only this chat's owned, active sessions; never unowned admin roots or another chat's roots. |
+| `/sessions` | List this chat's owned, active sessions, plus unowned workspace roots it can adopt; never another chat's roots. |
 | `/session` | Report the chat's current session. |
-| `/session <session-id>` | Attach to an existing session owned by this chat. |
-| `/session main` | Attach to the configured main session only if this chat already owns it. |
+| `/session <session-id>` | Attach to a session owned by this chat, or adopt an existing unowned root. Another chat's root is refused. |
+| `/session main` | Attach to the configured main session, adopting it if it is unowned. |
 | `/session default` | Return to this chat's owned default session. |
-| `/session default <session-id>` | Set an already-owned default without changing the current attachment. |
+| `/session default <session-id>` | Set the default to an owned or unowned root without changing the current attachment. |
 | `/new <title>` | Create and attach a new chat-owned session; old ownership remains. |
+| `/compact` | Compact the chat's bound session: its history is replaced by a summary. |
+
+Attaching an **unowned** root (typically created in the web UI) adopts it: the
+chat becomes its permanent owner, exactly as `/new` does, and no other chat can
+take it over afterwards. A root already owned by a different chat is never
+adopted, listed, or attached. Ownership is recorded in the same transaction that
+binds the conversation, before any accepted message is dispatched.
 
 Commands are handled by the host rather than sent to a model as ordinary work.
 Their acknowledgements return to the originating chat. Pending messages retain
 their admitted session target when a later command changes the binding.
+`/compact` is the exception: it compacts the bound session rather than answering
+from a cached reply, and reports the resulting message counts back to the chat.
 
 Unowned, foreign, hidden, and unknown session targets receive the same rejection;
 commands do not disclose whether those IDs exist. Only trusted local management
@@ -649,7 +690,7 @@ model supporting JSON output and, when supplied, the singular `language` paramet
 
 Inject the transcription key into the backend's environment using your secret
 management tooling, then select its variable name without putting the key in
-TOML, browser settings, URLs, or the image:
+YAML, browser settings, URLs, or the image:
 
 ```bash
 ngn serve --dictation \
@@ -659,7 +700,7 @@ ngn serve --dictation \
 ```
 
 This assumes `NGN_TRANSCRIPTION_API_KEY` has already been supplied to the process.
-The existing `NGN_DICTATION_*` defaults and trusted TOML options also work with
+The existing `NGN_DICTATION_*` defaults and trusted YAML options also work with
 `serve`. The backend endpoint defaults to `https://api.openai.com/v1`; endpoint
 and API-key-variable selection remain administrator-managed. See the
 [deployment guide](ngn-web-deployment.md#transcription-credentials) for a runtime
@@ -671,6 +712,13 @@ settings. They cannot override an administrator's disabled service or maximum
 duration. Missing credentials and demo mode are reported clearly without opening
 the microphone or making a provider request. No provider credential is returned
 to the browser.
+
+The **Context compaction** section in Settings selects the automatic trigger:
+the provider default, a token window, a message count, or off. The choice is a
+persisted workspace override applied to the shared Harness on the next run. A
+`messages` threshold counts stored conversation messages; a `tokens` window
+compacts near 70% of the given context size. Manual `Harness.compact()` (and the
+channel `/compact` command) always remain available.
 
 #### Upload Contract
 
@@ -725,8 +773,11 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `dictation_model` | Trimmed, nonblank compatible transcription model ID, at most 200 printable characters |
 | `dictation_language` | Empty for automatic detection, or a two-letter lowercase language code |
 | `dictation_max_seconds` | Integer, 1 through 300; effective recording duration is capped by the administrator's startup limit |
+| `compact_trigger` | One of `auto` (provider default), `tokens`, `messages`, or `off` |
+| `compact_tokens` | Integer, 1,024 through 10,000,000; the total context window used when `compact_trigger` is `tokens` |
+| `compact_messages` | Integer, 1 through 10,000; the conversation length used when `compact_trigger` is `messages` |
 
-POST requires all sixteen values plus the write-only `api_key` field. Unknown
+POST requires all nineteen values plus the write-only `api_key` field. Unknown
 fields, numeric strings, booleans used as numbers, and nonfinite numbers are
 rejected with HTTP 422, as are invalid provider combinations (for example,
 `litellm` without an endpoint, `chatgpt` with a custom endpoint, credentials in
@@ -738,6 +789,13 @@ unavailable ID. Permission ceilings and per-call approvals remain enforced.
 Existing sessions, history, provider credentials, and tools are retained. New
 children inherit the current model; retained children keep their prior state
 under the existing child continuation contract.
+
+`compact_trigger = auto` leaves the provider's context-limit default in place,
+`tokens` compacts near 70% of `compact_tokens`, `messages` compacts once the
+conversation reaches `compact_messages`, and `off` disables automatic compaction.
+The choice applies to the shared Harness on the next run and persists with the
+other overrides; manual `Harness.compact()` and the channel `/compact` command
+remain available regardless.
 
 An optional `api_key` stores a write-only key for the submitted provider; an
 empty value leaves any stored key unchanged. `clear_api_key` removes it. A
@@ -760,7 +818,7 @@ configuration. Write-only keys live in a separate `ngn_web_provider_keys` table
 in the same private database; both are deleted on reset. The override applies
 across sessions and web-server restarts for that resolved workspace. One process
 must own the workspace; this is not multi-process settings synchronization.
-ConfigMap/TOML, CLI, profile and initial authentication/model resolution
+ConfigMap/YAML, CLI, profile and initial authentication/model resolution
 establish startup defaults **before** the saved override is applied. Reset
 deletes the rows, so later restarts use any newly changed trusted defaults. The
 CLI/TUI do not load this web-only override.

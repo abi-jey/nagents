@@ -44,6 +44,7 @@ class ConnectionInput(ChannelRevision):
     plugin: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_.-]*$")
     enabled: bool
     auto_reply: bool = False
+    chat_approvals: bool = False
     config: dict[str, JsonValue] = Field(default_factory=dict)
     secrets: dict[str, JsonValue] = Field(default_factory=dict)
     main_session_id: str = Field(default="", max_length=80, pattern=r"^(?:ngn-[A-Za-z0-9-]+)?$")
@@ -54,6 +55,7 @@ class Connection(BaseModel):
     plugin: str
     enabled: bool
     auto_reply: bool = False
+    chat_approvals: bool = False
     config: dict[str, JsonValue]
     secrets: dict[str, JsonValue]
     main_session_id: str
@@ -224,15 +226,19 @@ class ChannelCatalog:
             _validate_schema(schema_values, plugin.schema if body.enabled else {**plugin.schema, "required": []})
         except Exception:
             raise HTTPException(422, "Connection fields do not match the installed plugin schema.") from None
-        # Older clients omit this host policy. Preserve an explicit saved opt-in
-        # on edits to the same connector, without granting it to a replacement.
+        # Older clients omit these host policies. Preserve an explicit saved
+        # opt-in on edits to the same connector, without granting it to a replacement.
         auto_reply = body.auto_reply
         if "auto_reply" not in body.model_fields_set and old is not None and old.plugin == body.plugin:
             auto_reply = old.auto_reply
+        chat_approvals = body.chat_approvals
+        if "chat_approvals" not in body.model_fields_set and old is not None and old.plugin == body.plugin:
+            chat_approvals = old.chat_approvals
         return Connection(
             plugin=body.plugin,
             enabled=body.enabled,
             auto_reply=auto_reply,
+            chat_approvals=chat_approvals,
             config=public,
             secrets=saved,
             main_session_id=main,
@@ -341,6 +347,7 @@ class ChannelCatalog:
                     "plugin": connection.plugin,
                     "enabled": connection.enabled,
                     "auto_reply": connection.auto_reply,
+                    "chat_approvals": connection.chat_approvals,
                     "status": status,
                     "error": error,
                     "config": public,

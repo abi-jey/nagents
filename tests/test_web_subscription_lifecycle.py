@@ -18,6 +18,7 @@ from starlette.websockets import WebSocket
 
 from nagents.web import subscriptions
 from nagents.web.subscriptions import EventBus
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import site
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ class Peer:
         self.incoming.put_nowait({"type": "websocket.disconnect", "code": 1000})
 
     async def message(self) -> Message:
-        return await asyncio.wait_for(self.outgoing.get(), 5)
+        return await asyncio.wait_for(self.outgoing.get(), HANG_GUARD)
 
     async def frame(self) -> dict[str, object]:
         message = await self.message()
@@ -68,7 +69,7 @@ class Peer:
 
 
 async def until(predicate: Callable[[], bool]) -> None:
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(HANG_GUARD):
         while not predicate():
             await asyncio.sleep(0.001)
 
@@ -123,7 +124,7 @@ def test_history_read_racing_complete_run_has_consistent_snapshot(
             else:
                 socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
             try:
-                assert reached.wait(5)
+                assert reached.wait(HANG_GUARD)
                 accepted = app.submit("complete during hydration")
                 app.idle()  # Hydration must not block the model or the durable worker.
             finally:
@@ -131,7 +132,7 @@ def test_history_read_racing_complete_run_has_consistent_snapshot(
                 if mode == "http":
                     # Also join on a failed gate/model assertion: an HTTP read
                     # must not outlive the test and overlap lifespan teardown.
-                    snapshot = response.result(timeout=5)
+                    snapshot = response.result(timeout=HANG_GUARD)
             if mode != "http":
                 frame = socket.receive_json()
                 assert frame["type"] == "snapshot"
@@ -183,7 +184,7 @@ def test_replay_during_hydration_delivers_each_event_then_live_handoff() -> None
         finally:
             release.set()
             peer.disconnect()
-            await asyncio.wait_for(task, 5)
+            await asyncio.wait_for(task, HANG_GUARD)
 
     asyncio.run(scenario())
 
@@ -228,7 +229,7 @@ def test_catalog_cancellation_joins_unread_cursor_before_writer_commit(
 
             task = asyncio.create_task(read())
             try:
-                await asyncio.wait_for(reached.wait(), 5)
+                await asyncio.wait_for(reached.wait(), HANG_GUARD)
                 task.cancel()
                 await asyncio.sleep(0)
                 if repeated:
@@ -236,7 +237,7 @@ def test_catalog_cancellation_joins_unread_cursor_before_writer_commit(
                 assert not task.done()
             finally:
                 release.set()
-                result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+                result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), HANG_GUARD)
 
             def write() -> None:
                 db = sqlite3.connect(app.state.history.db_path, timeout=0.1)
@@ -297,7 +298,7 @@ def test_hydration_departure_revokes_approval_before_db_cleanup_and_keeps_run(
             monkeypatch.setattr(app.state.history, "snapshot", read)
             socket.send_json({"type": "subscribe", "session_id": app.main})
             try:
-                assert reached.wait(5)
+                assert reached.wait(HANG_GUARD)
                 # Verified same-root hydration alone preserves the outstanding decision.
                 assert app.state.bus.listening(app.main) and not answer.done()
                 if departure == "disconnect":
@@ -367,7 +368,7 @@ def test_superseded_noncooperative_hydration_cannot_publish_or_close_new_subscri
         finally:
             release.set()
             peer.disconnect()
-            await asyncio.wait_for(task, 5)
+            await asyncio.wait_for(task, HANG_GUARD)
 
     asyncio.run(scenario())
 
@@ -391,7 +392,7 @@ def test_failed_membership_never_publishes_snapshot_or_replay(failure: str) -> N
         close = await peer.message()
         assert close["type"] == "websocket.close"
         assert close["code"] == (1013 if failure == "exception" else 1008)
-        await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(task, HANG_GUARD)
         assert not bus.listening("ngn-hidden") and peer.outgoing.empty()
 
     asyncio.run(scenario())
@@ -452,7 +453,7 @@ def test_stubborn_hydration_is_bounded_revoked_and_joined(monkeypatch: pytest.Mo
             assert not task.done() and finished == 0 and started <= subscriptions.MAX_HYDRATIONS
         finally:
             release.set()
-            result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+            result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), HANG_GUARD)
         assert finished == started and not bus.subscribers and peer.outgoing.empty()
         if ending == "owner-cancel":
             assert isinstance(result[0], asyncio.CancelledError)
@@ -476,7 +477,7 @@ def test_checkpoint_timeout_does_not_starve_event_publisher(monkeypatch: pytest.
         peer.subscribe("ngn-root")
         close = await peer.message()
         assert close["type"] == "websocket.close" and close["code"] == 1013
-        await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(task, HANG_GUARD)
         assert bus.cursor > 1 and not bus.subscribers
 
     asyncio.run(scenario())
@@ -511,13 +512,13 @@ def test_closing_hydration_retains_connection_capacity_until_joined(monkeypatch:
             assert not task.done()
         finally:
             release.set()
-            await asyncio.wait_for(task, 5)
+            await asyncio.wait_for(task, HANG_GUARD)
         assert not bus.subscribers
         next_peer = Peer()
         next_task = await next_peer.start(bus, snapshot, lambda: None)
         next_peer.subscribe("ngn-root")
         assert (await next_peer.frame())["type"] == "snapshot"
         next_peer.disconnect()
-        await asyncio.wait_for(next_task, 5)
+        await asyncio.wait_for(next_task, HANG_GUARD)
 
     asyncio.run(scenario())

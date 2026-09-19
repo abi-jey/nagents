@@ -1,20 +1,21 @@
-"""Strict, secret-free TOML configuration.
+"""Strict, secret-free YAML configuration.
 
-Precedence: built-ins < NGN_* environment defaults < user TOML < trusted
-project TOML < explicit TOML. Tables other than ``[profiles.NAME]`` are errors.
+Precedence: built-ins < NGN_* environment defaults < user YAML < trusted
+project YAML < explicit YAML. Mapping keys other than ``profiles`` are errors.
 Profiles accept ``mode`` (build/reviewer), ``instructions``, and ``model``.
 Python extensions are executable trusted code, not sandboxed plugins.
 """
 
 import os
 import re
-import tomllib
 import warnings
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
+
+import yaml
 
 from nagents.provider import ProviderType
 
@@ -252,8 +253,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         else:
             setattr(config, key, Path(env_value) if key == "data_dir" else env_value)
 
-    user = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn/config.toml"
-    project = config.workspace / ".ngn/config.toml"
+    user = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn/config.yaml"
+    project = config.workspace / ".ngn/config.yaml"
     explicit = config_path.expanduser().resolve() if config_path is not None else None
     paths = [user]
     diagnostics: list[str] = [login_note] if login_note else []
@@ -275,10 +276,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 raise FileNotFoundError(path)
             continue
         try:
-            with path.open("rb") as source:
-                values = tomllib.load(source)
-        except tomllib.TOMLDecodeError as exc:
-            raise ValueError(f"Invalid TOML in {path}: {exc}") from exc
+            values = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+        if values is None:
+            values = {}
+        if not isinstance(values, dict):
+            raise ValueError(f"{path}: the configuration must be a mapping of top-level settings")
         unknown = values.keys() - allowed
         if unknown:
             raise ValueError(
@@ -316,8 +320,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                     plugins.append(f"{module}:{setup}")
                 value = tuple(plugins)
             elif key == "profiles":
+                if value is None:
+                    value = {}
                 if not isinstance(value, dict):
-                    raise ValueError(f"{path}: profiles must be a table")
+                    raise ValueError(f"{path}: profiles must be a mapping")
                 for name, profile in value.items():
                     if not isinstance(profile, dict) or profile.keys() - {"mode", "instructions", "model"}:
                         raise ValueError(f"{path}: invalid profile {name!r}")

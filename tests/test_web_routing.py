@@ -15,6 +15,7 @@ from nagents.channels.types import ChannelSend
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from tests.hang_guard import HANG_GUARD
 from tests.test_web_channels import FakeChannel
 from tests.test_web_channels import site
 
@@ -215,7 +216,7 @@ def test_admission_switch_and_frozen_A_C_targets_survive_restart_before_command_
         app.submit("hold")
 
         async def blocked() -> None:
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(HANG_GUARD):
                 while not app.providers[0].requests:
                     await asyncio.sleep(0.01)
 

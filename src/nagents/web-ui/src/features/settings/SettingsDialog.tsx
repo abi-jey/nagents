@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { executionLimits } from "./draft.js";
+import { executionLimits, compactionLimits } from "./draft.js";
 import { ModelField } from "./ModelField.js";
 import { DictationSettings } from "./DictationSettings.js";
 import type { useSettings } from "./useSettings";
@@ -439,6 +439,64 @@ export function SettingsDialog({
                       </div>
                     ))}
                   </div>
+                </fieldset>
+              </details>
+              <details className="settings-disclosure">
+                <summary>Context compaction</summary>
+                <fieldset className="settings-group" disabled={disabled || !!confirmation}>
+                  <legend className="sr-only">Context compaction</legend>
+                  <div className="settings-field">
+                    <label htmlFor="settings-compact_trigger">Trigger</label>
+                    <select
+                      id="settings-compact_trigger"
+                      value={draft.compact_trigger}
+                      aria-describedby={`settings-compact_trigger-help${errors.compact_trigger ? " settings-compact_trigger-error" : ""}`}
+                      aria-invalid={!!errors.compact_trigger}
+                      onChange={(event) => settings.update("compact_trigger", event.target.value)}
+                    >
+                      <option value="auto">Automatic (provider default)</option>
+                      <option value="tokens">Token window</option>
+                      <option value="messages">Message count</option>
+                      <option value="off">Off</option>
+                    </select>
+                    <p id="settings-compact_trigger-help">
+                      Automatic compacts near the model&apos;s context limit.
+                      Token and message thresholds apply before the next model
+                      call; off disables automatic compaction. Manual compaction
+                      stays available.
+                    </p>
+                    {errors.compact_trigger && (
+                      <p id="settings-compact_trigger-error" className="error-text">
+                        {errors.compact_trigger}
+                      </p>
+                    )}
+                  </div>
+                  {compactionLimits.map((limit) => (
+                    <div className="settings-field" key={limit.key}>
+                      <label htmlFor={`settings-${limit.key}`}>{limit.label}</label>
+                      <div className="settings-number">
+                        <input
+                          id={`settings-${limit.key}`}
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          spellCheck={false}
+                          required
+                          value={draft[limit.key]}
+                          aria-describedby={`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`}
+                          aria-invalid={!!errors[limit.key]}
+                          onChange={(event) => settings.update(limit.key, event.target.value)}
+                        />
+                        <span aria-hidden="true">{limit.unit}</span>
+                      </div>
+                      <p id={`settings-${limit.key}-help`}>{limit.help}</p>
+                      {errors[limit.key] && (
+                        <p id={`settings-${limit.key}-error`} className="error-text">
+                          {errors[limit.key]}
+                        </p>
+                      )}
+                    </div>
+                  ))}
                 </fieldset>
               </details>
               <details className="settings-disclosure">

@@ -38,6 +38,7 @@ from nagents.types import Message
 from nagents.types import TextContent
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
+from tests.hang_guard import HANG_GUARD
 
 
 class OfflineProvider(Provider):
@@ -757,14 +758,14 @@ def test_cancel_pending_multi_call_block_repairs_before_return(tmp_path: Path, c
             provider, SessionManager(tmp_path / "cancel.db"), tools=[work], plugins=[Cleanup()], compactor=None
         )
         task = asyncio.create_task(collect(agent))
-        await asyncio.wait_for(started.wait(), timeout=5)
+        await asyncio.wait_for(started.wait(), HANG_GUARD)
         task.cancel()
-        await asyncio.wait_for(cleaning.wait(), timeout=5)
+        await asyncio.wait_for(cleaning.wait(), HANG_GUARD)
         if cancel_again:
             task.cancel()
         release_cleanup.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=5)
+            await asyncio.wait_for(task, HANG_GUARD)
         assert cleaned == [True]
         assert executed == ["first", "second"]
         history = await agent.session.get_history("s")
@@ -832,10 +833,10 @@ def test_cancellation_racing_committed_message_does_not_duplicate_results(tmp_pa
         provider = OfflineProvider([[ToolCallEvent(id="a", name="work"), ToolCallEvent(id="b", name="work")]])
         agent = Agent(provider, PausingSession(tmp_path / "commit_race.db"), tools=[work], compactor=None)
         task = asyncio.create_task(collect(agent))
-        await asyncio.wait_for(committed.wait(), timeout=5)
+        await asyncio.wait_for(committed.wait(), HANG_GUARD)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=5)
+            await asyncio.wait_for(task, HANG_GUARD)
         history = await agent.session.get_history("s")
         results = [message for message in history if message.role == "tool"]
         assert [message.tool_call_id for message in results] == ["a", "b"]

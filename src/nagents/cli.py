@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
     common.add_argument("--workspace", "-C", type=Path, help="Working directory (default: current directory)")
-    common.add_argument("--config", type=Path, help="Explicit, trusted TOML configuration")
+    common.add_argument("--config", type=Path, help="Explicit, trusted YAML configuration")
     common.add_argument("--provider", help="Provider name, for example openai, anthropic, or gemini")
     common.add_argument("--model", "-m", help="Provider model ID")
     common.add_argument("--base-url", help="Provider API endpoint")
@@ -98,7 +98,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     common.add_argument("--plugin", action="append", help="Explicitly trust and load a Python path.py:setup extension")
     common.add_argument(
-        "--trust-project", action="store_true", help="Trust this project's .ngn/config.toml and its code"
+        "--trust-project", action="store_true", help="Trust this project's .ngn/config.yaml and its code"
     )
     common.add_argument(
         "--demo", action="store_true", help="Offline interface demo; no model calls or workspace writes"

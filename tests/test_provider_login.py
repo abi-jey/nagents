@@ -126,11 +126,11 @@ def test_saved_login_supplies_defaults_below_env_and_files(tmp_path: Path, monke
     assert load_config(tmp_path).provider == "anthropic"
     monkeypatch.delenv("NGN_PROVIDER")
 
-    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/config.toml"
+    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/config.yaml"
     user_config.parent.mkdir(parents=True, exist_ok=True)
-    user_config.write_text('model = "toml-model"\n')
+    user_config.write_text("model: file-model\n")
     overridden = load_config(tmp_path)
-    assert overridden.provider == "openrouter" and overridden.model == "toml-model"
+    assert overridden.provider == "openrouter" and overridden.model == "file-model"
 
 
 @pytest.mark.requires_posix

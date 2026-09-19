@@ -50,13 +50,13 @@ test("confirmation owns one captured session until success; pending blocks cance
 test("server failure leaves the named confirmation and draft available for cancellation or explicit retry", async () => {
   let count = 0;
   const controller = new SessionDeletion(() => {}, async () => {
-    if (++count === 1) throw new Error("Session has queued inbox work.");
+    if (++count === 1) throw new Error("Session has retained descendant tasks.");
     return true;
   });
   controller.show(target); await controller.confirm();
   assert.equal(count, 1); assert.equal(controller.state.pending, false);
   assert.equal(controller.state.target?.id, target.id);
-  assert.match(controller.state.error, /queued inbox/);
+  assert.match(controller.state.error, /retained descendant tasks/);
   await controller.confirm(); assert.equal(count, 2); assert.equal(controller.state.target, undefined);
 });
 
@@ -88,9 +88,10 @@ test("unconfirmed or inconsistent deletion acknowledgement cannot clear local hi
   }
 });
 
-test("HTTP deletion conflicts preserve actionable routing instructions", async (context) => {
-  context.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Reattach with /session ID first." }, { status: 409 }));
-  await assert.rejects(deleteSession("synthetic", target.id, true), /Reattach with \/session ID/);
+test("HTTP deletion conflicts preserve actionable retry instructions", async (context) => {
+  const detail = "Session has retained descendant tasks. Finish or cancel them, then restart ngn before deleting this root.";
+  context.mock.method(globalThis, "fetch", async () => Response.json({ detail }, { status: 409 }));
+  await assert.rejects(deleteSession("synthetic", target.id, true), /retained descendant tasks/);
 });
 
 test("forgetting a deleted root drops its transcript, replay cursor and uncertain message identities only", () => {
@@ -124,11 +125,11 @@ test("deleted-root policy close stops retries and asks the owner to refresh memb
 test("confirmation uses a named native dialog, explicit irreversible text, cancel and live error/pending states", () => {
   const controller = new SessionDeletion(() => {}, async () => assert.fail("render cannot delete"));
   const html = renderToStaticMarkup(createElement(DeleteSessionDialog, {
-    controller, state: { target: { ...target, title: "<script>private title</script>" }, pending: true, error: "Reattach channel first" },
+    controller, state: { target: { ...target, title: "<script>private title</script>" }, pending: true, error: "Finish retained descendant tasks first" },
   }));
   assert.match(html, /<dialog[^>]*aria-labelledby="delete-session-title"[^>]*aria-describedby="delete-session-description"[^>]*aria-busy="true"/);
   assert.match(html, /cannot be undone/); assert.match(html, /&lt;script&gt;private title&lt;\/script&gt;/);
-  assert.match(html, /role="alert"[^>]*>Reattach channel first/);
+  assert.match(html, /role="alert"[^>]*>Finish retained descendant tasks first/);
   assert.match(html, /role="status">Deleting session/);
   assert.match(html, /<button disabled="">Cancel<\/button>/);
   assert.match(html, /disabled="">Delete forever<\/button>/);
@@ -214,8 +215,8 @@ for (const id of [target.id, "ngn-sidebar"]) {
   test(`failed deletion of ${id} keeps selection, history, draft, review and session membership`, async () => {
     const f = deletionView();
     const removing = deleteSessionFromView(id, f.view);
-    f.pending.reject(new Error("Bound session; reattach first"));
-    await assert.rejects(removing, /reattach first/);
+    f.pending.reject(new Error("Finish retained descendant tasks first"));
+    await assert.rejects(removing, /retained descendant tasks/);
     assert.deepEqual(f.state.selection, { id: target.id, revision: 1 });
     assert.deepEqual(f.state.history, ["Current conversation"]);
     assert.equal(f.state.draft, "Keep my unsent draft");

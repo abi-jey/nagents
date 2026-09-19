@@ -1,4 +1,4 @@
-"""The documented TOML/env/CLI schema, independent of microphone or provider I/O."""
+"""The documented YAML/env/CLI schema, independent of microphone or provider I/O."""
 
 import asyncio
 from dataclasses import replace
@@ -29,7 +29,7 @@ def test_new_defaults_and_generic_agent(tmp_path: Path) -> None:
 
 
 def test_shipped_config_example_loads_without_code_or_credentials(tmp_path: Path) -> None:
-    path = Path(__file__).resolve().parents[1] / "examples/harness/config.toml"
+    path = Path(__file__).resolve().parents[1] / "examples/harness/config.yaml"
     config = load_config(tmp_path, path)
     assert config.theme == "ocean"
     assert config.max_subagent_depth == 2
@@ -76,34 +76,34 @@ def test_saved_login_does_not_override_explicit_api(
 
 
 @pytest.mark.parametrize(
-    "toml",
+    "document",
     [
-        'api = "unknown"',
-        'theme_background = "transparent"',
-        "max_subagent_depth = -1",
-        "max_subagent_depth = 9",
-        "max_subagent_depth = true",
-        "max_subagent_depth = 1.5",
-        'dictation_enabled = "true"',
-        'dictation_model = "  "',
-        'dictation_api_key_env = "not-an-env-name"',
-        'dictation_base_url = "file:///tmp/audio"',
-        'dictation_base_url = "https://user:password@example.invalid/v1"',
-        'dictation_base_url = "https://example.invalid/v1?key=placeholder"',
-        'dictation_base_url = "https://example.invalid/v1#fragment"',
-        'dictation_base_url = "https://exa mple.invalid/v1"',
-        'dictation_language = "english"',
-        'dictation_language = "EN"',
-        "dictation_max_seconds = 0",
-        "dictation_max_seconds = 301",
-        "dictation_max_seconds = false",
-        "dictation_max_seconds = 1.5",
-        '[profiles.agent]\nmode = "reviewer"',
+        "api: unknown",
+        "theme_background: transparent",
+        "max_subagent_depth: -1",
+        "max_subagent_depth: 9",
+        "max_subagent_depth: true",
+        "max_subagent_depth: 1.5",
+        'dictation_enabled: "true"',
+        'dictation_model: "  "',
+        "dictation_api_key_env: not-an-env-name",
+        'dictation_base_url: "file:///tmp/audio"',
+        'dictation_base_url: "https://user:password@example.invalid/v1"',
+        'dictation_base_url: "https://example.invalid/v1?key=placeholder"',
+        'dictation_base_url: "https://example.invalid/v1#fragment"',
+        'dictation_base_url: "https://exa mple.invalid/v1"',
+        "dictation_language: english",
+        'dictation_language: "EN"',
+        "dictation_max_seconds: 0",
+        "dictation_max_seconds: 301",
+        "dictation_max_seconds: false",
+        "dictation_max_seconds: 1.5",
+        "profiles:\n  agent:\n    mode: reviewer",
     ],
 )
-def test_new_fields_reject_invalid_values(tmp_path: Path, toml: str) -> None:
-    path = tmp_path / "config.toml"
-    path.write_text(toml)
+def test_new_fields_reject_invalid_values(tmp_path: Path, document: str) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(document)
     with pytest.raises(ValueError):
         load_config(tmp_path, path)
 
@@ -114,7 +114,7 @@ def test_depth_is_strict_for_python_configs(tmp_path: Path, depth: int) -> None:
         HarnessConfig(workspace=tmp_path, max_subagent_depth=depth)
 
 
-def test_scalar_environment_defaults_and_toml_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scalar_environment_defaults_and_file_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in {
         "API": "responses",
         "MAX_SUBAGENT_DEPTH": "3",
@@ -134,8 +134,8 @@ def test_scalar_environment_defaults_and_toml_override(tmp_path: Path, monkeypat
     assert config.dictation_base_url == "http://127.0.0.1:4000/v1"
     assert config.dictation_api_key_env == "NGN_TEST_TRANSCRIPTION_KEY"
     assert config.dictation_language == "de" and config.dictation_max_seconds == 45
-    path = tmp_path / "config.toml"
-    path.write_text('api = "chat_completions"\nmax_subagent_depth = 0\ndictation_enabled = false\n')
+    path = tmp_path / "config.yaml"
+    path.write_text("api: chat_completions\nmax_subagent_depth: 0\ndictation_enabled: false\n")
     config = load_config(tmp_path, path)
     assert config.api == "chat_completions" and config.max_subagent_depth == 0
     assert not config.dictation_enabled
@@ -179,26 +179,26 @@ def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user"))
     user = tmp_path / "user/ngn"
     user.mkdir(parents=True)
-    (user / "config.toml").write_text(
-        'agent = "audit"\n[profiles.audit]\nmode = "reviewer"\nmodel = "audit-model"\n'
-        'instructions = "User instructions"\n[profiles.other]\nmode = "reviewer"\n'
+    (user / "config.yaml").write_text(
+        "agent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: audit-model\n"
+        "    instructions: User instructions\n  other:\n    mode: reviewer\n"
     )
     project = tmp_path / ".ngn"
     project.mkdir()
-    (project / "config.toml").write_text('[profiles.audit]\ninstructions = "Project instructions"\n')
-    explicit = tmp_path / "explicit.toml"
-    explicit.write_text("[profiles]\n")
+    (project / "config.yaml").write_text("profiles:\n  audit:\n    instructions: Project instructions\n")
+    explicit = tmp_path / "explicit.yaml"
+    explicit.write_text("profiles:\n")
 
     with pytest.warns(UserWarning, match="Ignoring untrusted project"):
         untrusted = load_config(tmp_path, explicit)
     assert untrusted.profile("audit") == AgentProfile("reviewer", "User instructions", "audit-model")
 
     trusted = load_config(tmp_path, explicit, trust_project=True)
-    # Documented replacement resets omitted mode/model; an empty table deletes nothing.
+    # Documented replacement resets omitted mode/model; an empty mapping deletes nothing.
     assert trusted.profile("audit") == AgentProfile("build", "Project instructions", "")
     assert trusted.profile("other") == AgentProfile("reviewer")
 
-    explicit.write_text('[profiles.audit]\nmode = "reviewer"\n')
+    explicit.write_text("profiles:\n  audit:\n    mode: reviewer\n")
     overridden = load_config(tmp_path, explicit, trust_project=True)
     assert overridden.profile("audit") == AgentProfile("reviewer")
     assert overridden.profile("other") == AgentProfile("reviewer")

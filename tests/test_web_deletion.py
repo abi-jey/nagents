@@ -15,7 +15,6 @@ from fastapi import HTTPException
 
 from nagents.channels.store import InboxStore
 from nagents.channels.store import finish_on_cancel
-from nagents.channels.types import ChannelCommand
 from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web import deletion
@@ -24,6 +23,7 @@ from nagents.web.service import Run
 from nagents.web.service import WebState
 from nagents.web.subscriptions import Subscriber
 from nagents.web.wakeups import Chain
+from tests.hang_guard import HANG_GUARD
 from tests.test_web import client_app
 from tests.test_web_subscription_lifecycle import Peer
 
@@ -140,7 +140,7 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("guard", ["active", "busy", "descendant", "retained", "wakeup", "main", "disabled-main"])
+@pytest.mark.parametrize("guard", ["active", "busy", "descendant", "retained", "wakeup"])
 def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
@@ -155,16 +155,8 @@ def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
                 state.harness.tasks._infos["task"] = TaskInfo(
                     "task", "child", session_id=root, status="running" if guard == "descendant" else "completed"
                 )
-            elif guard == "wakeup":
-                state.wakeups.schedule(root, "run", Chain(), "", 86400, "later")
             else:
-                state.channels.catalog.connections["fixture"] = Connection(
-                    plugin="fixture",
-                    enabled=guard == "main",
-                    config={},
-                    secrets={"key": "private"},
-                    main_session_id=root,
-                )
+                state.wakeups.schedule(root, "run", Chain(), "", 86400, "later")
             try:
                 response = await client.request(
                     "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
@@ -180,9 +172,44 @@ def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_delete_repoints_configured_channel_main_and_keeps_connector(tmp_path: Path, enabled: bool) -> None:
+    async def run() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            root = state.selected_session_id
+            await state.harness.new_session()
+            state.channels.catalog.connections["fixture"] = Connection(
+                plugin="fixture",
+                enabled=enabled,
+                config={},
+                secrets={"key": "private"},
+                main_session_id=root,
+            )
+            source = asyncio.create_task(asyncio.sleep(3600))
+            state.channels.sources["fixture"] = source
+            try:
+                response = await client.request(
+                    "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+                )
+                assert response.status_code == 200, response.text
+                connection = state.channels.catalog.connections["fixture"]
+                assert connection.enabled is enabled
+                assert connection.main_session_id == response.json()["session_id"]
+                assert connection.main_session_id != root
+                assert state.channels.sources.get("fixture") is source and not source.done()
+            finally:
+                source.cancel()
+                await asyncio.gather(source, return_exceptions=True)
+                state.channels.sources.pop("fixture", None)
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("table", ["ngn_web_inbox", "nagents_channel_inbox"])
 @pytest.mark.parametrize("status", ["queued", "running"])
-def test_delete_rejects_durable_work(tmp_path: Path, table: str, status: str) -> None:
+def test_delete_releases_durable_work(tmp_path: Path, table: str, status: str) -> None:
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
@@ -202,8 +229,8 @@ def test_delete_rejects_durable_work(tmp_path: Path, table: str, status: str) ->
             response = await client.request(
                 "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
             )
-            assert response.status_code == 409 and "inbox" in response.text
-            assert await rows(state, f"SELECT status FROM {table}") == [(status,)]
+            assert response.status_code == 200, response.text
+            assert not await rows(state, f"SELECT * FROM {table} WHERE session_id = ?", root)
 
     asyncio.run(run())
 
@@ -264,7 +291,7 @@ def test_cancel_during_transaction_joins_atomic_outcome_and_cleanup(
             def blocked(db: sqlite3.Connection, id: str, selected: str) -> str:
                 result = original(db, id, selected)
                 entered.set()
-                assert release.wait(5)
+                assert release.wait(HANG_GUARD)
                 if rollback:
                     raise ValueError("injected transaction failure")
                 return result
@@ -312,7 +339,7 @@ def test_admission_racing_delete_cannot_recreate_root(tmp_path: Path, monkeypatc
 
             def blocked(db: sqlite3.Connection, id: str, selected: str) -> str:
                 entered.set()
-                assert release.wait(5)
+                assert release.wait(HANG_GUARD)
                 return original(db, id, selected)
 
             monkeypatch.setattr(deletion, "_delete_rows", blocked)
@@ -329,7 +356,7 @@ def test_admission_racing_delete_cannot_recreate_root(tmp_path: Path, monkeypatc
     asyncio.run(run())
 
 
-def test_binding_reattachment_and_deleted_channel_redelivery(tmp_path: Path) -> None:
+def test_binding_deletion_reroots_chat_and_deleted_redelivery_dedups(tmp_path: Path) -> None:
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
@@ -338,9 +365,9 @@ def test_binding_reattachment_and_deleted_channel_redelivery(tmp_path: Path) -> 
             store = state.channels.store
             await store.assign_owner(other, "fixture", "conversation")
 
-            def envelope(id: str) -> str:
+            def envelope(id: str, text: str = "private") -> str:
                 return json.dumps(
-                    dict(message_id=id, conversation_id="conversation", thread_id="", reply_to="", text="private")
+                    dict(message_id=id, conversation_id="conversation", thread_id="", reply_to="", text=text)
                 )
 
             await store.receive("fixture", envelope("original"), other, None)
@@ -353,21 +380,100 @@ def test_binding_reattachment_and_deleted_channel_redelivery(tmp_path: Path) -> 
                 await store._transaction(finish)
 
             await complete()
-            for id, command in (("attach", f"{other}"), ("default", f"default {other}")):
-                response = await client.request(
-                    "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
-                )
-                assert response.status_code == 409 and "/session default ID" in response.text
-                await store.receive("fixture", envelope(id), other, ChannelCommand("session", command))
-                await complete()
-            assert (
-                await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True})
-            ).status_code == 200
+            # Permanent deletion of the bound root wins: the chat is re-rooted,
+            # not blocked, and its ownership evidence is retained.
+            response = await client.request(
+                "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+            )
+            assert response.status_code == 200, response.text
+            assert not await rows(
+                state, "SELECT * FROM ngn_web_bindings WHERE channel = 'fixture' AND conversation_id = 'conversation'"
+            )
+            assert await rows(
+                state, "SELECT owner.session_id FROM ngn_web_session_owners owner WHERE session_id = ?", root
+            ) == [(root,)]
+            # A late redelivery of the deleted message is deduplicated, not re-executed.
             await store.receive("fixture", envelope("original"), other, None)
             assert not await rows(state, "SELECT * FROM ngn_web_inbox WHERE message_id = 'original'")
             assert await rows(state, "SELECT * FROM ngn_web_deleted_messages") == [("fixture", "original")]
-            assert len(await rows(state, "SELECT * FROM ngn_web_inbox")) == 2
-            assert (await store.bindings())[0]["session_id"] == other
+            # The next fresh inbound creates a new chat root and is admitted as normal input.
+            await store.receive("fixture", envelope("fresh", "real request"), other, None)
+            bindings = await store.bindings()
+            assert len(bindings) == 1 and bindings[0]["session_id"] != root
+            assert await rows(state, "SELECT acknowledgement FROM ngn_web_inbox WHERE message_id = 'fresh'") == [("",)]
+            work = await store.claim_work()
+            assert work is not None and work.message_id == "fresh" and work.session_id != root
+
+    asyncio.run(run())
+
+
+def test_deleting_only_a_binding_default_keeps_chat_on_surviving_root(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            root = state.selected_session_id
+            default_root = await state.harness.new_session()
+
+            def bind(db: sqlite3.Connection) -> None:
+                db.execute(
+                    "INSERT INTO ngn_web_bindings VALUES ('fixture', 'conversation', ?, ?)", (root, default_root)
+                )
+
+            await state.channels.store._transaction(bind)
+            response = await client.request(
+                "DELETE", f"/api/sessions/{default_root}", headers=headers, json={"permanent": True}
+            )
+            assert response.status_code == 200, response.text
+            assert await rows(state, "SELECT * FROM ngn_web_bindings") == [("fixture", "conversation", root, root)]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("permanent", [False, True])
+def test_delete_succeeds_while_bound_and_quarantines_pending_work(tmp_path: Path, permanent: bool) -> None:
+    async def run() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            other = state.selected_session_id
+            root = await state.harness.new_session()
+
+            def bind(db: sqlite3.Connection) -> None:
+                db.execute("INSERT INTO ngn_web_bindings VALUES ('fixture', 'conversation', ?, ?)", (root, root))
+
+            await state.channels.store._transaction(bind)
+
+            def pending(db: sqlite3.Connection) -> None:
+                db.execute(
+                    "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, status) "
+                    "VALUES (?, 'fixture', 'late', 'PRIVATE envelope', 'queued')",
+                    (root,),
+                )
+
+            await state.channels.store._transaction(pending)
+            response = await client.request(
+                "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": permanent}
+            )
+            assert response.status_code == 200, response.text
+            assert not await rows(
+                state, "SELECT * FROM ngn_web_bindings WHERE session_id = ? OR default_session_id = ?", root, root
+            )
+            if permanent:
+                assert not await rows(state, "SELECT * FROM ngn_web_inbox WHERE session_id = ?", root)
+            else:
+                # Soft delete keeps history rows but marks pending work terminal.
+                assert await rows(state, "SELECT status FROM ngn_web_inbox WHERE session_id = ?", root) == [
+                    ("interrupted",)
+                ]
+            assert await rows(state, "SELECT * FROM ngn_web_deleted_messages") == [("fixture", "late")]
+            # A late connector redelivery must not re-execute the deleted work.
+            envelope = json.dumps(
+                dict(message_id="late", conversation_id="conversation", thread_id="", reply_to="", text="PRIVATE")
+            )
+            await state.channels.store.receive("fixture", envelope, other, None)
+            assert not await rows(state, "SELECT * FROM ngn_web_inbox WHERE message_id = 'late' AND status = 'queued'")
+            assert await state.channels.store.claim_work() is None
 
     asyncio.run(run())
 
@@ -437,6 +543,7 @@ def test_unrelated_pending_work_bindings_and_retained_tasks_are_preserved(tmp_pa
 
             def bind(db: sqlite3.Connection) -> None:
                 db.execute("INSERT INTO ngn_web_bindings VALUES ('fixture', 'other', ?, ?)", (other, other))
+                db.execute("INSERT INTO ngn_web_bindings VALUES ('fixture', 'root', ?, ?)", (root, root))
 
             await state.channels.store._transaction(bind)
             try:
@@ -445,7 +552,9 @@ def test_unrelated_pending_work_bindings_and_retained_tasks_are_preserved(tmp_pa
                 )
                 assert response.status_code == 200
                 assert await rows(state, "SELECT prompt, status FROM ngn_web_inbox") == [("do not drop", "queued")]
-                assert (await state.channels.store.bindings())[0]["session_id"] == other
+                bindings = await state.channels.store.bindings()
+                assert [entry["conversation_id"] for entry in bindings] == ["other"]
+                assert bindings[0]["session_id"] == other
                 assert "other-task" in state.harness.tasks._infos
                 assert len(state.wakeups.pending) == 1
             finally:

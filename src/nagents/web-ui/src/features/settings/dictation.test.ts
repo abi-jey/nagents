@@ -13,11 +13,12 @@ const values: SettingsValues = {
   shell_timeout: 30, max_output: 16384,
   max_file_bytes: 1048576, max_tool_rounds: 100, max_subagent_depth: 2,
   dictation_enabled: true, dictation_model: "gpt-4o-mini-transcribe", dictation_language: "", dictation_max_seconds: 60,
+  compact_trigger: "auto", compact_tokens: 200000, compact_messages: 100,
 };
 const profiles = [{ name: "build", mode: "build" as const, model: "" }, { name: "review", mode: "reviewer" as const, model: "another-chat-model" }];
 
-test("all sixteen settings round-trip with actual booleans and independent chat/transcription models", () => {
-  assert.equal(Object.keys(values).length, 16);
+test("all nineteen settings round-trip with actual booleans and independent chat/transcription models", () => {
+  assert.equal(Object.keys(values).length, 19);
   for (const enabled of [true, false]) {
     const current = { ...values, dictation_enabled: enabled };
     const draft = createDraft(current);

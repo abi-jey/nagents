@@ -20,7 +20,10 @@ from nagents.channels.store import finish_on_cancel
 
 from .deletion import _guard_process
 from .deletion import _guard_rows
+from .deletion import _quarantine_pending
+from .deletion import _release_bindings
 from .deletion import _remove_content
+from .deletion import _repoint_mains
 from .deletion import _selection
 from .routing import RoutingStore
 from .settings import _join
@@ -173,6 +176,8 @@ class SessionTrash:
             return _selection(db, selected), existing
         RoutingStore.root(db, session_id)
         _guard_rows(db, session_id)
+        _release_bindings(db, session_id)
+        _quarantine_pending(db, session_id)
         with closing(db.execute("SELECT title FROM harness_sessions WHERE id = ?", (session_id,))) as cursor:
             title = str(cursor.fetchone()[0])
         with closing(db.execute("SELECT retention_days FROM ngn_web_trash_policy WHERE id = 1")) as cursor:
@@ -218,12 +223,14 @@ class SessionTrash:
         if expired and item.purge_at > self.clock():
             raise HTTPException(409, "The recovery period has not expired.")
         tables = _guard_rows(db, session_id)
+        _release_bindings(db, session_id)
         _remove_content(db, session_id, tables)
         db.execute("DELETE FROM ngn_web_session_trash WHERE id = ? AND deletion_id = ?", (session_id, deletion_id))
 
     async def _purge(self, session_id: str, deletion_id: str, *, expired: bool = False) -> None:
         _guard_process(self.state, session_id)
         await self.store._transaction(lambda db: self._purge_rows(db, session_id, deletion_id, expired=expired))
+        _repoint_mains(self.state, session_id, self.state.selected_session_id)
         self.state.bus.delete_session(session_id)
         self.state.wakeups.forget_session(session_id)
 

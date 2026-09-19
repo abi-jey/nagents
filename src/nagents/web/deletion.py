@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from contextlib import closing
 from typing import TYPE_CHECKING
@@ -18,37 +19,76 @@ if TYPE_CHECKING:
 
     from .service import WebState
 
+logger = logging.getLogger(__name__)
+
 
 def _guard_rows(db: sqlite3.Connection, session_id: str) -> set[str]:
-    """Reject durable work/bindings before either removing membership or content."""
+    """Reject only genuine cross-session corruption before removing content.
+
+    Channel attachments and pending inbox work are no longer refusals: the UI
+    wins, and the deletion paths release bindings and quarantine pending work
+    instead of asking the user to reattach or wait.
+    """
     with closing(db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")) as cursor:
         tables = {str(row[0]) for row in cursor.fetchall()}
 
-    def exists(sql: str, parameters: tuple[str, ...]) -> bool:
-        with closing(db.execute(sql, parameters)) as cursor:
-            return cursor.fetchone() is not None
-
-    for table in ("ngn_web_inbox", "nagents_channel_inbox"):
-        if table in tables and exists(
-            f"SELECT 1 FROM {table} WHERE session_id = ? AND status NOT IN ('completed', 'failed', 'interrupted')",
-            (session_id,),
-        ):
-            raise HTTPException(409, "Session has queued or running inbox work. Let it finish before deleting.")
-    if exists(
-        "SELECT 1 FROM ngn_web_bindings WHERE session_id = ? OR default_session_id = ?", (session_id, session_id)
-    ):
-        raise HTTPException(
-            409,
-            "Session is attached to a channel conversation. In that channel, use /sessions, then /session ID "
-            "to attach another root and /session default ID to move its default. Let queued replies finish, then retry.",
+    with closing(
+        db.execute(
+            "SELECT 1 FROM ngn_web_message_origins o JOIN ngn_web_inbox i ON i.id = o.inbox_id "
+            "JOIN v2_messages m ON m.id = o.history_id WHERE i.session_id = ? AND m.session_id != ?",
+            (session_id, session_id),
         )
-    if exists(
-        "SELECT 1 FROM ngn_web_message_origins o JOIN ngn_web_inbox i ON i.id = o.inbox_id "
-        "JOIN v2_messages m ON m.id = o.history_id WHERE i.session_id = ? AND m.session_id != ?",
-        (session_id, session_id),
-    ):
-        raise HTTPException(409, "Session has inconsistent cross-session history metadata. Deletion was not performed.")
+    ) as cursor:
+        if cursor.fetchone() is not None:
+            raise HTTPException(
+                409, "Session has inconsistent cross-session history metadata. Deletion was not performed."
+            )
     return tables
+
+
+def _release_bindings(db: sqlite3.Connection, session_id: str) -> None:
+    """Re-root channel chats that referenced the deleted root.
+
+    Removing the conversation binding lets ``RoutingStore.receive`` create a
+    fresh chat root on its next inbound through the existing ``row is None``
+    branch, with no recovery notice and no lost message. When only the chat's
+    default was deleted, keep it on its surviving root. Ownership rows are
+    deliberately retained; deleting an ID never transfers historical ownership.
+    """
+    with closing(db.execute("DELETE FROM ngn_web_bindings WHERE session_id = ?", (session_id,))):
+        pass
+    with closing(
+        db.execute(
+            "UPDATE ngn_web_bindings SET default_session_id = session_id WHERE default_session_id = ?",
+            (session_id,),
+        )
+    ):
+        pass
+
+
+def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
+    """Make a soft-deleted root's pending work terminal and dedup-safe.
+
+    Rows stay for restore/history joins, but a late connector redelivery of the
+    same ``(channel, message_id)`` must not re-execute deleted work.
+    """
+    with closing(
+        db.execute(
+            "INSERT OR IGNORE INTO ngn_web_deleted_messages "
+            "SELECT channel, message_id FROM ngn_web_inbox "
+            "WHERE session_id = ? AND channel != '' AND status NOT IN ('completed', 'failed', 'interrupted')",
+            (session_id,),
+        )
+    ):
+        pass
+    with closing(
+        db.execute(
+            "UPDATE ngn_web_inbox SET status = 'interrupted' "
+            "WHERE session_id = ? AND status NOT IN ('completed', 'failed', 'interrupted')",
+            (session_id,),
+        )
+    ):
+        pass
 
 
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
@@ -96,6 +136,7 @@ def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
     # Root membership, never an ID prefix or raw history, authorizes destruction.
     RoutingStore.root(db, session_id)
     tables = _guard_rows(db, session_id)
+    _release_bindings(db, session_id)
     _remove_content(db, session_id, tables)
     return _selection(db, selected)
 
@@ -112,12 +153,31 @@ def _guard_process(state: WebState, session_id: str) -> None:
         raise HTTPException(409, "Descendant tasks are still running. Finish or cancel them before deleting.")
     if any(item.session_id == session_id for item in state.wakeups.pending.values()):
         raise HTTPException(409, "Session has pending wakeups. Let them finish or cancel their run before deleting.")
-    if any(item.main_session_id == session_id for item in state.channels.catalog.connections.values()):
-        raise HTTPException(
-            409,
-            "Session is a configured channel main session. Open Channels and save another main session "
-            "first, including for disabled connections. Then reattach any conversations before deleting.",
-        )
+
+
+def _repoint_mains(state: WebState, session_id: str, selected: str) -> None:
+    """Keep configured connectors pointed at a live root after deletion.
+
+    The replacement root is the same selection the delete transaction committed.
+    The live catalog is updated first, so routing never observes a deleted main
+    even if persistence is unavailable (demo) or fails. Persistence is best
+    effort: a stale on-disk main is tolerated at startup and re-derived on the
+    next configure.
+    """
+    catalog = state.channels.catalog
+    affected = [key for key, connection in catalog.connections.items() if connection.main_session_id == session_id]
+    if not affected:
+        return
+    connections = dict(catalog.connections)
+    for key in affected:
+        connections[key] = connections[key].model_copy(update={"main_session_id": selected})
+    catalog.connections = connections
+    if not catalog.allow_plugins:
+        return
+    try:
+        catalog.save(connections)
+    except Exception:
+        logger.warning("Channel catalog main repoint was not persisted; it will be re-derived on next configure")
 
 
 async def delete_session(state: WebState, session_id: str, *, permanent: bool = False) -> dict[str, object]:
@@ -142,6 +202,9 @@ async def delete_session(state: WebState, session_id: str, *, permanent: bool = 
                         lambda db: state.trash.remove_rows(db, session_id, state.selected_session_id)
                     )
                     extra["trash"] = item.wire()
+                # Repoint connector mains before memory invalidation so no reader
+                # ever sees a configured main that no longer exists.
+                _repoint_mains(state, session_id, selected)
                 # No await between commit acknowledgement and memory invalidation.
                 # The enclosing owned task joins this even if HTTP is cancelled.
                 state.selected_session_id = selected
