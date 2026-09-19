@@ -61,6 +61,8 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--api-key-env", help="Environment variable containing the API key, never the key itself")
     common.add_argument("--auth", choices=("auto", "api-key", "chatgpt"), help="Authentication method (default: auto)")
     common.add_argument("--agent", "-a", help="Agent profile (built-ins: agent, build, reviewer)")
+    common.add_argument("--design", type=Path, help="Load a YAML agent design (requires the designer extra)")
+    common.add_argument("--design-agent", default="", help="Agent ID within --design (default: entrypoint)")
     common.add_argument(
         "--max-subagent-depth",
         type=int,
@@ -487,6 +489,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides["plugins"] = tuple(plugins)
         config = replace(config, **overrides)
         if args.command == "serve":
+            if getattr(args, "design", None):
+                raise ValueError(
+                    "Open agent designs from the web Agent Designer; --design is for terminal/headless execution."
+                )
             from .web import serve
 
             serve(
@@ -498,7 +504,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dev=args.dev,
             )
             return 0
-        harness = Harness(config)
+        if getattr(args, "design", None):
+            try:
+                from .designer.runtime import DesignedHarness
+                from .designer.schema import parse
+            except ModuleNotFoundError as error:
+                if error.name not in {"yaml", "pydantic"}:
+                    raise
+                raise ValueError("YAML agent execution requires pip install 'nagents[designer]'.") from error
+
+            with args.design.open(encoding="utf-8") as source:
+                design = parse(source.read(49153)).resolved(workspace)
+            harness: Harness = DesignedHarness(config, design, args.design_agent)
+        else:
+            if getattr(args, "design_agent", ""):
+                raise ValueError("--design-agent requires --design")
+            harness = Harness(config)
         if args.command:
             return asyncio.run(_headless(harness, args))
         if not sys.stdin.isatty() or not sys.stdout.isatty():

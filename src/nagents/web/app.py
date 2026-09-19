@@ -36,6 +36,8 @@ from . import local_authority
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
 from .deletion import delete_session
+from .designer import Designer
+from .designer import register as register_designer
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
@@ -109,16 +111,19 @@ def create_app(
     directory = built_assets() if assets is None else assets
     token = secrets.token_urlsafe(32)
     state: WebState
+    designer: Designer
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state
+        nonlocal state, designer
         harness = harness_factory(copy.deepcopy(config))
         state = WebState(harness)
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
         try:
             await harness.initialize()
+            designer = Designer(state)
+            await designer.traces.initialize()
             await state.history.initialize()
             harness.agent.plugins.append(state.history.identity)
             state.settings = WebSettings(harness)
@@ -173,6 +178,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
+    register_designer(app, lambda: designer)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request: Request, error: RequestValidationError) -> JSONResponse:

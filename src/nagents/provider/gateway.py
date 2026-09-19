@@ -12,6 +12,8 @@ from ..adapters._validation import ProtocolError
 from ..adapters._validation import load_object
 from ..http import HTTPClient
 from ..http import HTTPError
+from ..observation import response_chunk
+from ..observation import trace_config
 
 MAX_EVENT_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
@@ -21,7 +23,10 @@ class GatewayHTTPClient(HTTPClient):
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                timeout=self._timeout, trust_env=False, cookie_jar=aiohttp.DummyCookieJar()
+                timeout=self._timeout,
+                trust_env=False,
+                cookie_jar=aiohttp.DummyCookieJar(),
+                trace_configs=[trace_config()],
             )
         return self._session
 
@@ -45,6 +50,7 @@ class GatewayHTTPClient(HTTPClient):
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise ProtocolError("Provider response exceeded the safe size limit.")
             try:
+                response_chunk(body.decode("utf-8"))
                 return load_object(body.decode("utf-8"))
             except UnicodeError:
                 raise ProtocolError("Provider returned invalid response encoding.") from None
@@ -81,6 +87,7 @@ class GatewayHTTPClient(HTTPClient):
                                 payload = b"\n".join(fields).decode("utf-8")
                             except UnicodeError:
                                 raise ProtocolError("Provider returned invalid stream encoding.") from None
+                            response_chunk(payload)
                             yield payload
                         fields = []
                         frame_size = 0

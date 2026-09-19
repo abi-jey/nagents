@@ -30,6 +30,8 @@ from ..events import TextDoneEvent
 from ..events import ToolCallEvent
 from ..events import Usage
 from ..exceptions import ModelListError
+from ..observation import response_chunk
+from ..observation import trace_config
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
@@ -192,6 +194,7 @@ async def _sse(response: aiohttp.ClientResponse) -> AsyncIterator[dict[str, obje
             if not line:
                 if data:
                     payload = b"\n".join(data)
+                    response_chunk(payload.decode("utf-8", errors="replace"))
                     if payload == b"[DONE]":
                         return
                     try:
@@ -371,6 +374,7 @@ class CodexProvider(Provider):
                     timeout=aiohttp.ClientTimeout(total=self._timeout),
                     trust_env=False,
                     cookie_jar=aiohttp.DummyCookieJar(),
+                    trace_configs=[trace_config()],
                 ) as client,
                 client.post(CODEX_ENDPOINT, json=body, headers=headers, allow_redirects=False) as response,
             ):

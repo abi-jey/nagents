@@ -1,0 +1,35 @@
+version: 1
+id: delegation-demo
+entrypoint: coordinator
+defaults:
+  provider: primary
+  max_subagent_depth: 2
+providers:
+  primary:
+    type: openai
+    model: gpt-5.6-terra
+    auth: chatgpt
+agents:
+  coordinator:
+    name: Coordinator
+    instructions:
+      text: >-
+        For an initial task, delegate it to analyst exactly once, then end your
+        turn briefly. When a BACKGROUND TASK NOTIFICATION arrives, give the final
+        concise answer using its result; do not delegate again.
+    invokes:
+      - agent: analyst
+        description: Check calculations and explain the result in one sentence.
+    max_tool_rounds: 6
+  analyst:
+    name: Analyst
+    instructions:
+      text: Solve the delegated arithmetic task. Return the result and a one-sentence verification.
+    max_tool_rounds: 3
+layout:
+  coordinator:
+    x: 90
+    y: 150
+  analyst:
+    x: 380
+    y: 150
