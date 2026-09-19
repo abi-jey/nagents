@@ -151,7 +151,7 @@ class HarnessExecutor(ToolExecutor):
                 raise PermissionError("OFFLINE DEMO: writes, shell, and custom tools are disabled")
             if self.harness.mode == "reviewer" and (not builtin or call.name in {"edit", "write", "shell"}):
                 raise PermissionError("reviewer profile denies edits, shell, and custom tools")
-            if self.harness._is_subagent and not builtin:
+            if self.harness._is_subagent and not builtin and not self.harness.supports_child_custom_tools:
                 raise PermissionError("Subagents do not support custom plugin/tool execution")
             if tool is not None:
                 _validate(call.arguments, tool.parameters)

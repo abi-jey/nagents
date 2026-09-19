@@ -10,6 +10,9 @@ from typing import cast
 
 import aiohttp
 
+from ..observation import response_chunk
+from ..observation import trace_config
+
 if TYPE_CHECKING:
     from .logger import HTTPLogger
 
@@ -93,7 +96,7 @@ class HTTPClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the aiohttp session."""
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=self._timeout)
+            self._session = aiohttp.ClientSession(timeout=self._timeout, trace_configs=[trace_config()])
         return self._session
 
     async def post_json(
@@ -209,6 +212,7 @@ class HTTPClient:
                     continue
                 if decoded.startswith("data: "):
                     chunk_data = decoded[6:]  # Remove "data: " prefix
+                    response_chunk(chunk_data)
                     # Log SSE chunk
                     if self._logger:
                         self._logger.log_sse_chunk(url, chunk_data, self._session_id)
@@ -216,6 +220,7 @@ class HTTPClient:
                 # Some APIs use just "data:" without space
                 elif decoded.startswith("data:"):
                     chunk_data = decoded[5:]
+                    response_chunk(chunk_data)
                     # Log SSE chunk
                     if self._logger:
                         self._logger.log_sse_chunk(url, chunk_data, self._session_id)
@@ -267,6 +272,7 @@ class HTTPClient:
                     try:
                         # Try to find a complete JSON object
                         obj, idx = json.JSONDecoder().raw_decode(buffer)
+                        response_chunk(buffer[:idx])
                         # Log SSE chunk (NDJSON object)
                         if self._logger:
                             self._logger.log_sse_chunk(url, json.dumps(obj), self._session_id)

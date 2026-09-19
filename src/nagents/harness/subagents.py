@@ -365,6 +365,19 @@ class SubagentManager:
         from .runtime import Harness
 
         parent = self._children[info.id] if continuing and info is not None else self.harness
+        defined = parent.create_defined_child(agent)
+        if defined is not None:
+            defined._is_subagent = True
+            defined._task_id = info.id if info else str(uuid.uuid4())
+            defined._task_name = info.name if info else agent
+            defined._activation = info.activation if info else 0
+            defined.subagent_depth = info.depth if info else self.harness.subagent_depth + 1
+            defined._permission_ceiling = "reviewer" if parent.mode == "reviewer" else "build"
+            if info:
+                defined.session_id = info.child_session_id
+            defined.tasks = SubagentManager(defined, self.root)
+            defined.refresh_instructions()
+            return defined
         if not isinstance(parent.agent.provider, HarnessProvider | CodexProvider):
             raise ValueError(
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"

@@ -107,6 +107,12 @@ remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
 
 ## HTTP Interfaces
 
+The current checkout includes a web-only **Agent Designer**: a YAML-backed agent
+canvas with per-agent providers, instructions, selected tools/MCPs, delegation,
+chat, and persisted context/request inspection. See the
+[Agent Designer guide](docs/guide/agent-designer.md) for configuration and terminal
+execution with `ngn --design`.
+
 These are separate applications, not interchangeable launch commands:
 
 | Command | Purpose | Installation |

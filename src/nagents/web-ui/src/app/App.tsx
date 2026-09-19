@@ -16,12 +16,14 @@ import "../features/channels/channels.css";
 import { useClient } from "./useClient";
 import { ContextIndicator } from "../features/context/ContextIndicator";
 import { restoreDeletionFocus } from "../api/deletion";
+import { Designer } from "../features/designer/Designer";
 
 export function App() {
   const client = useClient();
   const { chat, sessions, busy, error, dictation } = client;
   const { config, sessionId, externalRun } = sessions;
   const [navOpen, setNavOpen] = useState(false);
+  const [designerOpen, setDesignerOpen] = useState(false);
   const closeNavigation = useCallback(() => setNavOpen(false), []);
   const composer = useRef<HTMLTextAreaElement>(null);
   const selectedSession = sessions.sessions.find((session) => session.id === sessionId);
@@ -56,8 +58,9 @@ export function App() {
       <a className="skip-link" href="#composer">
         Skip to prompt
       </a>
-      <main>
+      <main inert={designerOpen}>
         <header className="topbar">
+          <button disabled={!config || busy || client.operating || dictation.unfinished} onClick={() => setDesignerOpen(true)}>Agent Designer</button>
           <button
             className="nav-toggle"
             aria-label="Toggle sessions"
@@ -177,6 +180,7 @@ export function App() {
           />
         </footer>
       </main>
+      {designerOpen && config && <Designer token={config.token} close={() => { setDesignerOpen(false); void client.connect(); }} />}
       {client.settings.open && <SettingsDialog settings={client.settings} />}
       {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController} permanent={client.deletionController.showTrash.bind(client.deletionController)} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
       {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessionId} />}

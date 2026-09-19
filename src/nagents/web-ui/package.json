@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "node scripts/build.mjs",
-    "test": "node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/dictation/*.test.js"
+    "test": "node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/dictation/*.test.js .test-build/features/designer/*.test.js"
   },
   "dependencies": {
     "react": "^19.2.4",

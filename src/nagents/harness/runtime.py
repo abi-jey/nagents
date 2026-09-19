@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from nagents.context_stats import ContextStats
     from nagents.events import CompactionDoneEvent
     from nagents.provider import Provider
+    from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolArguments
 
@@ -95,6 +96,19 @@ class _HarnessSession(SessionManager):
 
 
 class Harness:
+    supports_child_custom_tools = False
+
+    def generation_config(self) -> "GenerationConfig | None":
+        return None
+
+    def create_defined_child(self, name: str) -> "Harness | None":
+        """Optional definition-driven construction; ordinary profiles use cloning."""
+        return None
+
+    def load_project_instructions(self) -> None:
+        """Coding harnesses discover workspace instructions during initialization."""
+        self.tools.instructions(Path("AGENTS.md"))
+
     def __init__(self, config: "HarnessConfig", *, allow_subagents: bool = True) -> None:
         self.config = config
         self.allow_subagents = allow_subagents
@@ -250,7 +264,7 @@ class Harness:
                         "CREATE TABLE IF NOT EXISTS harness_sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
                     )
                     await db.commit()
-                self.tools.instructions(Path("AGENTS.md"))
+                self.load_project_instructions()
                 await self.agent.refresh_skills()
                 self.refresh_instructions()
                 if (
@@ -451,7 +465,9 @@ class Harness:
                     while message is not None:
                         failed = False
                         async with aclosing(
-                            self.agent.run(message, session_id=session_id, user_id="harness")
+                            self.agent.run(
+                                message, session_id=session_id, user_id="harness", config=self.generation_config()
+                            )
                         ) as events:
                             async for event in events:
                                 if isinstance(event, DoneEvent):

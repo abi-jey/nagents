@@ -67,6 +67,8 @@ from .extensions import RunContext
 from .http import FileHTTPLogger
 from .http import HTTPError
 from .media import transcode_audio_to_wav
+from .observation import observe
+from .observation import scope as observation_scope
 from .provider import Provider
 from .provider import ProviderType
 from .session import SessionManager
@@ -1145,6 +1147,7 @@ class Agent:
         trigger = self._resolve_compact_on()
 
         # Get info before compaction
+        observe("context_before_compaction", messages=messages, session_id=session_id)
         original_count = len(messages)
         original_tokens = estimate_messages_tokens(messages)
         compaction_session_id = generate_compaction_session_id(session_id)
@@ -1670,6 +1673,7 @@ class Agent:
                     # Reset token tracking after compaction (context was summarized)
                     # The next API call will give us new actual prompt_tokens
                     self._session_tokens[session_id] = event.summary_tokens
+                    observe("context_after_compaction", messages=messages, session_id=session_id)
 
             # Generate response
             pending_tool_calls: list[ToolCall] = []
@@ -1701,11 +1705,28 @@ class Agent:
                 [replace(tool, parameters=deepcopy(tool.parameters)) for tool in tools or []],
                 deepcopy(config),
             )
+            observation_scope.set(
+                {
+                    **observation_scope.get(),
+                    "model_call_id": uuid.uuid4().hex,
+                    "round": round_num,
+                    "session_id": context.session_id,
+                }
+            )
             for plugin in plugins:
                 request = await plugin.before_model(context, request)
                 if not isinstance(request, ModelRequest):
                     raise TypeError(f"{type(plugin).__name__}.before_model must return ModelRequest")
 
+            observe(
+                "model_context",
+                messages=request.messages,
+                tools=[
+                    {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
+                    for tool in request.tools
+                ],
+                config=request.config,
+            )
             async with self._closing_events(
                 self.provider.generate(
                     messages=request.messages,
@@ -1785,9 +1806,11 @@ class Agent:
 
                     # _save_to convention: remove from args before tool execution
                     execution_call = deepcopy(tool_call)
+                    observe("tool_started", call=execution_call)
                     save_path = _extract_save_path(execution_call) if self.save_tool_outputs else None
 
                     result_event = await self._execute_text_tool(execution_call, context, plugins)
+                    observe("tool_finished", result=result_event)
                     # Attach last known usage info to tool result events
                     result_event.usage = replace(last_usage, session=replace(session_usage))
                     # Add tool result to history
