@@ -130,6 +130,16 @@ class TraceStore:
                 records = [json.loads(item[0]) for item in await cursor.fetchall()]
             return {**dict(row), "events": records}
 
+    async def conversations(self) -> list[dict[str, object]]:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT id, session_id, agent, revision, status, created FROM designer_runs "
+                "WHERE rowid IN (SELECT MAX(rowid) FROM designer_runs GROUP BY session_id) "
+                "ORDER BY created DESC"
+            ) as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
+
     async def delete(self, run_id: str) -> None:
         async with aiosqlite.connect(self.path) as db:
             await db.execute("DELETE FROM designer_events WHERE run_id=?", (run_id,))

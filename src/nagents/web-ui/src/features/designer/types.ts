@@ -8,6 +8,7 @@ export interface AgentDefinition {
   name: string; provider: string; instructions: { text: string; file: string };
   tools: ToolSelection[]; mcp: { server: string; tools: ToolSelection[] }[];
   invokes: Invocation[]; max_tool_rounds: number;
+  generation?: { temperature?: number; max_tokens?: number; top_p?: number; stop?: string[] };
 }
 export interface Design {
   version: 1; id: string; entrypoint: string;
@@ -19,7 +20,9 @@ export interface Design {
   channels?: Record<string, string>;
 }
 export interface TraceRecord { sequence: number; kind: string; timestamp: string; data: Record<string, unknown> }
-export interface RunSummary { id: string; agent: string; status: string; created: string; revision: string }
+export interface RunSummary { id: string; session_id: string; agent: string; status: string; created: string; revision: string }
+export interface ChatMessage { id: number; role: string; text: string }
+export interface ConversationReply { session_id: string; messages: ChatMessage[]; cursor: number; more: boolean }
 export interface TraceReply extends RunSummary {
   channel_session?: boolean;
   design: string; events: TraceRecord[];

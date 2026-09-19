@@ -41,6 +41,21 @@ with model context and request traces.
 
 ## Designer basics
 
+The test dock's **Chat history** lists conversations; selecting one restores its
+persisted messages across every turn. **New chat** starts a separate conversation.
+Sending continues the selected conversation by default. **Execution history**
+selects an individual run for debugging without reducing the visible chat to that
+run. Existing conversations keep their pinned agent and provider configuration.
+
+New designs and **Live example** inherit the current web provider settings,
+including saved overrides. Open **Agent settings → Provider settings** (or the
+provider under **Resources**) to choose **Responses API**, **Chat Completions API**,
+**Messages API**, or automatic routing. The same form exposes provider type, model
+ID, endpoint prefix, authentication, credential reference, and Azure API version.
+Provider resources are shared: edits apply to agents using that resource in new
+conversations. **Advanced** exposes temperature, output token limit, top-p, stop
+sequences, and model-round limits; blank generation fields use provider defaults.
+
 Install the current checkout with the `web` extra and build the frontend as
 described in [web development](../development/contributing.md#web-client-development).
 `ngn serve --demo` exercises the editor and inspector without model calls or MCP
