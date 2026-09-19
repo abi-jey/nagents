@@ -124,6 +124,49 @@ def test_demo_json_is_parseable(
 
 
 @pytest.mark.requires_posix
+def test_run_header_shows_effective_provider_model_and_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    config = tmp_path / "settings.yaml"
+    config.write_text("provider: openai\nmodel: header-model\n")
+    assert main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "run", "hello"]) == 0
+    captured = capsys.readouterr()
+    assert "Provider: openai" in captured.err
+    assert "Model: header-model" in captured.err
+    assert f"Config: {config}" in captured.err
+    assert "Provider:" not in captured.out
+    assert "Model:" not in captured.out
+
+
+@pytest.mark.requires_posix
+def test_run_header_reports_builtin_defaults_without_a_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "hello"]) == 0
+    captured = capsys.readouterr()
+    assert "Config: built-in defaults" in captured.err
+    assert "Mode: offline demo" in captured.err
+
+
+@pytest.mark.requires_posix
+def test_run_json_header_stays_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "--json", "hello"]) == 0
+    captured = capsys.readouterr()
+    for line in captured.out.splitlines():
+        record = json.loads(line)
+        assert record["schema_version"] == 1
+    assert "Provider:" in captured.err and "Config:" in captured.err
+
+
+@pytest.mark.requires_posix
 def test_demo_sessions_and_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -65,6 +65,7 @@ class HarnessConfig:
     max_tool_rounds: int = 30
     profiles: dict[str, AgentProfile] = field(default_factory=dict)
     diagnostics: tuple[str, ...] = ()
+    config_paths: tuple[Path, ...] = ()
     auth: str = "auto"
     theme: str = "terminal"
     animations: bool = True
@@ -270,11 +271,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         paths.append(explicit)
     # Keep the last occurrence so explicitly selecting the global file still
     # overrides a trusted project file.
+    loaded: list[Path] = []
     for path in reversed(dict.fromkeys(reversed(paths))):
         if not path.exists():
             if path == explicit:
                 raise FileNotFoundError(path)
             continue
+        loaded.append(path.resolve())
         try:
             values = yaml.safe_load(path.read_text(encoding="utf-8"))
         except yaml.YAMLError as exc:
@@ -334,5 +337,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             setattr(config, key, value)
         diagnostics.append(f"Loaded trusted configuration: {path}")
     config.diagnostics = tuple(diagnostics)
+    config.config_paths = tuple(loaded)
     config.__post_init__()
     return config

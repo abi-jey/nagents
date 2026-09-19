@@ -714,6 +714,19 @@ class Harness:
             return "Offline demo; authentication is disabled"
         return f"ChatGPT: {self.openai_auth.status()}\nProvider login: {self.login_store.status()}"
 
+    def config_header(self) -> str:
+        """Compact run header: the effective provider, model and loaded config files."""
+        loaded = ", ".join(str(path) for path in self.config.config_paths) or "built-in defaults"
+        model = self.agent.provider.model or self.config.model
+        lines = [
+            f"Provider: {self.config.provider}",
+            f"Model: {model}",
+            f"Config: {loaded}",
+        ]
+        if self.config.demo:
+            lines.append("Mode: offline demo (no provider calls)")
+        return "\n".join(lines)
+
     def describe(self) -> str:
         skills = ", ".join(f"{skill.name}: {skill.description}" for skill in self.agent.skills.values()) or "none"
         return "\n".join(
@@ -733,6 +746,7 @@ class Harness:
                 f"model: {self.config.dictation_model}; endpoint: {self.config.dictation_base_url}; "
                 f"key reference: ${self.config.dictation_api_key_env}",
                 f"Project configuration trusted: {self.config.trust_project}",
+                f"Config files: {', '.join(str(path) for path in self.config.config_paths) or 'built-in defaults'}",
                 f"Tools: {', '.join(self.agent.tool_registry.names())}",
                 f"Commands: {', '.join('/' + command.name for command in self.commands.list())}",
                 f"Plugins configured: {', '.join(self.config.plugins) or 'none'}",
