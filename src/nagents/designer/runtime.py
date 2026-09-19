@@ -168,6 +168,7 @@ class DesignedHarness(Harness):
             max_subagent_depth=design.defaults.max_subagent_depth,
         )
         super().__init__(configured)
+        self._initial_provider = self.agent.provider
         self.agent.provider = (
             CodexProvider(self.codex_credentials, model=provider.model)
             if provider.auth == "chatgpt" and not config.demo
@@ -288,7 +289,14 @@ class DesignedHarness(Harness):
         try:
             await super().close()
         finally:
-            task = asyncio.create_task(self.mcp.disconnect_all())
+
+            async def cleanup() -> None:
+                try:
+                    await self._initial_provider.close()
+                finally:
+                    await self.mcp.disconnect_all()
+
+            task = asyncio.create_task(cleanup())
             from nagents.harness.subagents import _await_cleanup
 
             await _await_cleanup(task)

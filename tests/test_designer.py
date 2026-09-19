@@ -127,6 +127,8 @@ def test_general_agent_tools_and_delegation_are_explicit(tmp_path: Path) -> None
         design.agents["researcher"] = AgentDefinition(instructions=Instructions(text="Only research."))
         design.agents["assistant"].invokes = [Invocation(agent="researcher", description="Research documents")]
         design.agents["researcher"].tools = [ToolSelection(ref="builtin.read_file", description="Read research notes")]
+        # The standalone/TUI runtime never opens serve-only channel bindings.
+        design.channels = {"telegram": "assistant"}
         root = DesignedHarness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True), design)
         try:
             assert root.agent.tool_registry.names() == ["delegate"]

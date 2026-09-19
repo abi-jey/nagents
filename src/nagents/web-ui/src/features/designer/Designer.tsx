@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { request } from "../../api/client";
 import { Canvas } from "./Canvas";
 import { Resources } from "./Resources";
+import { ChannelRoutes } from "./ChannelRoutes";
 import { TestPrompt } from "./TestPrompt";
 import { Icon } from "../../components/Icon";
 import { appendTrace, newAgent, removeAgent, traceMatches } from "./types";
 import type { AgentDefinition, Design, RunSummary, TraceRecord, TraceReply } from "./types";
 import "./designer.css";
 
-export function Designer({ token, close }: { token: string; close: () => void }) {
+export function Designer({ token, close, configureChannels }: { token: string; close: () => void; configureChannels: () => void }) {
   const [design, setDesign] = useState<Design>();
   const [source, setSource] = useState("");
   const [yamlDirty, setYamlDirty] = useState(false);
@@ -134,7 +135,7 @@ export function Designer({ token, close }: { token: string; close: () => void })
     </header>
     {error && <p role="alert" className="designer-error">{error}</p>}
     {notice && <p role="status">{notice}</p>}
-    <nav className="designer-tabs" aria-label="Designer views">{["canvas", "yaml", "resources", "preview"].map((name) => <button key={name} aria-pressed={tab === name} onClick={() => void action(async () => {
+    <nav className="designer-tabs" aria-label="Designer views">{["canvas", "yaml", "resources", "channels", "preview"].map((name) => <button key={name} aria-pressed={tab === name} onClick={() => void action(async () => {
       if (yamlDirty && name !== "yaml") await validate(source);
       if (name === "yaml") await currentSource();
       if (name === "resources" && design) setResourceText(JSON.stringify({ defaults: design.defaults, providers: design.providers, secrets: design.secrets, mcp_servers: design.mcp_servers }, null, 2));
@@ -153,6 +154,13 @@ export function Designer({ token, close }: { token: string; close: () => void })
         </aside>
         <div className="designer-workspace">
           {tab === "canvas" && <Canvas design={design} selected={selected} select={setSelected} change={edit} runningAgents={runningAgents} />}
+          {tab === "channels" && <ChannelRoutes token={token} design={design} change={edit} configure={configureChannels} busy={busy} apply={() => action(async () => {
+            const text = await currentSource();
+            const saved = await api<{ revision: string }>("/save", { source: text, revision });
+            setRevision(saved.revision); await refresh();
+            await api("/channels", { source: text, revision: saved.revision });
+            setNotice("Channel routes applied. New chats and /new use this version; existing conversations keep their pinned agent.");
+          })} />}
           {tab === "yaml" && <><label>YAML definition<textarea className="designer-code" spellCheck={false} value={source} onChange={(e) => { setSource(e.target.value); setYamlDirty(true); }} /></label><button disabled={pending} onClick={() => void action(async () => { await validate(source); setNotice("YAML applied to canvas."); })}>Apply YAML</button><p>Visual edits produce canonical YAML when saved; YAML comments are retained only when saving directly from this editor.</p></>}
           {tab === "resources" && <><Resources design={design} change={(next) => { edit(next); setResourceText(JSON.stringify({ defaults: next.defaults, providers: next.providers, secrets: next.secrets, mcp_servers: next.mcp_servers }, null, 2)); }} /><details><summary>Advanced resource JSON</summary><p>MCP secrets map environment variable names to named secret references.</p>
             <textarea className="designer-code" aria-label="Shared resource configuration" spellCheck={false} value={resourceText} onChange={(e) => setResourceText(e.target.value)} />
@@ -200,7 +208,7 @@ export function Designer({ token, close }: { token: string; close: () => void })
             await request("approval", token, { run_id: runId, approval_id: reply.approval.approval_id, call_id: reply.approval.id, decision });
           })}>{decision}</button>)}</div>}
           <label className="designer-prompt"><span className="sr-only">Message</span><TestPrompt target={continueRun && reply ? reply.agent : selected} value={prompt} change={setPrompt} canSend={!busy} send={() => void action(run)} /></label>
-          <div className="designer-chat-actions">{runId && <label className="designer-check" title="Continue this conversation using its pinned agent definition"><input type="checkbox" checked={continueRun} onChange={(e) => setContinueRun(e.target.checked)} />Continue</label>}
+           <div className="designer-chat-actions">{runId && <label className="designer-check" title={reply?.channel_session ? "Continue in the bound web session or channel chat" : "Continue this conversation using its pinned agent definition"}><input type="checkbox" disabled={reply?.channel_session} checked={continueRun} onChange={(e) => setContinueRun(e.target.checked)} />{reply?.channel_session ? "Channel conversation" : "Continue"}</label>}
           <button className="designer-send" title="Ctrl+Enter or ⌘+Enter" disabled={busy || !prompt.trim()} onClick={() => void action(run)}>Send</button>
           <button disabled={reply?.status !== "running"} onClick={() => void action(async () => { await request("cancel", token, { run_id: runId }); })}>Cancel run</button>
           <button title="Delete trace" aria-label="Delete trace" disabled={!runId || busy} onClick={() => void action(async () => { await api(`/runs/${runId}`, {}, "DELETE"); setRunId(""); setTrace([]); setReply(undefined); await refresh(); })}><Icon name="trash" size={14} /></button></div>

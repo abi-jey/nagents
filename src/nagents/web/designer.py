@@ -132,6 +132,10 @@ class Designer:
                 design = parse(str(previous["design"]))
                 name = str(previous["agent"])
                 session_id = str(previous["session_id"])
+                if await self.state.designed_channels.pinned(session_id):
+                    raise HTTPException(
+                        409, "Continue channel conversations in their bound web session or channel chat."
+                    )
             else:
                 design = parse(body.source).resolved(self.config.workspace)
                 name = body.agent or design.entrypoint
@@ -250,6 +254,35 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
         except (ValueError, OSError, yaml.YAMLError) as error:
             raise invalid(error) from None
 
+    @app.get("/api/designer/channels")
+    async def channels() -> dict[str, object]:
+        host = get().state.channels
+        return {
+            "connections": [
+                {
+                    "id": id,
+                    "plugin": connection.plugin,
+                    "enabled": connection.enabled,
+                    "status": host.catalog.status.get(id, ("disabled", ""))[0],
+                }
+                for id, connection in host.catalog.connections.items()
+            ],
+            "routes": await get().state.designed_channels.routes(),
+        }
+
+    @app.post("/api/designer/channels")
+    async def apply_channels(body: Source) -> dict[str, object]:
+        designer = get()
+        with designer.state.idle():
+            try:
+                design = parse(body.source)
+                saved = designer.files.read(design.id)
+                if saved["revision"] != body.revision or saved["source"] != body.source:
+                    raise HTTPException(409, "Save this design before applying its channel routes.")
+                return {"routes": await designer.state.designed_channels.apply(design)}
+            except (ValueError, OSError, yaml.YAMLError) as error:
+                raise invalid(error) from None
+
     @app.post("/api/designer/validate")
     async def validate(body: Source) -> dict[str, object]:
         try:
@@ -322,6 +355,7 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
             result = await get().traces.read(run_id, max(0, after))
             active = get().state.active
             result["approval"] = active.pending.record if active and active.id == run_id and active.pending else {}
+            result["channel_session"] = await get().state.designed_channels.pinned(str(result["session_id"]))
             return result
         except ValueError as error:
             raise invalid(error) from None

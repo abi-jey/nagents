@@ -8,11 +8,13 @@ test("removing an agent repairs delegation edges, layout and entrypoint", () => 
     version: 1, id: "team", entrypoint: "child", defaults: { provider: "primary", max_subagent_depth: 2 },
     providers: {}, secrets: {}, mcp_servers: {}, layout: { child: { x: 50, y: 100 } },
     agents: { parent: { ...newAgent(), invokes: [{ agent: "child", description: "Research" }] }, child: newAgent() },
+    channels: { telegram: "child", support: "parent" },
   };
   const result = removeAgent(design, "child");
   assert.equal(result.entrypoint, "parent");
   assert.deepEqual(result.agents.parent.invokes, []);
   assert.deepEqual(result.layout, {});
+  assert.deepEqual(result.channels, { support: "parent" });
   assert.equal(design.agents.parent.invokes.length, 1);
   assert.equal(removeAgent(result, "parent"), result);
 });

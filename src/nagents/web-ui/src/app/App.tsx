@@ -180,7 +180,7 @@ export function App() {
           />
         </footer>
       </main>
-      {designerOpen && config && <Designer token={config.token} close={() => { setDesignerOpen(false); void client.connect(); }} />}
+      {designerOpen && config && <Designer token={config.token} configureChannels={client.channels.show} close={() => { setDesignerOpen(false); void client.connect(); }} />}
       {client.settings.open && <SettingsDialog settings={client.settings} />}
       {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController} permanent={client.deletionController.showTrash.bind(client.deletionController)} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
       {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessionId} />}

@@ -25,6 +25,7 @@ from nagents.harness.runtime import _HarnessSession
 from .channel_host import ChannelHost
 from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
+from .design_channels import DesignedChannels
 from .dictation import WebDictation
 from .history import WebHistory
 from .replay import RunReplay
@@ -140,6 +141,7 @@ class WebState:
 
     def __init__(self, harness: Harness) -> None:
         self.harness = harness
+        self.running_harness = harness
         self.approval_timeout: Callable[[], float] = lambda: APPROVAL_TIMEOUT
         self.selected_session_id = harness.session_id
         self.session_revision = 0
@@ -156,6 +158,7 @@ class WebState:
             lambda: self.active is None and not self.mutating, self.wake, observer=self.activity_event
         )
         self.channels = ChannelHost(self)
+        self.designed_channels = DesignedChannels(self)
         self.trash = SessionTrash(self)
         harness.approval_handler = self.approve
         harness.wakeup_handler = self.schedule
@@ -357,6 +360,15 @@ class WebState:
             }
         )
 
+    async def produce_session(self, run: Run, prompt: str | list[ContentPart]) -> None:
+        try:
+            async with self.designed_channels.execution(run) as harness:
+                self.running_harness = harness
+                await harness.resume(run.session_id)
+                await self.produce(run, prompt)
+        finally:
+            self.running_harness = self.harness
+
     async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
         notices = run.notices = ChannelNotices(self, run)
         try:
@@ -365,9 +377,9 @@ class WebState:
             if run.background:
                 if not isinstance(prompt, str):
                     raise ValueError("Background wake prompts must be text")
-                source = self.harness.wake(prompt, task_id=task_id)
+                source = self.running_harness.wake(prompt, task_id=task_id)
             else:
-                source = self.harness.run(prompt)
+                source = self.running_harness.run(prompt)
             async with aclosing(source) as events:
                 async for event in events:
                     if isinstance(event, ErrorEvent):
@@ -418,12 +430,16 @@ class WebState:
 
         async def execute() -> None:
             try:
-                await self.harness.resume(run.session_id)
-                with self.history.admitted(work, run.id):
-                    prompt: str | list[ContentPart] = (
-                        await self.channels.inbound_content(work.channel, work.prompt) if work.channel else work.prompt
-                    )
-                    await self.produce(run, prompt)
+                async with self.designed_channels.execution(run) as harness:
+                    self.running_harness = harness
+                    await harness.resume(run.session_id)
+                    with self.history.admitted(work, run.id):
+                        prompt: str | list[ContentPart] = (
+                            await self.channels.inbound_content(work.channel, work.prompt)
+                            if work.channel
+                            else work.prompt
+                        )
+                        await self.produce(run, prompt)
             except asyncio.CancelledError:
                 run.outcome = "cancelled"
                 raise
@@ -437,6 +453,7 @@ class WebState:
                 # producer cleanup, never underneath the shared Harness.
                 self.harness.session_id = self.selected_session_id
                 self.harness.tools.read_hashes.clear()
+                self.running_harness = self.harness
 
         run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")
         try:
@@ -462,8 +479,10 @@ class WebState:
         async def execute() -> None:
             note = "Compaction failed. Context was not changed."
             try:
-                await self.harness.resume(run.session_id)
-                done = await self.harness.compact()
+                async with self.designed_channels.execution(run) as harness:
+                    self.running_harness = harness
+                    await harness.resume(run.session_id)
+                    done = await harness.compact()
                 run.outcome = "completed"
                 await self.send(run, _event_record(done))
                 note = f"Context compacted: {done.original_message_count} messages summarized into {done.new_message_count}."
@@ -480,6 +499,7 @@ class WebState:
                 # producer cleanup, never underneath the shared Harness.
                 self.harness.session_id = self.selected_session_id
                 self.harness.tools.read_hashes.clear()
+                self.running_harness = self.harness
             await self.channels.reply(work, note)
 
         run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")

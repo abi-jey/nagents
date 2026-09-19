@@ -365,7 +365,7 @@ def create_app(
             state.active = active
             state.publish(active, {"event": "run_started"})
             state.status()
-            active.task = asyncio.create_task(state.produce(active, body.prompt), name=f"ngn-web-{active.id}")
+            active.task = asyncio.create_task(state.produce_session(active, body.prompt), name=f"ngn-web-{active.id}")
         return RunResponse(state, active)
 
     @app.post("/api/dictation/transcribe")

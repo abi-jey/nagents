@@ -120,6 +120,7 @@ class ChannelHost:
             _HOSTS.add(key)
             self.owned = True
         await self.store.initialize()
+        await self.state.designed_channels.initialize()
         self.initialized = True
         self.catalog.initialize()
         self.register_tools()
