@@ -1030,6 +1030,53 @@ def test_demo_cancellation_during_approval_does_not_write(config: HarnessConfig)
 
 
 @pytest.mark.requires_posix
+def test_read_only_initialization_never_creates_a_session(config: HarnessConfig) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        try:
+            await harness.initialize(create_session=False)
+            assert await harness.history() == []
+            assert await harness.list_sessions() == []
+            # Repeated read-only calls stay empty; this is the picker/list path.
+            assert await harness.list_sessions() == []
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
+def test_default_initialization_creates_the_current_session(config: HarnessConfig) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        try:
+            await harness.initialize()
+            assert [session.id for session in await harness.list_sessions()] == [harness.session_id]
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
+def test_run_creates_the_current_session_on_first_use(config: HarnessConfig) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        harness.agent.provider = ScriptedProvider([[TextDoneEvent(text="reply")]])
+        try:
+            await harness.initialize(create_session=False)
+            assert await harness.list_sessions() == []
+            _ = [event async for event in harness.run("hello there")]
+            sessions = await harness.list_sessions()
+            assert [session.id for session in sessions] == [harness.session_id]
+            assert sessions[0].title == "hello there"
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
 def test_workspace_sessions_titles_resume_and_custom_compaction(config: HarnessConfig, tmp_path: Path) -> None:
     class LocalCompaction:
         async def should_compact(self, request: CompactionRequest) -> bool:

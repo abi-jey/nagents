@@ -560,6 +560,7 @@ after the subcommand; prefer supplying each option only once.
 | `ngn run [--json] [prompt ...]` | Headless prompt execution. `-`, or no prompt with piped stdin, reads stdin. |
 | `ngn serve` | New local React client for the harness. Requires the current checkout, `[web]`, and built assets; see [Local Web Client](ngn-web.md). Not the legacy `python -m nagents.server` API. |
 | `ngn sessions` | List saved sessions for the selected workspace. |
+| `ngn resume [SESSION_ID]` | Resume a saved session in the full-screen client. With no ID, choose from an interactive list. Requires a terminal; errors on an ID from another workspace. |
 | `ngn doctor` | Initialize the harness and show configuration/extension diagnostics without an LLM request. Trusted plugins still execute. Use `--demo` to skip them. |
 | `ngn login [METHOD]` | Start provider sign-in. Methods: `chatgpt`, `openrouter`, `openai`, `anthropic`, `gemini`, `custom`, or an advanced `--provider` name. Interactive menu in a terminal; ChatGPT device login when none is chosen non-interactively. |
 | `ngn login --status` | Show ChatGPT and provider login status without a network request. |
@@ -609,6 +610,12 @@ Sessions are scoped to the resolved workspace path. The default state root is
 hashed subdirectory containing `sessions.db`. Set `data_dir` to change the
 session-state root. Moving a workspace or changing its resolved path can select
 a different scope; `--resume` does not search unrelated workspaces.
+
+`ngn resume` opens the full-screen client on a saved session. Pass a session ID
+to resume it directly, or omit the ID to pick from an interactive list. Listing
+and choosing are read-only: they never register an empty session, so the picker
+shows only real conversations. `--continue`/`--resume` on `ngn` and `ngn run`
+remain available for scripts and one-shot runs.
 
 Demo conversations persist too. Queued prompts and running subagent jobs do not
 survive application exit. Resuming history does not replay completed or uncertain

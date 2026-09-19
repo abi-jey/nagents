@@ -73,12 +73,12 @@ class ControlledHarness(Harness):
         self.decisions: list[bool] = []
         self.loop = asyncio.get_running_loop()
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, create_session: bool = True) -> None:
         assert asyncio.get_running_loop() is self.loop
         # Replace only workspace discovery on this injected test instance. Keep
         # the real initialization lock and SQLite session/membership lifecycle.
         with patch.object(self.tools, "instructions", return_value=""), patch.object(self.tools, "discover_skills"):
-            await super().initialize()
+            await super().initialize(create_session=create_session)
 
     async def run(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         try:
