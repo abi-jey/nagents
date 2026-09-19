@@ -118,6 +118,7 @@ class Design(Definition):
     mcp_servers: dict[str, MCPDefinition] = Field(default_factory=dict)
     agents: dict[str, AgentDefinition]
     layout: dict[str, Position] = Field(default_factory=dict)
+    channels: dict[str, str] = Field(default_factory=dict)
 
     def document(self) -> dict[str, object]:
         """Materialize editor defaults without enabling unset generation options."""
@@ -156,6 +157,9 @@ class Design(Definition):
                 raise ValueError("Unknown MCP server")
         if any(name not in self.agents for name in self.layout):
             raise ValueError("Layout references an unknown agent")
+        for connection, agent_id in self.channels.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", connection) or agent_id not in self.agents:
+                raise ValueError("Channels must map connection IDs to known agents")
         return self
 
     def resolved(self, workspace: Path) -> Design:
