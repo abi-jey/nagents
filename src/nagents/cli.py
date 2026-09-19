@@ -367,6 +367,9 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 print(_plain(f"{session.id}  {session.updated_at}  {session.title}"))
             return 0
 
+        if args.command == "run":
+            print(_plain(harness.config_header()), file=sys.stderr, flush=True)
+
         prompt = " ".join(args.prompt)
         if prompt == "-" or (not prompt and not sys.stdin.isatty()):
             prompt = sys.stdin.read()

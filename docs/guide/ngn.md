@@ -522,6 +522,21 @@ tools, hooks, and permission checks as the TUI. Non-interactive approvals are
 denied, never silently granted. An interactive `ngn run` asks for approval on
 standard error. Control sequences in human-readable tool output are sanitized.
 
+Before the prompt runs, `ngn run` prints a short header on standard error with
+the effective provider, the effective model (a profile's model can supersede the
+top-level `model`), and the configuration files that were actually loaded:
+
+```text
+Provider: openai
+Model: gpt-4.1
+Config: /home/you/.config/ngn/config.yaml
+```
+
+When no configuration file exists the header reads `Config: built-in defaults`,
+and `--demo` adds a `Mode: offline demo` line. The header always goes to standard
+error, so `ngn run --json` keeps standard output as pure JSON Lines. `ngn doctor`
+lists the same files as `Config files:`.
+
 `--json` is a `run` option, not an option for every subcommand. Human-readable
 text streams to stdout; tool progress and approval prompts use stderr. JSON
 mode writes versioned event records to stdout, with command errors/denials still

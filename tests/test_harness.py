@@ -156,6 +156,21 @@ def test_config_precedence_origins_profiles_and_xdg(
     assert load_config(config.workspace, explicit, trust_project=True).model == "explicit-model"
     assert load_config(config.workspace, project_config).plugins == loaded.plugins
     assert load_config(config.workspace, user / "config.yaml", trust_project=True).model == "user-model"
+    # config_paths records exactly the files that were read, in load order.
+    assert load_config(config.workspace).config_paths == (user / "config.yaml",)
+    assert load_config(config.workspace, trust_project=True).config_paths == (
+        user / "config.yaml",
+        project_config,
+    )
+    assert load_config(config.workspace, explicit, trust_project=True).config_paths == (
+        user / "config.yaml",
+        project_config,
+        explicit,
+    )
+
+
+def test_config_paths_are_empty_with_only_builtin_defaults(config: HarnessConfig) -> None:
+    assert load_config(config.workspace).config_paths == ()
 
 
 @pytest.mark.parametrize(
@@ -192,6 +207,42 @@ def test_provider_aliases_and_missing_explicit_config(config: HarnessConfig, tmp
     assert PROVIDERS["openai"] is ProviderType.OPENAI_COMPATIBLE
     with pytest.raises(FileNotFoundError):
         load_config(config.workspace, tmp_path / "missing.yaml")
+
+
+def test_config_header_reports_effective_selection(config: HarnessConfig, tmp_path: Path) -> None:
+    settings = tmp_path / "settings.yaml"
+    settings.write_text("provider: anthropic\nmodel: claude-test\n")
+    harness = Harness(load_config(config.workspace, settings))
+    try:
+        header = harness.config_header()
+        assert "Provider: anthropic" in header
+        assert "Model: claude-test" in header
+        assert f"Config: {settings}" in header
+        assert "Mode:" not in header
+    finally:
+        asyncio.run(harness.close())
+
+
+def test_config_header_uses_effective_profile_model(config: HarnessConfig, tmp_path: Path) -> None:
+    settings = tmp_path / "settings.yaml"
+    settings.write_text(
+        "model: top-level-model\nagent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: profile-model\n"
+    )
+    harness = Harness(load_config(config.workspace, settings))
+    try:
+        assert "Model: profile-model" in harness.config_header()
+    finally:
+        asyncio.run(harness.close())
+
+
+def test_config_header_marks_demo_and_builtin_defaults(config: HarnessConfig, tmp_path: Path) -> None:
+    harness = Harness(replace(config, demo=True))
+    try:
+        header = harness.config_header()
+        assert "Config: built-in defaults" in header
+        assert "Mode: offline demo" in header
+    finally:
+        asyncio.run(harness.close())
 
 
 @pytest.mark.requires_posix
