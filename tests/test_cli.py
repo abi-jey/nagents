@@ -96,6 +96,60 @@ def test_conflicting_resume_flags_across_subcommand(capsys: pytest.CaptureFixtur
     assert "either --continue or --resume" in capsys.readouterr().err
 
 
+def test_resume_parser_accepts_an_optional_session_id() -> None:
+    assert _parser().parse_args(["resume"]).session_id == ""
+    assert _parser().parse_args(["resume", "ngn-abc123"]).session_id == "ngn-abc123"
+
+
+def test_resume_command_rejects_session_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--resume", "other", "resume", "ngn-abc123"]) == 2
+    assert "Pass the session ID to ngn resume" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+def test_resume_without_an_id_needs_a_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["resume", "--workspace", str(tmp_path), "--demo"]) == 2
+    assert "ngn resume SESSION_ID" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+def test_resume_unknown_session_id_is_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "hello"]) == 0
+    capsys.readouterr()
+    assert main(["resume", "ngn-missing", "--workspace", str(tmp_path), "--demo"]) == 2
+    captured = capsys.readouterr()
+    assert "does not exist in this workspace" in captured.err
+
+
+@pytest.mark.requires_posix
+def test_listing_sessions_does_not_create_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    common = ["--workspace", str(tmp_path), "--demo"]
+    assert main([*common, "run", "only prompt"]) == 0
+    capsys.readouterr()
+    assert main([*common, "sessions"]) == 0
+    first = capsys.readouterr().out.splitlines()
+    assert len(first) == 1
+    assert main([*common, "sessions"]) == 0
+    assert capsys.readouterr().out.splitlines() == first
+    assert main([*common, "doctor"]) == 0
+    capsys.readouterr()
+    assert main([*common, "sessions"]) == 0
+    assert capsys.readouterr().out.splitlines() == first
+
+
 @pytest.mark.requires_posix
 def test_missing_credentials_are_actionable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

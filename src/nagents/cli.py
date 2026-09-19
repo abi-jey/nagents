@@ -8,6 +8,7 @@ import getpass
 import json
 import logging
 import os
+import sqlite3
 import sys
 from contextlib import aclosing
 from dataclasses import asdict
@@ -103,23 +104,34 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--demo", action="store_true", help="Offline interface demo; no model calls or workspace writes"
     )
-    resume = common.add_mutually_exclusive_group()
-    resume.add_argument("--continue", "-c", dest="continue_session", action="store_true", help="Resume latest session")
-    resume.add_argument("--resume", help="Resume a session ID in this workspace")
+    session_flags = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
+    session = session_flags.add_mutually_exclusive_group()
+    session.add_argument("--continue", "-c", dest="continue_session", action="store_true", help="Resume latest session")
+    session.add_argument("--resume", help="Resume a session ID in this workspace")
 
     parser = argparse.ArgumentParser(
         prog="ngn",
         description="A Python-extensible agent harness, at home in your terminal.",
         epilog="Run without a subcommand for the TUI. Try ngn --demo without API credentials.",
-        parents=[common],
+        parents=[common, session_flags],
     )
     parser.add_argument("--version", action="version", version=f"ngn (nagents {version('nagents')})")
     commands = parser.add_subparsers(dest="command")
-    run = commands.add_parser("run", parents=[common], help="Run a prompt without the full-screen interface")
+    run = commands.add_parser(
+        "run", parents=[common, session_flags], help="Run a prompt without the full-screen interface"
+    )
     run.add_argument("--json", action="store_true", help="Emit versioned JSON Lines events; approvals fail closed")
     run.add_argument("prompt", nargs="*", help="Prompt text, or - to read from standard input")
     commands.add_parser("sessions", parents=[common], help="List this workspace's saved sessions")
-    serve = commands.add_parser("serve", parents=[common], help="Serve the local React web client (web extra)")
+    resume = commands.add_parser(
+        "resume",
+        parents=[common],
+        help="Resume a saved session in the full-screen client, choosing when no ID is given",
+    )
+    resume.add_argument("session_id", nargs="?", default="", help="Session ID to resume; omit to choose from a list")
+    serve = commands.add_parser(
+        "serve", parents=[common, session_flags], help="Serve the local React web client (web extra)"
+    )
     serve.add_argument(
         "--host",
         default="127.0.0.1",
@@ -153,6 +165,21 @@ def _parser() -> argparse.ArgumentParser:
 def _plain(text: str) -> str:
     """Do not let tool output send control sequences to the user's terminal."""
     return "".join(char for char in text if char in "\n\t" or (ord(char) >= 32 and not 127 <= ord(char) <= 159))
+
+
+def _session_in_workspace(db_path: Path, session_id: str) -> bool:
+    """Read-only session check that never initializes the harness or loads plugins."""
+    if not session_id or not db_path.exists():
+        return False
+    try:
+        with sqlite3.connect(db_path) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id WHERE h.id = ?",
+                (session_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
 
 
 def _json_default(value: object) -> object:
@@ -212,10 +239,12 @@ async def _approve(request: ApprovalRequest, *, interactive: bool) -> bool:
 
 
 async def _prepare(harness: Harness, args: argparse.Namespace) -> None:
-    await harness.initialize()
-    if getattr(args, "resume", ""):
-        await harness.resume(args.resume)
-    elif getattr(args, "continue_session", False):
+    resume = getattr(args, "resume", "")
+    continue_session = getattr(args, "continue_session", False)
+    await harness.initialize(create_session=not (resume or continue_session))
+    if resume:
+        await harness.resume(resume)
+    elif continue_session:
         sessions = await harness.list_sessions()
         if sessions:
             await harness.resume(sessions[0].id)
@@ -357,8 +386,8 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 "Other clients and remote sessions were not changed."
             )
             return 0
-        await _prepare(harness, args)
         if args.command == "doctor":
+            await harness.initialize(create_session=False)
             print(_plain(harness.describe()))
             return 0
         if args.command == "sessions":
@@ -368,6 +397,7 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
             for session in sessions:
                 print(_plain(f"{session.id}  {session.updated_at}  {session.title}"))
             return 0
+        await _prepare(harness, args)
 
         if args.command == "run":
             print(_plain(harness.config_header()), file=sys.stderr, flush=True)
@@ -448,6 +478,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if getattr(args, "continue_session", False) and getattr(args, "resume", ""):
             raise ValueError("Choose either --continue or --resume, not both.")
+        if args.command == "resume" and (getattr(args, "resume", "") or getattr(args, "continue_session", False)):
+            raise ValueError(
+                "Pass the session ID to ngn resume as an argument; --resume and --continue are for ngn and ngn run."
+            )
         workspace = getattr(args, "workspace", Path.cwd()).expanduser().resolve()
         if not workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {workspace}")
@@ -523,9 +557,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             if getattr(args, "design_agent", ""):
                 raise ValueError("--design-agent requires --design")
             harness = Harness(config)
-        if args.command:
+        if args.command and args.command != "resume":
             return asyncio.run(_headless(harness, args))
+        pick_session = False
+        if args.command == "resume":
+            session_id = getattr(args, "session_id", "") or ""
+            if session_id:
+                if not _session_in_workspace(harness.agent.session.db_path, session_id):
+                    raise ValueError(
+                        f"Session {session_id!r} does not exist in this workspace. List sessions with ngn sessions."
+                    )
+            else:
+                pick_session = True
+            resume_session, continue_session = session_id, False
+        else:
+            resume_session = getattr(args, "resume", "")
+            continue_session = getattr(args, "continue_session", False)
         if not sys.stdin.isatty() or not sys.stdout.isatty():
+            if pick_session:
+                raise ValueError("Choose a session interactively in a terminal, or pass its ID: ngn resume SESSION_ID.")
             raise ValueError("The TUI needs a terminal. Use ngn run --json PROMPT for scripts and pipes.")
         try:
             from .tui import NagentsApp
@@ -541,8 +591,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         # plugin clients, and subprocess resources must not cross event loops.
         app = NagentsApp(
             harness,
-            resume_session=getattr(args, "resume", ""),
-            continue_session=getattr(args, "continue_session", False),
+            resume_session=resume_session,
+            continue_session=continue_session,
+            pick_session=pick_session,
         )
         logging.basicConfig(level=logging.WARNING)
         app.run()
