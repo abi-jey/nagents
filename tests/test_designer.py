@@ -424,5 +424,44 @@ def test_web_designer_chat_and_pinned_continuation(tmp_path: Path) -> None:
             await active.task
             trace2 = (await client.get(f"/api/designer/runs/{response.json()['run_id']}/0")).json()
             assert trace2["revision"] == trace["revision"]
+            history = (await client.get(f"/api/designer/conversations/{run['run_id']}/0")).json()
+            assert [message["role"] for message in history["messages"]] == ["user", "assistant", "user", "assistant"]
+            assert [message["text"] for message in history["messages"] if message["role"] == "user"] == [
+                "Hello",
+                "Again",
+            ]
+            after = history["messages"][1]["id"]
+            page = (await client.get(f"/api/designer/conversations/{run['run_id']}/{after}")).json()
+            assert [message["id"] for message in page["messages"]] == [
+                message["id"] for message in history["messages"][2:]
+            ]
+            catalog = (await client.get("/api/designer")).json()
+            assert len(catalog["conversations"]) == 1
+            assert len(catalog["runs"]) == 2
+
+            # Runtime settings may change after the Designer was constructed.
+            harness = app.state.web.harness
+            harness.config.provider = "openrouter"
+            harness.config.api = "chat_completions"
+            harness.config.api_key_env = "OPENROUTER_API_KEY"
+            harness.agent.provider.model = "deepseek/deepseek-v4.1-flash"
+            catalog = (await client.get("/api/designer")).json()
+            for key in ("starter", "example"):
+                design = parse(catalog[key])
+                provider = design.providers[design.defaults.provider]
+                assert provider.type == "openrouter"
+                assert provider.model == "deepseek/deepseek-v4.1-flash"
+                assert provider.api == "chat_completions"
+                assert design.secrets[provider.secret].name == "OPENROUTER_API_KEY"
+            for contract in ("responses", "chat_completions"):
+                design = parse(catalog["starter"])
+                design.providers[design.defaults.provider].api = contract
+                checked = await client.post("/api/designer/validate", json={"source": serialize(design)})
+                assert checked.status_code == 200
+                details = checked.json()["preview"]["assistant"]
+                assert details["provider_configuration"]["api"] == contract
+                assert details["provider_configuration"]["type"] == "openrouter"
+                assert details["generation"] == {}
+                assert details["max_tool_rounds"] == 30
 
     asyncio.run(drive())

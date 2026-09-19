@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from contextlib import aclosing
 from contextlib import suppress
@@ -10,6 +11,7 @@ from dataclasses import asdict
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+import aiosqlite
 import yaml
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -75,30 +77,26 @@ class Designer:
         self.config = replace(state.harness.config, data_dir=state.harness.config.data_dir / "designer")
 
     def example(self) -> str:
+        config = self.state.harness.config
         design = parse(STARTER)
         design.id = "delegation-demo"
         design.entrypoint = "coordinator"
         provider = design.providers["primary"]
-        provider.type = self.config.provider
+        provider.type = config.provider
         provider.model = self.state.harness.agent.provider.model
-        provider.base_url = self.config.base_url
-        provider.api = self.config.api
-        provider.api_version = self.config.api_version
+        provider.base_url = config.base_url
+        provider.api = config.api
+        provider.api_version = config.api_version
         if isinstance(self.state.harness.agent.provider, CodexProvider):
             provider.auth = "chatgpt"
             provider.secret = ""
             design.secrets = {}
         else:
-            design.secrets["primary_key"].name = self.config.api_key_env
+            design.secrets["primary_key"].name = config.api_key_env
             selection = self.state.harness.login_store.selection()
-            if (
-                selection
-                and selection.provider == self.config.provider
-                and not selection.base_url
-                and not self.config.base_url
-            ):
+            if selection and selection.provider == config.provider and not selection.base_url and not config.base_url:
                 design.secrets["primary_key"].source = "saved"
-                design.secrets["primary_key"].name = self.config.provider
+                design.secrets["primary_key"].name = config.provider
         design.agents = {
             "coordinator": AgentDefinition(
                 name="Coordinator",
@@ -122,6 +120,56 @@ class Designer:
         }
         design.layout = {"coordinator": Position(x=90, y=150), "analyst": Position(x=380, y=150)}
         return serialize(design)
+
+    def starter(self) -> str:
+        design = parse(self.example())
+        design.id = "my-team"
+        design.entrypoint = "assistant"
+        design.agents = {
+            "assistant": AgentDefinition(
+                name="Assistant", instructions=Instructions(text="You are a helpful assistant.")
+            )
+        }
+        design.layout = {}
+        return serialize(design)
+
+    async def conversation(self, run_id: str, after: int) -> dict[str, object]:
+        run = await self.traces.read(run_id)
+        session_id = str(run["session_id"])
+        base = self.state.harness.agent.session.db_path
+        if await self.state.designed_channels.pinned(session_id):
+            await self.state.channels.store._transaction(lambda db: self.state.channels.store.root(db, session_id))
+            path = base
+        else:
+            path = self.config.data_dir / base.parent.name / base.name
+        if not path.is_file():
+            return {"session_id": session_id, "messages": [], "cursor": after, "more": False}
+        async with (
+            aiosqlite.connect(path) as db,
+            db.execute(
+                "SELECT id, role, content FROM v2_messages WHERE session_id = ? AND id > ? "
+                "AND role IN ('user', 'assistant') ORDER BY id LIMIT 201",
+                (session_id, after),
+            ) as cursor,
+        ):
+            rows = list(await cursor.fetchall())
+        messages = []
+        for id, role, content in rows[:200]:
+            text = str(content or "")
+            try:
+                parts = json.loads(text)
+            except ValueError:
+                parts = None
+            if isinstance(parts, list) and all(isinstance(part, dict) and "type" in part for part in parts):
+                text = "\n".join(str(part.get("text", "")) for part in parts if part.get("type") == "text")
+            if text.strip():
+                messages.append({"id": id, "role": role, "text": text})
+        return {
+            "session_id": session_id,
+            "messages": messages,
+            "cursor": rows[min(len(rows), 200) - 1][0] if rows else after,
+            "more": len(rows) > 200,
+        }
 
     async def run(self, body: TestRun) -> dict[str, str]:
         with self.state.idle():
@@ -233,9 +281,10 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
         designer = get()
         return {
             "designs": designer.files.list(),
-            "starter": STARTER,
+            "starter": designer.starter(),
             "tools": list(BUILTINS),
             "runs": await designer.traces.runs(),
+            "conversations": await designer.traces.conversations(),
             "demo": designer.config.demo,
             "example": designer.example(),
         }
@@ -295,6 +344,12 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
                     "instructions": harness.agent.system_prompt,
                     "provider": harness.config.provider,
                     "model": harness.agent.provider.model,
+                    "provider_configuration": resolved.providers[
+                        harness.definition.provider or resolved.defaults.provider
+                    ].model_dump(),
+                    "generation": harness.definition.generation.model_dump(exclude_unset=True),
+                    "max_tool_rounds": harness.definition.max_tool_rounds,
+                    "max_subagent_depth": resolved.defaults.max_subagent_depth,
                     "tools": [
                         {"name": tool.name, "description": tool.description, "parameters": tool.parameters}
                         for tool in harness.agent.tool_registry.get_all()
@@ -357,6 +412,13 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
             result["approval"] = active.pending.record if active and active.id == run_id and active.pending else {}
             result["channel_session"] = await get().state.designed_channels.pinned(str(result["session_id"]))
             return result
+        except ValueError as error:
+            raise invalid(error) from None
+
+    @app.get("/api/designer/conversations/{run_id}/{after}")
+    async def conversation(run_id: str, after: int) -> dict[str, object]:
+        try:
+            return await get().conversation(run_id, max(0, after))
         except ValueError as error:
             raise invalid(error) from None
 

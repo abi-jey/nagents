@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { request } from "../../api/client";
 import { Canvas } from "./Canvas";
 import { Resources } from "./Resources";
+import { ProviderSettings } from "./ProviderSettings";
 import { ChannelRoutes } from "./ChannelRoutes";
 import { TestPrompt } from "./TestPrompt";
 import { Icon } from "../../components/Icon";
 import { appendTrace, newAgent, removeAgent, traceMatches } from "./types";
-import type { AgentDefinition, Design, RunSummary, TraceRecord, TraceReply } from "./types";
+import type { AgentDefinition, Design, RunSummary, TraceRecord, TraceReply, ChatMessage, ConversationReply } from "./types";
 import "./designer.css";
 
 export function Designer({ token, close, configureChannels }: { token: string; close: () => void; configureChannels: () => void }) {
@@ -17,6 +18,9 @@ export function Designer({ token, close, configureChannels }: { token: string; c
   const [selected, setSelected] = useState("");
   const [names, setNames] = useState<string[]>([]);
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [conversations, setConversations] = useState<RunSummary[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const conversation = useRef({ id: "", cursor: 0 });
   const [tools, setTools] = useState<string[]>([]);
   const [tab, setTab] = useState("canvas");
   const [error, setError] = useState("");
@@ -56,11 +60,12 @@ export function Designer({ token, close, configureChannels }: { token: string; c
     return result.design;
   }
   async function refresh() {
-    const catalog = await api<{ designs: string[]; starter: string; example: string; tools: string[]; runs: RunSummary[]; demo: boolean }>("");
+    const catalog = await api<{ designs: string[]; starter: string; example: string; tools: string[]; runs: RunSummary[]; conversations: RunSummary[]; demo: boolean }>("");
     setNames(catalog.designs); setTools(catalog.tools); setRuns(catalog.runs); setDemo(catalog.demo);
+    setConversations(catalog.conversations);
     return catalog;
   }
-  useEffect(() => { void action(async () => { const catalog = await refresh(); await validate(catalog.starter); }); }, []);
+  useEffect(() => { void action(async () => { const catalog = await refresh(); await validate(catalog.starter); if (catalog.conversations[0]) openRun(catalog.conversations[0].id); }); }, []);
 
   useEffect(() => {
     if (!runId) return;
@@ -72,6 +77,18 @@ export function Designer({ token, close, configureChannels }: { token: string; c
         const result = await api<TraceReply>(`/runs/${runId}/${cursor}`);
         if (disposed || generation !== polling.current) return;
         setReply(result); setTrace((current) => appendTrace(current, result.events));
+        if (result.channel_session) setContinueRun(false);
+        if (conversation.current.id !== result.session_id) {
+          conversation.current = { id: result.session_id, cursor: 0 }; setMessages([]);
+        }
+        let more = true;
+        while (more) {
+          const history = await api<ConversationReply>(`/conversations/${runId}/${conversation.current.cursor}`);
+          if (disposed || generation !== polling.current) return;
+          conversation.current.cursor = history.cursor;
+          setMessages((current) => [...current, ...history.messages.filter((message) => !current.some((old) => old.id === message.id))]);
+          more = history.more;
+        }
         if (result.events.length) cursor = result.events.at(-1)!.sequence;
         if (result.status === "running" || result.events.length === 200) timer = setTimeout(() => void poll(), result.events.length === 200 ? 0 : 400);
         else void refresh();
@@ -92,21 +109,25 @@ export function Designer({ token, close, configureChannels }: { token: string; c
     const result = await api<{ source: string }>("/serialize", design);
     setSource(result.source); return result.source;
   }
-  function openRun(id: string) { setTrace([]); setReply(undefined); setInspected(undefined); setRunId(id); setContinueRun(false); }
+  function openRun(id: string, preserveChat = false) {
+    polling.current++;
+    if (!preserveChat) { setMessages([]); conversation.current = { id: "", cursor: 0 }; }
+    setTrace([]); setReply(undefined); setInspected(undefined); setRunId(id); setContinueRun(!!id);
+  }
   async function run() {
-    const text = await currentSource();
+    const text = continueRun && runId ? "" : await currentSource();
     const result = await api<{ run_id: string }>("/run", { source: text, agent: selected, prompt, previous_run: continueRun ? runId : "" });
-    openRun(result.run_id); setContinueRun(true); setPrompt("");
+    openRun(result.run_id, continueRun); setContinueRun(true); setPrompt("");
   }
   const agent = design?.agents[selected];
+  const providerId = agent?.provider || design?.defaults.provider || "";
+  const provider = design?.providers[providerId];
   const runningAgents = new Set<string>();
   for (const record of trace) {
     const id = String(record.data.agent_id || "");
     if (record.kind === "agent_started") runningAgents.add(id);
     if (record.kind === "agent_finished") runningAgents.delete(id);
   }
-  const transcript = trace.filter((record) => record.kind === "user_message" ||
-    (record.kind === "agent_event" && (record.data.event as { type?: string })?.type === "text_done" && !!(record.data.event as { text?: string }).text?.trim()));
   const visible = trace.filter((record) => traceMatches(record, filter) && (!agentFilter || record.data.agent_id === agentFilter));
   const inspectedData = inspected || visible.at(-1);
   const inspectedBody = inspectedData?.data.body;
@@ -179,7 +200,12 @@ export function Designer({ token, close, configureChannels }: { token: string; c
         {agent && <aside className="designer-inspector" inert={yamlDirty}><h2><Icon name="settings" size={15} />Agent settings<small>{selected}</small></h2>
           <label>Display name<input value={agent.name} onChange={(e) => editAgent({ name: e.target.value })} /></label>
           <label className="designer-check"><input type="checkbox" checked={design.entrypoint === selected} onChange={() => edit({ ...design, entrypoint: selected })} />Entry agent</label>
-          <label>Provider<select value={agent.provider} onChange={(e) => editAgent({ provider: e.target.value })}><option value="">Default: {design.defaults.provider}</option>{Object.keys(design.providers).map((id) => <option key={id}>{id}</option>)}</select></label>
+           <label>Provider<select value={agent.provider} onChange={(e) => editAgent({ provider: e.target.value })}><option value="">Default: {design.defaults.provider}</option>{Object.keys(design.providers).map((id) => <option key={id}>{id}</option>)}</select></label>
+           {provider && <details><summary>Provider settings · {provider.type} · {provider.api}</summary>
+             <p>Shared provider: {providerId}. Changes affect agents using this provider; existing conversations keep their pinned configuration.</p>
+             <ProviderSettings provider={provider} secrets={Object.keys(design.secrets)} update={(patch) => edit({ ...design, providers: { ...design.providers, [providerId]: { ...provider, ...patch } } })} />
+             {provider.secret && <p>Credential source: {design.secrets[provider.secret]?.source} · {design.secrets[provider.secret]?.name}</p>}
+           </details>}
           <label>Instructions<textarea value={agent.instructions.text} onChange={(e) => editAgent({ instructions: { ...agent.instructions, text: e.target.value } })} /></label>
           <details><summary>Tools ({agent.tools.length})</summary>{tools.map((tool) => {
             const chosen = agent.tools.find((item) => item.ref.replace("builtin.", "") === tool);
@@ -196,14 +222,18 @@ export function Designer({ token, close, configureChannels }: { token: string; c
             return <div key={id}><label className="designer-check"><input type="checkbox" checked={!!selection} onChange={(e) => editAgent({ mcp: e.target.checked ? [...agent.mcp, { server: id, tools: [] }] : agent.mcp.filter((item) => item !== selection) })} />{id}</label>
               {selection && <label>Tool names (comma separated)<input value={selection.tools.map((item) => item.ref).join(", ")} onChange={(e) => editAgent({ mcp: agent.mcp.map((item) => item === selection ? { ...item, tools: e.target.value.split(",").map((name) => name.trim()).filter(Boolean).map((ref) => ({ ref, description: selection.tools.find((tool) => tool.ref === ref)?.description || "" })) } : item) })} /></label>}</div>;
           })}<p>Configure servers in Resources. Tool descriptions can also be overridden in YAML.</p></details>
-          <details><summary>Advanced</summary><label>Instruction file<input placeholder="agents/instructions.md" value={agent.instructions.file} onChange={(e) => editAgent({ instructions: { ...agent.instructions, file: e.target.value } })} /></label>
+           <details><summary>Advanced</summary><label>Instruction file<input placeholder="agents/instructions.md" value={agent.instructions.file} onChange={(e) => editAgent({ instructions: { ...agent.instructions, file: e.target.value } })} /></label>
+           {([ ["temperature", "Temperature", 0, 2], ["max_tokens", "Maximum output tokens", 1, undefined], ["top_p", "Top P", 0, 1] ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} step={key === "max_tokens" ? 1 : 0.05} placeholder="Provider default" value={agent.generation?.[key] ?? ""} onChange={(e) => { const generation = { ...agent.generation }; if (e.target.value === "") delete generation[key]; else generation[key] = Number(e.target.value); editAgent({ generation }); }} /></label>)}
+           <label>Stop sequences (one per line)<textarea value={agent.generation?.stop?.join("\n") || ""} onChange={(e) => { const generation = { ...agent.generation }; if (e.target.value) generation.stop = e.target.value.split("\n"); else delete generation.stop; editAgent({ generation }); }} /></label>
+           <p>Blank generation fields use the provider default. Delegation depth is configured in Resources.</p>
           <label>Maximum model rounds<input type="number" min="1" max="1000" value={agent.max_tool_rounds} onChange={(e) => editAgent({ max_tool_rounds: Number(e.target.value) })} /></label></details>
         </aside>}
       </div>
       {debugOpen && <div className="designer-execution">
         <section className="designer-chat"><div className="designer-panel-heading"><h2><Icon name="chat" size={15} />{continueRun && reply ? reply.agent : selected}</h2><small>{reply ? `${reply.status} · ${reply.revision.slice(0, 8)}` : "New conversation"}</small></div>
-          <select aria-label="Execution history" value={runId} onChange={(e) => openRun(e.target.value)}><option value="">Execution history…</option>{runs.map((run) => <option key={run.id} value={run.id}>{run.agent} · {run.status} · {run.created.slice(0, 19)}</option>)}{runId && !runs.some((run) => run.id === runId) && <option value={runId}>Current run</option>}</select>
-          <div className="designer-transcript" aria-live="polite">{transcript.map((record) => <article key={record.sequence}><strong>{record.kind === "user_message" ? "You" : String(record.data.agent_id)}</strong><p>{record.kind === "user_message" ? String(record.data.text) : String((record.data.event as { text: string }).text)}</p></article>)}</div>
+           <div className="designer-tabs"><select aria-label="Chat history" value={reply?.session_id || conversation.current.id} disabled={busy} onChange={(e) => { const chat = conversations.find((item) => item.session_id === e.target.value); if (chat) openRun(chat.id); }}><option value="">New conversation</option>{conversations.map((chat) => <option key={chat.session_id} value={chat.session_id}>{chat.agent} · {chat.created.slice(0, 19)}</option>)}{reply && !conversations.some((chat) => chat.session_id === reply.session_id) && <option value={reply.session_id}>Current conversation</option>}</select><button disabled={busy} onClick={() => { openRun(""); setPrompt(""); }}>New chat</button></div>
+           <select aria-label="Execution history" value={runId} disabled={busy} onChange={(e) => openRun(e.target.value)}><option value="">Inspect execution…</option>{runs.filter((run) => !reply || run.session_id === reply.session_id).map((run) => <option key={run.id} value={run.id}>{run.agent} · {run.status} · {run.created.slice(0, 19)}</option>)}{runId && !runs.some((run) => run.id === runId) && <option value={runId}>Current run</option>}</select>
+           <div className="designer-transcript" aria-live="polite">{messages.map((message) => <article key={message.id}><strong>{message.role === "user" ? "You" : reply?.agent || selected}</strong><p>{message.text}</p></article>)}</div>
           {reply?.approval?.approval_id && <div className="designer-approval"><h3>Approval requested</h3><p>{reply.approval.description}</p><pre>{reply.approval.preview}</pre>{["allow", "deny"].map((decision) => <button key={decision} disabled={pending} onClick={() => void action(async () => {
             await request("approval", token, { run_id: runId, approval_id: reply.approval.approval_id, call_id: reply.approval.id, decision });
           })}>{decision}</button>)}</div>}
