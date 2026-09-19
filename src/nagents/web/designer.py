@@ -78,27 +78,23 @@ class Designer:
         design = parse(STARTER)
         design.id = "delegation-demo"
         design.entrypoint = "coordinator"
+        config = self.state.harness.config
         provider = design.providers["primary"]
-        provider.type = self.config.provider
+        provider.type = config.provider
         provider.model = self.state.harness.agent.provider.model
-        provider.base_url = self.config.base_url
-        provider.api = self.config.api
-        provider.api_version = self.config.api_version
+        provider.base_url = config.base_url
+        provider.api = config.api
+        provider.api_version = config.api_version
         if isinstance(self.state.harness.agent.provider, CodexProvider):
             provider.auth = "chatgpt"
             provider.secret = ""
             design.secrets = {}
         else:
-            design.secrets["primary_key"].name = self.config.api_key_env
+            design.secrets["primary_key"].name = config.api_key_env
             selection = self.state.harness.login_store.selection()
-            if (
-                selection
-                and selection.provider == self.config.provider
-                and not selection.base_url
-                and not self.config.base_url
-            ):
+            if selection and selection.provider == config.provider and not selection.base_url and not config.base_url:
                 design.secrets["primary_key"].source = "saved"
-                design.secrets["primary_key"].name = self.config.provider
+                design.secrets["primary_key"].name = config.provider
         design.agents = {
             "coordinator": AgentDefinition(
                 name="Coordinator",
