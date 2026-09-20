@@ -27,6 +27,8 @@ from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 
+pytestmark = pytest.mark.requires_posix
+
 if TYPE_CHECKING:
     from pathlib import Path
 
