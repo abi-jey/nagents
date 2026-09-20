@@ -195,7 +195,7 @@ poetry run pytest
 poetry run pytest --cov=nagents --cov-report=html
 
 # Run specific test file
-poetry run pytest tests/test_dynamic_tools.py
+poetry run pytest tests/agent/test_dynamic_tools.py
 
 # Run tests matching a pattern
 poetry run pytest -k "test_session"
@@ -232,8 +232,8 @@ def test_session_history(tmp_path: Path) -> None:
     asyncio.run(scenario())
 ```
 
-For an agent test with a fake provider, see `tests/test_dynamic_tools.py`. For
-HTTP-contract fixtures, see `tests/test_gateway_provider.py`. Keep live-service
+For an agent test with a fake provider, see `tests/agent/test_dynamic_tools.py`. For
+HTTP-contract fixtures, see `tests/providers/test_gateway_provider.py`. Keep live-service
 experiments explicit and separate from the default test suite.
 
 ### Test Markers

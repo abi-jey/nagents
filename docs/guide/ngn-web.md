@@ -128,7 +128,7 @@ still stored locally in the Harness data directory.
 ### Workspace Navigation
 
 The sidebar keeps **New session** above an independently scrolling session list.
-**Settings**, **Channels**, **Trash**, and expandable workspace information stay
+**Global settings**, **Channels**, **Trash**, and the workspace information overlay stay
 in the bottom section, so they remain reachable with a long conversation history. On narrow
 screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
 it and returns focus to the navigation toggle. Dialogs opened from the drawer
@@ -328,7 +328,10 @@ contract below.
 | `GET settings` | Committed runtime values, startup defaults, profiles, revision, persistence and safe connection status; readable during a run |
 | `GET models` | Explicit fresh discovery from the active provider; `{models: string[], source: string}`; read-only, including during a run |
 | `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
-| `POST settings/reset` | `{revision}` restores startup defaults and deletes the saved override; idle only |
+| `POST settings/reset` | `{revision}` inherits current global defaults and deletes the workspace override; idle only |
+| `GET settings/global` | Global defaults and their independent revision |
+| `POST settings/global` | `{revision, values}` saves defaults shared by workspaces in the same data directory; idle only |
+| `POST settings/global/reset` | `{revision}` removes global overrides; idle only |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
 | `GET sessions/{session_id}/context` | Read-only estimated token breakdown of the request that session would send; safe while idle and during a run |
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
@@ -377,8 +380,16 @@ dominate a request.
 does not select the session, run the model, or change prompt content, and it
 never returns credentials. `GET /api/sessions` (which the client calls on
 connect, select, and reconnect) does not include the breakdown; the indicator
-fetches it once the harness is idle for the selected root. The numbers are the
-same character/byte estimates described in the
+refreshes it during model turns, tool calls/results, compaction, and run completion.
+Streaming event bursts are coalesced, only one read is in flight at a time, and
+active runs also get a periodic refresh. Navigation cancels old reads so a previous
+session's totals cannot overwrite the selected conversation. A **Live** indicator
+and manual refresh control are available in the breakdown.
+
+An in-progress root reply appears as **Streaming reply (not yet saved)** until
+the completed message enters history. Child-agent replies are kept separate.
+Pinned channel agents use their own provider and tool configuration for these
+estimates, including while idle. The numbers use the character/byte estimates described in the
 [Context Statistics API](../api/context-stats.md), not tokenizer counts.
 
 The response shape is:
@@ -746,10 +757,63 @@ insertion is rejected with both texts retained rather than silently truncated.
 
 ### Runtime Settings
 
+#### Workspace Tools
+
+Open **Tools** in the sidebar to inspect registered built-in, channel, and extension
+tools. Select a default agent/profile, search or filter tools, and use the switches
+to enable or disable them. Tool descriptions and parameter schemas are read-only.
+**Save tools** writes `.ngn/tools.yaml` in the workspace, for example:
+
+```yaml
+version: 1
+agents:
+  assistant:
+    shell: false
+    compact_history: true
+```
+
+`assistant` is the only built-in agent; configured custom profiles also appear in
+the Tools selector. Unspecified tools are enabled by default. Selections are per agent and apply in
+both `ngn serve` and the terminal harness. Disabled tools are omitted from model
+requests and rejected by the executor, including when a configuration change
+occurs during approval. Profile restrictions and per-call approvals still apply.
+Disabling `schedule_wakeup` also disables its `wake_up_in` alias. **Reset agent**
+removes that agent's overrides when saved. Changes use revision checks and atomic
+file replacement; no credentials are written to this configuration.
+
+The built-in **`compact_history`** requests compaction of the current conversation.
+The agent finishes pending tool calls, persists their results, then compacts before
+the next model round. It uses the configured compactor/strategy and emits normal
+compaction events; it does not start a nested run. A cancelled or finished run
+discards any unprocessed session-scoped request. The tool is also selectable in
+Agent Designer.
+
+#### Global and Workspace Preferences
+
+Use **Global settings** in the sidebar for defaults shared by workspaces in this
+installation. Click the workspace folder, then **Workspace settings**, for
+overrides belonging only to that folder. Workspace overrides take priority;
+**Use global defaults** removes the workspace override and inherits the current
+global values. Profiles and entered API-key values remain workspace-specific.
+Global settings carry credential references, not copied key values.
+
+**Message submission** selects what happens when another web message arrives in
+the same active conversation. **Queue** is the default: finish the current run,
+then process accepted messages in order. **Interrupt** cancels the active run,
+waits for cleanup, and then processes queued messages. Other conversations are
+not cancelled, and retrying an already accepted message never interrupts a run.
+
+Global defaults live in `data_dir/web-defaults.db`, shared by workspace databases
+under that data directory. `GET/POST /api/settings/global` and
+`POST /api/settings/global/reset` expose their own revision-checked scope. Saving
+global defaults applies to the current workspace when it has no saved override;
+other running workspace servers load those defaults on restart. Both scopes are
+web-only, and dictation still respects administrator-provided limits.
+
 Trash retention uses its [separate preferences API](#trash-api-contract); it is
 not an additional field in the model/tool/dictation settings below.
 
-Settings responses contain `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
+Settings responses contain `scope`, `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
 an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`),
 allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 (`provider`, `api`, `auth`, `base_url`, `api_key_env`, `key_configured`,
@@ -759,6 +823,7 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | --- | --- |
 | `model` | Trimmed, nonblank provider model ID, at most 200 characters, without control characters |
 | `agent` | An existing built-in or trusted configured profile name |
+| `read_only` | Boolean workspace restriction; startup-enforced read-only operation cannot be relaxed by web preferences |
 | `provider` | An allowlisted provider name from `providers`, for example `openrouter` or `openai_compatible` |
 | `base_url` | Empty for the provider default, or an HTTP(S) endpoint without credentials, query parameters, or fragments, at most 300 characters; required for `litellm` |
 | `api` | One of `auto`, `chat_completions`, `responses`, or `messages` (`completions` is rejected for the harness) |
@@ -776,8 +841,9 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `compact_trigger` | One of `auto` (provider default), `tokens`, `messages`, or `off` |
 | `compact_tokens` | Integer, 1,024 through 10,000,000; the total context window used when `compact_trigger` is `tokens` |
 | `compact_messages` | Integer, 1 through 10,000; the conversation length used when `compact_trigger` is `messages` |
+| `submit_mode` | `queue` (default) or `interrupt` for new messages in the active web conversation |
 
-POST requires all nineteen values plus the write-only `api_key` field. Unknown
+POST carries the settings values plus the write-only `api_key` field. Unknown
 fields, numeric strings, booleans used as numbers, and nonfinite numbers are
 rejected with HTTP 422, as are invalid provider combinations (for example,
 `litellm` without an endpoint, `chatgpt` with a custom endpoint, credentials in
@@ -819,15 +885,20 @@ in the same private database; both are deleted on reset. The override applies
 across sessions and web-server restarts for that resolved workspace. One process
 must own the workspace; this is not multi-process settings synchronization.
 ConfigMap/YAML, CLI, profile and initial authentication/model resolution
-establish startup defaults **before** the saved override is applied. Reset
-deletes the rows, so later restarts use any newly changed trusted defaults. The
+establish startup defaults, followed by global defaults, **before** the saved
+workspace override is applied. Reset deletes the workspace rows and inherits
+current global defaults. The
 CLI/TUI do not load this web-only override.
 
-Existing version-1 and version-2 rows are validated against their original
+Existing version-1, version-2, and version-3 rows are validated against their original
 schemas, retain their saved preferences, and receive the provider fields from
-trusted startup configuration. New saves write version 3 with all sixteen
-preferences. Existing chat preferences and revision checks are retained;
+trusted defaults for newer fields. New saves write version 4, including message
+submission policy. Existing chat preferences and revision checks are retained;
 arbitrary unknown fields or versions are not accepted as a migration shortcut.
+
+Legacy built-in selections migrate to `assistant`. An old read-only selection
+remains read-only through the workspace restriction, rather than gaining write
+or shell access. Explicit custom profiles retain their configured identity.
 
 After a version-3 save, an older image cannot load that row. Roll back with a
 compatible image or use administrator-reviewed settings-row recovery; preserve

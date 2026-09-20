@@ -16,7 +16,7 @@ model: gpt-4.1
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
-agent: build
+agent: assistant
 theme: terminal
 theme_background: auto
 animations: true
@@ -200,7 +200,8 @@ credentials.
 
 | Field | YAML type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
-| `agent` | string | `"build"` | `"build"`, `"agent"`, `"reviewer"`, or a configured profile name. |
+| `agent` | string | `"assistant"` | The built-in `"assistant"` or an explicitly configured profile name. |
+| `read_only` | boolean | `false` | Enforce read-only operation for the assistant and child agents. |
 | `shell_timeout` | integer or float | `60.0` | Seconds, strictly greater than `0` and at most `600`. Booleans are not numbers here. |
 | `max_output` | integer | `32768` | `1024` through `1048576`, inclusive; bounds tool output in bytes. |
 | `max_file_bytes` | integer | `262144` | `1024` through `4194304`, inclusive; file-size limit in bytes for guarded file operations. |
@@ -286,20 +287,25 @@ environment-variable convention, and no `NGN_CONFIG`, `NGN_WORKSPACE`, or
 
 ## Agent profiles
 
-Built-in names are reserved and cannot be overwritten in YAML:
+`assistant` is the only built-in agent and is reserved. Other agents are defined
+explicitly in `profiles`:
+
+Use `read_only: true` (or `NGN_READ_ONLY=true`) to constrain the assistant and its
+children to read-only operation. This startup restriction cannot be relaxed by
+switching profiles or saving web preferences. Legacy agent selections in loaded
+YAML/environment configuration migrate to `assistant`; legacy read-only selections
+also enable this restriction. Explicitly configured custom profiles are preserved.
 
 | Profile | Mode | Purpose |
 | --- | --- | --- |
-| `build` | `build` | Default interactive profile. Guarded changes and shell require approval. |
-| `agent` | `build` | General-purpose built-in profile; the default target of `delegate`. Subject to the parent's permission ceiling when used as a child. |
-| `reviewer` | `reviewer` | Inspection only; edits, writes, shell execution, and custom tools are denied. |
+| `assistant` | `build` | Default interactive agent and default delegation target. Guarded changes and shell require approval; child agents inherit their parent's permission ceiling. |
 
 Custom profile names match `[A-Za-z0-9_-]+`. Each profile accepts exactly these
 string fields:
 
 | Profile field | Default | Meaning |
 | --- | --- | --- |
-| `mode` | `"build"` | `"build"` or `"reviewer"`; `"agent"` is a profile name, not a mode. |
+| `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
 | `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
 

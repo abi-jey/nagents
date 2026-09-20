@@ -129,6 +129,11 @@ The equivalent YAML settings are `submit_mode: queue` and
 and `focus` for ordinary widget navigation. They also accept `NGN_SUBMIT_MODE`
 and `NGN_TAB_ACTION` environment defaults.
 
+`/resume` is a synonym for `/sessions` and opens the session picker. Aliases are
+resolved by the command registry before native dispatch, so they appear in
+completion and help without being sent to the model. Extensions can register
+synonyms with `harness.commands.register_alias(alias, target)`.
+
 ### Selection and clipboard
 
 Drag to highlight text and release the mouse button to copy it automatically.
@@ -156,6 +161,10 @@ terminal's own selection/copy mechanism. Usual terminal paste shortcuts continue
 to work; pasted multiline text is never submitted automatically.
 
 ## Themes and motion
+
+The message editor and its status footer share one borderless, filled surface.
+User messages use the same background, with paired foreground colors for contrast
+even when the surrounding terminal uses its native background.
 
 ```bash
 ngn --theme terminal
@@ -262,8 +271,8 @@ retries. Cancellation cannot recall audio already received by the endpoint.
 
 ## Native background subagents
 
-The agent can call `delegate(prompt, agent="agent")`; `agent` is the default
-target profile. Use `agent="reviewer"` for an explicitly read-only task. The caller
+The agent can call `delegate(prompt, agent="assistant")`; `assistant` is the only
+built-in agent. Other delegation targets must be explicitly configured. The caller
 immediately receives a UUID task ID, a random two-word name such as `quiet maple`,
 and `running` status.
 The child runs as a native asyncio task while the parent continues its own work.
@@ -293,10 +302,11 @@ second tool result and is not promoted to a system instruction. It is a new,
 labeled user-role data notification at a safe turn boundary, using the same
 `Agent.run`, hooks, context handling, and permissions as ordinary turns.
 
-The built-in `agent` profile has build mode, like `build`; `reviewer` is read-only.
+The built-in `assistant` uses normal guarded operation. Custom agents can select
+read-only mode through their profile configuration.
 Children have the **same permission ceiling as their parent**, not independent
-authority. A reviewer parent cannot obtain write or shell privileges by
-delegating to `agent` or a build-mode custom profile. Build-capable child actions
+authority. A read-only parent cannot obtain write or shell privileges by
+delegating to `assistant` or a build-mode custom profile. Build-capable child actions
 still need the ordinary guarded-tool approvals. An instruction or profile name
 does not bypass this boundary.
 
@@ -579,7 +589,7 @@ after the subcommand; prefer supplying each option only once.
 | `--api auto\|chat_completions\|responses\|messages\|completions` | Select provider HTTP protocol. Legacy Completions is text-only; ChatGPT login requires `auto`. |
 | `--api-key-env NAME` | Name the environment variable holding an API key. Never pass the value as this argument. |
 | `--auth auto\|api-key\|chatgpt` | Select authentication behavior. |
-| `--agent NAME`, `-a NAME` | Select built-in `build`, `agent`, `reviewer`, or a custom profile. |
+| `--agent NAME`, `-a NAME` | Select the built-in `assistant` or an explicitly configured custom profile. |
 | `--max-subagent-depth N` | Integer `0..8`; default `2`, with the root at depth `0`. |
 | `--theme NAME` | Select `terminal`, `graphite`, `ocean`, or `ember`. |
 | `--theme-background auto\|terminal\|theme` | Choose preset-default, terminal-native, or preset background behavior. |
@@ -639,7 +649,7 @@ model: gpt-4.1
 api: auto
 auth: auto
 api_key_env: OPENAI_API_KEY
-agent: build
+agent: assistant
 shell_timeout: 60.0
 max_subagent_depth: 2
 
