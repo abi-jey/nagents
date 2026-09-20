@@ -1,0 +1,262 @@
+"""CLI contracts, without API credentials or a real terminal."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from nagents.cli import _event_record
+from nagents.cli import _parser
+from nagents.cli import _plain
+from nagents.cli import main
+from nagents.events import TextChunkEvent
+from nagents.harness import TaskMessage
+from nagents.harness.types import ApprovalRequest
+from nagents.harness.types import TaskCompleted
+from nagents.harness.types import TaskNotification
+from nagents.harness.types import TaskStarted
+
+
+def test_options_work_before_and_after_subcommand() -> None:
+    args = _parser().parse_args(["--demo", "--model", "first", "run", "--json", "--model", "second", "hello"])
+    assert args.demo
+    assert args.json
+    assert args.model == "second"
+    assert args.prompt == ["hello"]
+
+
+def test_output_does_not_execute_terminal_controls() -> None:
+    assert _plain("hello\x1b]52;c;payload\x07\nworld\x9b") == "hello]52;c;payload\nworld"
+
+
+def test_json_event_schema() -> None:
+    record = _event_record(TextChunkEvent(chunk="hello"))
+    assert record["event"] == "text_chunk"
+    assert record["schema_version"] == 1
+    assert record["chunk"] == "hello"
+
+
+def test_human_task_message_json_retains_hierarchy() -> None:
+    record = _event_record(TaskMessage("task", "calm finch", "Follow up", parent_task_id="parent", depth=2))
+    assert record["event"] == "task_message"
+    assert record["schema_version"] == 1
+    assert record["parent_task_id"] == "parent" and record["depth"] == 2
+    assert record["prompt"] == "Follow up"
+
+
+def test_task_activation_and_notification_wire_contract() -> None:
+    for event in (
+        TaskStarted(
+            "child", "calm finch", "Wake", "parent", "parent-session", "child-session", 2, "agent", 1, 3, "wakeup"
+        ),
+        TaskCompleted(
+            "child",
+            "calm finch",
+            "Result",
+            "",
+            "parent",
+            "parent-session",
+            "child-session",
+            2,
+            "agent",
+            1,
+            "completed",
+            3,
+            "wakeup",
+        ),
+    ):
+        record = _event_record(event)
+        assert record["event"] in {"task_started", "task_completed"}
+        assert record["activation"] == 3 and record["trigger"] == "wakeup"
+        assert record["followup"] == 1 and record["parent_task_id"] == "parent"
+    notification = TaskNotification("notice-1", "child", "", "calm finch", "Main", "completion", "Result")
+    assert _event_record(notification) == {
+        "event": "task_notification",
+        "schema_version": 1,
+        "notification_id": "notice-1",
+        "source_task_id": "child",
+        "recipient_task_id": "",
+        "source_name": "calm finch",
+        "recipient_name": "Main",
+        "cause": "completion",
+        "text": "Result",
+    }
+    assert TaskStarted("child", "name", "prompt").activation == 0
+    assert TaskCompleted("child", "name", "result").trigger == "delegation"
+    assert ApprovalRequest("call", "write", "Create", {}, "", "child", "name", 2, 3).activation == 3
+
+
+def test_invalid_workspace_is_actionable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--workspace", str(tmp_path / "missing"), "doctor"]) == 2
+    assert "Workspace is not a directory" in capsys.readouterr().err
+
+
+def test_conflicting_resume_flags_across_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--continue", "run", "--resume", "other-session", "hello"]) == 2
+    assert "either --continue or --resume" in capsys.readouterr().err
+
+
+def test_resume_parser_accepts_an_optional_session_id() -> None:
+    assert _parser().parse_args(["resume"]).session_id == ""
+    assert _parser().parse_args(["resume", "ngn-abc123"]).session_id == "ngn-abc123"
+
+
+def test_agent_option_help_names_only_assistant_as_default() -> None:
+    # argparse wraps help text to the terminal width; normalize before matching.
+    help_text = " ".join(_parser().format_help().split())
+    assert "Agent profile (default: assistant; other profiles must be configured)" in help_text
+    # No removed built-in profile names are advertised as defaults.
+    assert "default: build" not in help_text
+    assert "default: reviewer" not in help_text
+    assert "default: agent" not in help_text
+
+
+def test_resume_command_rejects_session_flags(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--resume", "other", "resume", "ngn-abc123"]) == 2
+    assert "Pass the session ID to ngn resume" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+def test_resume_without_an_id_needs_a_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert main(["resume", "--workspace", str(tmp_path), "--demo"]) == 2
+    assert "ngn resume SESSION_ID" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+def test_resume_unknown_session_id_is_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "hello"]) == 0
+    capsys.readouterr()
+    assert main(["resume", "ngn-missing", "--workspace", str(tmp_path), "--demo"]) == 2
+    captured = capsys.readouterr()
+    assert "does not exist in this workspace" in captured.err
+
+
+@pytest.mark.requires_posix
+def test_listing_sessions_does_not_create_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    common = ["--workspace", str(tmp_path), "--demo"]
+    assert main([*common, "run", "only prompt"]) == 0
+    capsys.readouterr()
+    assert main([*common, "sessions"]) == 0
+    first = capsys.readouterr().out.splitlines()
+    assert len(first) == 1
+    assert main([*common, "sessions"]) == 0
+    assert capsys.readouterr().out.splitlines() == first
+    assert main([*common, "doctor"]) == 0
+    capsys.readouterr()
+    assert main([*common, "sessions"]) == 0
+    assert capsys.readouterr().out.splitlines() == first
+
+
+@pytest.mark.requires_posix
+def test_missing_credentials_are_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.delenv("NGN_UNSET_TEST_KEY", raising=False)
+    result = main(["run", "--workspace", str(tmp_path), "--api-key-env", "NGN_UNSET_TEST_KEY", "hello"])
+    assert result in {1, 2}
+    assert "NGN_UNSET_TEST_KEY" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+def test_demo_json_is_parseable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "--json", "hello"]) == 0
+    output = capsys.readouterr()
+    records = [json.loads(line) for line in output.out.splitlines()]
+    assert records
+    assert all(record["schema_version"] == 1 for record in records)
+    assert any(record["event"] == "text_chunk" for record in records)
+    assert any(record["event"] == "done" for record in records)
+
+
+@pytest.mark.requires_posix
+def test_run_header_shows_effective_provider_model_and_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    config = tmp_path / "settings.yaml"
+    config.write_text("provider: openai\nmodel: header-model\n")
+    assert main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "run", "hello"]) == 0
+    captured = capsys.readouterr()
+    assert "Provider: openai" in captured.err
+    assert "Model: header-model" in captured.err
+    assert f"Config: {config}" in captured.err
+    assert "Provider:" not in captured.out
+    assert "Model:" not in captured.out
+
+
+@pytest.mark.requires_posix
+def test_run_header_reports_builtin_defaults_without_a_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "hello"]) == 0
+    captured = capsys.readouterr()
+    assert "Config: built-in defaults" in captured.err
+    assert "Mode: offline demo" in captured.err
+
+
+@pytest.mark.requires_posix
+def test_run_json_header_stays_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    assert main(["run", "--workspace", str(tmp_path), "--demo", "--json", "hello"]) == 0
+    captured = capsys.readouterr()
+    for line in captured.out.splitlines():
+        record = json.loads(line)
+        assert record["schema_version"] == 1
+    assert "Provider:" in captured.err and "Config:" in captured.err
+
+
+@pytest.mark.requires_posix
+def test_demo_sessions_and_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    common = ["--workspace", str(tmp_path), "--demo"]
+    assert main([*common, "run", "first prompt"]) == 0
+    capsys.readouterr()
+    assert main([*common, "sessions"]) == 0
+    assert "first prompt" in capsys.readouterr().out
+    assert main([*common, "run", "--continue", "second prompt"]) == 0
+    assert "Session:" in capsys.readouterr().err
+
+
+@pytest.mark.requires_posix
+@pytest.mark.parametrize("profile_model", ["", "profile-model"])
+def test_profile_activation_model_precedence_over_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], profile_model: str
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f'model: top-level-model\nagent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: "{profile_model}"\n'
+    )
+    assert (
+        main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "--model", "cli-model", "doctor"]) == 0
+    )
+    output = capsys.readouterr()
+    assert f"Provider/model: openai / {profile_model or 'cli-model'}" in output.out
+    assert "Agent: audit (reviewer)" in output.out
