@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
-from nagents.channels.store import finish_on_cancel
 from nagents.extensions import AgentPlugin
 from nagents.harness.runtime import _HarnessSession
 from nagents.types import AudioContent
@@ -26,6 +25,7 @@ from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
+from ._async import finish_on_cancel
 from .routing import RoutingStore
 
 if TYPE_CHECKING:

@@ -1,4 +1,4 @@
-"""Allowlisted workspace settings; provider overrides with write-only keys.
+"""Global defaults and workspace overrides; workspace-scoped write-only keys.
 
 Trusted startup configuration remains the source of defaults and the ceiling.
 Saved workspace overrides may select an allowlisted provider, endpoint and API
@@ -9,13 +9,14 @@ this process's environment before the provider is (re)built.
 
 import asyncio
 import copy
+import json
 import os
 import re
 import secrets
 from typing import TYPE_CHECKING
+from typing import Literal
 
 import aiosqlite
-import anyio
 from fastapi import HTTPException
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -31,6 +32,8 @@ from nagents.harness.dictation import SAMPLE_RATE
 from nagents.harness.dictation import DictationError
 from nagents.harness.dictation import VoiceDictation
 
+from ._async import join_owned as _join
+
 if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
@@ -43,6 +46,10 @@ COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
 DEFAULT_COMPACT_TOKENS = 200_000
 DEFAULT_COMPACT_MESSAGES = 100
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_GLOBAL_SETTINGS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS ngn_web_global_settings (id INTEGER PRIMARY KEY CHECK(id = 1), "
+    "version INTEGER NOT NULL, values_json TEXT NOT NULL, revision TEXT NOT NULL)"
+)
 
 
 def _current_compaction(harness: "Harness") -> tuple[str, int, int]:
@@ -122,6 +129,8 @@ class SettingsValues(_SettingsValuesV2):
     compact_trigger: str = Field(default="auto", min_length=1, max_length=20)
     compact_tokens: int = Field(default=DEFAULT_COMPACT_TOKENS, ge=1024, le=10_000_000)
     compact_messages: int = Field(default=DEFAULT_COMPACT_MESSAGES, ge=1, le=10_000)
+    submit_mode: Literal["queue", "interrupt"] = "queue"
+    read_only: bool = False
 
     @field_validator("compact_trigger")
     @classmethod
@@ -191,6 +200,8 @@ class SettingsValues(_SettingsValuesV2):
             compact_trigger=trigger,
             compact_tokens=tokens,
             compact_messages=messages,
+            submit_mode=config.submit_mode,
+            read_only=config.read_only,
         )
 
     def apply(self, harness: "Harness") -> None:
@@ -204,6 +215,8 @@ class SettingsValues(_SettingsValuesV2):
         config.max_file_bytes = self.max_file_bytes
         config.max_tool_rounds = self.max_tool_rounds
         config.max_subagent_depth = self.max_subagent_depth
+        config.submit_mode = self.submit_mode
+        config.read_only = self.read_only or harness._permission_ceiling == "reviewer"
         harness.agent.provider.model = self.model
         harness.agent.max_tool_rounds = self.max_tool_rounds
         _apply_compaction(harness, self.compact_trigger, self.compact_tokens, self.compact_messages)
@@ -232,22 +245,6 @@ class SettingsInput(SettingsRevision):
         return value
 
 
-async def _join(task: asyncio.Task[None]) -> None:
-    # Never cancel an aiosqlite commit/connection setup halfway through. The
-    # worker does only bounded local SQL (including a five-second busy timeout).
-    # Join even repeated asyncio cancellation and AnyIO disconnect cancellation.
-    cancelled = False
-    with anyio.CancelScope(shield=True):
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                cancelled = True
-        task.result()
-    if cancelled:
-        raise asyncio.CancelledError
-
-
 class WebSettings:
     def __init__(self, harness: "Harness") -> None:
         self.harness = harness
@@ -257,6 +254,10 @@ class WebSettings:
         self._dictation_admin = copy.deepcopy(harness.config)
         self._provider_admin = copy.deepcopy(harness.config)
         self.defaults = SettingsValues.current(harness)
+        self.startup_defaults = self.defaults
+        self.global_path = harness.config.data_dir / "web-defaults.db"
+        self.global_revision = "0" * 64
+        self.global_persisted = False
         self.values = self.defaults
         self.effective_mode = harness.mode
         self.revision = secrets.token_hex(32)
@@ -348,11 +349,13 @@ class WebSettings:
     def snapshot(self) -> dict[str, object]:
         config = self.harness.config
         return {
+            "scope": "workspace",
+            "read_only_locked": self._provider_admin.read_only,
             "values": self.values.model_dump(),
             "defaults": self.defaults.model_dump(),
             "profiles": [
-                {"name": name, "mode": config.profile(name).mode, "model": config.profile(name).model}
-                for name in ("build", "agent", "reviewer", *sorted(config.profiles))
+                {"name": name, "mode": self.harness.mode_for_profile(name), "model": config.profile(name).model}
+                for name in config.profile_names
             ],
             "revision": self.revision,
             "persisted": self.persisted,
@@ -384,6 +387,12 @@ class WebSettings:
         await _join(asyncio.create_task(self._load()))
 
     async def _load(self) -> None:
+        try:
+            await self.load_global()
+        except Exception:
+            raise RuntimeError(
+                "Cannot load global web defaults. Check web-defaults.db in the configured data directory."
+            ) from None
         try:
             async with aiosqlite.connect(self.harness.agent.session.db_path, timeout=5) as db:
                 await db.execute(
@@ -425,7 +434,7 @@ class WebSettings:
                 version, payload, revision = row
                 if (
                     type(version) is not int
-                    or version not in {1, 2, 3}
+                    or version not in {1, 2, 3, 4}
                     or not isinstance(payload, str)
                     or not isinstance(revision, str)
                     or len(revision) != 64
@@ -440,8 +449,29 @@ class WebSettings:
                 elif version == 2:
                     legacy = _SettingsValuesV2.model_validate_json(payload)
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **legacy.model_dump()})
+                elif version == 3:
+                    legacy_values = json.loads(payload)
+                    if not isinstance(legacy_values, dict) or {"submit_mode", "read_only"} & legacy_values.keys():
+                        raise ValueError("Invalid version-3 settings")
+                    values = SettingsValues.model_validate(
+                        {
+                            **legacy_values,
+                            "submit_mode": self.defaults.submit_mode,
+                            "read_only": self.defaults.read_only,
+                        }
+                    )
                 else:
                     values = SettingsValues.model_validate_json(payload)
+                # Older web defaults used these names for the same unrestricted
+                # profile. Explicit custom profiles keep their configured identity.
+                if (
+                    version < 4
+                    and values.agent in {"build", "agent", "reviewer"}
+                    and values.agent not in self.harness.config.profiles
+                ):
+                    values = values.model_copy(
+                        update={"agent": "assistant", "read_only": values.read_only or values.agent == "reviewer"}
+                    )
                 self.validate(values)
                 secret = keys.get(values.provider, "")
                 if secret:
@@ -453,11 +483,109 @@ class WebSettings:
                 self.effective_mode = self.harness.mode
                 self.revision = revision
                 self.persisted = True
+            elif self.global_persisted:
+                with self.harness.operation("load global defaults"):
+                    await self.harness.reconfigure_provider(self.provider_config(self.defaults))
+                    self.defaults.apply(self.harness)
+                self.values = self.defaults
+                self.effective_mode = self.harness.mode
         except Exception:
             raise RuntimeError(
                 "Cannot load saved web settings. Stop ngn and have the administrator repair or remove "
                 "the ngn_web_settings row in this workspace's session database."
             ) from None
+
+    async def load_global(self) -> None:
+        """Defaults shared by workspaces using the same application data directory."""
+        self.defaults = self.startup_defaults
+        self.global_revision = "0" * 64
+        self.global_persisted = False
+        if not self.global_path.is_file():
+            return
+        async with aiosqlite.connect(self.global_path, timeout=5) as db:
+            await db.execute(_GLOBAL_SETTINGS_TABLE)
+            await db.commit()
+            async with db.execute(
+                "SELECT version, CASE WHEN length(CAST(values_json AS BLOB)) <= ? THEN values_json END, revision "
+                "FROM ngn_web_global_settings WHERE id = 1",
+                (MAX_SETTINGS_BYTES,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return
+        version, payload, revision = row
+        if (
+            version != 1
+            or not isinstance(payload, str)
+            or not isinstance(revision, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", revision)
+        ):
+            raise ValueError("Invalid global settings")
+        values = json.loads(payload)
+        if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
+            raise ValueError("Invalid global settings fields")
+        self.defaults = SettingsValues.model_validate({**self.startup_defaults.model_dump(), **values})
+        self.validate(self.defaults)
+        self.global_revision = revision
+        self.global_persisted = True
+
+    def global_snapshot(self) -> dict[str, object]:
+        result = self.snapshot()
+        result.update(
+            scope="global",
+            values=self.defaults.model_dump(),
+            defaults=self.startup_defaults.model_dump(),
+            revision=self.global_revision,
+            persisted=self.global_persisted,
+            connection={
+                "provider": self.defaults.provider,
+                "api": self.defaults.api,
+                "auth": self.defaults.auth,
+                "base_url": self.defaults.base_url,
+                "api_key_env": self.defaults.api_key_env,
+                "key_configured": False,
+                "auth_status": "Global defaults; credentials resolve in each workspace.",
+            },
+        )
+        return result
+
+    async def change_global(self, revision: str, values: SettingsValues, *, reset: bool = False) -> None:
+        # Profiles and write-only keys belong to a workspace. Global defaults
+        # carry provider credential references, never copied secret values.
+        if "submit_mode" not in values.model_fields_set:
+            values = values.model_copy(update={"submit_mode": self.defaults.submit_mode})
+        if "read_only" not in values.model_fields_set:
+            values = values.model_copy(update={"read_only": self.defaults.read_only})
+        values = values.model_copy(update={"agent": self.startup_defaults.agent})
+        self.validate(values)
+        payload = values.model_dump_json(exclude={"agent"})
+        next_revision = secrets.token_hex(32)
+        self.global_path.parent.mkdir(parents=True, exist_ok=True)
+        self.global_path.touch(mode=0o600, exist_ok=True)
+        async with aiosqlite.connect(self.global_path, timeout=5) as db:
+            await db.execute(_GLOBAL_SETTINGS_TABLE)
+            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute("SELECT revision FROM ngn_web_global_settings WHERE id = 1") as cursor:
+                current = await cursor.fetchone()
+            if (current[0] if current else "0" * 64) != revision:
+                raise HTTPException(409, "Global settings changed. Refresh before saving.")
+            if reset:
+                await db.execute("DELETE FROM ngn_web_global_settings WHERE id = 1")
+            else:
+                await db.execute(
+                    "INSERT INTO ngn_web_global_settings VALUES (1, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET values_json=excluded.values_json, revision=excluded.revision",
+                    (payload, next_revision),
+                )
+            await db.commit()
+        await self.load_global()
+        if not self.persisted:
+            with self.harness.operation("apply global defaults"):
+                await self.harness.reconfigure_provider(self.provider_config(self.defaults))
+                self.defaults.apply(self.harness)
+            self.values = self.defaults
+            self.effective_mode = self.harness.mode
+            self.revision = secrets.token_hex(32)
 
     async def change(
         self,
@@ -468,6 +596,10 @@ class WebSettings:
         clear_api_key: bool = False,
         reset: bool = False,
     ) -> None:
+        if "submit_mode" not in values.model_fields_set:
+            values = values.model_copy(update={"submit_mode": self.values.submit_mode})
+        if "read_only" not in values.model_fields_set:
+            values = values.model_copy(update={"read_only": self.values.read_only})
         try:
             payload = self.validate(values)
         except ValueError:
@@ -509,8 +641,8 @@ class WebSettings:
                     await db.execute("DELETE FROM ngn_web_provider_keys")
                 else:
                     await db.execute(
-                        "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, 3, ?, ?) "
-                        "ON CONFLICT(id) DO UPDATE SET version = 3, values_json = excluded.values_json, "
+                        "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, 4, ?, ?) "
+                        "ON CONFLICT(id) DO UPDATE SET version = 4, values_json = excluded.values_json, "
                         "revision = excluded.revision",
                         (payload, revision),
                     )
@@ -530,6 +662,8 @@ class WebSettings:
                     config.max_file_bytes,
                     config.max_tool_rounds,
                     config.max_subagent_depth,
+                    config.submit_mode,
+                    config.read_only,
                 )
                 previous_keys = dict(self.keys)
                 previous_secret = previous_keys.get(config.provider, "")
@@ -559,6 +693,8 @@ class WebSettings:
                         config.max_file_bytes,
                         config.max_tool_rounds,
                         config.max_subagent_depth,
+                        config.submit_mode,
+                        config.read_only,
                     ) = previous
                     harness.agent.provider.model = model
                     harness.agent.max_tool_rounds = rounds

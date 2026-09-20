@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { RequestError } from "../../api/client.js";
 import { createDraft, parseDraft } from "./draft.js";
 import { ModelField } from "./ModelField.js";
+import { settingsValues } from "./testFixtures.js";
 import {
   filterModels,
   modelCatalogFailure,
@@ -105,8 +106,8 @@ test("search is case-insensitive text matching, preserves exact IDs, and never c
 });
 
 test("manual models outside the catalog remain valid without changing other draft fields", () => {
-  const draft = createDraft({ model: "manual/not-in-catalog", agent: "build", provider: "openai_compatible", base_url: "https://gateway.invalid/v1", api: "chat_completions", auth: "api-key", api_key_env: "GATEWAY_KEY", shell_timeout: 30, max_output: 16384, max_file_bytes: 1048576, max_tool_rounds: 37, max_subagent_depth: 2, dictation_enabled: false, dictation_model: "gpt-4o-mini-transcribe", dictation_language: "", dictation_max_seconds: 60, compact_trigger: "auto", compact_tokens: 200000, compact_messages: 100 });
-  const profiles = [{ name: "build", mode: "build" as const, model: "" }];
+  const draft = createDraft(settingsValues({ model: "manual/not-in-catalog", provider: "openai_compatible", base_url: "https://gateway.invalid/v1", api: "chat_completions", auth: "api-key", api_key_env: "GATEWAY_KEY", max_tool_rounds: 37 }));
+  const profiles = [{ name: "assistant", mode: "build" as const, model: "" }];
   assert.equal(filterModels(catalog.models, draft.model).length, 0);
   assert.ok(parseDraft(draft, profiles).ok);
   assert.equal(draft.max_tool_rounds, "37");

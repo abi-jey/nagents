@@ -91,7 +91,7 @@ test("expanded execution details include full readable tool names and activation
   assert.match(body, /<dt>Activation<\/dt><dd>17<\/dd>/);
 });
 
-test("the full workspace path has a keyboard-accessible disclosure that mobile CSS does not hide", () => {
+test("workspace information has an accessible dialog trigger that mobile CSS does not hide", () => {
   const workspace = `/workspace/${"very-long-segment".repeat(70)}/project`;
   const html = renderToStaticMarkup(createElement(SessionSidebar, {
     workspace, sessions: [], selected: "", disabled: false, open: true,
@@ -101,17 +101,16 @@ test("the full workspace path has a keyboard-accessible disclosure that mobile C
     settings: () => undefined, settingsDisabled: false, channels: () => undefined, channelsDisabled: false,
     demo: true, close: () => undefined,
   }));
-  assert.match(html, /<details class="workspace-info"><summary/);
+  assert.match(html, /<button[^>]*class="workspace-trigger"/);
   assert.match(html, /aria-label="Workspace controls"/);
-  assert.match(html, /class="sidebar-info-content" role="region" aria-label="Workspace information" tabindex="0"/);
-  const information = html.slice(html.indexOf('class="sidebar-info-content"'));
-  assert.ok(information.includes(`<p>${workspace}</p>`));
+  assert.match(html, /aria-label="Workspace information: project" aria-haspopup="dialog"/);
+  assert.ok(html.includes(`title="${workspace}"`));
   // SSR alone cannot catch a mobile-only display:none rule. Keep this narrow
   // stylesheet regression alongside the native-disclosure/keyboard contract.
   const css = readFileSync(new URL("../../../src/app/styles.css", import.meta.url), "utf8");
   for (const rule of css.matchAll(/\.sidebar-footer\s*\{([^}]*)\}/g))
     assert.doesNotMatch(rule[1], /display\s*:\s*none/);
-  assert.match(css, /\.sidebar-info-content\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(css, /\.workspace-dialog\s*\{[^}]*max-height:/);
 });
 
 test("retained registry starts collapsed without removing its task identities or recorded evidence", () => {

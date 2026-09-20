@@ -63,9 +63,10 @@ profiles:
     instructions: Prioritize regressions and report the checks actually run.
 ```
 
-`AgentProfile` has `mode`, `instructions`, and `model`. Built-in `build` and
-`agent` use build mode; `reviewer` is read-only. Custom profiles cannot replace
-those names. A profile's nonempty model is selected on activation; inspect the
+`AgentProfile` has `mode`, `instructions`, and `model`. `assistant` is the only
+built-in agent and uses build mode. Other names require explicit profiles; use
+`mode: reviewer` for read-only behavior. Custom profiles cannot replace
+`assistant`. A profile's nonempty model is selected on activation; inspect the
 effective model rather than assuming the top-level model always wins.
 
 YAML plugin paths and `data_dir` resolve relative to the config file. CLI
@@ -300,8 +301,8 @@ Skill context grants
 no permissions and executes no scripts. Supporting resources require a separate
 permitted loading mechanism; package locations are not general workspace paths.
 
-`delegate(prompt, agent="agent")` starts a child and returns its task ID.
-`reviewer` selects a read-only child; permissions cannot exceed the parent.
+`delegate(prompt, agent="assistant")` starts a child and returns its task ID.
+Choose an explicitly configured profile for other behavior; permissions cannot exceed the parent.
 Results notify the immediate parent as user-role data. `Harness.tasks.list()`,
 `task_history(task_id, limit=...)`, and `continue_task(task_id, prompt)` support
 inspection and retained-child follow-ups. Default depth is 2 (root 0), with

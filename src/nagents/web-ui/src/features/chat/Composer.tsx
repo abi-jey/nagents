@@ -1,4 +1,32 @@
-import type { ReactNode, Ref } from "react";
+import { useLayoutEffect, useRef } from "react";
+import type { ComponentProps, ReactNode, Ref } from "react";
+
+function ComposerInput({ inputRef, ...props }: ComponentProps<"textarea"> & { inputRef: Ref<HTMLTextAreaElement> }) {
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  function resize() {
+    const element = textarea.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(160, Math.max(32, element.scrollHeight))}px`;
+  }
+  useLayoutEffect(resize, [props.value]);
+  useLayoutEffect(() => {
+    const element = textarea.current;
+    if (!element) return;
+    let width = element.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const next = element.getBoundingClientRect().width;
+      if (next !== width) { width = next; resize(); }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return <textarea {...props} ref={(element) => {
+    textarea.current = element;
+    if (typeof inputRef === "function") return inputRef(element);
+    if (inputRef) inputRef.current = element;
+  }} />;
+}
 
 export function Composer({
   inputRef,
@@ -37,8 +65,8 @@ export function Composer({
       <label htmlFor="composer" className="sr-only">
         Message ngn
       </label>
-      <textarea
-        ref={inputRef}
+      <ComposerInput
+        inputRef={inputRef}
         id="composer"
         aria-describedby="composer-help"
         placeholder={
@@ -66,15 +94,7 @@ export function Composer({
       <div className="composer-bottom">
         {dictation}
         {status}
-        <span className="composer-shortcut" aria-hidden="true">Enter to send · Shift+Enter for a new line</span>
-        <details className="composer-help">
-          <summary aria-label="Composer help" title="Composer help">?</summary>
-          <div className="composer-help-content">
-            <p id="composer-help">Enter to send. Shift+Enter for a new line. Resize the text boxes to review longer messages.</p>
-            <p>Mic records audio for transcription. Stop uploads it; reaching the time limit does not. Review and insert the text, then use Send.</p>
-            <p>{demo ? "Offline demo: no paid requests. Sessions are saved locally." : "Live requests may incur costs. Approvals apply to one call; completed actions are not rolled back. Shell is not sandboxed."}</p>
-          </div>
-        </details>
+        <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.</span>
         {running && (
           <button type="button" className="cancel" onClick={cancel}>
             Stop run

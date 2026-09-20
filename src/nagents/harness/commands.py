@@ -16,6 +16,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -67,12 +68,14 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("dictate", "Record an opt-in voice draft; never submits automatically"),
     Command("queue", "Inspect, resume, or clear queued prompts", argument_hint="[resume|clear]"),
 )
+BUILTIN_ALIASES = {"resume": "sessions"}
 
 
 class CommandRegistry:
     def __init__(self, harness: Harness) -> None:
         self.harness = harness
         self._registered: dict[str, tuple[Command, str, CommandHandler | None]] = {}
+        self._aliases = dict(BUILTIN_ALIASES)
         self._source: ContextVar[str] = ContextVar("ngn_command_source", default="harness")
 
     def register(
@@ -96,7 +99,11 @@ class CommandRegistry:
                 "Command names must be 1..64 ASCII lowercase letters, digits, '_' or '-', "
                 "starting with a letter; omit '/' and reserve ':' for skills"
             )
-        if name in self._registered or any(command.name == name for command in BUILTIN_COMMANDS):
+        if (
+            name in self._registered
+            or name in self._aliases
+            or any(command.name == name for command in BUILTIN_COMMANDS)
+        ):
             raise ValueError(f"Command /{name} is already registered or reserved as a built-in")
         if not all(isinstance(value, str) for value in (description, prompt, argument_hint, source)):
             raise TypeError("Command description, prompt, argument_hint, and source must be strings")
@@ -112,6 +119,22 @@ class CommandRegistry:
         command = Command(name, description, source or self._source.get(), argument_hint, requires_arguments)
         self._registered[name] = (command, prompt, handler)
         return command
+
+    def canonical_name(self, name: str) -> str:
+        """Resolve a synonym without executing commands or reading files."""
+        return self._aliases.get(name, name)
+
+    def register_alias(self, alias: str, target: str) -> None:
+        if not isinstance(alias, str) or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", alias) is None:
+            raise ValueError("Command aliases must be lowercase command names without '/' or ':'")
+        if alias in self._aliases or self.get(alias) is not None:
+            raise ValueError(f"Command /{alias} is already registered or reserved")
+        if not isinstance(target, str):
+            raise TypeError("Command alias targets must be strings")
+        target = self.canonical_name(target)
+        if self.get(target) is None:
+            raise ValueError(f"Unknown alias target /{target}")
+        self._aliases[alias] = target
 
     @contextmanager
     def plugin_source(self, reference: str) -> Iterator[None]:
@@ -142,6 +165,12 @@ class CommandRegistry:
             Command(f"skill:{name}", description, source="skill", argument_hint="[task]")
             for name, (_, description) in sorted(skills.items())
         )
+        canonical = {command.name: command for command in commands}
+        commands.extend(
+            replace(canonical[target], name=alias, description=f"Alias for /{target}. {canonical[target].description}")
+            for alias, target in self._aliases.items()
+            if target in canonical
+        )
         return list(dict.fromkeys(commands))
 
     def get(self, name: str) -> Command | None:
@@ -156,6 +185,7 @@ class CommandRegistry:
         """
         if not isinstance(name, str) or not isinstance(arguments, str):
             raise TypeError("Command name and arguments must be strings")
+        name = self.canonical_name(name)
         if self.harness._busy:
             raise RuntimeError(f"Harness is busy ({self.harness._busy}); wait before executing /{name}")
         await self.harness.initialize()

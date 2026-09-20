@@ -15,7 +15,7 @@ from nagents.harness.dictation import DictationError
 from nagents.harness.dictation import DictationInputError
 from nagents.harness.dictation import VoiceDictation
 
-from .settings import _join
+from ._async import join_owned as _join
 
 if TYPE_CHECKING:
     from starlette.requests import Request

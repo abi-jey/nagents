@@ -8,6 +8,7 @@ import { readBootstrap } from "../../api/bootstrap";
 import type { Bootstrap, Snapshot } from "../../types";
 import { useApproval } from "../approvals/useApproval";
 import { applySnapshot, LiveSessions, pendingApprovals, type LiveTranscript } from "./liveTranscript";
+import { changesContext } from "../context/controller";
 
 export function useChatRun(token: string, sessionId: string, receive: (frame: EventFrame) => void, acceptCredentials: (bootstrap: Bootstrap) => void, unavailable: () => void) {
   const latestToken = useRef(token);
@@ -24,6 +25,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const [status, setStatus] = useState("Connecting to local harness");
   const [activityError, setActivityError] = useState("");
   const [connected, setConnected] = useState(false);
+  const [contextRevision, setContextRevision] = useState(0);
   const [connectionVersion, setConnectionVersion] = useState(0);
   const [suspended, setSuspended] = useState(false);
   const stopSubscription = useRef<(() => void) | undefined>(undefined);
@@ -54,6 +56,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const receiveFrame = useEffectEvent((frame: EventFrame) => {
     receive(frame);
     if ((frame.type !== "snapshot" && frame.type !== "event") || frame.session_id !== selected.current) return;
+    if (frame.type === "snapshot" || changesContext(frame.record.event)) setContextRevision((revision) => revision + 1);
     const previousRun = cache.current.get(frame.session_id).activeRun;
     const next = cache.current.receive(frame);
     setView(next);
@@ -101,6 +104,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   }, [authenticated, sessionId, connectionVersion, suspended]);
 
   function loadHistory(snapshot: Snapshot) {
+    setContextRevision((revision) => revision + 1);
     const next = cache.current.set(snapshot.session_id, { ...applySnapshot(cache.current.get(snapshot.session_id), snapshot, false), position: undefined });
     setView(next); approval.close(); setStatus("Ready");
   }
@@ -139,6 +143,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   }
   return {
     entries: view.entries, prompt, setPrompt, insertDictation, runId: view.activeRun?.id || "", connected,
+    contextRevision,
     backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,
     transcriptVersion: 0, status: stopping ? "Cancelling and waiting for tools to stop" : status,
     setStatus, approval, loadHistory, forgetSession, submit, cancel,

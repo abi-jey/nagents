@@ -26,13 +26,14 @@ from starlette.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
-from nagents.channels.store import finish_on_cancel
 from nagents.harness import Harness
 from nagents.provider import CodexProvider
 
 from . import built_assets
 from . import is_loopback_host
 from . import local_authority
+from ._async import finish_on_cancel
+from ._async import join_owned as _join
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
 from .deletion import delete_session
@@ -47,7 +48,7 @@ from .service import WebState as WebState
 from .settings import SettingsInput
 from .settings import SettingsRevision
 from .settings import WebSettings
-from .settings import _join
+from .tool_settings import register as register_tool_settings
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
@@ -179,6 +180,7 @@ def create_app(
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
+    register_tool_settings(app, lambda: state)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request: Request, error: RequestValidationError) -> JSONResponse:
@@ -216,9 +218,26 @@ def create_app(
     async def message(body: MessageInput) -> dict[str, str]:
         if not body.prompt.strip():
             raise HTTPException(422, "Prompt must not be blank.")
-        session_id = await state.channels.store.web(body.session_id, body.message_id, body.prompt)
-        state.channels.changed.set()
-        return {"session_id": session_id, "message_id": body.message_id, "status": "queued"}
+
+        async def accept() -> dict[str, str]:
+            session_id, admitted = await state.channels.store.web(body.session_id, body.message_id, body.prompt)
+            active = state.active
+            if (
+                admitted
+                and state.harness.config.submit_mode == "interrupt"
+                and active is not None
+                and active.session_id == session_id
+                and active.message_id != body.message_id
+                and not active.finished
+                and not active.task.done()
+            ):
+                await state.stop(active)
+            state.channels.changed.set()
+            return {"session_id": session_id, "message_id": body.message_id, "status": "queued"}
+
+        # Admission and the selected policy complete even if the HTTP caller
+        # disconnects after commit. A retry only observes the existing message.
+        return await finish_on_cancel(accept())
 
     @app.get("/api/channels")
     async def channels() -> dict[str, object]:
@@ -292,8 +311,35 @@ def create_app(
     @app.post("/api/settings/reset")
     async def reset_settings(body: SettingsRevision) -> dict[str, object]:
         with state.idle():
+            await state.settings.load_global()
             await state.settings.change(body.revision, state.settings.defaults, reset=True)
             return state.settings.snapshot()
+
+    @app.get("/api/settings/global")
+    async def global_settings() -> dict[str, object]:
+        await state.settings.load_global()
+        return state.settings.global_snapshot()
+
+    @app.post("/api/settings/global")
+    async def save_global_settings(body: SettingsInput) -> dict[str, object]:
+        if body.api_key or body.clear_api_key:
+            raise HTTPException(
+                422, "Global settings use credential references. Store key values in workspace settings."
+            )
+        with state.idle():
+            try:
+                await finish_on_cancel(state.settings.change_global(body.revision, body.values))
+            except ValueError:
+                raise HTTPException(422, "Invalid global settings.") from None
+            return state.settings.global_snapshot()
+
+    @app.post("/api/settings/global/reset")
+    async def reset_global_settings(body: SettingsRevision) -> dict[str, object]:
+        with state.idle():
+            await finish_on_cancel(
+                state.settings.change_global(body.revision, state.settings.startup_defaults, reset=True)
+            )
+            return state.settings.global_snapshot()
 
     @app.get("/api/sessions")
     async def sessions() -> dict[str, object]:

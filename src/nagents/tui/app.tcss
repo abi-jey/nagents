@@ -4,23 +4,17 @@ Screen {
 }
 Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text-style: $ngn-selection-style; }
 
-#topbar {
-    height: 2;
-    padding: 0 2;
-    align-vertical: middle;
-    background: $ngn-panel;
-}
-#brand { width: 6; color: $ngn-accent; text-style: bold; }
-#workspace { width: 1fr; color: $ngn-text; text-overflow: ellipsis; }
-#model { width: auto; max-width: 40%; color: $ngn-info; margin: 0 2; text-overflow: ellipsis; }
-#profile { width: auto; color: $ngn-user; text-style: bold; }
 #mode { height: 1; padding: 0 2; color: $ngn-muted; text-overflow: ellipsis; }
 #mode.demo { color: $ngn-warning; }
 #main { height: 1fr; }
-#conversation { width: 1fr; padding: 1 3; scrollbar-size: 1 1; }
-#conversation:focus { border: none; }
+#conversation, #rail {
+    border: round $ngn-border;
+    border-title-color: $ngn-heading;
+    border-title-style: bold;
+}
+#conversation { width: 1fr; padding: 1 2 1 1; scrollbar-size: 1 1; }
+#conversation:focus { border: round $ngn-accent; }
 #welcome { height: auto; margin: 1 0; max-width: 72; }
-#welcome-title { height: auto; color: $ngn-heading; text-style: bold; margin-bottom: 1; }
 #welcome-subtitle { color: $ngn-muted; height: auto; margin-bottom: 1; }
 .suggestion {
     width: auto;
@@ -37,7 +31,6 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 .suggestion:hover, .suggestion:focus { background: $ngn-hover; color: $ngn-text; text-style: $ngn-focus-style; }
 #prompt-explain { color: $ngn-assistant; }
 #prompt-review { color: $ngn-tool; }
-#welcome-hint { color: $ngn-muted; height: auto; margin-top: 1; }
 #rail { width: 31; padding: 0 1; background: $ngn-panel; }
 #rail AgentTree { background: transparent; }
 #rail-details { height: auto; max-height: 60%; border: none; padding: 0; }
@@ -52,29 +45,34 @@ Screen > .screen--selection { background: $ngn-selection; color: $ngn-text; text
 #rail-session { color: $ngn-assistant; }
 #rail-activity { color: $ngn-info; }
 #rail-note { color: $ngn-muted; margin-top: 1; }
-#compose-area { height: auto; padding: 0 2; background: $ngn-background; }
-#compose-label { height: 1; color: $ngn-user; text-style: bold; }
+#compose-area { height: auto; padding: 0 1; border: none; }
+#compose-area { border-title-color: $ngn-message-user; background: $ngn-message-background; color: $ngn-message-text; }
+#queue-status { color: $ngn-message-muted; }
+#footer { height: auto; padding: 0 1; border: none; background: $ngn-message-background; }
 #composer {
     height: 3;
-    border: tall $ngn-border;
+    border: none;
     padding: 0 1;
-    background: $ngn-panel;
-    color: $ngn-text;
+    background: $ngn-message-background;
+    color: $ngn-message-text;
 }
-#composer:focus { border: tall $ngn-accent; }
+#composer:focus { border: none; }
 #composer > .text-area--cursor { background: $input-cursor-background; color: $input-cursor-foreground; text-style: $input-cursor-text-style; }
 #composer > .text-area--selection { background: $ngn-selection; color: $ngn-text; text-style: $ngn-selection-style; }
-#composer > .text-area--placeholder { color: $ngn-muted; }
-#shortcuts { height: 1; color: $ngn-muted; text-overflow: ellipsis; }
-#status { height: 1; color: $ngn-info; text-overflow: ellipsis; }
-#status.working, #rail-activity.working { color: $ngn-tool; }
-#status.ready, #rail-activity.ready { color: $ngn-success; }
-#status.warning, #rail-activity.warning { color: $ngn-warning; }
+#composer > .text-area--placeholder { color: $ngn-message-muted; }
+#status { height: 1; color: $ngn-message-info; text-overflow: ellipsis; }
+#status.working { color: $ngn-message-tool; }
+#rail-activity.working { color: $ngn-tool; }
+#status.ready { color: $ngn-message-success; }
+#rail-activity.ready { color: $ngn-success; }
+#status.warning { color: $ngn-message-warning; }
+#rail-activity.warning { color: $ngn-warning; }
 .turn { height: auto; margin: 0 0 1 0; }
 .turn-label { height: 1; color: $ngn-assistant; text-style: bold; margin-bottom: 1; }
-.user { background: $ngn-panel; padding: 0 2; }
-.user .turn-label { color: $ngn-user; }
-.assistant { padding-left: 2; }
+.turn.user { background: $ngn-message-background; padding: 0 2 0 1; }
+.turn.user > Static { background: $ngn-message-background; color: $ngn-message-text; }
+.turn.user > .turn-label { color: $ngn-message-user; }
+.assistant { padding-left: 1; }
 .turn Static { height: auto; }
 .turn Markdown { background: transparent; padding: 0; margin: 0; }
 MarkdownH1, MarkdownH2, MarkdownH3, MarkdownH4, MarkdownH5, MarkdownH6 { color: $ngn-heading; border: none; background: transparent; margin: 0 0 1 0; padding: 0; }
@@ -87,7 +85,8 @@ MarkdownBullet { color: $ngn-assistant; }
 .notice { height: auto; margin: 0 0 1 0; color: $ngn-info; border-left: solid $ngn-info; padding-left: 1; }
 .notice.warning { color: $ngn-warning; border-left: solid $ngn-warning; }
 .notice.error { border-left: solid $ngn-error; }
-.error, #status.error, #rail-activity.error { color: $ngn-error; }
+.error, #rail-activity.error { color: $ngn-error; }
+#status.error { color: $ngn-message-error; }
 .tool-card { height: auto; padding: 0; margin: 0 0 1 0; border: none; border-left: solid $ngn-tool; background: $ngn-panel; }
 .tool-card > CollapsibleTitle { color: $ngn-tool; background: transparent; padding: 0 1; }
 .tool-card > CollapsibleTitle:hover, .tool-card > CollapsibleTitle:focus { background: $ngn-hover; color: $ngn-text; text-style: $ngn-focus-style; }
@@ -128,15 +127,12 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; backgroun
 .detail-dialog { height: 85%; }
 .detail-dialog VerticalScroll { height: 1fr; }
 .detail-dialog Button { margin-top: 1; }
-.small #topbar { padding: 0 1; }
 .small #mode { padding: 0 1; }
-.small #model { margin: 0 1; max-width: 38%; }
-.small #conversation { padding: 1 2; }
+.small #conversation { padding: 1 1; }
 .small #welcome { margin: 0; }
 .small #welcome-subtitle { display: none; }
-.small #welcome-hint { margin-top: 0; }
 .small .suggestion { margin-bottom: 0; }
-.small #compose-area { padding: 0 1; }
+.small #compose-area, .small #footer { padding: 0; }
 .small .dialog { padding: 0 1; max-height: 95%; }
 .login-method-dialog { height: 28; }
 .login-method-content { height: 1fr; scrollbar-size: 1 1; margin-bottom: 1; }

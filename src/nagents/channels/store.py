@@ -18,32 +18,14 @@ from typing import TYPE_CHECKING
 from typing import Literal
 from typing import TypeVar
 
+from nagents._async import finish_on_cancel as finish_on_cancel
+
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from collections.abc import Coroutine
     from pathlib import Path
 
 T = TypeVar("T")
 InboxStatus = Literal["completed", "failed", "interrupted"]
-
-
-async def finish_on_cancel(operation: Coroutine[object, object, T]) -> T:
-    """Join an operation even when cancelled, then propagate cancellation.
-
-    In particular, a cancelled admission may have committed. Waiting for the
-    transaction/thread to finish prevents orphaned writes; source retries dedup.
-    """
-    task = asyncio.create_task(operation)
-    cancelled = False
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-    result = task.result()
-    if cancelled:
-        raise asyncio.CancelledError
-    return result
 
 
 class Admission(Enum):

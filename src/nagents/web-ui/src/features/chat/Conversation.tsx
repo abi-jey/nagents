@@ -10,6 +10,17 @@ import {
   type TranscriptItem,
 } from "./transcript.js";
 
+const usageTips = [
+  "Use Shift+Enter to add a new line to your message.",
+  "Mention a file path to focus the conversation on a specific file.",
+  "Start a new session when switching to an unrelated task.",
+  "Return to an earlier conversation from the sessions list.",
+  "Click the workspace folder to view its details.",
+  "Ask for a plan before making a larger change.",
+  "Expand a tool call to inspect its inputs and results.",
+  "Use the sidebar divider button to make more room for your conversation.",
+];
+
 function taskAccent(id: string): number {
   let hash = 0;
   for (const character of id)
@@ -169,6 +180,7 @@ export function Conversation({
   const stickToBottom = useRef(true);
   const anchor = useRef<{ key: string; offset: number } | undefined>(undefined);
   const [newActivity, setNewActivity] = useState(false);
+  const [usageTip] = useState(() => usageTips[Math.floor(Math.random() * usageTips.length)]);
   const [announcement, setAnnouncement] = useState("");
   const [disclosures, setDisclosures] = useState(new Map<string, boolean>());
   function toggle(key: string, open: boolean) {
@@ -323,42 +335,27 @@ export function Conversation({
             </button>
           )}
         </div>
-        {!entries.length && (
+        {!entries.length && <p className="usage-tip"><span>Tip</span>{usageTip}</p>}
+        {!entries.length && demo && (
           <section className="welcome">
-            <h2>Start with the workspace</h2>
-            <p>
-              Ask ngn to inspect a file, explain a problem, or propose a change.
-              Tool calls stay in the transcript so you can review their inputs
-              and results.
+            <p className="demo-note">
+              Offline demo. Scripted responses, real local tools and sessions.
+              No provider requests, shell commands, or workspace writes.
             </p>
-            {demo ? (
-              <>
-                <p className="demo-note">
-                  Offline demo. Scripted responses, real local tools and
-                  sessions. No provider requests, shell commands, or workspace
-                  writes.
-                </p>
-                <div className="starters">
-                  <button
-                    disabled={!canSubmit}
-                    onClick={() => submit("Show me this workspace")}
-                  >
-                    Inspect workspace
-                  </button>
-                  <button
-                    disabled={!canSubmit}
-                    onClick={() => submit("demo approval")}
-                  >
-                    Review a demo approval
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="demo-note">
-                Live provider requests may incur costs. Shell and edits require
-                approval. This is a trusted local tool, not a sandbox.
-              </p>
-            )}
+            <div className="starters">
+              <button
+                disabled={!canSubmit}
+                onClick={() => submit("Show me this workspace")}
+              >
+                Inspect workspace
+              </button>
+              <button
+                disabled={!canSubmit}
+                onClick={() => submit("demo approval")}
+              >
+                Review a demo approval
+              </button>
+            </div>
           </section>
         )}
         <TranscriptItems

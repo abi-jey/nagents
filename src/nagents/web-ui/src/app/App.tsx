@@ -17,18 +17,21 @@ import { useClient } from "./useClient";
 import { ContextIndicator } from "../features/context/ContextIndicator";
 import { restoreDeletionFocus } from "../api/deletion";
 import { Designer } from "../features/designer/Designer";
+import { ToolsDialog } from "../features/tools/ToolsDialog";
 
 export function App() {
   const client = useClient();
   const { chat, sessions, busy, error, dictation } = client;
   const { config, sessionId, externalRun } = sessions;
   const [navOpen, setNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [designerOpen, setDesignerOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const closeNavigation = useCallback(() => setNavOpen(false), []);
   const composer = useRef<HTMLTextAreaElement>(null);
   const selectedSession = sessions.sessions.find((session) => session.id === sessionId);
   const canSubmit =
-    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target && !client.trash.open;
+    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target && !client.trash.open && !toolsOpen;
   const trashBlocked = busy || (dictation.unfinished && dictation.state.phase !== "review");
   function openRestored(id: string) { client.trashController.close(); void select(id); }
   async function moveToTrash(session: typeof sessions.sessions[number]) {
@@ -58,7 +61,7 @@ export function App() {
       <a className="skip-link" href="#composer">
         Skip to prompt
       </a>
-      <main inert={designerOpen}>
+      <main inert={designerOpen} className={sidebarCollapsed ? "sidebar-collapsed" : undefined}>
         <header className="topbar">
           <button title="Experimental agent designer" disabled={!config || busy || client.operating || dictation.unfinished} onClick={() => setDesignerOpen(true)}>Agent Designer</button>
           <button
@@ -86,6 +89,9 @@ export function App() {
             error={client.context.error}
             open={client.context.open}
             setOpen={client.context.setOpen}
+            live={client.context.live}
+            loading={client.context.loading}
+            refresh={client.context.refresh}
           />
         </header>
         <SessionSidebar
@@ -103,12 +109,22 @@ export function App() {
           trashDisabled={!config || client.operating || (dictation.unfinished && dictation.state.phase !== "review") || client.channels.open || client.settings.open || !!client.deletion.target}
           notice={!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
           settings={client.settings.show}
+          globalSettings={client.settings.showGlobal}
+          tools={() => setToolsOpen(true)}
+          toolsDisabled={!config || client.operating || dictation.unfinished}
           settingsDisabled={!config || busy || !!externalRun || !!chat.approval.pending || dictation.unfinished || client.channels.open || !!client.deletion.target || client.trash.open}
           channels={client.channels.show}
           channelsDisabled={!config || client.operating || !!chat.approval.pending || dictation.unfinished || client.settings.open || !!client.deletion.target || client.trash.open}
           demo={!!config?.demo}
           close={closeNavigation}
         />
+        <button type="button" className="sidebar-divider-toggle"
+          aria-label={sidebarCollapsed ? "Expand sessions sidebar" : "Collapse sessions sidebar"}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-controls="session-navigation" aria-expanded={!sidebarCollapsed}
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+          <Icon name="chevron" size={14} />
+        </button>
         <Conversation
           key={`${sessionId}:${chat.transcriptVersion}`}
           entries={chat.entries}
@@ -174,7 +190,6 @@ export function App() {
                 stop={dictation.controller.stop}
                 cancel={() => dictation.controller.cancel()}
                 transcribe={() => void dictation.controller.transcribe()}
-                settings={client.settings.show}
               />
             }
           />
@@ -182,6 +197,7 @@ export function App() {
       </main>
       {designerOpen && config && <Designer token={config.token} configureChannels={client.channels.show} close={() => { setDesignerOpen(false); void client.connect(); }} />}
       {client.settings.open && <SettingsDialog settings={client.settings} />}
+      {toolsOpen && config && <ToolsDialog token={config.token} blocked={busy || client.operating || dictation.unfinished} close={() => { setToolsOpen(false); void client.connect(); }} />}
       {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController} permanent={client.deletionController.showTrash.bind(client.deletionController)} openSession={openRestored} blocked={trashBlocked} openDisabled={dictation.unfinished} />}
       {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessionId} />}
       {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessionId} />}

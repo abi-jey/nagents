@@ -175,31 +175,22 @@ class NagentsApp(App[None]):
         return self._active is not None and not self._active.done()
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="topbar"):
-            yield Static("ngn", id="brand", markup=False)
-            yield Static(id="workspace", markup=False)
-            yield Static(id="model", markup=False)
-            yield Static(id="profile", markup=False)
         yield Static(id="mode", markup=False)
         with Horizontal(id="main"):
-            with VerticalScroll(id="conversation", can_focus=True), Vertical(id="welcome"):
-                yield Static("A little context.\nA clear next step.", id="welcome-title", markup=False)
-                yield Static(
-                    "An offline walkthrough. No API key or workspace writes."
-                    if self.harness.config.demo
-                    else "Work with your code, one conversation at a time.",
-                    id="welcome-subtitle",
-                    markup=False,
-                )
+            with VerticalScroll(id="conversation", can_focus=True) as conversation, Vertical(id="welcome"):
+                conversation.border_title = "Conversation"
+                if self.harness.config.demo:
+                    yield Static(
+                        "An offline walkthrough. No API key or workspace writes.", id="welcome-subtitle", markup=False
+                    )
                 yield Button("Explain this workspace", id="prompt-explain", classes="suggestion")
                 yield Button(
                     "Preview an approval" if self.harness.config.demo else "Review the current changes",
                     id="prompt-review",
                     classes="suggestion",
                 )
-                yield Static("/ for commands   ctrl+l to pick up where you left off", id="welcome-hint", markup=False)
-            with Vertical(id="rail"):
-                yield Static("AGENTS  /  CTRL+T", classes="section-label", markup=False)
+            with Vertical(id="rail") as rail:
+                rail.border_title = "Agents / Ctrl+T"
                 yield AgentTree()
                 with (
                     Collapsible(title="Workspace & context", collapsed=True, id="rail-details"),
@@ -215,13 +206,13 @@ class NagentsApp(App[None]):
                     yield Static(id="rail-auth", markup=False)
                 yield Static(id="rail-activity", markup=False)
                 yield Static("Arrows navigate\nEnter inspect / follow up", id="rail-note", markup=False)
-        with Vertical(id="compose-area"):
+        with Vertical(id="compose-area") as compose_area:
+            compose_area.border_title = "Message"
             yield SlashMenu()
             yield Static(id="queue-status", markup=False)
-            yield Static("MESSAGE", id="compose-label", markup=False)
             yield Composer(self.complete)
-            yield Static(id="shortcuts", markup=False)
-            yield Static("Starting...", id="status", markup=False)
+            with Vertical(id="footer"):
+                yield Static("Starting...", id="status", markup=False)
 
     def on_mount(self) -> None:
         self.harness.approval_handler = self.request_approval
@@ -245,12 +236,6 @@ class NagentsApp(App[None]):
     def _resize_layout(self, width: int, height: int) -> None:
         self.query_one("#rail").display = width > 110
         self.default_screen.set_class(width < 72 or height < 23, "small")
-        hints = (
-            f"Enter send  Shift+Enter newline  Tab {self.harness.config.tab_action}  Esc stop"
-            if width < 72
-            else f"Enter send   Shift+Enter newline   Tab {self.harness.config.tab_action}   Ctrl+P commands   Esc stop"
-        )
-        self.query_one("#shortcuts", Static).update(hints)
         self._size_composer()
         self._refresh_completions()
 
@@ -435,7 +420,7 @@ class NagentsApp(App[None]):
         elif self.busy:
             self._status("Finish or stop the current run before switching agents. Your draft is kept.")
         else:
-            profiles = ["build", "agent", "reviewer", *self.harness.config.profiles]
+            profiles = list(self.harness.config.profile_names)
             current = profiles.index(self.harness.config.agent)
             name = profiles[(current + (-1 if event.reverse else 1)) % len(profiles)]
             self._hide_completions()
@@ -474,9 +459,6 @@ class NagentsApp(App[None]):
     def _refresh_context(self) -> None:
         config = self.harness.config
         auth_status = self.harness.auth_status()
-        self.query_one("#workspace", Static).update(self.harness.workspace.name or str(self.harness.workspace))
-        self.query_one("#model", Static).update(config.model)
-        self.query_one("#profile", Static).update(config.agent)
         mode = self.query_one("#mode", Static)
         mode.display = config.demo
         mode.update("OFFLINE DEMO  /  no provider calls; no workspace writes" if config.demo else "")
@@ -610,6 +592,8 @@ class NagentsApp(App[None]):
             return
         is_command = command.startswith("/")
         name = command.split(maxsplit=1)[0]
+        if is_command:
+            name = "/" + self.harness.commands.canonical_name(name[1:])
         custom_command = (
             is_command
             and (name.startswith("/skill:") or self.harness.commands.get(name[1:]) is not None)
@@ -1028,6 +1012,7 @@ class NagentsApp(App[None]):
         self._hide_completions()
         parts = text.split(maxsplit=1)
         name = parts[0] if parts else "/"
+        name = "/" + self.harness.commands.canonical_name(name.removeprefix("/"))
         argument = parts[1].strip() if len(parts) > 1 else ""
         if name == "/":
             self.action_commands()
@@ -1076,8 +1061,8 @@ class NagentsApp(App[None]):
             self._launch(self._logout, "Signing out...")
         elif name == "/agent" and not argument:
             profiles = [
-                (name, f"{name}  /  {self.harness.config.profile(name).mode}")
-                for name in ("build", "agent", "reviewer", *self.harness.config.profiles)
+                (name, name + ("  /  read-only" if self.harness.config.profile(name).mode == "reviewer" else ""))
+                for name in self.harness.config.profile_names
             ]
             self.push_screen(
                 ChoiceModal("AGENT PROFILE", profiles),

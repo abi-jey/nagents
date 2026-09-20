@@ -1,12 +1,16 @@
 import { RequestError, request } from "../../api/client.js";
 import type { SettingsReply, SettingsValues } from "./types.js";
 
+export type SettingsScope = "workspace" | "global";
+const settingsPath = (scope: SettingsScope) => scope === "global" ? "settings/global" : "settings";
+
 export async function readSettings(
   token: string,
   signal: AbortSignal,
+  scope: SettingsScope = "workspace",
 ): Promise<SettingsReply> {
   return (await (
-    await request("settings", token, undefined, signal)
+    await request(settingsPath(scope), token, undefined, signal)
   ).json()) as SettingsReply;
 }
 
@@ -16,9 +20,10 @@ export async function saveSettings(
   values: SettingsValues,
   apiKey = "",
   clearApiKey = false,
+  scope: SettingsScope = "workspace",
 ): Promise<SettingsReply> {
   return (await (
-    await request("settings", token, {
+    await request(settingsPath(scope), token, {
       revision,
       values,
       api_key: apiKey,
@@ -30,9 +35,10 @@ export async function saveSettings(
 export async function resetSettings(
   token: string,
   revision: string,
+  scope: SettingsScope = "workspace",
 ): Promise<SettingsReply> {
   return (await (
-    await request("settings/reset", token, { revision })
+    await request(`${settingsPath(scope)}/reset`, token, { revision })
   ).json()) as SettingsReply;
 }
 

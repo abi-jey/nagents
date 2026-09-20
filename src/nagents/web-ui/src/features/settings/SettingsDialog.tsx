@@ -16,6 +16,7 @@ export function SettingsDialog({
   const confirmationHeading = useRef<HTMLHeadingElement>(null);
   const [confirmation, setConfirmation] = useState<"" | "refresh" | "reset">("");
   const { snapshot, draft, errors, disabled, pending, loading } = settings;
+  const global = settings.scope === "global";
 
   useEffect(() => {
     const element = dialog.current;
@@ -80,10 +81,10 @@ export function SettingsDialog({
     >
       <header className="settings-heading">
         <h2 id="settings-title" ref={heading} tabIndex={-1}>
-          Settings
+          {global ? "Global settings" : "Workspace settings"}
         </h2>
         <p id="settings-description">
-          Applies to your next run or recording. Saved with workspace data.
+          {global ? "Defaults shared by workspaces in this installation. Existing workspace overrides take priority." : "Overrides for this workspace. Reset to inherit global defaults."}
         </p>
       </header>
       <form
@@ -111,8 +112,8 @@ export function SettingsDialog({
                   : settings.notice ||
                     (snapshot
                       ? snapshot.persisted
-                        ? "Saved workspace overrides are active."
-                        : "Using startup defaults. No saved overrides."
+                        ? (global ? "Saved global defaults are active." : "Saved workspace overrides are active.")
+                        : "Using inherited defaults. No saved overrides."
                       : "Settings have not loaded.")}
             </div>
             {settings.blocked && !pending && (
@@ -158,12 +159,12 @@ export function SettingsDialog({
                 tabIndex={-1}
               >
                 {confirmation === "reset"
-                  ? "Restore startup defaults?"
+                  ? (global ? "Restore startup defaults?" : "Use global defaults?")
                   : "Discard draft and refresh?"}
               </h3>
               <p>
                 {confirmation === "reset"
-                  ? "This removes saved workspace overrides and discards your draft. The server's trusted startup defaults apply to your next run or recording."
+                  ? (global ? "This removes saved global defaults. Workspace overrides are kept." : "This removes saved workspace overrides and discards your draft. Global defaults apply to your next run or recording.")
                   : "This replaces your unsaved draft with the latest server settings. It does not change any saved settings or retry your save."}
               </p>
               {confirmation === "reset" && snapshot && (
@@ -323,7 +324,7 @@ export function SettingsDialog({
                     </p>
                   )}
                 </div>
-                <div className="settings-field">
+                {!global && <div className="settings-field">
                   <label htmlFor="settings-provider-key">API key</label>
                   <input
                     id="settings-provider-key"
@@ -353,17 +354,21 @@ export function SettingsDialog({
                       Remove the stored key and fall back to the environment
                     </label>
                   )}
-                </div>
+                </div>}
+                {global && <p>Global credentials use the environment variable or saved-login reference. Key values can be stored in workspace settings.</p>}
               </fieldset>
               <fieldset
                 className="settings-group"
                 disabled={disabled || !!confirmation}
               >
                 <legend>Model and profile</legend>
+                <label className="settings-checkbox"><input id="settings-read_only" type="checkbox" checked={draft.read_only || !!snapshot.read_only_locked} disabled={disabled || !!confirmation || !!snapshot.read_only_locked} onChange={(event) => settings.update("read_only", event.target.checked)} />Read-only workspace</label>
+                <p>{snapshot.read_only_locked ? "Read-only operation is required by the startup configuration." : "Limit agents to inspection: file changes, shell, and custom tools remain blocked."}</p>
                 <div className="settings-field">
                   <label htmlFor="settings-agent">Agent profile</label>
                   <select
                     id="settings-agent"
+                    disabled={global}
                     value={draft.agent}
                     aria-describedby={`settings-agent-help${errors.agent ? " settings-agent-error" : ""}`}
                     aria-invalid={!!errors.agent}
@@ -380,13 +385,11 @@ export function SettingsDialog({
                     )}
                     {snapshot.profiles.map((profile) => (
                       <option key={profile.name} value={profile.name}>
-                        {profile.name} ({profile.mode})
+                        {profile.name}{profile.mode === "reviewer" ? " (read-only)" : ""}
                       </option>
                     ))}
                   </select>
-                  <p id="settings-agent-help">
-                    Server profiles preset their model; you can override it below.
-                  </p>
+                  <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Server profiles preset their model; you can override it below."}</p>
                   {errors.agent && (
                     <p id="settings-agent-error" className="error-text">
                       {errors.agent}
@@ -394,13 +397,13 @@ export function SettingsDialog({
                   )}
                 </div>
                 {/* A new connection replaces and aborts discovery, not the draft. */}
-                <ModelField
+                {global ? <div className="settings-field"><label htmlFor="global-model">Model ID</label><input id="global-model" value={draft.model} onChange={(event) => settings.update("model", event.target.value)} aria-invalid={!!errors.model} />{errors.model && <p className="error-text">{errors.model}</p>}</div> : <ModelField
                   key={JSON.stringify([settings.token, snapshot.connection])}
                   token={settings.token}
                   model={draft.model}
                   error={errors.model}
                   update={(model) => settings.update("model", model)}
-                />
+                />}
               </fieldset>
               <DictationSettings
                 config={snapshot.dictation}
@@ -409,6 +412,17 @@ export function SettingsDialog({
                 disabled={disabled || !!confirmation}
                 update={settings.update}
               />
+              <fieldset className="settings-group" disabled={disabled || !!confirmation}>
+                <legend>Message submission</legend>
+                <div className="settings-field"><label htmlFor="settings-submit_mode">When this conversation is working</label>
+                  <select id="settings-submit_mode" value={draft.submit_mode} aria-invalid={!!errors.submit_mode} aria-describedby="settings-submit-help" onChange={(event) => settings.update("submit_mode", event.target.value)}>
+                    <option value="queue">Queue · finish current work first (default)</option>
+                    <option value="interrupt">Interrupt · stop current work, then continue</option>
+                  </select>
+                  <p id="settings-submit-help">New web messages are always saved to the queue. Interrupt also cancels the active run in this same conversation and waits for cleanup before processing queued messages.</p>
+                  {errors.submit_mode && <p className="error-text">{errors.submit_mode}</p>}
+                </div>
+              </fieldset>
               <details className="settings-disclosure">
                 <summary>Execution limits</summary>
                 <fieldset className="settings-group" disabled={disabled || !!confirmation}>
@@ -526,14 +540,14 @@ export function SettingsDialog({
                   </p>
                 </section>
                 <section className="settings-reset" aria-labelledby="settings-reset-title">
-                  <h3 id="settings-reset-title">Startup defaults</h3>
-                  <p>Reset removes saved overrides from workspace data, not just this draft.</p>
+                  <h3 id="settings-reset-title">{global ? "Startup defaults" : "Inherited defaults"}</h3>
+                  <p>Reset removes saved settings in this scope, not just this draft.</p>
                   <button
                     type="button"
                     disabled={disabled || settings.needsRefresh || !!confirmation}
                     onClick={() => setConfirmation("reset")}
                   >
-                    Reset to startup defaults
+                    {global ? "Reset global defaults" : "Use global defaults"}
                   </button>
                 </section>
               </details>

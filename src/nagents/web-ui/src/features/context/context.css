@@ -112,3 +112,6 @@
   font-size: 11px;
   line-height: 1.5;
 }
+.context-live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--state-active); flex-shrink: 0; }
+.context-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; font-size: 12px; }
+.context-panel-heading button { min-height: 24px; padding: 2px 6px; font-size: 11px; }

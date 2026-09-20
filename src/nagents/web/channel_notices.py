@@ -18,11 +18,11 @@ from typing import Literal
 from nagents.channels import ChannelExecutionEvent
 from nagents.channels import dispatch_channel_execution_event
 from nagents.channels import sanitize_channel_tool_arguments
-from nagents.channels.store import finish_on_cancel
 from nagents.events import Event
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 
+from ._async import finish_on_cancel
 from .channel_privacy import CredentialProtectionError
 
 if TYPE_CHECKING:

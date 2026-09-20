@@ -8,8 +8,9 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from nagents.channels.runtime import _activity
-from nagents.channels.store import finish_on_cancel
 from nagents.channels.types import ChannelActivity
+
+from ._async import finish_on_cancel
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

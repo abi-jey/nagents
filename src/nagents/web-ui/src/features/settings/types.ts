@@ -20,6 +20,8 @@ export type SettingsValues = {
   compact_trigger: string;
   compact_tokens: number;
   compact_messages: number;
+  submit_mode: string;
+  read_only: boolean;
 };
 
 export type SettingsProfile = {
@@ -39,6 +41,7 @@ export type SettingsConnection = {
 };
 
 export type SettingsReply = {
+  read_only_locked?: boolean;
   values: SettingsValues;
   defaults: SettingsValues;
   profiles: SettingsProfile[];

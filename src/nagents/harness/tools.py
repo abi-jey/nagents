@@ -47,6 +47,11 @@ from nagents.types import ToolCall
 
 from .types import ToolOutput
 
+READ_ONLY_TOOLS = frozenset(
+    {"read_file", "list_files", "find", "search", "skill", "schedule_wakeup", "wake_up_in", "compact_history"}
+)
+MODIFYING_TOOLS = frozenset({"edit", "write", "shell"})
+
 if TYPE_CHECKING:
     from .runtime import Harness
 
@@ -129,28 +134,19 @@ class HarnessExecutor(ToolExecutor):
         call = copy.deepcopy(tool_call)
         token = self.tools.call_id.set(call.id)
         try:
+            self.harness.tool_settings.load()
+            if not self.harness.tool_settings.enabled(self.harness.config.agent, call.name):
+                raise PermissionError(f"Tool {call.name} is disabled for this agent in .ngn/tools.yaml")
             tool = self._registry.get(call.name)
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)
             if call.name == "delegate" and not self.harness.can_delegate:
                 raise PermissionError("Delegation is disabled at the configured subagent depth limit")
             if self.harness.config.demo and (
-                not builtin
-                or call.name
-                not in {
-                    "list_files",
-                    "find",
-                    "read_file",
-                    "search",
-                    "skill",
-                    "demo_preview",
-                    "delegate",
-                    "schedule_wakeup",
-                    "wake_up_in",
-                }
+                not builtin or call.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}
             ):
                 raise PermissionError("OFFLINE DEMO: writes, shell, and custom tools are disabled")
-            if self.harness.mode == "reviewer" and (not builtin or call.name in {"edit", "write", "shell"}):
-                raise PermissionError("reviewer profile denies edits, shell, and custom tools")
+            if self.harness.mode == "reviewer" and (not builtin or call.name in MODIFYING_TOOLS):
+                raise PermissionError("Read-only mode denies edits, shell, and custom tools")
             if self.harness._is_subagent and not builtin and not self.harness.supports_child_custom_tools:
                 raise PermissionError("Subagents do not support custom plugin/tool execution")
             if tool is not None:
@@ -206,6 +202,7 @@ class CodingTools:
             self.shell,
             self.skill,
             self.schedule_wakeup,
+            self.compact_history,
         ):
             self.harness.agent.register_tool(function)
             self.builtins[function.__name__] = function
@@ -214,6 +211,19 @@ class CodingTools:
         if self.harness.config.demo:
             self.harness.agent.register_tool(self.demo_preview)
             self.builtins["demo_preview"] = self.demo_preview
+
+    async def compact_history(self) -> dict[str, JsonValue]:
+        """Request history compaction in this conversation before the next model round, after pending tool calls finish."""
+        agent = self.harness.agent
+        if self.harness._busy != "run" or not agent._active_runs:
+            raise RuntimeError("History compaction requests require an active conversation")
+        if agent.compactor is None and agent.compaction_strategy is None:
+            raise ValueError("No compactor is configured for this agent")
+        agent.trigger_compaction(self.harness.session_id)
+        return {
+            "status": "requested",
+            "message": "History will be compacted before the next model round in this conversation.",
+        }
 
     async def schedule_wakeup(
         self,
