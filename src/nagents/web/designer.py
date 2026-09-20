@@ -36,19 +36,20 @@ from nagents.designer.store import DesignStore
 from nagents.designer.store import Recorder
 from nagents.designer.store import TraceStore
 from nagents.events import ErrorEvent
-from nagents.harness.subagents import _await_cleanup
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 from nagents.observation import observer
 from nagents.provider.codex import CodexProvider
 from nagents.tools.registry import ToolRegistry
 
+from ._async import join_owned as _await_cleanup
 from .service import Pending
 from .service import Run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from nagents.harness.config import HarnessConfig
     from nagents.harness.types import ApprovalRequest
 
     from .service import WebState
@@ -75,7 +76,15 @@ class Designer:
         self.state = state
         self.files = DesignStore(state.harness.workspace)
         self.traces = TraceStore(state.harness.agent.session.db_path.parent / "designer.db")
-        self.config = replace(state.harness.config, data_dir=state.harness.config.data_dir / "designer")
+
+    @property
+    def config(self) -> HarnessConfig:
+        config = self.state.harness.config
+        return replace(
+            config,
+            data_dir=config.data_dir / "designer",
+            read_only=config.read_only or self.state.harness._permission_ceiling == "reviewer",
+        )
 
     def example(self) -> str:
         config = self.state.harness.config

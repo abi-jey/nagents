@@ -51,7 +51,7 @@ class TaskStarted:
     parent_session_id: str = ""
     child_session_id: str = ""
     depth: int = 1
-    profile: str = "agent"
+    profile: str = "assistant"
     followup: int = 0
     activation: int = 0
     trigger: str = "delegation"
@@ -67,7 +67,7 @@ class TaskCompleted:
     parent_session_id: str = ""
     child_session_id: str = ""
     depth: int = 1
-    profile: str = "agent"
+    profile: str = "assistant"
     followup: int = 0
     status: Literal["running", "completed", "failed", "cancelled"] = "completed"
     activation: int = 0
@@ -85,7 +85,7 @@ class TaskMessage:
     parent_session_id: str = ""
     child_session_id: str = ""
     depth: int = 1
-    profile: str = "agent"
+    profile: str = "assistant"
     followup: int = 1
 
 

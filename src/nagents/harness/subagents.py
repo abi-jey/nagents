@@ -19,13 +19,14 @@ from dataclasses import dataclass
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from typing import Literal
-from typing import TypeVar
 
+from nagents._async import join_owned as _await_cleanup
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.provider.codex import CodexProvider
 
 from .provider import HarnessProvider
+from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
 from .types import TaskCompleted
 from .types import TaskMessage
 from .types import TaskNotification
@@ -47,22 +48,6 @@ MAX_RESULT = 12_000
 CHILD_TIMEOUT = 300.0
 _ADJECTIVES = ("quiet", "bright", "calm", "gentle", "swift", "clear", "small", "warm")
 _NOUNS = ("maple", "cedar", "willow", "birch", "fern", "brook", "finch", "otter")
-_READ_ONLY_TOOLS = frozenset({"read_file", "list_files", "find", "search", "skill", "schedule_wakeup", "wake_up_in"})
-_T = TypeVar("_T")
-
-
-async def _await_cleanup(task: asyncio.Task[_T]) -> _T:
-    """Finish owned local work even if a second cancellation interrupts the waiter."""
-    cancelled = False
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-    result = task.result()
-    if cancelled:
-        raise asyncio.CancelledError
-    return result
 
 
 @dataclass
@@ -78,7 +63,7 @@ class TaskInfo:
     parent_task_id: str = ""
     parent_session_id: str = ""
     depth: int = 1
-    profile: str = "agent"
+    profile: str = "assistant"
     mode: str = "build"
     followups: int = 0
     activation: int = 0
@@ -185,7 +170,7 @@ class SubagentManager:
         ):
             raise ValueError(f"At most {MAX_CONCURRENT} subagents may run concurrently; retry after a child finishes")
 
-    async def delegate(self, prompt: str, agent: str = "agent") -> dict[str, str]:
+    async def delegate(self, prompt: str, agent: str = "assistant") -> dict[str, str]:
         """Start a general-purpose child and immediately return task_id, name, status.
         Continue your own work; its bounded result arrives as untrusted background
         data after your turn. Children inherit your permission ceiling and need
@@ -194,7 +179,7 @@ class SubagentManager:
 
         Args:
             prompt: A self-contained task; the child does not receive parent conversation history.
-            agent: Defaults to agent (general-purpose). Omit this argument or use agent, build, reviewer, or a configured profile; never pass an empty name.
+            agent: Defaults to assistant. Omit this argument or use an explicitly configured profile; never pass an empty name.
         """
         if not self.harness.can_delegate:
             raise PermissionError("Delegation is disabled at the configured subagent depth limit")

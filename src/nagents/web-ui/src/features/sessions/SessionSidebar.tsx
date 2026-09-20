@@ -4,6 +4,33 @@ import type { Session } from "../../types";
 import type { ReactNode } from "react";
 import { SessionMenu } from "./SessionMenu.js";
 
+function WorkspaceDialog({ workspace, name, demo, count, close, settings, settingsDisabled }: {
+  workspace: string; name: string; demo: boolean; count: number; close: () => void; settings: () => void; settingsDisabled: boolean;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    const previous = document.activeElement;
+    element?.showModal();
+    return () => {
+      element?.close();
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, []);
+  return <dialog ref={dialog} className="workspace-dialog" aria-labelledby="workspace-dialog-title"
+    onCancel={(event) => { event.preventDefault(); close(); }}>
+    <header><h2 id="workspace-dialog-title"><Icon name="folder" />{name}</h2>
+      <button type="button" autoFocus onClick={close} aria-label="Close workspace information"><Icon name="close" /></button>
+    </header>
+    <dl>
+      <dt>Workspace folder</dt><dd>{workspace || "Connecting…"}</dd>
+      <dt>Mode</dt><dd>{demo ? "Offline demo" : "Live provider"}</dd>
+      <dt>Saved sessions</dt><dd>{count}</dd>
+    </dl>
+    <footer><button type="button" disabled={settingsDisabled} onClick={() => { close(); settings(); }}><Icon name="settings" size={14} /> Workspace settings</button></footer>
+  </dialog>;
+}
+
 export function SessionSidebar({
   workspace,
   sessions,
@@ -19,7 +46,10 @@ export function SessionSidebar({
   trashDisabled,
   notice,
   settings,
+  globalSettings = settings,
   settingsDisabled,
+  tools = () => {},
+  toolsDisabled = settingsDisabled,
   channels,
   channelsDisabled,
   demo,
@@ -39,6 +69,9 @@ export function SessionSidebar({
   trashDisabled: boolean;
   notice?: ReactNode;
   settings: () => void;
+  globalSettings?: () => void;
+  tools?: () => void;
+  toolsDisabled?: boolean;
   settingsDisabled: boolean;
   channels: () => void;
   channelsDisabled: boolean;
@@ -47,6 +80,7 @@ export function SessionSidebar({
 }) {
   const panel = useRef<HTMLElement>(null);
   const [mobile, setMobile] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const workspaceName = workspace.split(/[\\/]/).filter(Boolean).at(-1) || "Workspace";
   useEffect(() => {
     const query = window.matchMedia("(max-width: 760px)");
@@ -107,6 +141,7 @@ export function SessionSidebar({
       <div className="sidebar-create">
       <button
         className="new-session"
+        aria-label="New session" title="New session"
         disabled={disabled || newDisabled}
         onClick={() => select()}
       >
@@ -120,6 +155,7 @@ export function SessionSidebar({
           <li key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
           <button
             className={`session ${selected === session.id ? "selected" : ""}`}
+            aria-label={session.title || "New session"}
             aria-current={selected === session.id ? "page" : undefined}
             disabled={disabled}
             onClick={() => select(session.id)}
@@ -142,29 +178,30 @@ export function SessionSidebar({
       <div className="sidebar-footer">
         {notice}
         <nav className="sidebar-utilities" aria-label="Workspace controls">
-          <button className="sidebar-utility trash-trigger" disabled={trashDisabled} onClick={trash} aria-haspopup="dialog">
+          <button className="sidebar-utility trash-trigger" title="Trash" aria-label="Trash" disabled={trashDisabled} onClick={trash} aria-haspopup="dialog">
             <Icon name="trash" /><span>Trash</span><Icon name="chevron" size={13} />
           </button>
-          <button className="sidebar-utility settings-trigger" disabled={settingsDisabled} onClick={settings} aria-haspopup="dialog">
-            <Icon name="settings" /><span>Settings</span><Icon name="chevron" size={13} />
+          <button className="sidebar-utility settings-trigger" title="Global settings" aria-label="Global settings" disabled={settingsDisabled} onClick={globalSettings} aria-haspopup="dialog">
+            <Icon name="settings" /><span>Global settings</span><Icon name="chevron" size={13} />
           </button>
-          <button className="sidebar-utility channels-trigger" disabled={channelsDisabled} onClick={channels} aria-haspopup="dialog">
+          <button className="sidebar-utility channels-trigger" title="Channels" aria-label="Channels" disabled={channelsDisabled} onClick={channels} aria-haspopup="dialog">
             <Icon name="channels" /><span>Channels</span><Icon name="chevron" size={13} />
           </button>
+          <button className="sidebar-utility tools-trigger" title="Tools" aria-label="Tools" disabled={toolsDisabled} onClick={tools} aria-haspopup="dialog">
+            <Icon name="tools" /><span>Tools</span><Icon name="chevron" size={13} />
+          </button>
         </nav>
-        <details className="workspace-info">
-          <summary title={workspace || "Workspace information"}>
+        <div className="workspace-info">
+          <button type="button" className="workspace-trigger" title={workspace || "Workspace information"}
+            aria-label={`Workspace information: ${workspaceName}`} aria-haspopup="dialog" onClick={() => setWorkspaceOpen(true)}>
             <span className="workspace-icon"><Icon name="folder" /></span>
-            <span className="workspace-caption"><strong>{workspaceName}</strong><span className={`mode-badge${demo ? " demo" : ""}`}>{demo ? "Offline demo" : "Live provider"}</span></span>
+            <span className="workspace-caption"><strong>{workspaceName}</strong></span>
             <Icon name="chevron" size={13} />
-          </summary>
-          <div className="sidebar-info-content" role="region" aria-label="Workspace information" tabIndex={0}>
-            <p>{workspace || "Connecting…"}</p>
-            <p>Shared workspace and saved sessions. Shell is not sandboxed.</p>
-          </div>
-        </details>
+          </button>
+        </div>
       </div>
     </aside>
+    {workspaceOpen && <WorkspaceDialog workspace={workspace} name={workspaceName} demo={demo} count={sessions.length} close={() => setWorkspaceOpen(false)} settings={settings} settingsDisabled={settingsDisabled} />}
     </>
   );
 }

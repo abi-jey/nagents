@@ -15,7 +15,7 @@ from pydantic import model_validator
 from nagents.harness.config import API_NAMES
 from nagents.harness.config import PROVIDERS
 
-BUILTINS = ("read_file", "list_files", "find", "search", "edit", "write", "shell")
+BUILTINS = ("read_file", "list_files", "find", "search", "edit", "write", "shell", "compact_history")
 IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 
 

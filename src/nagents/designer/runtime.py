@@ -152,7 +152,7 @@ class DesignedHarness(Harness):
         self._design_initialized = False
         provider_name = self.definition.provider or design.defaults.provider
         provider = design.providers[provider_name]
-        profiles = {name: AgentProfile() for name in design.agents if name not in {"agent", "build", "reviewer"}}
+        profiles = {name: AgentProfile() for name in design.agents if name != "assistant"}
         configured = replace(
             config,
             agent=self.agent_id,
@@ -223,6 +223,8 @@ class DesignedHarness(Harness):
             for selection in self.definition.mcp:
                 if self.config.demo:
                     continue
+                if self.mode == "reviewer":
+                    raise PermissionError("Read-only agents cannot start MCP subprocesses")
                 server = self.design.mcp_servers[selection.server]
                 await self.approve(
                     "mcp_connect",
@@ -297,6 +299,6 @@ class DesignedHarness(Harness):
                     await self.mcp.disconnect_all()
 
             task = asyncio.create_task(cleanup())
-            from nagents.harness.subagents import _await_cleanup
+            from nagents._async import join_owned as _await_cleanup
 
             await _await_cleanup(task)

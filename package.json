@@ -1,0 +1,7 @@
+{
+  "name": "nagents-workspace",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix src/nagents/web-ui run build"
+  }
+}

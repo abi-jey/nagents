@@ -23,13 +23,13 @@ from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelSend
 from nagents.channels.types import ChannelValue
 
+from ._async import join_owned as _join
 from .catalog import ChannelCatalog
 from .channel_activity import ChannelActivities
 from .channel_management import ChannelManagement
 from .channel_privacy import CredentialGuard
 from .channel_privacy import CredentialProtectionError
 from .routing import RoutingStore
-from .settings import _join
 
 if TYPE_CHECKING:
     import sqlite3

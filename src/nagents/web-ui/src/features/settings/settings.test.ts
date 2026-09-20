@@ -5,33 +5,14 @@ import { createDraft, parseDraft, selectProfile } from "./draft.js";
 import { readSettings, resetSettings, saveSettings, settingsFailure } from "./transport.js";
 import type { SettingsReply, SettingsValues } from "./types.js";
 import { dictationConfig } from "../dictation/testFixtures.js";
+import { settingsValues } from "./testFixtures.js";
 
-const values: SettingsValues = {
-  model: "startup-model",
-  agent: "build",
-  provider: "mock",
-  base_url: "",
-  api: "responses",
-  auth: "auto",
-  api_key_env: "MOCK_API_KEY",
-  shell_timeout: 30,
-  max_output: 16384,
-  max_file_bytes: 1048576,
-  max_tool_rounds: 100,
-  max_subagent_depth: 2,
-  dictation_enabled: false,
-  dictation_model: "gpt-4o-mini-transcribe",
-  dictation_language: "",
-  dictation_max_seconds: 60,
-  compact_trigger: "auto",
-  compact_tokens: 200000,
-  compact_messages: 100,
-};
+const values: SettingsValues = settingsValues({ provider: "mock", api: "responses", api_key_env: "MOCK_API_KEY" });
 const reply: SettingsReply = {
   values,
   defaults: values,
   profiles: [
-    { name: "build", mode: "build", model: "" },
+    { name: "assistant", mode: "build", model: "" },
     { name: "review", mode: "reviewer", model: "review-model" },
   ],
   revision: 'opaque/revision:01+"not-a-counter"',
@@ -102,7 +83,7 @@ test("profiles come from the server and only nonempty profile models preset the 
   const selected = selectProfile(draft, "review", reply.profiles);
   assert.equal(selected.agent, "review");
   assert.equal(selected.model, "review-model");
-  assert.equal(draft.agent, "build");
+  assert.equal(draft.agent, "assistant");
   const overridden = { ...selected, model: "explicit-model" };
   const parsed = parseDraft(overridden, reply.profiles);
   assert.equal(parsed.ok && parsed.values.model, "explicit-model");
@@ -284,4 +265,13 @@ test("non-JSON HTTP failures retain their status", async (t) => {
     assert.match(cause.message, /503/);
     return true;
   });
+});
+
+test("message submission defaults to queue and accepts only explicit queue or interrupt", () => {
+  const draft = createDraft(values);
+  assert.equal(draft.submit_mode, "queue");
+  const changed = parseDraft({ ...draft, submit_mode: "interrupt" }, reply.profiles);
+  assert.ok(changed.ok);
+  assert.equal(changed.values.submit_mode, "interrupt");
+  assert.equal(parseDraft({ ...draft, submit_mode: "discard" }, reply.profiles).ok, false);
 });

@@ -1,4 +1,4 @@
-type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more";
+type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools";
 
 const paths: Record<IconName, string> = {
   plus: "M10 4v12M4 10h12",
@@ -11,6 +11,7 @@ const paths: Record<IconName, string> = {
   menu: "M3 5h14M3 10h14M3 15h14",
   chevron: "m7 4 6 6-6 6",
   more: "M4 10h.01M10 10h.01M16 10h.01",
+  tools: "M12 3a5 5 0 0 0-6 6L2.5 13.5a2 2 0 0 0 4 4L11 13a5 5 0 0 0 6-6l-3 3-4-4Z",
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

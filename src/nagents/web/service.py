@@ -11,6 +11,7 @@ from contextlib import suppress
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import anyio
@@ -19,9 +20,12 @@ from starlette.responses import StreamingResponse
 
 from nagents.cli import _event_record
 from nagents.cli import _json_default
+from nagents.compaction import estimate_tokens
+from nagents.context_stats import ContextComponent
 from nagents.events import ErrorEvent
 from nagents.harness.runtime import _HarnessSession
 
+from ._async import join_owned as _join
 from .channel_host import ChannelHost
 from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
@@ -29,7 +33,6 @@ from .design_channels import DesignedChannels
 from .dictation import WebDictation
 from .history import WebHistory
 from .replay import RunReplay
-from .settings import _join
 from .subscriptions import EventBus
 from .trash import SessionTrash
 from .wakeups import Chain
@@ -83,6 +86,7 @@ class Run:
     drafts: dict[str, dict[str, object]] = field(default_factory=dict)
     draft_sizes: dict[str, int] = field(default_factory=dict)
     draft_bytes: int = 0
+    _context_reply_live: bool = False
     replay: RunReplay = field(default_factory=RunReplay)
 
     def snapshot(self) -> dict[str, object]:
@@ -98,6 +102,14 @@ class Run:
             **self.replay.snapshot(),
         }
 
+    @property
+    def context_reply(self) -> str:
+        if self._context_reply_live:
+            for key, record in reversed(self.drafts.items()):
+                if key.startswith(":") and key.endswith(":text_chunk"):
+                    return str(record.get("chunk", ""))
+        return ""
+
     def remember(self, record: dict[str, object]) -> None:
         self.replay.append(record)
         event = record.get("event")
@@ -106,6 +118,11 @@ class Run:
         scope = (
             f"{record.get('task_id', extra.get('task_id', ''))}:{record.get('activation', extra.get('activation', 0))}"
         )
+        if not record.get("task_id", extra.get("task_id", "")):
+            if event == "text_chunk" and not any(key.startswith(f"{scope}:call:") for key in self.drafts):
+                self._context_reply_live = True
+            elif event in {"text_done", "tool_call", "tool_result", "done", "compaction_started"}:
+                self._context_reply_live = False
         if event in {"text_chunk", "reasoning_chunk"}:
             key = f"{scope}:{event}"
             old = self.drafts.get(key, {})
@@ -225,12 +242,28 @@ class WebState:
     async def context_stats(self, session_id: str) -> dict[str, object]:
         """Read-only estimated context breakdown for a root session.
 
-        Safe to call at any idle time: it reads persisted history and the
-        configured request inputs without mutating state or exposing credentials.
+        Reads persisted history and the active agent's configuration, plus its
+        bounded uncommitted reply estimate. Safe while a run is active.
         """
         if session_id not in {session.id for session in await self.list_sessions()}:
             raise HTTPException(404, "Session not found in this workspace.")
-        return (await self.harness.context_stats(session_id)).as_dict()
+        active = self.active
+        if active is not None and active.session_id == session_id and self.running_harness.session_id == session_id:
+            stats = await self.running_harness.agent.context_stats(session_id)
+        else:
+            stats = await self.designed_channels.context_stats(session_id)
+        if active is not None and self.active is active and active.session_id == session_id and active.context_reply:
+            tokens = estimate_tokens(active.context_reply) + 4
+            stats = replace(
+                stats,
+                components=(
+                    *stats.components,
+                    ContextComponent("streaming_reply", "Streaming reply (not yet saved)", tokens),
+                ),
+                total_tokens=stats.total_tokens + tokens,
+                remaining_tokens=stats.remaining_tokens - tokens if stats.remaining_tokens is not None else None,
+            )
+        return stats.as_dict()
 
     def user_message(self, run_id: str, record: dict[str, object]) -> None:
         run = self.active

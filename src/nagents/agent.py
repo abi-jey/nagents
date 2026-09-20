@@ -26,6 +26,7 @@ from typing import Protocol
 from typing import Self
 from typing import runtime_checkable
 
+from ._async import join_owned as _join_cleanup
 from .batch import BatchClient
 from .batch import BatchConfig
 from .batch import BatchRequest
@@ -115,19 +116,6 @@ logger = logging.getLogger(__name__)
 @runtime_checkable
 class _AsyncClosable(Protocol):
     async def aclose(self) -> None: ...
-
-
-async def _join_cleanup(task: asyncio.Task[None]) -> None:
-    """Finish shared cleanup before propagating cancellation of its caller."""
-    cancelled: asyncio.CancelledError | None = None
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as error:
-            cancelled = error
-    task.result()
-    if cancelled is not None:
-        raise cancelled
 
 
 class UnsupportedAudioBehavior(Enum):
@@ -359,6 +347,7 @@ class Agent:
 
         # Flag to request compaction during run (set by trigger_compaction())
         self._compaction_requested: bool = False
+        self._session_compaction_requests: set[str] = set()
 
         self._initialized = False
         self._http_logger: FileHTTPLogger | None = None
@@ -1297,7 +1286,7 @@ class Agent:
             session_id=session_id,
         )
 
-    def trigger_compaction(self) -> None:
+    def trigger_compaction(self, session_id: str = "") -> None:
         """Request compaction before the next generation cycle.
 
         Call this to trigger compaction before the next model call.
@@ -1305,13 +1294,18 @@ class Agent:
         before the next generation round.
 
         Useful when a tool knows it has generated a lot of context.
+        Pass the active session ID to scope the request to that conversation.
+        Scoped requests are discarded when its run ends or is cancelled.
 
         Example:
             # During run(), call this before the next generation:
             agent.trigger_compaction()
             # Compaction will happen before next model call
         """
-        self._compaction_requested = True
+        if session_id:
+            self._session_compaction_requests.add(session_id)
+        else:
+            self._compaction_requested = True
 
     async def compact(self, session_id: str) -> "CompactionDoneEvent":
         """Manually trigger compaction for a session.
@@ -1543,6 +1537,7 @@ class Agent:
                     except BaseException as error:
                         error.add_note(f"{type(plugin).__name__}.after_run failed")
                         errors.append(error)
+                self._session_compaction_requests.discard(session_id)
                 if errors:
                     raise BaseExceptionGroup("Agent run cleanup failed", errors)
 
@@ -1655,10 +1650,11 @@ class Agent:
             # Apply context compaction if configured
             compaction = (
                 self._do_compact(messages, session_id)
-                if self._compaction_requested
+                if self._compaction_requested or session_id in self._session_compaction_requests
                 else self._maybe_compact(messages, session_id)
             )
             self._compaction_requested = False
+            self._session_compaction_requests.discard(session_id)
             async for event in compaction:
                 yield event
                 # Update messages if compaction was done

@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 import anyio
 from fastapi import HTTPException
 
-from nagents.channels.store import finish_on_cancel
-
+from ._async import finish_on_cancel
+from ._async import join_owned as _join
 from .deletion import _guard_process
 from .deletion import _guard_rows
 from .deletion import _quarantine_pending
@@ -26,7 +26,6 @@ from .deletion import _remove_content
 from .deletion import _repoint_mains
 from .deletion import _selection
 from .routing import RoutingStore
-from .settings import _join
 
 if TYPE_CHECKING:
     import sqlite3

@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING
 import anyio
 from fastapi import HTTPException
 
-from nagents.channels.store import finish_on_cancel
-
+from ._async import finish_on_cancel
 from .routing import RoutingStore
 
 if TYPE_CHECKING:

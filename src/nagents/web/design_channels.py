@@ -18,13 +18,15 @@ from nagents.designer.store import Recorder
 from nagents.designer.store import TraceStore
 from nagents.observation import observer
 
-from .settings import _join
+from ._async import join_owned as _join
 
 if TYPE_CHECKING:
     import sqlite3
     from collections.abc import AsyncIterator
 
+    from nagents.context_stats import ContextStats
     from nagents.harness import Harness
+    from nagents.types import ToolDefinition
 
     from .service import Run
     from .service import WebState
@@ -110,13 +112,53 @@ class DesignedChannels:
         return await self.state.channels.store._transaction(resolve)
 
     async def pinned(self, session_id: str) -> bool:
-        def read(db: sqlite3.Connection) -> bool:
+        return bool((await self.definition(session_id))[1])
+
+    async def definition(self, session_id: str) -> tuple[str, str]:
+        def read(db: sqlite3.Connection) -> tuple[str, str]:
             with closing(
-                db.execute("SELECT 1 FROM ngn_design_sessions WHERE session_id = ? AND source != ''", (session_id,))
+                db.execute("SELECT agent, source FROM ngn_design_sessions WHERE session_id = ?", (session_id,))
             ) as cursor:
-                return cursor.fetchone() is not None
+                row = cursor.fetchone()
+                return (str(row[0]), str(row[1])) if row else ("", "")
 
         return await self.state.channels.store._transaction(read)
+
+    def assemble(
+        self, session_id: str, agent: str, source: str, recorder: Recorder
+    ) -> tuple[DesignedHarness, list[ToolDefinition]]:
+        harness = DesignedHarness(self.state.harness.config, parse(source), agent, recorder)
+        if self.state.harness._permission_ceiling == "reviewer":
+            harness._permission_ceiling = "reviewer"
+        harness.session_id = session_id
+        harness.agent.session = self.state.history
+        harness.agent.plugins.append(self.state.history.identity)
+        harness.approval_handler = self.state.approve
+        installed: list[ToolDefinition] = []
+        for tool in self.state.channels.tools:
+            if (
+                tool.name in {"channel_list", "channel_send", "channel_action"}
+                and tool.func is not None
+                and not any(item.name == tool.name for item in installed)
+            ):
+                installed.append(
+                    harness.agent.tool_registry.register(
+                        tool.func, name=tool.name, description=tool.description, parameters=tool.parameters
+                    )
+                )
+        harness.agent.plugins.append(self.state.channels.instructions)
+        return harness, installed
+
+    async def context_stats(self, session_id: str) -> ContextStats:
+        agent, source = await self.definition(session_id)
+        if not source:
+            return await self.state.harness.agent.context_stats(session_id)
+        harness, _ = self.assemble(session_id, agent, source, Recorder())
+        try:
+            # Metadata/history only: no initialization, provider request or MCP startup.
+            return await harness.agent.context_stats(session_id)
+        finally:
+            await _join(asyncio.create_task(harness.close()))
 
     @asynccontextmanager
     async def execution(self, run: Run) -> AsyncIterator[Harness]:
@@ -125,22 +167,9 @@ class DesignedChannels:
             yield self.state.harness
             return
         recorder = Recorder()
-        harness = DesignedHarness(self.state.harness.config, parse(source), agent, recorder)
-        harness.session_id = run.session_id
-        harness.agent.session = self.state.history
-        harness.agent.plugins.append(self.state.history.identity)
-        harness.approval_handler = self.state.approve
+        harness, installed = self.assemble(run.session_id, agent, source, recorder)
         host = self.state.channels
-        installed = []
-        for tool in host.tools[:]:
-            if tool.name in {"channel_list", "channel_send", "channel_action"} and tool.func is not None:
-                installed.append(
-                    harness.agent.tool_registry.register(
-                        tool.func, name=tool.name, description=tool.description, parameters=tool.parameters
-                    )
-                )
         host.tools.extend(installed)
-        harness.agent.plugins.append(host.instructions)
         token = observer.set(recorder)
         finished = asyncio.Event()
 

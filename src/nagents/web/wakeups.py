@@ -16,7 +16,7 @@ from datetime import timedelta
 
 from nagents.cli import _json_default
 
-from .settings import _join
+from ._async import join_owned as _join
 
 MAX_PENDING = 32
 MAX_ACTIVATIONS = 8

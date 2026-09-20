@@ -226,7 +226,12 @@ test("restart with an empty registry does not reconstruct a tree or verified del
 test("new session with no history and no retained tasks keeps the normal empty conversation", () => {
   const entries = fromHistory(snapshot());
   assert.deepEqual(entries, []);
-  assert.match(markup(entries), /Start with the workspace/);
+  assert.match(markup(entries), /class="usage-tip"/);
+  assert.doesNotMatch(markup([{ id: "first-message", kind: "user", text: "Hello" }]), /class="usage-tip"/);
+  assert.doesNotMatch(
+    markup(entries),
+    /Start with the workspace|Ask ngn to inspect|Live provider requests may incur costs/,
+  );
   assert.doesNotMatch(
     markup(entries),
     /Recorded background context|Retained task registry/,

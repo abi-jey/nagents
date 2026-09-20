@@ -21,7 +21,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from nagents.cli import _json_default
 
-from .settings import _join
+from ._async import join_owned as _join
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable

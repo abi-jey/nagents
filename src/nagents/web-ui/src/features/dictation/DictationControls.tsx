@@ -10,7 +10,6 @@ export type DictationControlsProps = {
   stop: () => void;
   cancel: () => void;
   transcribe: () => void;
-  settings: () => void;
 };
 
 function RecordingTime() {
@@ -25,31 +24,19 @@ function RecordingTime() {
 }
 
 export function DictationControls(props: DictationControlsProps) {
-  const { state, config, unsupported, disabled } = props;
+  const { state, config } = props;
   const active = state.phase !== "idle" && state.phase !== "error";
-  const unavailable = unsupported || (!config ? "Open Settings to load dictation availability." :
-    !config.available || !config.enabled || !config.admin_enabled ? config.status || "Dictation is unavailable. Check Settings, or keep typing." : "");
   const status = state.phase === "permission" ? "Waiting for microphone permission. Cancel is available." :
     state.phase === "recording" ? `Recording. Stop to transcribe, or cancel. Limit: ${config?.max_seconds} seconds.` :
     state.phase === "stopping" ? "Finishing recording…" :
     state.phase === "transcribing" ? "Transcribing with the server's OpenAI API-key connection…" :
     state.phase === "recorded" ? `Recording stopped at the limit (${state.seconds.toFixed(1)} seconds). Nothing uploaded. Choose Transcribe or discard.` :
     state.phase === "review" ? "Transcription ready. Review, insert into your draft, then Send." :
-    state.phase === "idle" ? state.message || unavailable : "";
+    state.phase === "idle" ? state.message : "";
 
+  if (state.phase === "idle") return state.message ? <span id="dictation-status" className="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.message}</span> : null;
   return (
     <div className="dictation-actions" role="group" aria-label="Microphone dictation" data-phase={state.phase}>
-      {!active && (
-        <button type="button" className="dictation-mic icon-button" aria-label="Record dictation"
-          title={unavailable || "Record dictation"} aria-describedby="dictation-help dictation-status"
-          disabled={disabled || !!unavailable} onClick={props.start}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-            <rect x="9" y="2" width="6" height="12" rx="3" />
-            <path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8" />
-          </svg>
-        </button>
-      )}
-      {!active && unavailable && <button type="button" title={unavailable} aria-describedby="dictation-status" disabled={disabled} onClick={props.settings}>Mic setup</button>}
       <span className="dictation-phase" aria-hidden="true">
         {state.phase === "recording" ? <RecordingTime /> :
           state.phase === "permission" ? "Permission…" :

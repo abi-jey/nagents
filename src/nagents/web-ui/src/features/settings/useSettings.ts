@@ -13,6 +13,7 @@ import {
   settingsFailure,
 } from "./transport";
 import type { SettingsReply } from "./types";
+import type { SettingsScope } from "./transport";
 
 export function useSettings({
   token,
@@ -26,6 +27,8 @@ export function useSettings({
   accept: (reply: SettingsReply) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<SettingsScope>("workspace");
+  const scopeRef = useRef<SettingsScope>("workspace");
   const [snapshot, setSnapshot] = useState<SettingsReply>();
   const [draft, setDraft] = useState<SettingsDraft>();
   const [apiKey, setApiKey] = useState("");
@@ -59,7 +62,7 @@ export function useSettings({
     setErrors({});
     setError("");
     setNeedsRefresh(false);
-    accept(reply);
+    if (scopeRef.current === "workspace") accept(reply);
   }
 
   async function refresh() {
@@ -70,7 +73,7 @@ export function useSettings({
     setLoading(true);
     setNotice("");
     try {
-      const reply = await readSettings(token, controller.signal);
+      const reply = await readSettings(token, controller.signal, scopeRef.current);
       if (!controller.signal.aborted) receive(reply);
     } catch (cause) {
       if (!controller.signal.aborted) {
@@ -86,8 +89,9 @@ export function useSettings({
     }
   }
 
-  function show() {
+  function openScope(next: SettingsScope) {
     if (blocked || !token || writing.current) return;
+    scopeRef.current = next; setScope(next);
     setSnapshot(undefined);
     setDraft(undefined);
     setApiKey("");
@@ -143,13 +147,15 @@ export function useSettings({
       const operated = await operate(async () => {
         try {
           const reply = reset
-            ? await resetSettings(token, snapshot.revision)
-            : await saveSettings(token, snapshot.revision, parsed.values, apiKey, clearKey);
+            ? await resetSettings(token, snapshot.revision, scopeRef.current)
+            : await saveSettings(token, snapshot.revision, parsed.values, apiKey, clearKey, scopeRef.current);
           receive(reply);
+          if (scopeRef.current === "global") accept(await readSettings(token, new AbortController().signal));
           setNotice(
-            reset
-              ? "Startup defaults restored. Saved overrides removed. Applies to your next run or recording."
-              : "Settings saved. Applies to your next run or recording.",
+            scopeRef.current === "global"
+              ? "Global defaults saved. New workspaces inherit these defaults; saved workspace overrides take priority."
+              : reset ? "Workspace overrides removed. Inherited defaults apply to your next run or recording."
+              : "Workspace settings saved. Applies to your next run or recording.",
           );
         } catch (cause) {
           const failure = settingsFailure(cause, true);
@@ -196,7 +202,9 @@ export function useSettings({
     dirty,
     disabled,
     blocked,
-    show,
+    scope,
+    show: () => openScope("workspace"),
+    showGlobal: () => openScope("global"),
     close,
     refresh,
     update,

@@ -158,6 +158,7 @@ def configure_theme(app: App[None], name: str, *, background: str = "auto") -> N
     switching is supported; initial setup must precede parsing ngn's CSS tokens.
     auto: native for terminal, painted otherwise. terminal: native for all names.
     theme: painted for all names; terminal uses graphite's dark surface fallback.
+    Message/editor surfaces always use a paired painted background and foreground.
     """
     if name not in THEME_NAMES:
         raise ValueError(f"Unknown theme; choose from: {', '.join(THEME_NAMES)}")
@@ -176,6 +177,16 @@ def configure_theme(app: App[None], name: str, *, background: str = "auto") -> N
         palette.update(accent="#85baff", user="#efabcf", heading="#85baff", tool="#d5bbff", code="#99d59b")
     focus_style = "bold reverse" if native else "bold"
     variables = {f"ngn-{key}": value for key, value in palette.items()}
+    # Message surfaces are deliberately painted, even on a native terminal
+    # background. Keep foregrounds paired with that surface for readable contrast.
+    message_palette = _PALETTES["graphite" if name == "terminal" else name] if native else palette
+    variables["ngn-message-background"] = message_palette["panel"]
+    variables.update(
+        {
+            f"ngn-message-{key}": message_palette[key]
+            for key in ("text", "muted", "user", "info", "tool", "success", "warning", "error")
+        }
+    )
     variables.update(
         {
             "ngn-focus-style": focus_style,

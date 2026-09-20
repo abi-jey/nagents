@@ -7,13 +7,19 @@ export function ContextIndicator({
   error,
   open,
   setOpen,
+  live = false,
+  loading = false,
+  refresh,
 }: {
   stats?: ContextStats;
   error: string;
   open: boolean;
   setOpen: (open: boolean) => void;
+  live?: boolean;
+  loading?: boolean;
+  refresh?: () => void;
 }) {
-  if (!stats && !error) return null;
+  if (!stats && !error && !loading) return null;
   const rows = stats ? contextRows(stats) : [];
   return (
     <div className="context-indicator">
@@ -26,10 +32,12 @@ export function ContextIndicator({
         onClick={() => setOpen(!open)}
       >
         <span className="context-toggle-label">Context</span>
-        <span className="context-total">{stats ? contextSummary(stats) : "unavailable"}</span>
+        {live && <span className="context-live-dot" aria-hidden="true" />}
+        <span className="context-total">{stats ? contextSummary(stats) : loading ? "Loading…" : "unavailable"}</span>
       </button>
       {open && (
         <div id="context-panel" className="context-panel" role="region" aria-label="Estimated context breakdown">
+          <div className="context-panel-heading"><strong>{live ? "Live context" : "Conversation context"}</strong>{refresh && <button type="button" onClick={refresh} disabled={loading} aria-label="Refresh context estimate">Refresh</button>}</div>
           {stats ? (
             <>
               {stats.context_window ? (
@@ -54,11 +62,13 @@ export function ContextIndicator({
                 <span>Total estimated input</span>
                 <span>{stats.total_tokens.toLocaleString()}</span>
               </div>
+              <p className="context-note">{stats.model}{live ? " · Updates during turns and tool execution" : ""}</p>
               <p className="context-note">
                 {stats.context_window
                   ? `${(stats.remaining_tokens ?? 0).toLocaleString()} tokens remaining of ${stats.context_window.toLocaleString()}.`
                   : "Context window unknown for this model."}
               </p>
+              {error && <p className="context-note" role="status">{error} Showing the last available estimate.</p>}
               {stats.observed_prompt_tokens != null ? (
                 <p className="context-note">
                   Last provider-reported input: {stats.observed_prompt_tokens.toLocaleString()} tokens.
@@ -70,7 +80,7 @@ export function ContextIndicator({
             </>
           ) : (
             <p className="context-note" role="status">
-              {error}
+              {error || "Reading context…"}
             </p>
           )}
         </div>

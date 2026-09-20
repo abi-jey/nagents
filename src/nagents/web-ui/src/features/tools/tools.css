@@ -1,0 +1,35 @@
+.tools-dialog { width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--border-control); border-radius: 12px; background: var(--surface-reading); color: var(--text-reading); }
+.tools-dialog[open] { display: flex; flex-direction: column; }
+.tools-dialog::backdrop { background: #10100dbd; }
+.tools-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 16px; border-bottom: 1px solid var(--border-group); }
+.tools-dialog h2 { display: flex; gap: 10px; align-items: center; margin: 0; font-size: 21px; font-weight: 550; }
+.tools-dialog header p { margin: 7px 0 0; color: var(--text-secondary); font-size: 13px; }
+.tools-toolbar { display: flex; align-items: end; gap: 12px; padding: 16px 24px 10px; }
+.tools-toolbar label { display: flex; flex-direction: column; gap: 5px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
+.tools-search { flex: 1; }
+.tools-toolbar input, .tools-toolbar select { min-height: 34px; width: 100%; padding: 6px 9px; border: 1px solid var(--border-group); border-radius: 6px; background: var(--surface-control); color: var(--text-reading); }
+.tools-summary { display: flex; align-items: center; gap: 8px; padding: 0 24px 14px; color: var(--text-secondary); font-size: 12px; }
+.tools-summary > span { flex: 1; }
+.tools-summary button { min-height: 28px; padding: 4px 8px; font-size: 11px; }
+.tools-list { overflow-y: auto; min-height: 0; padding: 0 24px 18px; display: flex; flex-direction: column; gap: 10px; }
+.tool-setting { padding: 14px 16px; border: 1px solid var(--border-group); border-radius: 8px; background: var(--surface-navigation); }
+.tool-setting-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.tool-setting h3 { margin: 0 0 6px; font: 600 13px ui-monospace, monospace; overflow-wrap: anywhere; }
+.tool-category { display: inline-block; margin-right: 6px; padding: 2px 6px; border-radius: 4px; background: var(--surface-control); color: var(--text-secondary); font-size: 10px; }
+.tool-setting > p { margin: 10px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.tool-setting .tool-restriction { color: var(--state-pending); }
+.tool-switch { display: flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+.tool-switch input { appearance: none; width: 34px; height: 20px; margin: 0; border: 1px solid var(--border-control); border-radius: 12px; background: var(--surface-reading); cursor: pointer; }
+.tool-switch input::before { content: ""; display: block; width: 12px; height: 12px; margin: 3px; border-radius: 50%; background: var(--text-secondary); }
+.tool-switch input:checked { background: color-mix(in srgb, var(--accent-teal) 25%, var(--surface-control)); border-color: var(--accent-teal); }
+.tool-switch input:checked::before { transform: translateX(14px); background: var(--accent-teal); }
+.tool-switch input:disabled { opacity: .45; cursor: default; }
+.tool-switch input:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.tool-setting summary { cursor: pointer; font-size: 11px; color: var(--text-secondary); }
+.tool-setting pre { margin: 8px 0 0; padding: 10px; border-radius: 5px; background: var(--surface-output); color: var(--text-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; font-size: 11px; }
+.tools-dialog > footer { display: flex; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--border-group); background: var(--surface-navigation); }
+.tools-dialog footer > div { flex: 1; min-width: 0; }
+.tools-dialog footer code { font-size: 12px; }
+.tools-dialog footer small { display: block; margin-top: 4px; font-size: 11px; color: var(--text-secondary); }
+.tools-feedback, .tools-empty { padding: 0 24px; font-size: 12px; }
+@media (max-width: 600px) { .tools-toolbar { flex-wrap: wrap; padding-inline: 14px; } .tools-search { min-width: 180px; } .tools-summary { flex-wrap: wrap; padding-inline: 14px; } .tools-summary > span { flex-basis: 100%; } .tools-list { padding-inline: 14px; } .tools-dialog > header, .tools-dialog > footer { padding-inline: 14px; } .tool-switch > span { display: none; } }

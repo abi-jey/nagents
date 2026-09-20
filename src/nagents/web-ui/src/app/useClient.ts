@@ -67,7 +67,8 @@ export function useClient() {
   const context = useContextStats(
     token,
     sessions.sessionId,
-    !busy && !sessions.externalRun && !sessions.activityOnly && !chat.approval.pending,
+    { active: !!chat.runId, revision: chat.contextRevision, enabled: !sessions.activityOnly,
+      configuration: `${sessions.config?.provider}:${sessions.config?.model}:${sessions.config?.agent}:${settings.snapshot?.revision}` },
   );
   const dependencies: TrashDependencies = {
     read: (signal) => readTrash(token, signal), save: (revision, days) => saveRetention(token, revision, days),

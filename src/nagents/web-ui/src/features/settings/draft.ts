@@ -93,6 +93,8 @@ export function createDraft(values: SettingsValues): SettingsDraft {
     compact_trigger: values.compact_trigger,
     compact_tokens: String(values.compact_tokens),
     compact_messages: String(values.compact_messages),
+    submit_mode: values.submit_mode || "queue",
+    read_only: values.read_only ?? false,
   };
 }
 
@@ -131,6 +133,8 @@ export function parseDraft(
     compact_trigger: draft.compact_trigger,
     compact_tokens: 0,
     compact_messages: 0,
+    submit_mode: draft.submit_mode || "queue",
+    read_only: draft.read_only,
   };
   if (
     !values.model ||
@@ -175,6 +179,8 @@ export function parseDraft(
     errors.dictation_max_seconds = "Enter a whole number from 1 to 300 seconds. The administrator's ceiling also applies.";
   if (!(compactionTriggers as readonly string[]).includes(values.compact_trigger))
     errors.compact_trigger = "Choose a supported compaction trigger.";
+  if (!["queue", "interrupt"].includes(values.submit_mode)) errors.submit_mode = "Choose Queue or Interrupt.";
+  if (typeof values.read_only !== "boolean") errors.read_only = "Choose whether this workspace is read-only.";
   for (const limit of [...executionLimits, ...compactionLimits]) {
     const raw = draft[limit.key].trim();
     const value = Number(raw);

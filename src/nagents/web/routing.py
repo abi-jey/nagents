@@ -317,8 +317,10 @@ class RoutingStore(InboxStore):
         ):
             raise HTTPException(429, "Message inbox is full. Retry with the same message ID.")
 
-    async def web(self, session_id: str, message_id: str, prompt: str) -> str:
-        def admit(db: sqlite3.Connection) -> str:
+    async def web(self, session_id: str, message_id: str, prompt: str) -> tuple[str, bool]:
+        """Return the root and whether this is newly admitted (not an HTTP retry)."""
+
+        def admit(db: sqlite3.Connection) -> tuple[str, bool]:
             self.execution_root(db, session_id)
             row = db.execute(
                 "SELECT session_id, prompt FROM ngn_web_inbox WHERE channel = '' AND message_id = ?", (message_id,)
@@ -326,13 +328,13 @@ class RoutingStore(InboxStore):
             if row:
                 if row != (session_id, prompt):
                     raise HTTPException(409, "Message ID already belongs to a different submission.")
-                return session_id
+                return session_id, False
             self.capacity(db)
             db.execute(
                 "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt) VALUES (?, '', ?, ?)",
                 (session_id, message_id, prompt),
             )
-            return session_id
+            return session_id, True
 
         return await self._transaction(admit)
 

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -53,7 +54,8 @@ class HarnessConfig:
     model: str = "gpt-4.1"
     base_url: str = ""
     api_key_env: str = "OPENAI_API_KEY"
-    agent: str = "build"
+    agent: str = "assistant"
+    read_only: bool = False
     plugins: tuple[str, ...] = ()
     trust_project: bool = False
     demo: bool = False
@@ -69,7 +71,7 @@ class HarnessConfig:
     auth: str = "auto"
     theme: str = "terminal"
     animations: bool = True
-    submit_mode: str = "queue"
+    submit_mode: Literal["queue", "interrupt"] = "queue"
     tab_action: str = "agent"
     api: str = "auto"
     max_subagent_depth: int = 2
@@ -93,6 +95,8 @@ class HarnessConfig:
         Callers that overlay allowlisted fields on a copy can validate the
         candidate configuration without constructing a new dataclass.
         """
+        if type(self.read_only) is not bool:
+            raise ValueError("read_only must be a boolean")
         if self.theme not in THEME_NAMES:
             raise ValueError(f"theme must be one of: {', '.join(THEME_NAMES)}")
         if self.theme_background not in THEME_BACKGROUNDS:
@@ -132,8 +136,8 @@ class HarnessConfig:
             if url.username or url.password or url.query or url.fragment:
                 raise ValueError("base_url must not contain credentials, query parameters, or fragments")
         for name, profile in self.profiles.items():
-            if name in {"agent", "build", "reviewer"}:
-                raise ValueError("Built-in agent/build/reviewer profiles cannot be overridden")
+            if name == "assistant":
+                raise ValueError("The built-in assistant profile cannot be overridden")
             if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or profile.mode not in {"build", "reviewer"}:
                 raise ValueError(f"Invalid profile {name!r}: mode must be build or reviewer")
         self.profile(self.agent)
@@ -170,15 +174,15 @@ class HarnessConfig:
             raise ValueError("dictation_max_seconds must be an integer between 1 and 300")
 
     def profile(self, name: str) -> AgentProfile:
-        if name == "agent":
-            return AgentProfile(mode="build")
-        if name in {"build", "reviewer"}:
-            return AgentProfile(mode=name)
+        if name == "assistant":
+            return AgentProfile(mode="reviewer" if self.read_only else "build")
         if name not in self.profiles:
-            raise ValueError(
-                f"Unknown agent profile {name!r}; available: agent, build, reviewer, {', '.join(self.profiles)}"
-            )
+            raise ValueError(f"Unknown agent profile {name!r}; available: {', '.join(self.profile_names)}")
         return self.profiles[name]
+
+    @property
+    def profile_names(self) -> tuple[str, ...]:
+        return ("assistant", *sorted(self.profiles))
 
 
 def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
@@ -237,7 +241,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_subagent_depth",
         "dictation_max_seconds",
     }
-    booleans = {"demo", "animations", "dictation_enabled"}
+    booleans = {"demo", "animations", "dictation_enabled", "read_only"}
     allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles"}
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
@@ -336,6 +340,14 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 continue
             setattr(config, key, value)
         diagnostics.append(f"Loaded trusted configuration: {path}")
+    if config.agent in {"build", "agent", "reviewer"} and config.agent not in config.profiles:
+        previous = config.agent
+        config.agent = "assistant"
+        config.read_only = config.read_only or previous == "reviewer"
+        diagnostics.append(
+            f"Migrated legacy agent selection {previous!r} to assistant"
+            + (" in read-only mode" if config.read_only else "")
+        )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
     config.__post_init__()
