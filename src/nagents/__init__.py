@@ -178,6 +178,8 @@ from .extensions import CompactionStrategy
 from .extensions import ModelRequest
 from .extensions import RunContext
 from .http import FileHTTPLogger
+from .live import LiveConfig
+from .live import LiveEvent
 from .mcp import MCPClient
 from .mcp import MCPError
 from .mcp import MCPManager
@@ -326,6 +328,8 @@ __all__ = [
     "JsonSchema",
     "JsonSchemaProperty",
     "JsonValue",
+    "LiveConfig",
+    "LiveEvent",
     "MCPClient",
     "MCPError",
     "MCPManager",

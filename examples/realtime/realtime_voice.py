@@ -7,7 +7,7 @@ agent, and the Realtime model + settings live on the provider — voice uses the
 same interface as text: ``agent.run()``.
 
 Run:
-    OPENAI_API_KEY=sk-... python examples/realtime-live/realtime_voice.py \
+    OPENAI_API_KEY=sk-... python examples/realtime/realtime_voice.py \
         --input speech.wav --output reply.wav
 
 If no input WAV is provided, a short synthetic tone is generated so the
@@ -22,9 +22,9 @@ import struct
 import wave
 from pathlib import Path
 
+from _support import print_event
+from _support import start_timer
 from dotenv import load_dotenv
-from event_printer import print_event
-from event_printer import start_timer
 
 from nagents import Agent
 from nagents import AudioDuplex

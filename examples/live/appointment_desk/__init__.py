@@ -1,0 +1,1 @@
+"""Persistent appointment application."""

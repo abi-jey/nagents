@@ -1,21 +1,26 @@
-"""ChatGPT subscription OAuth transport for Codex generation and model discovery.
+"""Codex configuration discovery and its ChatGPT subscription transport.
 
-This is not an API-key provider. Credentials only go to fixed Codex endpoints;
-base Provider HTTP logging, endpoint configuration, and retries are not used.
-Tools are released only after a validated completed response, never from a
-partially received stream. GenerationConfig.reasoning.enabled requests an auto
-reasoning summary; sampling settings and token budgets are unsupported here.
+API-key configurations use the normal Provider HTTP contract. ChatGPT credentials
+only go to fixed Codex endpoints, without base Provider logging or retries. The
+OAuth transport releases tools only after a validated completed response;
+GenerationConfig.reasoning.enabled requests a summary, while sampling settings
+and token budgets are unsupported on that route.
 """
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
+import tomllib
 import unicodedata
 from dataclasses import dataclass
 from dataclasses import field
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version
+from pathlib import Path
+from time import time
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -46,6 +51,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ..events import Event
+    from ..live import LiveConfig
     from ..types import GenerationConfig
     from ..types import Message
     from ..types import ToolDefinition
@@ -71,6 +77,177 @@ class CodexCredentials:
     access_token: str = field(repr=False)
     account_id: str = field(default="", repr=False)
     residency: str = field(default="", repr=False)
+
+
+class CodexConfigError(ValueError):
+    """Local discovery failed; messages exclude credentials and file bodies."""
+
+
+def _read_config_file(path: Path, *, toml: bool = False) -> dict[str, object]:
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError
+        value: object = tomllib.loads(raw.decode("utf-8")) if toml else json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError
+        return cast("dict[str, object]", value)
+    except FileNotFoundError:
+        return {}
+    except (ValueError, UnicodeError, OSError, RecursionError):
+        raise CodexConfigError("Cannot read Codex configuration or credentials") from None
+
+
+def _config_table(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise CodexConfigError("Expected a table in Codex configuration")
+    return cast("dict[str, object]", value)
+
+
+def _config_string(value: object) -> str:
+    if not isinstance(value, str):
+        raise CodexConfigError("Expected a string in Codex configuration")
+    return value
+
+
+def _merge_config(base: dict[str, object], override: dict[str, object]) -> dict[str, object]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge_config(_config_table(result[key]), _config_table(value))
+        else:
+            result[key] = value
+    return result
+
+
+def _token_claims(token: str) -> dict[str, object]:
+    try:
+        part = token.split(".")[1]
+        return _config_table(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))))
+    except (IndexError, ValueError, UnicodeError, RecursionError):
+        return {}
+
+
+def _local_credentials(home: Path) -> CodexCredentials:
+    auth = _read_config_file(home / "auth.json")
+    if auth.get("auth_mode") not in (None, "chatgpt"):
+        raise CodexConfigError("Codex login method changed; recreate the provider")
+    tokens = _config_table(auth.get("tokens", {}))
+    access = _config_string(tokens.get("access_token", ""))
+    if not access:
+        raise CodexConfigError("No Codex ChatGPT access token; run codex login")
+    claims = _token_claims(access)
+    expires = claims.get("exp")
+    if isinstance(expires, int | float) and expires <= time():
+        raise CodexConfigError("Codex access token expired; refresh the login with Codex")
+    identity = _token_claims(_config_string(tokens.get("id_token", "")))
+    routing = _config_table(claims.get("https://api.openai.com/auth", {}))
+    identity_routing = _config_table(identity.get("https://api.openai.com/auth", {}))
+    account = (
+        tokens.get("account_id") or routing.get("chatgpt_account_id") or identity_routing.get("chatgpt_account_id", "")
+    )
+    residency = routing.get("chatgpt_compute_residency", "")
+    return CodexCredentials(
+        access, _config_string(account), "" if residency == "no_constraint" else _config_string(residency)
+    )
+
+
+@dataclass
+class _CodexConfig:
+    model: str
+    api: str
+    home: Path
+    base_url: str = ""
+    api_key: str = field(default="", repr=False)
+    oauth: bool = False
+    workspace: str = ""
+
+    async def credentials(self) -> CodexCredentials:
+        current = _local_credentials(self.home)
+        if self.workspace and current.account_id != self.workspace:
+            raise CodexConfigError("Codex login does not match the configured workspace")
+        return current
+
+
+def _load_config(home: Path | str = "", *, profile: str = "", model: str = "", for_live: bool = False) -> _CodexConfig:
+    """Resolve explicit home > CODEX_HOME > ~/.codex; never load project config."""
+    directory = Path(home or os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    config = _read_config_file(directory / "config.toml", toml=True)
+    selected = profile or _config_string(config.get("profile", ""))
+    if selected:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", selected):
+            raise CodexConfigError("Invalid Codex profile name")
+        profile_path = directory / f"{selected}.config.toml"
+        if profile_path.exists():
+            override = _read_config_file(profile_path, toml=True)
+        else:
+            profiles = _config_table(config.get("profiles", {}))
+            if selected not in profiles:
+                raise CodexConfigError("Selected Codex profile was not found")
+            override = _config_table(profiles[selected])
+        config = _merge_config(config, override)
+    model = model or _config_string(config.get("model", DEFAULT_CODEX_MODEL))
+    provider_id = _config_string(config.get("model_provider", "openai"))
+    providers = _config_table(config.get("model_providers", {}))
+    if provider_id != "openai" and provider_id not in providers:
+        raise CodexConfigError("Selected Codex model provider is not configured")
+    provider = _config_table(providers.get(provider_id, {}))
+    wire_api = _config_string(provider.get("wire_api", "responses"))
+    api = {"responses": "responses", "chat": "chat_completions"}.get(wire_api)
+    if api is None:
+        raise CodexConfigError("Unsupported Codex wire_api; expected responses or legacy chat")
+    if any(provider.get(key) for key in ("auth", "http_headers", "env_http_headers", "query_params")):
+        raise CodexConfigError(
+            "Command auth and custom headers/query parameters require an explicitly configured provider"
+        )
+    requires_auth = provider.get("requires_openai_auth", provider_id == "openai")
+    if not isinstance(requires_auth, bool):
+        raise CodexConfigError("Codex requires_openai_auth must be boolean")
+    base_url = _config_string(provider.get("base_url", config.get("openai_base_url", "")))
+    if requires_auth:
+        store = config.get("cli_auth_credentials_store", "file")
+        if store not in ("file", "auto"):
+            raise CodexConfigError("Codex discovery requires file credentials in CODEX_HOME/auth.json")
+        auth = _read_config_file(directory / "auth.json")
+        mode = auth.get("auth_mode")
+        oauth = mode == "chatgpt" or (mode is None and bool(auth.get("tokens")))
+        if oauth and for_live:
+            # Matches Codex's voice auth selection: ChatGPT text login can use
+            # an API-key fallback for voice, never its subscription access token.
+            voice_key = _config_string(auth.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", ""))
+            if not voice_key:
+                raise CodexConfigError(
+                    "Codex selected ChatGPT authentication, but GPT-Live voice requires an OpenAI API key. "
+                    "No cached API key or OPENAI_API_KEY fallback was found. The saved ChatGPT login can "
+                    "still run the delegated backend."
+                )
+            return _CodexConfig(model, api, directory, base_url=base_url, api_key=voice_key)
+        if oauth:
+            if base_url or config.get("chatgpt_base_url"):
+                raise CodexConfigError("Codex ChatGPT login requires the standard Codex endpoint")
+            if config.get("forced_login_method") == "api":
+                raise CodexConfigError("Codex configuration requires API-key login")
+            credentials = _local_credentials(directory)
+            workspace = config.get("forced_chatgpt_workspace_id", "")
+            if workspace and credentials.account_id != workspace:
+                raise CodexConfigError("Codex login does not match the configured workspace")
+            return _CodexConfig(model, "responses", directory, oauth=True, workspace=_config_string(workspace))
+        if config.get("forced_login_method") == "chatgpt":
+            raise CodexConfigError("Codex configuration requires ChatGPT login")
+        if mode not in (None, "apikey"):
+            raise CodexConfigError("Unsupported Codex login method")
+        key = _config_string(auth.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", ""))
+    else:
+        env_key = _config_string(provider.get("env_key", ""))
+        key = os.environ.get(env_key, "") if env_key else _config_string(provider.get("experimental_bearer_token", ""))
+        if not env_key and not key:
+            raise CodexConfigError(
+                "This Codex provider has no key; configure an explicit Nagents provider for local inference"
+            )
+    if not key:
+        raise CodexConfigError("Codex API credential is missing; check auth.json or the provider's env_key")
+    return _CodexConfig(model, api, directory, base_url=base_url, api_key=key)
 
 
 class _ProtocolError(ValueError):
@@ -239,24 +416,67 @@ def _usage(value: object) -> Usage:
 
 
 class CodexProvider(Provider):
-    """Responses streaming and explicit model discovery with per-request OAuth.
+    """Use the locally configured Codex model and authentication by default.
 
-    verify_model does not assert account entitlement; the Responses service does.
-    No automatic retry/replay follows authentication, rate-limit, or stream errors.
+    An explicit credential callback selects the existing OAuth transport. On that
+    route, verify_model is local and no automatic retry/replay follows failures.
+    API-key configurations use the selected standard Provider API contract.
     """
 
     def __init__(
         self,
-        credentials: Callable[[], Awaitable[CodexCredentials]],
-        model: str = DEFAULT_CODEX_MODEL,
+        credentials: Callable[[], Awaitable[CodexCredentials]] | None = None,
+        model: str = "",
         timeout: float = 120.0,
+        *,
+        home: str | Path = "",
+        profile: str = "",
+        live_config: LiveConfig | None = None,
     ) -> None:
-        super().__init__(ProviderType.OPENAI_COMPATIBLE, "oauth-not-an-api-key", model, timeout=timeout)
+        """With no credentials, discover explicit home > CODEX_HOME > ~/.codex.
+
+        Local model/profile/wire_api and auth.json determine API-key versus
+        ChatGPT transport. Explicit credential callbacks retain the OAuth API.
+        """
+        self._local_api = False
+        self._credentials: Callable[[], Awaitable[CodexCredentials]]
+        if credentials is None:
+            local = _load_config(home, profile=profile, model=model, for_live=live_config is not None)
+            model = local.model
+            credentials = local.credentials
+            if not local.oauth:
+                super().__init__(
+                    ProviderType.OPENAI_COMPATIBLE,
+                    local.api_key,
+                    model,
+                    base_url=local.base_url or None,
+                    api=local.api,
+                    timeout=timeout,
+                    live_config=live_config,
+                )
+                self._local_api = True
+                self._credentials = credentials
+                self._timeout = timeout
+                return
+        if live_config is not None:
+            raise ValueError(
+                "Codex selected ChatGPT subscription authentication. GPT-Live's public API requires "
+                "OpenAI API-key authentication; this saved login can still run the delegated backend."
+            )
+        super().__init__(
+            ProviderType.OPENAI_COMPATIBLE,
+            "oauth-not-an-api-key",
+            model or DEFAULT_CODEX_MODEL,
+            timeout=timeout,
+            api="responses",
+        )
         self.base_url = CODEX_ENDPOINT
         self._credentials = credentials
         self._timeout = timeout
 
     async def verify_model(self, force: bool = False) -> bool:
+        if self._local_api:
+            return await super().verify_model(force)
         self._model_verified = True
         return True
 
@@ -268,6 +488,8 @@ class CodexProvider(Provider):
         verification. Failures raise ModelListError without upstream data; there
         is no API-key fallback or entitlement guarantee.
         """
+        if self._local_api:
+            return await super().get_model_list()
         if self.base_url != CODEX_ENDPOINT:
             raise ModelListError("Codex model discovery requires its fixed endpoint; custom URLs are unsupported.")
         try:
@@ -285,6 +507,8 @@ class CodexProvider(Provider):
                 raise ValueError
             if residency and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", residency):
                 raise ValueError
+        except CodexConfigError as error:
+            raise ModelListError(str(error)) from None
         except Exception:
             raise ModelListError("ChatGPT credentials are unavailable; sign in again with /login.") from None
         headers = {
@@ -339,6 +563,10 @@ class CodexProvider(Provider):
         stream: bool = True,
         verify_model: bool = False,
     ) -> AsyncGenerator[Event, None]:
+        if self._local_api:
+            async for generated in super().generate(messages, tools, config, stream, verify_model):
+                yield generated
+            return
         try:
             body = _request_body(self.model, messages, tools, config)
         except (TypeError, ValueError) as error:
@@ -353,6 +581,9 @@ class CodexProvider(Provider):
                 raise ValueError
             if credentials.residency and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", credentials.residency):
                 raise ValueError
+        except CodexConfigError as error:
+            yield ErrorEvent(message=str(error), code="CODEX_AUTH")
+            return
         except Exception:
             yield ErrorEvent(
                 message="ChatGPT credentials are unavailable; sign in again with /login.", code="CODEX_AUTH"

@@ -96,6 +96,7 @@ from .types import ToolCall
 from .types import ToolDefinition
 
 if TYPE_CHECKING:
+    from .live import _LiveUpdates
     from .realtime import AudioDuplex
     from .realtime import RealtimeConfig
     from .realtime import RealtimeSession
@@ -228,6 +229,7 @@ class Agent:
         save_tool_outputs: bool = True,
         skill_discoverer: SkillDiscoverer | None = None,
         skill_token_limit: int = DEFAULT_SKILL_TOKEN_LIMIT,
+        delegation_agent: "Agent | None" = None,
     ):
         """
         Initialize the agent.
@@ -290,7 +292,9 @@ class Agent:
             skill_discoverer: Optional live text-only skill source. Installs skill(name)
                               and refreshes the catalog at message, model and tool boundaries.
             skill_token_limit: Per-load and aggregate explicit-activation content budget,
-                              estimated as ceil(UTF-8 bytes / 4), default 10,000.
+                               estimated as ceil(UTF-8 bytes / 4), default 10,000.
+            delegation_agent: Client-owned GPT-Live backend. Runs normal text/tool
+                              inference independently of audio. Caller owns its lifetime.
         """
         self.provider = provider
         self.session = session_manager
@@ -303,6 +307,9 @@ class Agent:
         self.stt_service = stt_service
         self.unsupported_audio = unsupported_audio
         self.audio = audio
+        self.delegation_agent = delegation_agent
+        self._live_updates: _LiveUpdates | None = None
+        self._last_live_updates: _LiveUpdates | None = None
         self.plugins: list[AgentPlugin] = list(plugins)
         self.compaction_strategy = compaction_strategy
         self.save_tool_outputs = save_tool_outputs
@@ -780,12 +787,52 @@ class Agent:
             log_file=log_file,
         )
 
+    @property
+    def live(self) -> "_LiveUpdates":
+        """Native Live controls and latest session status (available after startup)."""
+        controls = self._live_updates or self._last_live_updates
+        if controls is None:
+            raise RuntimeError("This agent has not started a Live connection")
+        return controls
+
+    def live_configuration(self, *, media: bool = False) -> dict[str, object]:
+        """Session setup for native Live HTTP provisioning; media omits PCM format."""
+        from .live.runtime import build_session
+
+        return build_session(self, media=media)
+
+    async def add_comment(self, content: str) -> str:
+        """Queue a short spoken update for GPT-Live; returns its event ID.
+
+        Usable as a backend tool or from application code. During a delegation,
+        the original delegation ID is included automatically. Otherwise the
+        update is session-wide. Queuing does not mean playback has completed.
+        """
+        from .live import append_update
+
+        return await append_update(self, "commentary", content)
+
+    async def add_thinking(self, content: str) -> str:
+        """Queue factual context or quiet progress for GPT-Live; return its event ID."""
+        from .live import append_update
+
+        return await append_update(self, "thinking", content)
+
+    async def add_instructions(self, content: str) -> str:
+        """Queue application instructions for GPT-Live; return its event ID.
+
+        This can redirect speech, but does not cancel backend work.
+        """
+        from .live import append_update
+
+        return await append_update(self, "instructions", content)
+
     async def _run_voice(
         self,
         *,
         auto_commit: bool | None = None,
         log_file: Path | str | None = None,
-    ) -> AsyncIterator[Event]:
+    ) -> AsyncGenerator[Event, None]:
         """
         Run a full-duplex speech-to-speech conversation through this agent.
 
@@ -796,11 +843,29 @@ class Agent:
         :meth:`run`.
         """
         duplex = self.audio
-        if duplex is None or (duplex.input is None and duplex.output is None):
+        if duplex is None and self.provider.live_config is not None and self.provider.live_config.attach_to:
+            from .audio import AudioDuplex
+
+            duplex = AudioDuplex()
+        if duplex is None or (
+            duplex.input is None
+            and duplex.output is None
+            and not (self.provider.live_config and self.provider.live_config.attach_to)
+        ):
             raise ValueError(
                 "Voice mode requires an AudioDuplex with at least an input or output. "
                 "Set audio=AudioDuplex(input=..., output=...) on the Agent."
             )
+
+        if self.provider.live_config is not None:
+            from .live import run_live
+
+            if auto_commit:
+                raise ValueError("GPT-Live uses continuous audio, not Realtime input commits")
+            async with aclosing(run_live(self, duplex, log_file=log_file)) as events:
+                async for event in events:
+                    yield event
+            return
 
         session = self.realtime_session(audio=duplex, log_file=log_file)
         try:
@@ -1472,9 +1537,13 @@ class Agent:
         log_file: Path | str | None,
     ) -> AsyncGenerator[Event, None]:
         if user_message is None:
-            self._check_extension_mode("voice")
-            async for event in self._run_voice(auto_commit=auto_commit, log_file=log_file):
-                yield event
+            if self.provider.live_config is None:
+                self._check_extension_mode("voice")
+            elif self.plugins or self.compaction_strategy or self.skill_discoverer:
+                raise ValueError("Configure text lifecycle extensions on the Live backend agent")
+            async with aclosing(self._run_voice(auto_commit=auto_commit, log_file=log_file)) as events:
+                async for event in events:
+                    yield event
             return
 
         if self.batch:

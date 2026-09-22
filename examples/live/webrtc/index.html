@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Nagents GPT-Live</title>
+<style>body{font:16px system-ui;max-width:960px;margin:40px auto;padding:16px}button,input{padding:10px;margin:4px}pre{white-space:pre-wrap;max-height:300px;overflow:auto;background:#f4f4f4;padding:16px}</style>
+<h1>GPT-Live</h1><p>Browser audio; native Nagents backend events and tools.</p>
+<button id="start">Start</button><button id="stop" disabled>End</button>
+<button id="mute">Mute playback</button><audio id="audio" autoplay controls></audio>
+<p id="status">Ready</p><pre id="captions"></pre>
+<p><input id="text" placeholder="Type an exact reference or correction"><button id="send">Send typed input</button>
+<input id="image" type="file" accept="image/png,image/jpeg,image/webp"><button id="sendImage">Analyze image</button></p>
+<p><button id="inputMute">Mute model input</button><button id="fork">Fork last stored session</button>
+<button id="recording">Download recording</button></p>
+<p>Verified disclosure clip (operator must verify its words before selecting): <input id="clip" type="file" accept="audio/wav">
+<button id="playClip">Play verified clip with model output muted</button><audio id="clipAudio" controls></audio></p>
+<section id="desk" hidden><h2>Appointment desk</h2><p>Review the exact proposal before approving. Approval is an application action, never a model tool.</p>
+<button id="approve">Approve current proposal</button>
+<select id="slot"><option>2030-08-06 14:00 UTC</option><option>2030-08-07 14:00 UTC</option></select>
+<button id="change">Change proposal</button><button id="job">Start independent report</button>
+<pre id="records"></pre></section>
+<h2>Backend timeline</h2><pre id="timeline"></pre>
+<script>
+const token='__TOKEN__';let peer,channel,mic,sessionId,revision,forkFrom='',inputMuted=false;
+const $=id=>document.getElementById(id);
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Demo-Token':token},body:body?JSON.stringify(body):undefined});if(!r.ok)throw Error(await r.text());return r.json()}
+function cleanup(){mic?.getTracks().forEach(t=>t.stop());channel?.close();peer?.close();$('audio').srcObject=null;$('start').disabled=false;$('stop').disabled=true}
+$('start').onclick=async()=>{try{
+ $('start').disabled=true;$('status').textContent='Connecting…';
+ peer=new RTCPeerConnection();peer.ontrack=e=>{$('audio').srcObject=new MediaStream([e.track]);$('audio').play().catch(()=>{$('status').textContent='Press play to enable audio'})};
+ mic=await navigator.mediaDevices.getUserMedia({audio:true});mic.getTracks().forEach(t=>peer.addTrack(t,mic));
+ channel=peer.createDataChannel('oai-events');channel.onmessage=({data})=>{const e=JSON.parse(data);
+  if(e.type==='session.started'){$('status').textContent='Connected';$('stop').disabled=false}
+  if(e.type.includes('transcript.delta'))$('captions').textContent+=e.type.includes('input')?'\nCaller: '+e.delta:'\nAssistant: '+e.delta;
+  if(e.type==='session.closed'){$('status').textContent='Final voice usage: '+JSON.stringify(e.usage);cleanup()}
+ };channel.onclose=()=>{if($('stop').disabled===false){$('status').textContent='Disconnected; inspect finalization in the timeline';cleanup()}};
+ await peer.setLocalDescription(await peer.createOffer());
+ if(peer.iceGatheringState!=='complete')await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('ICE gathering timed out')),10000);peer.addEventListener('icegatheringstatechange',()=>{if(peer.iceGatheringState==='complete'){clearTimeout(timer);resolve()}})});
+ const result=await api('/session',{sdp:peer.localDescription.sdp,fork_from:forkFrom});sessionId=result.session.id;forkFrom='';
+ await peer.setRemoteDescription({type:'answer',sdp:result.transport.sdp});
+}catch(e){$('status').textContent=e.message;cleanup()}};
+$('stop').onclick=async()=>{try{await api('/close',{session_id:sessionId});$('status').textContent='Waiting for session.closed…';setTimeout(()=>{if(!$('stop').disabled){$('status').textContent='Finalization unconfirmed';cleanup()}},20000)}catch(e){$('status').textContent=e.message}};
+$('mute').onclick=()=>{$('audio').muted=!$('audio').muted;$('mute').textContent=$('audio').muted?'Resume playback':'Mute playback'};
+$('approve').onclick=async()=>{try{await api('/approve',{revision});$('status').textContent='Approved; tell the assistant to commit the proposal.'}catch(e){$('status').textContent=e.message}};
+const action=fn=>async()=>{try{await fn()}catch(e){$('status').textContent=e.message}};
+$('send').onclick=action(async()=>{await api('/message',{session_id:sessionId,text:$('text').value});$('text').value=''});
+$('sendImage').onclick=action(async()=>{const f=$('image').files[0];if(!f||f.size>3*1024*1024)throw Error('Choose an image smaller than 3 MiB');const image=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(f)});await api('/message',{session_id:sessionId,image,text:$('text').value})});
+$('inputMute').onclick=action(async()=>{await api('/command',{session_id:sessionId,command:inputMuted?'unmute':'mute'});inputMuted=!inputMuted;$('inputMute').textContent=inputMuted?'Unmute model input':'Mute model input'});
+$('fork').onclick=()=>{forkFrom=sessionId;$('status').textContent='Fork selected. End this call, then press Start. Storage/finalization is required.'};
+$('change').onclick=action(async()=>{await api('/selection',{slot:$('slot').value});$('status').textContent='Proposal changed; previous approval is invalid.'});
+$('job').onclick=action(async()=>{const r=await api('/job',{});$('status').textContent='Report '+r.job_id+' runs even if you end voice. Start a new call later to review it.'});
+$('playClip').onclick=action(async()=>{const f=$('clip').files[0];if(!f)throw Error('Select a previously verified clip');$('audio').muted=true;const player=$('clipAudio');const url=URL.createObjectURL(f);player.src=url;player.onended=async()=>{URL.revokeObjectURL(url);$('status').textContent='Verified clip playback completed; model output remains muted until you resume it.';try{await api('/command',{session_id:sessionId,command:'context',text:'The application completed playback of its verified disclosure. Model output generated during it was not played.'})}catch{}};await player.play();$('status').textContent='Playing verified clip; not yet marked delivered.'});
+$('recording').onclick=action(async()=>{const r=await fetch('/recording',{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Token':token},body:JSON.stringify({session_id:sessionId})});if(!r.ok)throw Error(await r.text());const url=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=url;a.download='recording.wav';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
+setInterval(async()=>{try{const state=await api('/state');$('timeline').textContent=JSON.stringify(state.events,null,2);if(state.desk){$('desk').hidden=false;$('records').textContent=JSON.stringify(state.desk,null,2);revision=state.desk.draft?.revision}}catch{}},1000);
+</script></html>

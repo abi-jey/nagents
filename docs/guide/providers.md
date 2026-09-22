@@ -26,6 +26,36 @@ explicitly as shown below.
 
 ## Discover Model IDs
 
+### Local Codex configuration
+
+```python
+from nagents import CodexProvider
+
+provider = CodexProvider()
+```
+
+With no credential callback, Codex discovers its configuration under `CODEX_HOME`
+or `~/.codex`. It reads `config.toml` and file-based `auth.json` to select the
+model, API contract and authentication method. Saved ChatGPT login uses the
+existing Codex OAuth transport; API-key/custom-provider configuration uses the
+selected Responses or legacy Chat Completions API. An unrelated `OPENAI_API_KEY`
+does not replace a saved ChatGPT login.
+
+Optional overrides are `CodexProvider(home=..., profile=..., model=...)`.
+Selected `NAME.config.toml` profile files and legacy `[profiles.NAME]` tables are
+supported. Custom providers can specify `base_url`, `wire_api`, `env_key`, and
+`requires_openai_auth`. Project-local configuration is not used for authentication
+or endpoint discovery. No credentials are copied or written. OAuth tokens are
+reread before requests, picking up refreshes performed by Codex; Nagents does not
+rotate the external application's refresh tokens.
+
+This discovery path currently requires file credentials. Keyring-only/ephemeral
+logins and provider command-auth/custom-header/query settings report an explicit
+configuration error instead of silently selecting another route. Supplying the
+existing credential callback continues to work for application-owned OAuth.
+
+### Explicit catalog discovery
+
 The current source checkout adds `await provider.get_model_list() -> list[str]`;
 the published `v0.5.0` release does not include this method. See the
 [Provider API example](../api/provider.md#explicit-model-discovery) for a complete

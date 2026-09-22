@@ -10,7 +10,7 @@ Requirements:
     pip install -e .[dev]   # installs sounddevice + numpy
 
 Run:
-    OPENAI_API_KEY=sk-... python examples/realtime-live/realtime_mic.py
+    OPENAI_API_KEY=sk-... python examples/realtime/realtime_mic.py
 
 Every event is printed with timing/audio info, and every raw client/server
 event is logged to logs/realtime-mic.log (override with --log).
@@ -23,11 +23,11 @@ import asyncio
 import os
 from pathlib import Path
 
-from audio_adapters import SoundDeviceAudioInput
-from audio_adapters import SoundDeviceAudioOutput
+from _support import SoundDeviceAudioInput
+from _support import SoundDeviceAudioOutput
+from _support import print_event
+from _support import start_timer
 from dotenv import load_dotenv
-from event_printer import print_event
-from event_printer import start_timer
 
 from nagents import Agent
 from nagents import AudioDuplex

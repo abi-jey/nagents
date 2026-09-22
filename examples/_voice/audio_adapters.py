@@ -12,7 +12,8 @@ Usage:
 
     mic = SoundDeviceAudioInput()
     speaker = SoundDeviceAudioOutput()
-    async for event in agent.run_voice(mic, speaker, auto_commit=False):
+    agent.audio = AudioDuplex(input=mic, output=speaker)
+    async for event in agent.run():
         ...
 """
 
@@ -24,7 +25,7 @@ from typing import Any
 
 import sounddevice as sd
 
-from nagents.realtime import AudioFormat
+from nagents.audio import AudioFormat
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class SoundDeviceAudioOutput:
         self._buffer = bytearray()
         self._lock = threading.Lock()
         self._stream: Any = None
+        self._played_until = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -122,6 +124,8 @@ class SoundDeviceAudioOutput:
             n = min(needed, len(self._buffer))
             chunk = bytes(self._buffer[:n])
             del self._buffer[:n]
+            if n:
+                self._played_until = time_info.outputBufferDacTime + n / (2 * self._sample_rate)
         if n < needed:
             chunk += b"\x00" * (needed - n)
         outdata[:] = chunk
@@ -146,6 +150,17 @@ class SoundDeviceAudioOutput:
         """Drop all buffered/unplayed audio immediately."""
         with self._lock:
             self._buffer.clear()
+
+    async def drain(self) -> None:
+        """Wait for queued samples to pass the PortAudio device playback clock."""
+        while self._stream is not None:
+            with self._lock:
+                pending = bool(self._buffer) or self._stream.time < self._played_until
+            if not pending:
+                return
+            if not self._stream.active:
+                raise RuntimeError("Audio output stopped before playback completed")
+            await asyncio.sleep(0.01)
 
     async def close(self) -> None:
         if self._stream is not None and self._loop is not None:

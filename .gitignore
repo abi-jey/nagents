@@ -3,6 +3,12 @@ sessions.db
 logs
 *.db
 *.wav
+/captions.jsonl
+/voice-history.json
+/evaluation.jsonl
+/simulation.json
+/simulation.*.pcm
+/reply.g711
 .playwright-mcp
 .agents/chrome-context
 .agents/skills
