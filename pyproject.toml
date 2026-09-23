@@ -27,6 +27,9 @@ designer = [ "pydantic>=2.0",]
 tui = [ "textual>=8.2.8",]
 voice = [ "sounddevice>=0.5.6",]
 
+[dependency-groups]
+dev = [ "azure-identity>=1.17.0",]
+
 [project.scripts]
 ngn = "nagents.cli:main"
 

@@ -31,6 +31,7 @@ from ..events import DoneEvent
 from ..events import ErrorEvent
 from ..events import Event as AgentEvent
 from ..events import InputTranscriptDeltaEvent
+from ..provider.auth import validate_endpoint
 from .audio import SilenceInput
 from .controls import LiveControls as _LiveUpdates
 from .events import LiveEvent
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 
     from ..audio import AudioDuplex
     from ..audio import AudioOutput
+    from ..provider import Provider
     from ..types import ContentPart
 
 Event = dict[str, object]
@@ -48,6 +50,20 @@ Send = Callable[[Event], Awaitable[None]]
 Backend = Callable[[str, str], Awaitable[str]]
 Emit = Callable[[AgentEvent], Awaitable[None]]
 LIVE_URL = "wss://api.openai.com/v1/live/sessions"
+
+
+def _no_redirects() -> aiohttp.TraceConfig:
+    # aiohttp.ws_connect follows HTTP redirects internally and exposes no
+    # allow_redirects switch. Abort before it sends a redirected handshake.
+    trace = aiohttp.TraceConfig()
+
+    async def reject(
+        session: aiohttp.ClientSession, context: object, params: aiohttp.TraceRequestRedirectParams
+    ) -> None:
+        raise ValueError("Live WebSocket redirects are not allowed")
+
+    trace.on_request_redirect.append(reject)
+    return trace
 
 
 @dataclass(frozen=True)
@@ -366,15 +382,20 @@ async def converse(
     updates: _LiveUpdates,
     options: LiveConfig | None = None,
     hosted: HostedTools | None = None,
+    provider: Provider | None = None,
 ) -> None:
     options = options or LiveConfig()
     suffix = (
         f"/{quote(options.attach_to or options.fork_from, safe='')}/" if options.attach_to or options.fork_from else ""
     )
-    url = LIVE_URL + suffix + ("attach" if options.attach_to else "fork" if options.fork_from else "")
+    prefix = provider.live_endpoint(websocket=True) if provider is not None else LIVE_URL
+    prefix = prefix.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    url = prefix + suffix + ("attach" if options.attach_to else "fork" if options.fork_from else "")
+    validate_endpoint(url, websocket=True)
+    headers = await provider.auth_headers(url) if provider is not None else {"Authorization": f"Bearer {api_key}"}
     async with (
-        aiohttp.ClientSession() as http,
-        http.ws_connect(url, headers={"Authorization": f"Bearer {api_key}"}, heartbeat=20) as socket,
+        aiohttp.ClientSession(trace_configs=[_no_redirects()], cookie_jar=aiohttp.DummyCookieJar()) as http,
+        http.ws_connect(url, headers=headers, heartbeat=20) as socket,
     ):
         send_lock = asyncio.Lock()
 
@@ -504,8 +525,10 @@ class _LiveConnection:
         on_backend_event: Emit,
         updates: _LiveUpdates,
         options: LiveConfig | None = None,
+        provider: Provider | None = None,
     ) -> None:
         self.api_key = api_key
+        self.provider = provider
         self.backend = backend
         self.on_event = on_event
         self.on_backend_event = on_backend_event
@@ -568,6 +591,7 @@ class _LiveConnection:
                 self.updates,
                 self.options,
                 self.hosted,
+                self.provider,
             )
         finally:
             await speaker.close()
@@ -640,6 +664,7 @@ async def run_live(
         on_backend_event=emit,
         updates=updates,
         options=config,
+        provider=agent.provider,
     )
     connection.config = build_session(agent)
     if config.delegation == "responses" and config.handle_delegations:

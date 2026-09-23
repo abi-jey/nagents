@@ -87,6 +87,7 @@ async def ws_server(monkeypatch: pytest.MonkeyPatch, handler: Handler, *, prefix
     await site.start()
     url = f"http://127.0.0.1:{runner.addresses[0][1]}{prefix}"
     monkeypatch.setattr(runtime, "LIVE_URL", url)
+    monkeypatch.setattr(Provider, "live_endpoint", lambda self, **kwargs: url.replace("http://", "ws://"))
     try:
         yield
     finally:

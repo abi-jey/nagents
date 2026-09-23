@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 import aiohttp
 
+from ..provider.auth import validate_endpoint
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
@@ -25,7 +27,7 @@ class LiveAPI:
         if provider.live_config is None:
             raise ValueError("Use a voice provider with live_config for Live API authentication")
         self.provider = provider
-        self.base_url = "https://api.openai.com/v1/live/sessions"
+        self.base_url = provider.live_endpoint()
 
     def url(self, session_id: str = "", operation: str = "") -> str:
         if operation and not session_id:
@@ -33,11 +35,11 @@ class LiveAPI:
         return self.base_url + (f"/{quote(session_id, safe='')}/{operation}" if session_id else "")
 
     async def _post(self, url: str, payload: dict[str, object] | None) -> dict[str, object]:
+        validate_endpoint(url)
+        headers = await self.provider.auth_headers(url)
         async with (
             aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as http,
-            http.post(
-                url, json=payload, headers={"Authorization": f"Bearer {self.provider.api_key}"}, allow_redirects=False
-            ) as response,
+            http.post(url, json=payload, headers=headers, allow_redirects=False) as response,
         ):
             if not 200 <= response.status < 300:
                 raise RuntimeError(f"Live HTTP operation failed ({response.status})")
@@ -78,11 +80,13 @@ class LiveAPI:
         await self._post(self.url(session_id, "hangup"), None)
 
     async def recording(self, session_id: str) -> AsyncGenerator[bytes, None]:
+        url = self.url(session_id, "content")
+        headers = await self.provider.auth_headers(url)
         async with (
             aiohttp.ClientSession() as http,
             http.get(
-                self.url(session_id, "content"),
-                headers={"Authorization": f"Bearer {self.provider.api_key}"},
+                url,
+                headers=headers,
                 allow_redirects=False,
             ) as response,
         ):

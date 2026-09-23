@@ -1,8 +1,9 @@
 # Provider API
 
 Use `Provider` with a `ProviderType` value and explicit credentials/model.
-There are no separate `OpenAIProvider`, `AnthropicProvider`, or `GoogleProvider`
-classes. See [Providers](../guide/providers.md) and
+`OpenAIProvider` adds OpenAI authentication/discovery; `FoundryProvider` accepts
+a caller-owned sync or async Azure credential or an API key. See [Providers](../guide/providers.md),
+[Foundry authentication](../guide/foundry-authentication.md), and
 [Multi-Provider Setup](../examples/multi-provider.md).
 
 `base_url` is an API prefix, not a complete generation endpoint. A shared
@@ -19,6 +20,31 @@ across providers and HTTP contracts. This reference follows the current source.
         - get_model_list
         - verify_model
         - close
+
+## Foundry credentials
+
+`FoundryProvider` reuses the Provider text/GPT-Live transports. `credential` and
+`api_key` are mutually exclusive; `scope` defaults to `https://ai.azure.com/.default`.
+It never creates, selects, caches, or closes an Azure credential. Applications
+choose a sync or async Azure Identity credential (or a structural equivalent)
+themselves. Async is preferred; synchronous token calls are offloaded to a worker
+thread to keep the voice event loop responsive.
+Azure Identity is a developer-testing dependency only, not a project runtime
+dependency or extra.
+
+Foundry API-key GPT-Live WebSockets use the `api-key` header, including attach/fork.
+Entra WebSockets and REST requests retain Bearer authentication, as do REST API
+keys. OpenAI WebSocket authentication is unchanged. Redirects and query-string
+credentials are not allowed.
+
+::: nagents.FoundryProvider
+    options:
+      members:
+        - __init__
+
+::: nagents.provider.AsyncTokenCredential
+
+::: nagents.provider.TokenCredential
 
 ## GPT-Live Voice
 

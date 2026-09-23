@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from ..types import Message
     from ..types import RetryConfig
     from ..types import ToolDefinition
+    from .auth import BearerTokenProvider
 
 DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
@@ -439,21 +440,22 @@ class OpenAIProvider(Provider):
         api: str = "auto",
         realtime_config: RealtimeConfig | None = None,
         retry_config: RetryConfig | None = None,
+        bearer_token_provider: BearerTokenProvider | None = None,
     ) -> None:
-        """Explicit API keys bypass discovery; otherwise use CODEX_HOME/~/.codex.
+        """Explicit API keys/token providers bypass discovery; otherwise use CODEX_HOME/~/.codex.
 
         Local model/profile/wire_api and auth.json select API-key or ChatGPT
         authentication. Explicit credential callbacks select ChatGPT. A custom
-        base_url requires an explicit key; saved OAuth never goes to that URL.
+        base_url requires an explicit key or bearer_token_provider; saved OAuth never goes to that URL.
         API-key requests default to Responses unless another API is selected.
         """
         self._local_api = False
         self._credentials: Callable[[], Awaitable[CodexCredentials]]
-        if credentials is not None and api_key:
-            raise ValueError("Choose api_key or ChatGPT credentials, not both")
-        if base_url and not api_key:
-            raise ValueError("An explicit base_url requires an explicit api_key")
-        if not api_key and credentials is None:
+        if sum((credentials is not None, bool(api_key), bearer_token_provider is not None)) > 1:
+            raise ValueError("Choose api_key, bearer_token_provider, or ChatGPT credentials, not multiple auth sources")
+        if base_url and not api_key and bearer_token_provider is None:
+            raise ValueError("An explicit base_url requires an explicit api_key or bearer_token_provider")
+        if not api_key and credentials is None and bearer_token_provider is None:
             local = _load_config(
                 home, profile=profile, model=model, for_live=live_config is not None or realtime_config is not None
             )
@@ -463,7 +465,7 @@ class OpenAIProvider(Provider):
                 api_key = local.api_key
                 base_url = local.base_url
                 api = local.api if api == "auto" else api
-        if api_key:
+        if api_key or bearer_token_provider is not None:
             super().__init__(
                 ProviderType.OPENAI_COMPATIBLE,
                 api_key,
@@ -474,6 +476,7 @@ class OpenAIProvider(Provider):
                 live_config=live_config,
                 realtime_config=realtime_config,
                 retry_config=retry_config,
+                bearer_token_provider=bearer_token_provider,
             )
             self._local_api = True
             return

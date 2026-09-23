@@ -388,6 +388,8 @@ class Agent:
 
     def _init_batch_client(self) -> None:
         """Initialize the batch client for batch mode."""
+        if self.provider.bearer_token_provider is not None:
+            raise ValueError("Batch mode does not support bearer_token_provider")
         valid_types = (
             ProviderType.OPENAI_COMPATIBLE,
             ProviderType.AZURE_OPENAI_COMPATIBLE,
@@ -758,6 +760,8 @@ class Agent:
         from .realtime import RealtimeConfig
         from .realtime import RealtimeSession
 
+        if self.provider.bearer_token_provider is not None:
+            raise ValueError("Realtime does not support bearer_token_provider; use GPT-Live with live_config")
         if self.provider.provider_type != ProviderType.OPENAI_COMPATIBLE:
             raise ValueError(
                 "Realtime speech-to-speech sessions require an OPENAI_COMPATIBLE provider. "

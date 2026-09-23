@@ -18,6 +18,7 @@ arguments. Most microphone cases accept `--duration SECONDS` or run until Ctrl+C
 | --- | --- |
 | Hosted model and native custom functions | `hosted.py`, `hosted_tools.py` |
 | Client agent or plain application service | `client.py`, `client_service.py` |
+| Foundry hosted/client with API keys or async Entra credentials | `foundry.py --mode hosted`, `foundry.py --mode client` |
 | Optional model tool, nested call, application commentary | `commentary.py` |
 | Quiet UI context and command acknowledgments/errors | `context_updates.py`, `commands_and_errors.py` |
 | Proactive greeting and requested disclosure | `greeting.py`, `disclosure.py` |
@@ -58,6 +59,17 @@ PCM16 at 24 kHz. Use headphones; the reference adapters do not do echo cancellat
 Ctrl+C closes the connection. Backend history is stored in `live-sessions.db`.
 
 ## Authentication
+
+For Azure Foundry, see [Foundry authentication](../../docs/guide/foundry-authentication.md)
+and `foundry.py`. Set an explicit `/openai/v1` resource prefix, Live/backend
+deployment names, and select `--auth entra` (default) or `--auth key`. The Entra
+example passes an async credential to `FoundryProvider` and closes the caller-owned
+credential after both agents. Foundry API-key WebSockets use `api-key` (confirmed
+by hosted-inference service testing); REST keys and Entra tokens retain Bearer
+authentication. Attach/fork use the same WS header, with no redirect fallback.
+Azure Identity is a development-group dependency only; applications install their
+chosen SDK themselves. `--identity` selects the SDK's default chain or an explicit
+managed, workload, or service-principal credential.
 
 **`OpenAIProvider()`** discovers `CODEX_HOME` or `~/.codex`, the selected model
 provider, and saved authentication. `.env` is loaded for configured environment-key

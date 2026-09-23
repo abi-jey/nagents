@@ -91,6 +91,7 @@ nav:
       - Private Web Deployment: guide/ngn-web-deployment.md
       - Legacy API Server: guide/server.md
       - Providers: guide/providers.md
+      - Foundry Authentication: guide/foundry-authentication.md
       - Tools: guide/tools.md
       - Skills: guide/skills.md
       - Sessions: guide/sessions.md
