@@ -102,9 +102,8 @@ def test_web_history_exposes_channel_parts_and_provenance(tmp_path: Path, monkey
         assert source["attachments"] == [
             {"reference": "asset", "media_type": "image/png", "filename": "picture.png", "size": len(PNG)}
         ]
-        messages = cast(
-            "list[Message]",
-            app.client.portal.call(app.state.harness.agent.session.get_history, app.bindings()["chat-a"]),
+        messages: list[Message] = app.client.portal.call(
+            app.state.harness.agent.session.get_history, app.bindings()["chat-a"]
         )
         assert isinstance(messages[0].content, list)
 

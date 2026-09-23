@@ -65,9 +65,7 @@ def test_channel_web_and_unlinked_identical_envelopes_have_authoritative_distinc
         app.idle()
         session_id = app.bindings()["chat-a"]
         assert app.client.portal is not None
-        messages = cast(
-            "list[Message]", app.client.portal.call(app.state.harness.agent.session.get_history, session_id)
-        )
+        messages: list[Message] = app.client.portal.call(app.state.harness.agent.session.get_history, session_id)
         original = messages[0].content
         assert isinstance(original, str)
         assert original.startswith("fixture · user sender · chat chat-a · message ")
@@ -89,7 +87,7 @@ def test_channel_web_and_unlinked_identical_envelopes_have_authoritative_distinc
         assert channel["ingress_id"] != web["ingress_id"]
         assert unlinked["source_verified"] is False and "source" not in unlinked
         assert unlinked["content"] == original and unlinked["message_id"] == unlinked["ingress_id"] == ""
-        saved = cast("list[Message]", app.client.portal.call(app.state.harness.agent.session.get_history, session_id))
+        saved: list[Message] = app.client.portal.call(app.state.harness.agent.session.get_history, session_id)
         assert [message.content for message in saved if message.role == "user"] == [original] * 3
         assert len(received(app)) == 2
     with site(tmp_path, monkeypatch) as app:
@@ -170,9 +168,7 @@ def test_unlinked_compaction_copies_and_duplicate_legacy_rows_are_not_reidentifi
         before = users(app, session_id)[0]
         assert before["source_verified"] is True
         assert app.client.portal is not None
-        messages = cast(
-            "list[Message]", app.client.portal.call(app.state.harness.agent.session.get_history, session_id)
-        )
+        messages: list[Message] = app.client.portal.call(app.state.harness.agent.session.get_history, session_id)
         replacement = [Message(role="compaction_summary", content="summary"), messages[0], messages[0]]
         app.client.portal.call(app.state.harness.agent.session.replace_context, session_id, replacement)
         rows = users(app, session_id)

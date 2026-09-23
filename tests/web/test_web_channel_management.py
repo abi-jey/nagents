@@ -175,8 +175,12 @@ def test_approved_tool_queues_then_real_turn_finishes_and_worker_opens_at_idle(
         assert not app.channels and not host.catalog.path.exists()
         assert host.runtime is None and host.instructions.catalog == []
         status = app.client.portal.call(host.management.channel_configuration, "status")
-        assert status["requests"][0]["status"] == "QUEUED"
-        assert status["requests"][0]["saved"] is False
+        requests = status["requests"]
+        assert isinstance(requests, list)
+        request = requests[0]
+        assert isinstance(request, dict)
+        assert request["status"] == "QUEUED"
+        assert request["saved"] is False
         assert FAKE_SECRET not in json.dumps(status)
         result = app.providers[0].requests[-1][-1]
         assert result.role == "tool" and "QUEUED" in str(result.content)
@@ -293,9 +297,18 @@ def test_discovery_private_metadata_and_active_root_not_browser_selection(
         assert response.status_code == 200 and selected != app.main
         assert app.client.portal is not None
         result = app.client.portal.call(host.management.channel_configuration)
-        plugin = result["plugins"][0]
+        plugins = result["plugins"]
+        assert isinstance(plugins, list)
+        plugin = plugins[0]
+        assert isinstance(plugin, dict)
         assert plugin["secret_fields"] == ["token"]
-        assert plugin["schema"]["properties"]["token"]["writeOnly"] is True
+        schema = plugin["schema"]
+        assert isinstance(schema, dict)
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        token = properties["token"]
+        assert isinstance(token, dict)
+        assert token["writeOnly"] is True
         assert "configured_secrets" in json.dumps(result) and FAKE_SECRET not in json.dumps(result)
         assert result["plugin_path"] == str(host.catalog.plugin_path)
         assert "bindings" not in result
