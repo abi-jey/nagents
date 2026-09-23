@@ -48,6 +48,10 @@ from ..types import Message
 from ..types import RetryConfig
 from ..types import ToolCall
 from ..types import ToolDefinition
+from .auth import BearerTokenProvider
+from .auth import bearer_headers
+from .auth import validate_endpoint
+from .auth import validate_prefix
 from .gateway import GatewayHTTPClient
 
 if TYPE_CHECKING:
@@ -92,8 +96,8 @@ class Provider:
     def __init__(
         self,
         provider_type: ProviderType,
-        api_key: str,
-        model: str,
+        api_key: str = "",
+        model: str = "",
         base_url: str | None = None,
         timeout: float = 120.0,
         api_version: str | None = None,
@@ -101,6 +105,8 @@ class Provider:
         realtime_config: "RealtimeConfig | None" = None,
         api: str = "auto",
         live_config: "LiveConfig | None" = None,
+        *,
+        bearer_token_provider: BearerTokenProvider | None = None,
     ):
         """
         Initialize the provider.
@@ -124,9 +130,23 @@ class Provider:
                 chat_completions for LiteLLM and OpenRouter. base_url is an API
                  prefix, not a full generation endpoint.
             live_config: GPT-Live voice/delegation settings for Agent.run() with audio.
+            bearer_token_provider: Optional async callable returning a bearer token.
+                Mutually exclusive with api_key; supports OpenAI-compatible v1
+                chat/Responses and GPT-Live. Called per request attempt/connection.
+                The caller owns the credential and its cache/refresh/close lifecycle.
         """
         self.provider_type = provider_type
         self.api_key = api_key
+        self.bearer_token_provider = bearer_token_provider
+        if bearer_token_provider is not None:
+            if api_key:
+                raise ValueError("Choose api_key or bearer_token_provider, not both")
+            if not callable(bearer_token_provider):
+                raise ValueError("bearer_token_provider must be an async callable")
+            if provider_type not in {ProviderType.OPENAI_COMPATIBLE, ProviderType.AZURE_OPENAI_COMPATIBLE_V1}:
+                raise ValueError("Bearer token authentication requires an OpenAI-compatible v1 provider")
+            if api not in {"auto", "chat_completions", "responses"} or realtime_config is not None:
+                raise ValueError("Bearer token authentication supports text chat/responses and GPT-Live, not Realtime")
         self.model = model
         self.api_version = api_version
         self.retry_config = retry_config or RetryConfig()
@@ -134,11 +154,11 @@ class Provider:
         self.live_config = live_config
         if live_config is not None and realtime_config is not None:
             raise ValueError("Choose live_config or realtime_config, not both")
-        if live_config is not None and (
-            provider_type != ProviderType.OPENAI_COMPATIBLE
-            or (base_url and base_url.rstrip("/") != "https://api.openai.com/v1")
-        ):
-            raise ValueError("GPT-Live uses the OpenAI voice endpoint; configure custom providers on the backend agent")
+        if live_config is not None and provider_type not in {
+            ProviderType.OPENAI_COMPATIBLE,
+            ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
+        }:
+            raise ValueError("GPT-Live requires an OpenAI-compatible v1 provider")
         if api not in {"auto", "chat_completions", "responses", "messages", "completions"}:
             raise ValueError("api must be auto, chat_completions, responses, messages, or completions")
         if provider_type == ProviderType.LITELLM and not base_url:
@@ -147,8 +167,19 @@ class Provider:
         if provider_type == ProviderType.GEMINI_NATIVE:
             default_api = "auto"
         self.api = default_api if api == "auto" else api
+        if provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1 and self.api not in {
+            "chat_completions",
+            "responses",
+        }:
+            raise ValueError("Azure v1 supports chat_completions or responses")
         if (
-            provider_type not in {ProviderType.LITELLM, ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER}
+            provider_type
+            not in {
+                ProviderType.LITELLM,
+                ProviderType.OPENAI_COMPATIBLE,
+                ProviderType.OPENROUTER,
+                ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
+            }
             and self.api != default_api
         ):
             raise ValueError("This provider does not support the selected HTTP API contract")
@@ -168,7 +199,9 @@ class Provider:
                 raise ValueError("base_url must be an API prefix, not a generation endpoint")
         self._http = (
             GatewayHTTPClient(timeout=timeout)
-            if provider_type in {ProviderType.LITELLM, ProviderType.OPENROUTER} or api != "auto"
+            if bearer_token_provider is not None
+            or provider_type in {ProviderType.LITELLM, ProviderType.OPENROUTER, ProviderType.AZURE_OPENAI_COMPATIBLE_V1}
+            or api != "auto"
             else HTTPClient(timeout=timeout)
         )
         self._model_verified: bool | None = None  # None = not checked, True/False = result
@@ -197,8 +230,30 @@ class Provider:
             raise ValueError("base_url is required for Azure OpenAI")
         else:  # GEMINI_NATIVE
             self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        if not self.api_key:
+        if bearer_token_provider is not None or live_config is not None:
+            validate_prefix(self.base_url)
+        if not self.api_key and bearer_token_provider is None:
             raise ValueError("API key is required for provider initialization")
+
+    async def auth_headers(self, url: str) -> dict[str, str]:
+        """Fresh authentication per attempt; caller owns the credential lifetime."""
+        validate_prefix(self.base_url)
+        validate_endpoint(url, websocket=url.startswith(("ws:", "wss:")))
+        if self.bearer_token_provider is not None:
+            return await bearer_headers(self.bearer_token_provider)
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    def live_endpoint(self, *, websocket: bool = False) -> str:
+        """Derive GPT-Live endpoints independently of Realtime/Voice Live."""
+        validate_prefix(self.base_url)
+        url = self._api_prefix() + "/live/sessions"
+        return url.replace("https://", "wss://", 1).replace("http://", "ws://", 1) if websocket else url
+
+    def _api_prefix(self) -> str:
+        prefix = self.base_url.rstrip("/")
+        if self.provider_type == ProviderType.AZURE_OPENAI_COMPATIBLE_V1 and not prefix.endswith("/v1"):
+            prefix += "/v1"
+        return prefix
 
     def set_http_logger(self, http_logger: "HTTPLogger | None") -> None:
         """
@@ -252,9 +307,13 @@ class Provider:
                 or parsed.path.rstrip("/").endswith(("/chat/completions", "/responses", "/messages", "/completions"))
             ):
                 raise ValueError
-            if not self.api_key.strip():
+            if not self.api_key.strip() and self.bearer_token_provider is None:
                 raise ValueError
-            headers = {"Authorization": f"Bearer {self.api_key}"}
+            headers = (
+                await self.auth_headers(prefix)
+                if self.bearer_token_provider
+                else {"Authorization": f"Bearer {self.api_key}"}
+            )
             if self.provider_type == ProviderType.OPENROUTER:
                 headers["HTTP-Referer"] = "https://github.com/nagents"
             # A short-lived secure transport also isolates catalogs from generation
@@ -598,6 +657,8 @@ class Provider:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        if self.bearer_token_provider is not None:
+            headers.update(await self.auth_headers(url))
 
         body: dict[str, Any] = {
             "model": self.model,
@@ -709,7 +770,7 @@ class Provider:
             # V1 Azure OpenAI format - standard OpenAI-compatible endpoint
             # URL: https://{resource}.openai.azure.com/openai/v1/chat/completions
             # Uses Bearer token auth and model in body (like standard OpenAI)
-            prefix = self.base_url if self.base_url.endswith("/v1") else f"{self.base_url}/v1"
+            prefix = self._api_prefix()
             url = f"{prefix}/chat/completions"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -717,6 +778,9 @@ class Provider:
             }
         else:
             raise ValueError(f"Unexpected provider type for Azure generation: {self.provider_type}")
+
+        if self.bearer_token_provider is not None:
+            headers.update(await self.auth_headers(url))
 
         body: dict[str, Any] = {
             "messages": openai_adapter.format_messages(messages),
@@ -1337,8 +1401,10 @@ class Provider:
         from ..adapters.responses import format_request
 
         body = format_request(self.model, messages, tools, config, stream)
-        url = f"{self.base_url}/responses"
+        url = f"{self._api_prefix()}/responses"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if self.bearer_token_provider is not None:
+            headers.update(await self.auth_headers(url))
         if self.provider_type == ProviderType.OPENROUTER:
             headers["HTTP-Referer"] = "https://github.com/nagents"
         accumulator = ResponseAccumulator()

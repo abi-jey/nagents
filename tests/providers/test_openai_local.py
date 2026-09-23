@@ -335,7 +335,7 @@ def test_voice_live_config_uses_api_key_never_oauth_token(tmp_path: Path, monkey
     assert OpenAIProvider(home=expired, live_config=LiveConfig()).api_key == "sk-still-valid"
 
 
-def test_voice_live_config_rejects_custom_base_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_voice_live_config_uses_custom_base_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "codex"
     write_config(
         home,
@@ -343,8 +343,8 @@ def test_voice_live_config_rejects_custom_base_url(tmp_path: Path, monkeypatch: 
         'wire_api = "responses"\nenv_key = "CUSTOM_KEY"\n',
     )
     monkeypatch.setenv("CUSTOM_KEY", "sk-custom")
-    with pytest.raises(ValueError, match="GPT-Live uses the OpenAI voice endpoint"):
-        OpenAIProvider(home=home, live_config=LiveConfig())
+    provider = OpenAIProvider(home=home, live_config=LiveConfig())
+    assert provider.live_endpoint(websocket=True) == "wss://example.test/v1/live/sessions"
 
 
 def test_no_file_writes_and_project_config_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -448,7 +448,7 @@ def test_explicit_base_url_requires_explicit_api_key() -> None:
 
 def test_callback_and_api_key_are_mutually_exclusive() -> None:
     callback = AsyncMock(return_value=CodexCredentials("callback-token"))
-    with pytest.raises(ValueError, match="Choose api_key or ChatGPT credentials"):
+    with pytest.raises(ValueError, match="not multiple auth sources"):
         OpenAIProvider(callback, api_key="sk-explicit")
     callback.assert_not_awaited()
 

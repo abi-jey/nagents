@@ -4,6 +4,9 @@ from .base import PLACEHOLDER_PROVIDER
 from .base import PlaceholderProvider
 from .base import Provider
 from .base import ProviderType
+from .foundry import AsyncTokenCredential
+from .foundry import FoundryProvider
+from .foundry import TokenCredential
 from .openai import DEFAULT_CODEX_MODEL
 from .openai import CodexCredentials
 from .openai import OpenAIProvider
@@ -11,9 +14,12 @@ from .openai import OpenAIProvider
 __all__ = [
     "DEFAULT_CODEX_MODEL",
     "PLACEHOLDER_PROVIDER",
+    "AsyncTokenCredential",
     "CodexCredentials",
+    "FoundryProvider",
     "OpenAIProvider",
     "PlaceholderProvider",
     "Provider",
     "ProviderType",
+    "TokenCredential",
 ]

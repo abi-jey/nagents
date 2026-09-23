@@ -192,6 +192,7 @@ from .media import get_media_capabilities
 from .media import transcode_audio_to_wav
 from .provider import DEFAULT_CODEX_MODEL
 from .provider import CodexCredentials
+from .provider import FoundryProvider
 from .provider import OpenAIProvider
 from .provider import Provider
 from .provider import ProviderType
@@ -318,6 +319,7 @@ __all__ = [
     "EventType",
     "FileHTTPLogger",
     "FinishReason",
+    "FoundryProvider",
     "GeminiSTTService",
     "GeminiThinkingConfig",
     "GenerationConfig",

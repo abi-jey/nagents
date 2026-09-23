@@ -131,6 +131,7 @@ async def live_server(monkeypatch: pytest.MonkeyPatch, handler: Handler) -> Asyn
     await site.start()
     url = f"http://127.0.0.1:{runner.addresses[0][1]}/live"
     monkeypatch.setattr(live, "LIVE_URL", url)
+    monkeypatch.setattr(Provider, "live_endpoint", lambda self, **kwargs: url.replace("http://", "ws://"))
     try:
         yield
     finally:
