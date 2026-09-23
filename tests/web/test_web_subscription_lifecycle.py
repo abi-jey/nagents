@@ -138,9 +138,12 @@ def test_history_read_racing_complete_run_has_consistent_snapshot(
                 assert frame["type"] == "snapshot"
                 snapshot = frame["snapshot"]
                 cursor = frame["cursor"]
-                app.client.portal.call(
-                    app.state.bus.event, {"session_id": app.main, "event": "notice", "text": "after checkpoint"}
-                )
+                notice: dict[str, object] = {
+                    "session_id": app.main,
+                    "event": "notice",
+                    "text": "after checkpoint",
+                }
+                app.client.portal.call(app.state.bus.event, notice)
                 event = socket.receive_json()
                 assert event["cursor"] > cursor and event["record"]["text"] == "after checkpoint"
             history = cast("list[dict[str, object]]", snapshot["history"])

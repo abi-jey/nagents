@@ -39,7 +39,7 @@ from nagents.events import ErrorEvent
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 from nagents.observation import observer
-from nagents.provider.codex import CodexProvider
+from nagents.provider.openai import OpenAIProvider
 from nagents.tools.registry import ToolRegistry
 
 from ._async import join_owned as _await_cleanup
@@ -97,7 +97,10 @@ class Designer:
         provider.base_url = config.base_url
         provider.api = config.api
         provider.api_version = config.api_version
-        if isinstance(self.state.harness.agent.provider, CodexProvider):
+        if (
+            isinstance(self.state.harness.agent.provider, OpenAIProvider)
+            and self.state.harness.agent.provider.uses_chatgpt_auth
+        ):
             provider.auth = "chatgpt"
             provider.secret = ""
             design.secrets = {}

@@ -178,6 +178,8 @@ from .extensions import CompactionStrategy
 from .extensions import ModelRequest
 from .extensions import RunContext
 from .http import FileHTTPLogger
+from .live import LiveConfig
+from .live import LiveEvent
 from .mcp import MCPClient
 from .mcp import MCPError
 from .mcp import MCPManager
@@ -190,7 +192,7 @@ from .media import get_media_capabilities
 from .media import transcode_audio_to_wav
 from .provider import DEFAULT_CODEX_MODEL
 from .provider import CodexCredentials
-from .provider import CodexProvider
+from .provider import OpenAIProvider
 from .provider import Provider
 from .provider import ProviderType
 from .realtime import DEFAULT_REALTIME_MODEL
@@ -298,7 +300,6 @@ __all__ = [
     "ChannelSend",
     "ChannelValue",
     "CodexCredentials",
-    "CodexProvider",
     "CompactionDoneEvent",
     "CompactionRequest",
     "CompactionResult",
@@ -326,6 +327,8 @@ __all__ = [
     "JsonSchema",
     "JsonSchemaProperty",
     "JsonValue",
+    "LiveConfig",
+    "LiveEvent",
     "MCPClient",
     "MCPError",
     "MCPManager",
@@ -337,6 +340,7 @@ __all__ = [
     "ModelRequest",
     "NagentsError",
     "NullAudioOutput",
+    "OpenAIProvider",
     "OpenAISTTService",
     "OpenRouterReasoningConfig",
     "Provider",

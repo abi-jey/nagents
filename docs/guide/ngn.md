@@ -481,7 +481,7 @@ restrictions or turn a ChatGPT subscription into general API access.
 ChatGPT sign-in uses `https://chatgpt.com/backend-api/codex/responses`, not the
 ordinary API-key chat-completions endpoint. The initial default `gpt-4.1` is
 switched to `gpt-5.6-terra` for this route; use `/model` to select another model
-available to your account. The underlying `CodexProvider` lives in the library;
+available to your account. The underlying `OpenAIProvider` lives in the library;
 interactive login, token refresh/storage, and route selection live in the harness.
 
 The `auth` configuration field and `--auth` accept:

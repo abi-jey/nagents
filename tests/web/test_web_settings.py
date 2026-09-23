@@ -21,7 +21,7 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.dictation import VoiceDictation
 from nagents.harness.provider import HarnessProvider
-from nagents.provider import CodexProvider
+from nagents.provider import OpenAIProvider
 from nagents.types import Message
 from nagents.types import ToolCall
 from nagents.web.app import create_app
@@ -275,7 +275,7 @@ def test_dictation_projection_is_local_safe_and_separate_from_codex(
                 harness = harnesses[0]
                 provider = harness.agent.provider
                 if not config.demo:
-                    assert isinstance(provider, CodexProvider)
+                    assert isinstance(provider, OpenAIProvider)
                 before = (await client.get("/api/settings", headers=headers)).json()
                 values = {
                     **before["values"],

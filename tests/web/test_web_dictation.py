@@ -22,7 +22,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.dictation import BYTES_PER_SECOND
 from nagents.harness.dictation import MAX_RESPONSE_BYTES
 from nagents.harness.dictation import VoiceDictation
-from nagents.provider import CodexProvider
+from nagents.provider import OpenAIProvider
 from nagents.web import dictation as web_dictation
 from nagents.web.app import WebState
 from nagents.web.wakeups import Chain
@@ -172,7 +172,7 @@ def test_real_transcription_is_draft_only_and_preserves_codex(tmp_path: Path, ne
         ):
             harness = state.harness
             provider = harness.agent.provider
-            assert isinstance(provider, CodexProvider)
+            assert isinstance(provider, OpenAIProvider)
             before = state.settings.snapshot()
             history = await harness.history()
             sessions = await harness.list_sessions()
@@ -540,7 +540,7 @@ def test_cancelled_lifespan_still_closes_harness_provider_and_auth(
         harness = state.harness
         assert isinstance(harness, ControlledHarness)
         provider = harness.agent.provider
-        assert isinstance(provider, CodexProvider)
+        assert isinstance(provider, OpenAIProvider)
         provider_entered = asyncio.Event()
         provider_release = asyncio.Event()
         if cancellation != "repeated":
@@ -754,7 +754,7 @@ def test_saved_preferences_and_selected_backend_key_drive_upload(
         config = replace(configuration(tmp_path), auth="chatgpt", dictation_api_key_env="NGN_TRANSCRIPTION_API_KEY")
         async with dictation_app(tmp_path, config) as (app, client, headers, state):
             provider = state.harness.agent.provider
-            assert isinstance(provider, CodexProvider)
+            assert isinstance(provider, OpenAIProvider)
             coding_model = provider.model
             values = {
                 **state.settings.values.model_dump(),

@@ -27,7 +27,7 @@ from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from nagents.harness import Harness
-from nagents.provider import CodexProvider
+from nagents.provider import OpenAIProvider
 
 from . import built_assets
 from . import is_loopback_host
@@ -285,7 +285,11 @@ def create_app(
             raise HTTPException(501, "Model discovery is unavailable in offline demo mode. Enter a model ID manually.")
         try:
             model_ids = await provider.get_model_list()
-            source = "codex" if isinstance(provider, CodexProvider) else provider.provider_type.value
+            source = (
+                "codex"
+                if isinstance(provider, OpenAIProvider) and provider.uses_chatgpt_auth
+                else provider.provider_type.value
+            )
         except NotImplementedError:
             raise HTTPException(
                 501, "Model discovery is not supported by this connection. Enter a model ID manually."

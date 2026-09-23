@@ -36,6 +36,7 @@ class EventType(Enum):
     RESPONSE_CANCELLED = "response_cancelled"  # In-progress response was cancelled
     REALTIME_RATE_LIMITS = "realtime_rate_limits"  # Rate limit / usage counters
     REALTIME_RAW = "realtime_raw"  # Unmapped server event (raw passthrough)
+    LIVE = "live"  # GPT-Live lifecycle/control event, not a Realtime event.
 
     # Completion events
     TEXT_DONE = "text_done"  # Final complete text

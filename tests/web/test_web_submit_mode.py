@@ -45,7 +45,7 @@ def inbox_rows(app: Site) -> dict[str, str]:
             return {str(message_id): str(status) for message_id, status in await cursor.fetchall()}
 
     assert app.client.portal is not None
-    return cast("dict[str, str]", app.client.portal.call(read))
+    return app.client.portal.call(read)
 
 
 def holding_first_script(started: asyncio.Event) -> Script:
@@ -71,7 +71,7 @@ def begin_active_run(app: Site) -> tuple[Run, str]:
     app.idle()
     root = app.bindings()["chat-a"]
     assert app.client.portal is not None
-    started = cast("asyncio.Event", app.client.portal.call(asyncio.Event))
+    started: asyncio.Event = app.client.portal.call(asyncio.Event)
     app.providers[0].script = holding_first_script(started)
     app.submit("first work", root, id=M1)
     app.client.portal.call(asyncio.wait_for, started.wait(), 5)
@@ -143,7 +143,7 @@ def test_other_session_input_never_cancels_active_work(tmp_path: Path, monkeypat
         def create(db: object) -> str:
             return store.new_root(db, "unrelated work")  # type: ignore[arg-type]
 
-        other = cast("str", app.client.portal.call(store._transaction, create))
+        other: str = app.client.portal.call(store._transaction, create)
         try:
             app.submit("unrelated", other, id=M3)
             # Different-session input cannot stop this session's run.

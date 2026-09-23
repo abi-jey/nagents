@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from ..http import HTTPLogger
+    from ..live import LiveConfig
     from ..realtime import RealtimeConfig
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ class Provider:
         retry_config: RetryConfig | None = None,
         realtime_config: "RealtimeConfig | None" = None,
         api: str = "auto",
+        live_config: "LiveConfig | None" = None,
     ):
         """
         Initialize the provider.
@@ -120,7 +122,8 @@ class Provider:
             api: HTTP contract: auto, chat_completions, responses, messages,
                 or completions. Auto preserves native providers and selects
                 chat_completions for LiteLLM and OpenRouter. base_url is an API
-                prefix, not a full generation endpoint.
+                 prefix, not a full generation endpoint.
+            live_config: GPT-Live voice/delegation settings for Agent.run() with audio.
         """
         self.provider_type = provider_type
         self.api_key = api_key
@@ -128,6 +131,14 @@ class Provider:
         self.api_version = api_version
         self.retry_config = retry_config or RetryConfig()
         self.realtime_config = realtime_config
+        self.live_config = live_config
+        if live_config is not None and realtime_config is not None:
+            raise ValueError("Choose live_config or realtime_config, not both")
+        if live_config is not None and (
+            provider_type != ProviderType.OPENAI_COMPATIBLE
+            or (base_url and base_url.rstrip("/") != "https://api.openai.com/v1")
+        ):
+            raise ValueError("GPT-Live uses the OpenAI voice endpoint; configure custom providers on the backend agent")
         if api not in {"auto", "chat_completions", "responses", "messages", "completions"}:
             raise ValueError("api must be auto, chat_completions, responses, messages, or completions")
         if provider_type == ProviderType.LITELLM and not base_url:

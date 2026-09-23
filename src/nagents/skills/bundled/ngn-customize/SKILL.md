@@ -19,7 +19,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Need | Object or entry point | Source under `src/nagents/` |
 | --- | --- | --- |
 | Text agent lifecycle and runtime options | `Agent(...)`, `run()`, `close()` | `agent.py` |
-| Provider/model/protocol/retries | `Provider`, `ProviderType`, `RetryConfig`, `GenerationConfig`, `CodexProvider` | `provider/`, `types.py`, `http/` |
+| Provider/model/protocol/retries | `Provider`, `ProviderType`, `RetryConfig`, `GenerationConfig`, `OpenAIProvider` | `provider/`, `types.py`, `http/` |
 | Persistent conversation and active context | `SessionManager`, `Message`, `Agent.session` | `session/manager.py`, `types.py` |
 | Model-callable Python functions | `Agent.register_tool`, `ToolRegistry.register` | `tools/registry.py` |
 | MCP server processes and tool wrappers | `MCPServerConfig`, `MCPClient`, `MCPManager` | `mcp/` |
@@ -246,7 +246,7 @@ OpenAI-compatible, Anthropic, native Gemini, Azure, OpenRouter, and LiteLLM.
 generation endpoint. LiteLLM needs an explicit gateway URL and API-key variable.
 Text-only legacy Completions cannot drive the coding Harness's tools.
 
-`CodexProvider` uses its credential-provider interface; the Harness owns device
+`OpenAIProvider` uses its credential-provider interface for ChatGPT authentication; the Harness owns device
 login, refresh, and credential storage. `auth="chatgpt"` requires the default
 OpenAI route with `api="auto"`; custom endpoints use API-key authentication.
 Dictation has separate transcription credentials and is not authorized by

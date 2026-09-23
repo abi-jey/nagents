@@ -6,7 +6,7 @@ microphone or audio files: connect to a realtime model, send a text message,
 and stream the response plus any tool calls.
 
 Run:
-    OPENAI_API_KEY=sk-... python examples/realtime-live/realtime_text.py
+    OPENAI_API_KEY=sk-... python examples/realtime/realtime_text.py
 """
 
 import argparse
@@ -14,9 +14,9 @@ import asyncio
 import os
 from pathlib import Path
 
+from _support import print_event
+from _support import start_timer
 from dotenv import load_dotenv
-from event_printer import print_event
-from event_printer import start_timer
 
 from nagents import Agent
 from nagents import DoneEvent

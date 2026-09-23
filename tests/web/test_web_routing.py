@@ -89,7 +89,7 @@ def journal(app: Site) -> dict[str, dict[str, str]]:
             }
 
     assert app.client.portal is not None
-    return cast("dict[str, dict[str, str]]", app.client.portal.call(read))
+    return app.client.portal.call(read)
 
 
 def users(app: Site, session_id: str) -> list[dict[str, object]]:

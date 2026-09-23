@@ -26,6 +26,47 @@ explicitly as shown below.
 
 ## Discover Model IDs
 
+### Local Codex configuration
+
+```python
+from nagents import OpenAIProvider
+
+provider = OpenAIProvider()
+```
+
+With no explicit credentials, `OpenAIProvider` discovers Codex configuration under `CODEX_HOME`
+or `~/.codex`. It reads `config.toml` and file-based `auth.json` to select the
+model, API contract and authentication method. Saved ChatGPT login uses the
+existing Codex OAuth transport; API-key/custom-provider configuration uses the
+selected Responses or legacy Chat Completions API. An unrelated `OPENAI_API_KEY`
+does not replace a saved ChatGPT login.
+
+Optional overrides are `OpenAIProvider(home=..., profile=..., model=...)`.
+
+An explicit API key bypasses local discovery, including saved ChatGPT login:
+
+```python
+provider = OpenAIProvider(api_key="your-api-key", model="gpt-5.6-terra", api="responses")
+```
+
+Use `api="chat_completions"` to select that protocol. A custom `base_url`
+requires an explicit `api_key`. `provider.uses_chatgpt_auth` distinguishes
+subscription authentication from API-key authentication.
+
+Selected `NAME.config.toml` profile files and legacy `[profiles.NAME]` tables are
+supported. Custom providers can specify `base_url`, `wire_api`, `env_key`, and
+`requires_openai_auth`. Project-local configuration is not used for authentication
+or endpoint discovery. No credentials are copied or written. OAuth tokens are
+reread before requests, picking up refreshes performed by Codex; Nagents does not
+rotate the external application's refresh tokens.
+
+This discovery path currently requires file credentials. Keyring-only/ephemeral
+logins and provider command-auth/custom-header/query settings report an explicit
+configuration error instead of silently selecting another route. Supplying the
+existing credential callback continues to work for application-owned OAuth.
+
+### Explicit catalog discovery
+
 The current source checkout adds `await provider.get_model_list() -> list[str]`;
 the published `v0.5.0` release does not include this method. See the
 [Provider API example](../api/provider.md#explicit-model-discovery) for a complete
@@ -45,11 +86,11 @@ Catalog IDs are not capability or entitlement guarantees. The generation service
 can reject a listed model or accept an unlisted one. API-key catalogs and
 ChatGPT/Codex OAuth catalogs are separate connections, not interchangeable ways
 to use a subscription. Never pass a Codex OAuth token as `Provider.api_key`, or
-send it to an OpenAI-compatible endpoint. Use the separate `CodexProvider` and
+send it to an OpenAI-compatible endpoint. Use `OpenAIProvider` with ChatGPT authentication and
 the [existing ngn login flow](ngn.md#openai-device-login) for subscription access.
 Its `get_model_list()` fetches picker-visible `slug` IDs from the fixed Codex
 catalog using a fresh credential snapshot. `supported_in_api: false` does not
-exclude an OAuth model. See the [Codex API example and pinned contract](../api/provider.md#codex-authentication)
+exclude an OAuth model. See the [ChatGPT API example and pinned contract](../api/provider.md#local-configuration-and-chatgpt-authentication)
 for authentication, visibility validation, and compatibility limits. This follows
 the official Codex client, not a stable public API guarantee; manual entry remains
 available without changing login or billing mode.

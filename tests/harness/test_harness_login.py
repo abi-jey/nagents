@@ -21,10 +21,10 @@ from nagents.harness import load_config
 from nagents.harness import runtime
 from nagents.harness.auth import DeviceAuthorization
 from nagents.harness.provider import HarnessProvider
-from nagents.provider import codex as codex_module
-from nagents.provider.codex import DEFAULT_CODEX_MODEL
-from nagents.provider.codex import CodexCredentials
-from nagents.provider.codex import CodexProvider
+from nagents.provider import openai as openai_module
+from nagents.provider.openai import DEFAULT_CODEX_MODEL
+from nagents.provider.openai import CodexCredentials
+from nagents.provider.openai import OpenAIProvider
 from tests.support.hang_guard import HANG_GUARD
 
 
@@ -92,7 +92,7 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             assert fake.saved
             assert harness.config.auth == "chatgpt"
             assert harness.config.model == DEFAULT_CODEX_MODEL
-            assert isinstance(harness.agent.provider, CodexProvider)
+            assert isinstance(harness.agent.provider, OpenAIProvider)
             assert await harness.history() == []
             assert "TEST-CODE" not in harness.describe()
             assert "test-access-do-not-display" not in harness.describe()
@@ -130,7 +130,7 @@ def test_saved_oauth_never_reaches_custom_endpoints(
         harness = Harness(HarnessConfig(workspace=tmp_path, auth=auth, base_url=endpoint))
         try:
             await harness.initialize()
-            assert isinstance(harness.agent.provider, CodexProvider) is expected
+            assert isinstance(harness.agent.provider, OpenAIProvider) is expected
             assert fake.started == 0
         finally:
             await harness.close()
@@ -336,7 +336,7 @@ def test_saved_login_drives_real_responses_tool_loop(tmp_path: Path, monkeypatch
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
-        monkeypatch.setattr(codex_module, "CODEX_ENDPOINT", f"http://127.0.0.1:{runner.addresses[0][1]}/responses")
+        monkeypatch.setattr(openai_module, "CODEX_ENDPOINT", f"http://127.0.0.1:{runner.addresses[0][1]}/responses")
         harness = Harness(HarnessConfig(workspace=tmp_path))
         try:
             events = [event async for event in harness.run("Read sample.txt")]

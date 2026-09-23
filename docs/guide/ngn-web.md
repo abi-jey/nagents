@@ -927,7 +927,7 @@ provider override never changes the administrator's demo-mode ceiling.
 read side effect. It accepts no query parameters and uses the same `X-Ngn-Token`,
 Host, Origin, and fetch-metadata guards as other API reads. A successful response
 contains only `models` (an array of IDs) and `source`: `codex` for an active
-`CodexProvider`, otherwise the actual `ProviderType.value` such as
+`OpenAIProvider` using ChatGPT authentication, otherwise the actual `ProviderType.value` such as
 `openai_compatible`, `openrouter`, or `litellm`. The configured provider can still
 be named `openai` while the active connection is Codex.
 
@@ -941,7 +941,7 @@ a fake or cached catalog, expose upstream exceptions, or change the provider.
 Codex returns only picker-visible model IDs, including those marked
 `supported_in_api: false`; that field does not indicate OAuth unavailability.
 Its fixed catalog request uses compatibility version `0.153.4` while retaining
-ngn's own client identity. This follows the [official Codex client contract](../api/provider.md#codex-authentication),
+ngn's own client identity. This follows the [official Codex client contract](../api/provider.md#local-configuration-and-chatgpt-authentication),
 not a stable public OpenAI REST guarantee. The existing backend login/refresh
 flow and private deployment's selected authentication mode are unchanged.
 

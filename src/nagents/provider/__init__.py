@@ -4,15 +4,15 @@ from .base import PLACEHOLDER_PROVIDER
 from .base import PlaceholderProvider
 from .base import Provider
 from .base import ProviderType
-from .codex import DEFAULT_CODEX_MODEL
-from .codex import CodexCredentials
-from .codex import CodexProvider
+from .openai import DEFAULT_CODEX_MODEL
+from .openai import CodexCredentials
+from .openai import OpenAIProvider
 
 __all__ = [
     "DEFAULT_CODEX_MODEL",
     "PLACEHOLDER_PROVIDER",
     "CodexCredentials",
-    "CodexProvider",
+    "OpenAIProvider",
     "PlaceholderProvider",
     "Provider",
     "ProviderType",

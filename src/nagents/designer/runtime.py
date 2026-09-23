@@ -24,8 +24,8 @@ from nagents.mcp import MCPServerConfig
 from nagents.observation import observe
 from nagents.observation import scope
 from nagents.provider import Provider
-from nagents.provider.codex import CodexCredentials
-from nagents.provider.codex import CodexProvider
+from nagents.provider.openai import CodexCredentials
+from nagents.provider.openai import OpenAIProvider
 from nagents.types import GenerationConfig
 
 from .store import Recorder
@@ -170,7 +170,7 @@ class DesignedHarness(Harness):
         super().__init__(configured)
         self._initial_provider = self.agent.provider
         self.agent.provider = (
-            CodexProvider(self.codex_credentials, model=provider.model)
+            OpenAIProvider(self.codex_credentials, model=provider.model)
             if provider.auth == "chatgpt" and not config.demo
             else DesignProvider(design, provider_name, self.recorder, config.demo)
         )
