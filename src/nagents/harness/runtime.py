@@ -26,8 +26,8 @@ from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.extensions import AgentPlugin
-from nagents.provider.codex import DEFAULT_CODEX_MODEL
-from nagents.provider.codex import CodexProvider
+from nagents.provider.openai import DEFAULT_CODEX_MODEL
+from nagents.provider.openai import OpenAIProvider
 from nagents.session import SessionManager
 from nagents.types import ContentPart
 from nagents.types import TextContent
@@ -635,9 +635,9 @@ class Harness:
         if changing:
             replacement: Provider
             if config.auth == "chatgpt":
-                if not isinstance(self.agent.provider, CodexProvider):
+                if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
                     self._api_model = self.agent.provider.model
-                replacement = CodexProvider(self.openai_auth.credentials, model=config.model)
+                replacement = OpenAIProvider(self.openai_auth.credentials, model=config.model)
             else:
                 replacement = HarnessProvider(config, self.login_store)
             try:
@@ -650,11 +650,11 @@ class Harness:
         self.agent.provider.model = config.model
 
     async def _use_chatgpt(self) -> None:
-        if not isinstance(self.agent.provider, CodexProvider):
+        if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
             self._api_model = self.agent.provider.model
         if self.config.model == "gpt-4.1":
             self.config.model = DEFAULT_CODEX_MODEL
-        replacement = CodexProvider(self.openai_auth.credentials, model=self.config.model)
+        replacement = OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
         try:
             await self.agent.close()
         finally:
@@ -735,7 +735,7 @@ class Harness:
             self.openai_auth.logout()
             self.login_store.remove()
             self.config.auth = "api-key"
-            if isinstance(self.agent.provider, CodexProvider):
+            if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
                 self.config.model = self._api_model
                 replacement = HarnessProvider(self.config, self.login_store)
                 try:
@@ -746,7 +746,9 @@ class Harness:
     def auth_status(self) -> str:
         if self.config.demo:
             return "Offline demo; authentication is disabled"
-        if isinstance(self.agent.provider, CodexProvider) or self.config.auth == "chatgpt":
+        if (
+            isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth
+        ) or self.config.auth == "chatgpt":
             return self.openai_auth.status()
         if self.login_store.key_for(self.config.provider):
             return f"{self.config.provider} API key saved in ngn's private credential store (value never displayed)"

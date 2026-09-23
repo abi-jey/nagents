@@ -12,8 +12,8 @@ from _support import start_timer
 from dotenv import load_dotenv
 
 from nagents import Agent
-from nagents import CodexProvider
 from nagents import LiveConfig
+from nagents import OpenAIProvider
 from nagents import SessionManager
 
 
@@ -21,7 +21,7 @@ async def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     load_dotenv()
     agent = Agent(
-        provider=CodexProvider(
+        provider=OpenAIProvider(
             model="gpt-live-1",
             live_config=LiveConfig(delegation="responses", backend_model="gpt-5.6-luna", web_search=True),
         ),

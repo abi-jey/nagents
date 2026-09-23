@@ -59,7 +59,7 @@ Ctrl+C closes the connection. Backend history is stored in `live-sessions.db`.
 
 ## Authentication
 
-**`CodexProvider()`** discovers `CODEX_HOME` or `~/.codex`, the selected model
+**`OpenAIProvider()`** discovers `CODEX_HOME` or `~/.codex`, the selected model
 provider, and saved authentication. `.env` is loaded for configured environment-key
 references. The example does not parse credentials itself.
 

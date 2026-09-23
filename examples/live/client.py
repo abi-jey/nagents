@@ -14,8 +14,8 @@ from _support import start_timer
 from dotenv import load_dotenv
 
 from nagents import Agent
-from nagents import CodexProvider
 from nagents import LiveConfig
+from nagents import OpenAIProvider
 from nagents import SessionManager
 
 
@@ -29,14 +29,14 @@ async def main() -> None:
     load_dotenv()
     sessions = SessionManager(Path("live-sessions.db"))
     backend = Agent(
-        provider=CodexProvider(model="gpt-5.6-terra"),
+        provider=OpenAIProvider(model="gpt-5.6-terra"),
         session_manager=sessions,
         tools=[get_utc_time],
         streaming=True,
         system_prompt="Answer the latest voice request; respect corrections. Return concise facts in under 60 words.",
     )
     voice = Agent(
-        provider=CodexProvider(model="gpt-live-1", live_config=LiveConfig(delegation="client")),
+        provider=OpenAIProvider(model="gpt-live-1", live_config=LiveConfig(delegation="client")),
         session_manager=sessions,
         delegation_agent=backend,
         system_prompt="Be concise. Delegate reasoning and tool requests. Keep listening while the backend works.",

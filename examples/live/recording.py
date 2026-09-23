@@ -6,7 +6,7 @@ from _support import execute
 from _support import parser
 from dotenv import load_dotenv
 
-from nagents import CodexProvider
+from nagents import OpenAIProvider
 from nagents.live import LiveAPI
 from nagents.live import LiveConfig
 
@@ -17,7 +17,7 @@ async def main() -> None:
     cli.add_argument("--output", type=Path, default=Path("recording.wav"))
     args = cli.parse_args()
     load_dotenv()
-    provider = CodexProvider(model="gpt-live-1", live_config=LiveConfig())
+    provider = OpenAIProvider(model="gpt-live-1", live_config=LiveConfig())
     try:
         await LiveAPI(provider).download_recording(args.session_id, args.output)
     finally:

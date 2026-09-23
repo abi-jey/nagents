@@ -10,8 +10,8 @@ from _support import voice
 from dotenv import load_dotenv
 
 from nagents import Agent
-from nagents import CodexProvider
 from nagents import DoneEvent
+from nagents import OpenAIProvider
 from nagents import SessionManager
 from nagents.live import LiveConfig
 
@@ -19,7 +19,7 @@ from nagents.live import LiveConfig
 async def main() -> None:
     args = parser(__doc__ or "Idle resume").parse_args()
     load_dotenv()
-    backend = Agent(provider=CodexProvider(), session_manager=SessionManager(Path("background-work.db")))
+    backend = Agent(provider=OpenAIProvider(), session_manager=SessionManager(Path("background-work.db")))
 
     async def work() -> str:
         answer = ""

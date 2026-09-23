@@ -14,8 +14,8 @@ from _support import start_timer
 from dotenv import load_dotenv
 
 from nagents import Agent
-from nagents import CodexProvider
 from nagents import LiveConfig
+from nagents import OpenAIProvider
 from nagents import SessionManager
 from nagents.live import LiveEvent
 
@@ -25,7 +25,7 @@ async def main() -> None:
     load_dotenv()
     sessions = SessionManager(Path("live-sessions.db"))
     voice = Agent(
-        provider=CodexProvider(model="gpt-live-1", live_config=LiveConfig(delegation="client")),
+        provider=OpenAIProvider(model="gpt-live-1", live_config=LiveConfig(delegation="client")),
         session_manager=sessions,
         system_prompt="Delegate reasoning and tool requests; keep listening while the backend works.",
         audio=microphone(),
@@ -39,7 +39,7 @@ async def main() -> None:
         return datetime.now(UTC).isoformat()
 
     backend = Agent(
-        provider=CodexProvider(),
+        provider=OpenAIProvider(),
         session_manager=sessions,
         # 2. Optional model-callable tool. Nothing is injected automatically.
         tools=[voice.add_comment, get_utc_time],

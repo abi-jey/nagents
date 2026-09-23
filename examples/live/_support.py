@@ -14,8 +14,8 @@ from dotenv import load_dotenv
 
 from nagents import Agent
 from nagents import AudioDuplex
-from nagents import CodexProvider
 from nagents import Event
+from nagents import OpenAIProvider
 from nagents import SessionManager
 from nagents.live import LiveConfig
 from nagents.live import LiveEvent
@@ -58,7 +58,7 @@ def voice(
     load_dotenv()
     config = config or LiveConfig()
     return Agent(
-        provider=CodexProvider(model="gpt-live-1", live_config=config),
+        provider=OpenAIProvider(model="gpt-live-1", live_config=config),
         session_manager=SessionManager(Path("live-sessions.db")),
         system_prompt=instructions,
         tools=list(tools),

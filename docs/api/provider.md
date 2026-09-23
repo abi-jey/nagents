@@ -137,15 +137,32 @@ prefix matching; `force=True` refreshes verification. Native Gemini verification
 and the local Anthropic/Azure verification behavior are unchanged. A catalog ID
 is not a guarantee of tool/media support, capabilities, or account entitlement.
 
-## Codex Authentication
+## OpenAI Provider
 
-`CodexProvider()` discovers local Codex configuration and file credentials from
+`OpenAIProvider` supports both API-key requests and ChatGPT subscription
+authentication. An explicit `api_key` bypasses local discovery:
+
+```python
+from nagents import OpenAIProvider
+
+provider = OpenAIProvider(api_key="your-api-key", model="gpt-5.6-terra", api="responses")
+```
+
+API-key requests default to Responses; select `api="chat_completions"` for
+Chat Completions. A custom `base_url` requires an explicit key.
+`uses_chatgpt_auth` reports the selected authentication mode, independently of
+the provider class. `retry_config` applies to API-key requests; the subscription
+transport does not automatically retry or replay requests.
+
+### Local configuration and ChatGPT authentication
+
+`OpenAIProvider()` discovers local Codex configuration and file credentials from
 `CODEX_HOME` or `~/.codex`, including the selected model, profile and wire API.
 Pass `home=`, `profile=`, or `model=` only to override discovery. API-key settings
 use the configured compatible API; a saved ChatGPT login uses the dedicated Codex
 OAuth transport. See [local discovery](../guide/providers.md#local-codex-configuration).
 
-`CodexProvider(model="gpt-live-1", live_config=LiveConfig(...))` uses the same
+`OpenAIProvider(model="gpt-live-1", live_config=LiveConfig(...))` uses the same
 discovery for voice. As in the Codex client, voice requires an API key and may
 use its `OPENAI_API_KEY` environment fallback even when normal text inference uses
 saved ChatGPT authentication. OAuth tokens are never sent as Live API keys.
@@ -164,14 +181,14 @@ ngn login --status
 ```python
 import asyncio
 
-from nagents import CodexProvider, ModelListError
+from nagents import OpenAIProvider, ModelListError
 from nagents.harness.auth import OpenAIAuth
 
 
 async def codex_models() -> None:
     auth = OpenAIAuth()
     try:
-        async with CodexProvider(credentials=auth.credentials) as provider:
+        async with OpenAIProvider(credentials=auth.credentials) as provider:
             try:
                 print(await provider.get_model_list())
             except (NotImplementedError, ModelListError):
@@ -193,7 +210,7 @@ the application honestly as `originator: ngn` and `User-Agent: ngn/<package-vers
 Each fetch obtains one current `OpenAIAuth.credentials` snapshot and uses its
 access token, optional account ID, and optional residency together. It never
 copies the OAuth token into `Provider.api_key`, derives a catalog route from a
-custom URL, or falls back to the OpenAI API-key service. Changing the Codex
+custom URL, or falls back to the OpenAI API-key service. Changing an OAuth
 provider's `base_url` rejects discovery before requesting credentials. Login,
 refresh, and generation behavior are unchanged; no additional account-routing
 features are inferred from geolocation or other metadata.
@@ -208,7 +225,7 @@ instructions, account metadata, and other extra fields are not returned.
 
 The catalog uses the same bounded, redirect-free, cookie-free, non-logging
 transport limits described above. There is no catalog cache or pagination.
-`CodexProvider.verify_model()` remains local and does not prove account
+For ChatGPT authentication, `OpenAIProvider.verify_model()` remains local and does not prove account
 entitlement or request a catalog. This is an **official Codex client contract,
 not a stable public OpenAI REST API guarantee**. `ModelListError` and manual model
 entry remain important if that contract or account access changes.
@@ -219,7 +236,7 @@ and [picker visibility](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f3
 
 ::: nagents.CodexCredentials
 
-::: nagents.CodexProvider
+::: nagents.OpenAIProvider
     options:
       members:
         - __init__

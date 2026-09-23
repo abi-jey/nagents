@@ -17,7 +17,7 @@ from nagents.exceptions import ModelListError
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.provider import CodexCredentials
-from nagents.provider import CodexProvider
+from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.types import Message as SessionMessage
@@ -25,7 +25,7 @@ from nagents.web import built_assets
 from nagents.web import local_authority
 from nagents.web import serve
 from nagents.web.app import create_app
-from tests.providers.test_codex_provider import endpoint as codex_endpoint
+from tests.providers.test_openai_provider import endpoint as openai_endpoint
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
 from tests.support.web import ControlledHarness
@@ -167,7 +167,7 @@ def test_models_uses_active_provider_read_only(tmp_path: Path, monkeypatch: pyte
                 original = harness.agent.provider
                 callback = AsyncMock(side_effect=AssertionError("No live credentials in web dispatch test"))
                 provider = (
-                    CodexProvider(callback, model=original.model)
+                    OpenAIProvider(callback, model=original.model)
                     if source == "codex"
                     else Provider(ProviderType(source), "fake-key", original.model, base_url="http://127.0.0.1:1")
                 )
@@ -253,7 +253,7 @@ def test_models_real_codex_catalog_with_configured_openai(
             workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
         )
         async with (
-            codex_endpoint(monkeypatch, handle),
+            openai_endpoint(monkeypatch, handle),
             client_app(tmp_path, config=config) as (_, client, headers, harnesses),
         ):
             harness = harnesses[0]
@@ -261,7 +261,7 @@ def test_models_real_codex_catalog_with_configured_openai(
             callback = AsyncMock(return_value=CodexCredentials("fake-codex-oauth", "fixture-account"))
             if outcome == "missing-credentials":
                 callback.side_effect = RuntimeError("SECRET-credential-detail")
-            provider = CodexProvider(callback, model=original.model)
+            provider = OpenAIProvider(callback, model=original.model)
             harness.agent.provider = provider
             try:
                 with patch.object(harness.openai_auth, "status", return_value="Fixture login status"):
@@ -312,7 +312,7 @@ def test_models_captures_provider_during_inflight_read(tmp_path: Path, monkeypat
                 await release.wait()
                 return ["captured-provider-model"]
 
-            replacement = CodexProvider(AsyncMock(side_effect=AssertionError("No OAuth credentials requested")))
+            replacement = OpenAIProvider(AsyncMock(side_effect=AssertionError("No OAuth credentials requested")))
             with (
                 patch.object(provider, "get_model_list", catalog),
                 patch.object(replacement, "get_model_list", AsyncMock()) as other,

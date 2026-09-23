@@ -1,7 +1,7 @@
 # Direct SIP
 
 Run `python examples/live/sip/server.py`. Set `OPENAI_WEBHOOK_SECRET` and API
-credentials discoverable by `CodexProvider()`. Forward a public HTTPS webhook
+credentials discoverable by `OpenAIProvider()`. Forward a public HTTPS webhook
 URL to `/webhooks/openai`; subscribe to `live.transport.incoming`.
 
 Configure project access, TLS signaling and SRTP media according to the

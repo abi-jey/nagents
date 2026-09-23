@@ -32,7 +32,7 @@ from nagents.harness.subagents import MAX_RESULT
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted
-from nagents.provider.codex import CodexProvider
+from nagents.provider.openai import OpenAIProvider
 from nagents.types import Message
 from nagents.types import ToolCall
 from tests.support.hang_guard import HANG_GUARD
@@ -699,11 +699,11 @@ def test_codex_child_shares_auth_not_provider_or_close_ownership(tmp_path: Path)
                 profiles={"reviewer": AgentProfile(mode="reviewer")},
             )
         )
-        harness.agent.provider = CodexProvider(harness.openai_auth.credentials)
+        harness.agent.provider = OpenAIProvider(harness.openai_auth.credentials)
         child = harness.tasks._create_child("reviewer")
         try:
             await child.initialize()  # Local only: model verification and credentials aren't requested.
-            assert isinstance(child.agent.provider, CodexProvider)
+            assert isinstance(child.agent.provider, OpenAIProvider)
             assert child.agent.provider is not harness.agent.provider
             assert child.agent.provider._credentials == harness.openai_auth.credentials
             assert child.openai_auth is harness.openai_auth and not child._owns_auth

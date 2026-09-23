@@ -23,7 +23,7 @@ from typing import Literal
 from nagents._async import join_owned as _await_cleanup
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
-from nagents.provider.codex import CodexProvider
+from nagents.provider.openai import OpenAIProvider
 
 from .provider import HarnessProvider
 from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
@@ -363,7 +363,8 @@ class SubagentManager:
             defined.tasks = SubagentManager(defined, self.root)
             defined.refresh_instructions()
             return defined
-        if not isinstance(parent.agent.provider, HarnessProvider | CodexProvider):
+        chatgpt = isinstance(parent.agent.provider, OpenAIProvider) and parent.agent.provider.uses_chatgpt_auth
+        if not isinstance(parent.agent.provider, HarnessProvider) and not chatgpt:
             raise ValueError(
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
@@ -378,7 +379,7 @@ class SubagentManager:
             plugins=(),
             diagnostics=(),
             demo=parent.config.demo or self.root.harness.config.demo,
-            auth="chatgpt" if isinstance(parent.agent.provider, CodexProvider) else "api-key",
+            auth="chatgpt" if chatgpt else "api-key",
             max_tool_rounds=min(parent.config.max_tool_rounds, 12),
             max_subagent_depth=min(parent.config.max_subagent_depth, self.root.harness.config.max_subagent_depth),
         )

@@ -17,9 +17,9 @@ from examples.live.appointment_desk.store import Desk
 from examples.live.webrtc.server import BrowserApp
 from nagents import Agent
 from nagents import AudioDuplex
-from nagents import CodexProvider
 from nagents import DoneEvent
 from nagents import Event
+from nagents import OpenAIProvider
 from nagents import SessionManager
 from nagents.live import LiveConfig
 from nagents.live import LiveEvent
@@ -75,7 +75,7 @@ class AppointmentApp(BrowserApp):
                 owner.register_tool(tool)
             return owner
         backend = Agent(
-            provider=CodexProvider(),
+            provider=OpenAIProvider(),
             session_manager=SessionManager(Path("desk-history.db")),
             streaming=True,
             tools=tools,
@@ -123,7 +123,7 @@ class AppointmentApp(BrowserApp):
 
         async def work() -> None:
             try:
-                agent = Agent(provider=CodexProvider(), session_manager=SessionManager(Path("desk-reports.db")))
+                agent = Agent(provider=OpenAIProvider(), session_manager=SessionManager(Path("desk-reports.db")))
             except Exception:
                 self.desk.finish_job(identifier, "failed", "Backend could not be initialized.")
                 return

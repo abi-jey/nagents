@@ -21,12 +21,12 @@ OTHER_SLOT = "2030-08-07 14:00 UTC"
 
 
 def _forbidden(*args: object, **kwargs: object) -> object:
-    raise AssertionError("CodexProvider must not be constructed for state/selection/approve")
+    raise AssertionError("OpenAIProvider must not be constructed for state/selection/approve")
 
 
 def test_state_selection_approve_and_authorization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "CodexProvider", _forbidden)
-    monkeypatch.setattr(support_module, "CodexProvider", _forbidden)
+    monkeypatch.setattr(app_module, "OpenAIProvider", _forbidden)
+    monkeypatch.setattr(support_module, "OpenAIProvider", _forbidden)
 
     async def scenario() -> None:
         application = AppointmentApp(tmp_path / "desk.db", port=0)

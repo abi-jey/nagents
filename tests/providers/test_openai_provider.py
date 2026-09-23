@@ -1,4 +1,4 @@
-"""Codex Responses transport tests with fake OAuth credentials and local SSE."""
+"""OpenAI ChatGPT-auth Responses transport tests with fake credentials and local SSE."""
 
 from __future__ import annotations
 
@@ -25,12 +25,12 @@ from nagents.events import ToolResultEvent
 from nagents.exceptions import ModelListError
 from nagents.http import HTTPLogger
 from nagents.provider import Provider
-from nagents.provider import codex
 from nagents.provider import gateway
-from nagents.provider.codex import DEFAULT_CODEX_MODEL
-from nagents.provider.codex import CodexCredentials
-from nagents.provider.codex import CodexProvider
+from nagents.provider import openai
 from nagents.provider.gateway import GatewayHTTPClient
+from nagents.provider.openai import DEFAULT_CODEX_MODEL
+from nagents.provider.openai import CodexCredentials
+from nagents.provider.openai import OpenAIProvider
 from nagents.types import AudioContent
 from nagents.types import DocumentContent
 from nagents.types import GenerationConfig
@@ -60,7 +60,7 @@ async def credentials() -> CodexCredentials:
 def test_catalog_cannot_inherit_api_key_route() -> None:
     async def scenario() -> None:
         callback = AsyncMock(side_effect=credentials)
-        async with CodexProvider(callback) as provider:
+        async with OpenAIProvider(callback) as provider:
             with (
                 patch.object(GatewayHTTPClient, "get_json", AsyncMock(return_value={"models": []})) as get,
                 patch.object(
@@ -80,13 +80,13 @@ def test_catalog_cannot_inherit_api_key_route() -> None:
                         "ChatGPT-Account-Id": "account-123",
                         "x-openai-internal-codex-residency": "eu",
                         "originator": "ngn",
-                        "User-Agent": codex.USER_AGENT,
+                        "User-Agent": openai.USER_AGENT,
                     },
                 )
                 callback.assert_awaited_once_with()
                 api_key.assert_not_called()
                 assert provider.model == DEFAULT_CODEX_MODEL and provider.is_model_verified is True
-                assert provider.base_url == codex.CODEX_ENDPOINT
+                assert provider.base_url == openai.CODEX_ENDPOINT
 
     asyncio.run(scenario())
 
@@ -155,8 +155,8 @@ async def endpoint(
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     url = f"http://127.0.0.1:{runner.addresses[0][1]}/backend-api/codex/responses"
-    monkeypatch.setattr(codex, "CODEX_ENDPOINT", url)
-    monkeypatch.setattr(codex, "CODEX_MODELS_ENDPOINT", url.removesuffix("/responses") + "/models")
+    monkeypatch.setattr(openai, "CODEX_ENDPOINT", url)
+    monkeypatch.setattr(openai, "CODEX_MODELS_ENDPOINT", url.removesuffix("/responses") + "/models")
     try:
         yield url
     finally:
@@ -186,7 +186,7 @@ def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypa
             assert dict(request.query) == {"client_version": "0.153.4"}
             assert request.headers["version"] == "0.153.4"
             assert request.headers["Accept"] == "application/json"
-            assert request.headers["originator"] == "ngn" and request.headers["User-Agent"] == codex.USER_AGENT
+            assert request.headers["originator"] == "ngn" and request.headers["User-Agent"] == openai.USER_AGENT
             assert (
                 not {"Cookie", "x-api-key", "OpenAI-Organization", "OpenAI-Project", "x-openai-internal-codex-fedramp"}
                 & request.headers.keys()
@@ -216,7 +216,7 @@ def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypa
                 headers={"Set-Cookie": "fixture=not-a-real-cookie; Path=/"},
             )
 
-        async with endpoint(monkeypatch, handle), CodexProvider(callback, model="selected-model") as provider:
+        async with endpoint(monkeypatch, handle), OpenAIProvider(callback, model="selected-model") as provider:
             provider.api_key = "api-key-must-not-be-used"
             http_logger = Mock(spec=HTTPLogger)
             provider.set_http_logger(http_logger)
@@ -238,7 +238,7 @@ def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypa
                 assert observed[1]["ChatGPT-Account-Id"] == "account-456"
                 assert observed[1]["x-openai-internal-codex-residency"] == "us"
                 assert provider.model == "selected-model" and provider.is_model_verified is None
-                assert provider.base_url == codex.CODEX_ENDPOINT
+                assert provider.base_url == openai.CODEX_ENDPOINT
                 assert not http_logger.mock_calls
             finally:
                 release.set()
@@ -257,7 +257,7 @@ def test_catalog_omits_optional_account_and_residency_headers(monkeypatch: pytes
 
         async with (
             endpoint(monkeypatch, handle),
-            CodexProvider(AsyncMock(return_value=CodexCredentials(ACCESS, residency=residency))) as provider,
+            OpenAIProvider(AsyncMock(return_value=CodexCredentials(ACCESS, residency=residency))) as provider,
         ):
             assert await provider.get_model_list() == []
 
@@ -277,7 +277,7 @@ def test_catalog_omits_optional_account_and_residency_headers(monkeypatch: pytes
 def test_catalog_invalid_configuration_rejected_before_credentials(base_url: str) -> None:
     async def scenario() -> None:
         callback = AsyncMock(side_effect=AssertionError("No callback for invalid configuration"))
-        async with CodexProvider(callback) as provider:
+        async with OpenAIProvider(callback) as provider:
             provider.base_url = base_url
             with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
                 with pytest.raises(ModelListError, match="fixed endpoint"):
@@ -303,7 +303,7 @@ def test_catalog_invalid_configuration_rejected_before_credentials(base_url: str
 )
 def test_catalog_invalid_credentials_rejected_without_http(snapshot: CodexCredentials) -> None:
     async def scenario() -> None:
-        async with CodexProvider(AsyncMock(return_value=snapshot)) as provider:
+        async with OpenAIProvider(AsyncMock(return_value=snapshot)) as provider:
             with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
                 with pytest.raises(ModelListError, match="/login") as error:
                     await provider.get_model_list()
@@ -316,7 +316,7 @@ def test_catalog_invalid_credentials_rejected_without_http(snapshot: CodexCreden
 def test_catalog_credential_failure_and_cancellation_are_safe() -> None:
     async def scenario() -> None:
         callback = AsyncMock(side_effect=RuntimeError(ACCESS))
-        async with CodexProvider(callback) as provider:
+        async with OpenAIProvider(callback) as provider:
             with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
                 with pytest.raises(ModelListError) as error:
                     await provider.get_model_list()
@@ -363,7 +363,7 @@ def test_catalog_malformed_data_is_not_an_empty_success(
         async def handle(request: web.Request) -> web.Response:
             return web.json_response(body)
 
-        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+        async with endpoint(monkeypatch, handle), OpenAIProvider(credentials) as provider:
             with pytest.raises(ModelListError) as error:
                 await provider.get_model_list()
             assert ACCESS not in str(error.value) + caplog.text
@@ -378,7 +378,7 @@ def test_catalog_invalid_json_is_sanitized(monkeypatch: pytest.MonkeyPatch, body
         async def handle(request: web.Request) -> web.Response:
             return web.Response(body=body)
 
-        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+        async with endpoint(monkeypatch, handle), OpenAIProvider(credentials) as provider:
             with pytest.raises(ModelListError):
                 await provider.get_model_list()
 
@@ -398,7 +398,7 @@ def test_catalog_http_errors_redacted_without_redirect_or_fallback(
                 status=status, text=ACCESS, reason=ACCESS, headers={"Location": "/credential-sink", "Secret": ACCESS}
             )
 
-        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+        async with endpoint(monkeypatch, handle), OpenAIProvider(credentials) as provider:
             http_logger = Mock(spec=HTTPLogger)
             provider.set_http_logger(http_logger)
             with pytest.raises(ModelListError) as error:
@@ -424,7 +424,7 @@ def test_catalog_body_bound(monkeypatch: pytest.MonkeyPatch) -> None:
             )
             return response
 
-        async with endpoint(monkeypatch, handle), CodexProvider(credentials) as provider:
+        async with endpoint(monkeypatch, handle), OpenAIProvider(credentials) as provider:
             with pytest.raises(ModelListError):
                 await provider.get_model_list()
 
@@ -448,7 +448,7 @@ def test_catalog_timeout_and_cancellation_close_connection(monkeypatch: pytest.M
                 await asyncio.sleep(0.01)
             return response
 
-        async with endpoint(monkeypatch, handle), CodexProvider(credentials, timeout=2) as provider:
+        async with endpoint(monkeypatch, handle), OpenAIProvider(credentials, timeout=2) as provider:
             task = asyncio.create_task(provider.get_model_list())
             try:
                 await asyncio.wait_for(started.wait(), HANG_GUARD)
@@ -505,7 +505,7 @@ def test_responses_conversion_headers_and_text_usage(monkeypatch: pytest.MonkeyP
         ]
         tool = ToolDefinition("work", "Return value", {"type": "object", "properties": {"value": {"type": "string"}}})
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             provider.base_url = "http://127.0.0.1:1/never-send-oauth-here"
             assert provider.model == DEFAULT_CODEX_MODEL
             assert await provider.verify_model() is True and requests == []
@@ -574,7 +574,7 @@ def test_missing_content_type_still_requires_valid_sse(monkeypatch: pytest.Monke
             return web.Response(text=body)
 
         async with endpoint(monkeypatch, handle, omit_content_type=True):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             try:
                 events = [event async for event in provider.generate([Message(role="user", content="hello")])]
                 assert len(events) == 1
@@ -627,7 +627,7 @@ def test_fragmented_tool_arguments_are_deduplicated(monkeypatch: pytest.MonkeyPa
             return response
 
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             results = [event async for event in provider.generate([Message(role="user", content="work")])]
             calls = [event for event in results if isinstance(event, ToolCallEvent)]
             assert len(calls) == 1
@@ -679,7 +679,7 @@ def test_failed_or_malformed_streams_never_release_tools(monkeypatch: pytest.Mon
             return web.Response(text=beginning + endings[failure], content_type="text/event-stream")
 
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             events = [event async for event in provider.generate([Message(role="user", content="work")])]
             assert len(events) == 1 and isinstance(events[0], ErrorEvent)
             assert ACCESS not in repr(events)
@@ -695,10 +695,10 @@ def test_http_errors_safe_and_redirects_disabled(monkeypatch: pytest.MonkeyPatch
 
         async def handle(request: web.Request) -> web.Response:
             paths.append(request.path)
-            return web.Response(status=status, text=ACCESS, headers={"Location": codex.CODEX_ENDPOINT + "/leak"})
+            return web.Response(status=status, text=ACCESS, headers={"Location": openai.CODEX_ENDPOINT + "/leak"})
 
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             events = [event async for event in provider.generate([Message(role="user", content="hello")])]
             assert len(events) == 1 and isinstance(events[0], ErrorEvent)
             assert events[0].code == f"CODEX_HTTP_{status}" and not events[0].recoverable
@@ -744,7 +744,7 @@ def test_invalid_tool_state_is_rejected_before_any_call(monkeypatch: pytest.Monk
             return web.Response(text=sse(frames), content_type="text/event-stream")
 
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             events = [event async for event in provider.generate([Message(role="user", content="work")])]
             assert len(events) == 1 and isinstance(events[0], ErrorEvent)
             await provider.close()
@@ -773,7 +773,7 @@ def test_completed_stream_items_with_empty_terminal_output(monkeypatch: pytest.M
             )
 
         async with endpoint(monkeypatch, handle, omit_content_type=True):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             try:
                 events = [event async for event in provider.generate([Message(role="user", content="hello")])]
                 assert not any(isinstance(event, ErrorEvent) for event in events)
@@ -792,7 +792,7 @@ def test_unsupported_media_rejected_before_credentials(part: ContentPart) -> Non
         async def forbidden() -> CodexCredentials:
             raise AssertionError("Credentials must not be requested for unsupported media")
 
-        provider = CodexProvider(forbidden)
+        provider = OpenAIProvider(forbidden)
         events = [event async for event in provider.generate([Message(role="user", content=[part])])]
         assert len(events) == 1 and isinstance(events[0], ErrorEvent)
         assert events[0].code == "CODEX_REQUEST_INVALID"
@@ -806,7 +806,7 @@ def test_credentials_exception_is_not_exposed() -> None:
         async def broken() -> CodexCredentials:
             raise RuntimeError(ACCESS)
 
-        provider = CodexProvider(broken)
+        provider = OpenAIProvider(broken)
         events = [event async for event in provider.generate([Message(role="user", content="hello")])]
         assert len(events) == 1 and isinstance(events[0], ErrorEvent)
         assert "/login" in events[0].message and ACCESS not in repr(events)
@@ -828,7 +828,7 @@ def test_missing_optional_headers_and_no_constraint(monkeypatch: pytest.MonkeyPa
             return web.Response(text=sse([completion([text_item()])]), content_type="text/event-stream")
 
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(basic)
+            provider = OpenAIProvider(basic)
             events = [event async for event in provider.generate([Message(role="user", content="hello")])]
             assert isinstance(events[-1], TextDoneEvent)
             await provider.close()
@@ -857,7 +857,7 @@ def test_interruption_closes_stream(monkeypatch: pytest.MonkeyPatch, cancel: boo
             return response
 
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             stream = provider.generate([Message(role="user", content="hello")])
             first = await anext(stream)
             assert isinstance(first, TextChunkEvent)
@@ -884,9 +884,9 @@ def test_timeout_and_stream_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
         async def handle(request: web.Request) -> web.Response:
             return web.Response(text="data: " + "x" * 256, content_type="text/event-stream")
 
-        monkeypatch.setattr(codex, "_MAX_EVENT_BYTES", 128)
+        monkeypatch.setattr(openai, "_MAX_EVENT_BYTES", 128)
         async with endpoint(monkeypatch, handle):
-            provider = CodexProvider(credentials)
+            provider = OpenAIProvider(credentials)
             events = [event async for event in provider.generate([Message(role="user", content="hello")])]
             assert len(events) == 1 and isinstance(events[0], ErrorEvent)
             assert "size limit" in events[0].message
@@ -899,7 +899,7 @@ def test_timeout_and_stream_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
             return web.Response(text="late")
 
         async with endpoint(monkeypatch, wait):
-            provider = CodexProvider(credentials, timeout=0.03)
+            provider = OpenAIProvider(credentials, timeout=0.03)
             try:
                 events = [event async for event in provider.generate([Message(role="user", content="hello")])]
                 assert len(events) == 1 and isinstance(events[0], ErrorEvent)
@@ -934,7 +934,7 @@ def test_agent_tool_loop_and_history_never_store_oauth(monkeypatch: pytest.Monke
 
         async with endpoint(monkeypatch, handle):
             agent = Agent(
-                CodexProvider(credentials), SessionManager(tmp_path / "sessions.db"), tools=[work], compactor=None
+                OpenAIProvider(credentials), SessionManager(tmp_path / "sessions.db"), tools=[work], compactor=None
             )
             events = [event async for event in agent.run("Use work", session_id="s")]
             assert requests == 2

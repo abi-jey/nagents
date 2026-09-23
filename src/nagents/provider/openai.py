@@ -1,4 +1,4 @@
-"""Codex configuration discovery and its ChatGPT subscription transport.
+"""OpenAI API-key and ChatGPT authentication with local configuration discovery.
 
 API-key configurations use the normal Provider HTTP contract. ChatGPT credentials
 only go to fixed Codex endpoints, without base Provider logging or retries. The
@@ -52,8 +52,10 @@ if TYPE_CHECKING:
 
     from ..events import Event
     from ..live import LiveConfig
+    from ..realtime import RealtimeConfig
     from ..types import GenerationConfig
     from ..types import Message
+    from ..types import RetryConfig
     from ..types import ToolDefinition
 
 DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
@@ -415,8 +417,8 @@ def _usage(value: object) -> Usage:
     )
 
 
-class CodexProvider(Provider):
-    """Use the locally configured Codex model and authentication by default.
+class OpenAIProvider(Provider):
+    """OpenAI inference with explicit credentials or automatic local discovery.
 
     An explicit credential callback selects the existing OAuth transport. On that
     route, verify_model is local and no automatic retry/replay follows failures.
@@ -432,35 +434,55 @@ class CodexProvider(Provider):
         home: str | Path = "",
         profile: str = "",
         live_config: LiveConfig | None = None,
+        api_key: str = "",
+        base_url: str = "",
+        api: str = "auto",
+        realtime_config: RealtimeConfig | None = None,
+        retry_config: RetryConfig | None = None,
     ) -> None:
-        """With no credentials, discover explicit home > CODEX_HOME > ~/.codex.
+        """Explicit API keys bypass discovery; otherwise use CODEX_HOME/~/.codex.
 
-        Local model/profile/wire_api and auth.json determine API-key versus
-        ChatGPT transport. Explicit credential callbacks retain the OAuth API.
+        Local model/profile/wire_api and auth.json select API-key or ChatGPT
+        authentication. Explicit credential callbacks select ChatGPT. A custom
+        base_url requires an explicit key; saved OAuth never goes to that URL.
+        API-key requests default to Responses unless another API is selected.
         """
         self._local_api = False
         self._credentials: Callable[[], Awaitable[CodexCredentials]]
-        if credentials is None:
-            local = _load_config(home, profile=profile, model=model, for_live=live_config is not None)
+        if credentials is not None and api_key:
+            raise ValueError("Choose api_key or ChatGPT credentials, not both")
+        if base_url and not api_key:
+            raise ValueError("An explicit base_url requires an explicit api_key")
+        if not api_key and credentials is None:
+            local = _load_config(
+                home, profile=profile, model=model, for_live=live_config is not None or realtime_config is not None
+            )
             model = local.model
             credentials = local.credentials
             if not local.oauth:
-                super().__init__(
-                    ProviderType.OPENAI_COMPATIBLE,
-                    local.api_key,
-                    model,
-                    base_url=local.base_url or None,
-                    api=local.api,
-                    timeout=timeout,
-                    live_config=live_config,
-                )
-                self._local_api = True
-                self._credentials = credentials
-                self._timeout = timeout
-                return
-        if live_config is not None:
+                api_key = local.api_key
+                base_url = local.base_url
+                api = local.api if api == "auto" else api
+        if api_key:
+            super().__init__(
+                ProviderType.OPENAI_COMPATIBLE,
+                api_key,
+                model or DEFAULT_CODEX_MODEL,
+                base_url=base_url or None,
+                api="responses" if api == "auto" else api,
+                timeout=timeout,
+                live_config=live_config,
+                realtime_config=realtime_config,
+                retry_config=retry_config,
+            )
+            self._local_api = True
+            return
+        assert credentials is not None
+        if api not in {"auto", "responses"}:
+            raise ValueError("ChatGPT authentication uses the Responses protocol")
+        if live_config is not None or realtime_config is not None:
             raise ValueError(
-                "Codex selected ChatGPT subscription authentication. GPT-Live's public API requires "
+                "Selected ChatGPT subscription authentication. GPT-Live and Realtime require "
                 "OpenAI API-key authentication; this saved login can still run the delegated backend."
             )
         super().__init__(
@@ -474,6 +496,11 @@ class CodexProvider(Provider):
         self._credentials = credentials
         self._timeout = timeout
 
+    @property
+    def uses_chatgpt_auth(self) -> bool:
+        """Whether this instance uses the subscription transport, not an API key."""
+        return not self._local_api
+
     async def verify_model(self, force: bool = False) -> bool:
         if self._local_api:
             return await super().verify_model(force)
@@ -481,9 +508,9 @@ class CodexProvider(Provider):
         return True
 
     async def get_model_list(self) -> list[str]:
-        """Fetch picker-visible Codex model IDs using the current OAuth snapshot.
+        """Fetch model IDs from the API-key catalog or the subscription catalog.
 
-        This follows the official Codex client's catalog contract, not the public
+        With ChatGPT authentication this follows the Codex client's catalog contract, not the public
         OpenAI API-key catalog. It is fresh, read-only, and independent of model
         verification. Failures raise ModelListError without upstream data; there
         is no API-key fallback or entitlement guarantee.
