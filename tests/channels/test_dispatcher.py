@@ -145,6 +145,7 @@ def test_runtime_guards_and_exact_tool_schemas(tmp_path: Path) -> None:
     asyncio.run(drive())
 
 
+@pytest.mark.requires_posix
 def test_owned_registration_runs_real_harness_tools_without_listener(tmp_path: Path) -> None:
     async def drive() -> None:
         harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", auth="api-key"))
