@@ -20,6 +20,7 @@ from nagents.tui.widgets import Composer
 from nagents.tui.widgets import ToolCard
 from nagents.types import Message
 from nagents.types import ToolCall
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
 from tests.support.tui import make_app
@@ -285,7 +286,9 @@ def test_approval_paging_from_decision_buttons_keeps_exact_proposal(tmp_path: Pa
             scroll = modal.query_one(".approval-content", VerticalScroll)
             deny = modal.query_one("#deny", Button)
             allow = modal.query_one("#allow", Button)
-            assert app.focused is deny
+            async with asyncio.timeout(HANG_GUARD):
+                while app.focused is not deny:
+                    await pilot.pause()
             assert "PgUp/PgDn" in str(modal.query_one(".dialog-hint", Static).content)
             assert modal.request.arguments == arguments
             assert modal.request.preview == preview
@@ -456,7 +459,10 @@ def test_approval_restores_prior_focus_without_scrolling(tmp_path: Path, size: t
             await pilot.pause()
             modal = app.screen
             assert isinstance(modal, ApprovalModal)
-            assert app.focused is modal.query_one("#deny")
+            deny = modal.query_one("#deny")
+            async with asyncio.timeout(HANG_GUARD):
+                while app.focused is not deny:
+                    await pilot.pause()
             if origin == "removed":
                 await card.remove()
             elif origin == "direct-display":
