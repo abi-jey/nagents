@@ -260,8 +260,49 @@ legacy `receive`, and rejects direct `listen()` calls. It starts no additional
 listener and is not an external connector eligible for automatic replies.
 
 The built-in route is owned by the running TUI. Tool registration detects
-collisions and shutdown removes only its own definitions. Browser delivery and
-media playback are separate follow-up work.
+collisions and shutdown removes only its own definitions. The separate browser
+route and its media playback are documented below.
+
+### Built-in web media delivery
+
+`ngn serve` provides a host-managed `builtin.web` route for explicit text and
+media deliveries in ordinary, externally unowned conversations. Discover its
+directional capabilities with `channel_list`; host instructions supply the
+executing root session ID as the destination. Normal replies already appear in
+the browser and are not automatically sent again.
+
+Supported files are PNG, JPEG, GIF, WebP, MP3 (`audio/mpeg`), WAV, Ogg audio,
+MP4 video, and WebM video. The dispatcher accepts workspace-relative paths, with
+limits of **3 files, 20 MiB per file, and 30 MiB per delivery**. The complete send
+is rejected if any attachment has an unsupported type or mismatched container.
+Generic files, HTML, SVG, nonempty thread/reply references, and child sends are
+unsupported. Existing profile restrictions and browser approval decisions apply.
+
+Each delivery is saved separately from model messages, with a durable ID and an
+exact assistant-row/tool-call anchor. Reconnect, restart, multiple tabs, and cold
+history restore the same delivery. Compaction moves older entries into
+**Deliveries from earlier context**. Saved media remains available after the
+original workspace file changes or is deleted.
+
+Use **Load preview / download** to fetch an attachment. Images and native audio/
+video controls use authenticated, bounded byte reads and temporary object URLs;
+tokens never appear in media URLs. Media does not autoplay. Browser codec support
+varies, so a loaded file always has an explicit **Download** link. A decoder error
+leaves that fallback available. Use **Unload preview** to release its memory.
+The browser allows two concurrent media fetches and at most 60 MiB of reserved or
+retained media per page. Session changes and unmounting cancel stale requests and
+revoke object URLs.
+
+Assets are scoped to their active root conversation. Trash revokes server access,
+restore reinstates it, and permanent deletion removes saved metadata and bytes.
+Externally owned chats retain their owner-only catalog and outbound destination
+restrictions; acquiring external ownership does not hide earlier local deliveries.
+The built-in adapter is not a configurable connector or automatic-reply target,
+and its `listen()` method fails because the web host already owns input admission.
+
+Browser upload, paste, and attachment-aware model input are separate follow-up
+work (#46). Web receive capabilities remain text-only; dictation still produces
+editable text.
 
 ### Durable local delivery foundation
 

@@ -7,6 +7,7 @@ import json
 import secrets
 from contextlib import aclosing
 from contextlib import contextmanager
+from contextlib import nullcontext
 from contextlib import suppress
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from nagents.cli import _json_default
 from nagents.compaction import estimate_tokens
 from nagents.context_stats import ContextComponent
 from nagents.events import ErrorEvent
+from nagents.harness.execution import bind_channel_send
 from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
 
@@ -30,6 +32,7 @@ from ._async import join_owned as _join
 from .channel_host import ChannelHost
 from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
+from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
 from .dictation import WebDictation
 from .history import WebHistory
@@ -405,6 +408,9 @@ class WebState:
 
     async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
         notices = run.notices = ChannelNotices(self, run)
+        transcript = DeliveryTranscript(
+            capture=type(self.running_harness.agent.session) in {WebHistory, _HarnessSession}
+        )
         try:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
@@ -414,18 +420,25 @@ class WebState:
                 source = self.running_harness.wake(prompt, task_id=task_id)
             else:
                 source = self.running_harness.run(prompt)
-            with host_run(self.running_harness, run.id):
+            definition = self.running_harness.agent.tool_registry.get("channel_send")
+            binding = (
+                bind_channel_send(self.running_harness, definition)
+                if definition is not None and any(definition is tool for tool in self.channels.tools)
+                else nullcontext()
+            )
+            with binding, host_run(self.running_harness, run.id):
                 async with aclosing(source) as events:
                     async for event in events:
                         if isinstance(event, ErrorEvent):
-                            run.outcome = "failed"
+                            if not event.recoverable:
+                                run.outcome = "failed"
                             record = {
                                 "event": "error",
                                 "message": "The provider run failed. Check local provider configuration before trying again.",
                                 "recoverable": event.recoverable,
                             }
                         else:
-                            record = _event_record(event)
+                            record = transcript.record(event)
                         await notices.observe(record, live=True)
                         await self.send(run, record)
         except asyncio.CancelledError:

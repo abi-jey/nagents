@@ -35,12 +35,21 @@ function activeRun(value: unknown): boolean {
       (Array.isArray(value[key]) && value[key].every(validRecord))) &&
     (value.approval === undefined || (object(value.approval) && !Object.keys(value.approval).length) || validRecord(value.approval)));
 }
+function deliveries(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every((item: unknown) => object(item) &&
+    ["delivery_id", "session_id", "channel", "text", "anchor_message_id"].every((key) => typeof item[key] === "string") &&
+    integer(item.call_position) && integer(item.sequence) && typeof item.earlier === "boolean" &&
+    Array.isArray(item.assets) && item.assets.length <= 3 && item.assets.every((asset: unknown) => object(asset) &&
+      ["asset_id", "filename", "media_type"].every((key) => typeof asset[key] === "string") &&
+      integer(asset.position) && integer(asset.byte_length) && asset.byte_length <= 20 * 1024 * 1024)));
+}
 export function validSnapshot(value: unknown): value is Snapshot {
   return object(value) && typeof value.session_id === "string" && sessions(value.sessions) &&
     (value.activity_cursor === undefined || integer(value.activity_cursor)) && activeRun(value.active_run) &&
     Array.isArray(value.history) && value.history.every((item: unknown) => object(item) &&
       ["role", "content", "name", "tool_call_id"].every((key) => typeof item[key] === "string") &&
       (item.message_id === undefined || typeof item.message_id === "string") &&
+      deliveries(item.deliveries) &&
       Array.isArray(item.tool_calls) && item.tool_calls.every((call: unknown) => object(call) &&
         typeof call.id === "string" && typeof call.name === "string")) &&
     Array.isArray(value.retained_tasks) && value.retained_tasks.every((item: unknown) => object(item) &&
@@ -200,6 +209,10 @@ export function subscribeEvents(options: SubscriptionOptions): () => void {
           options.receive(frame);
           position = { cursor: frame.cursor, epoch: frame.epoch };
           if (scoped) { cancelHydration?.(); cancelHydration = undefined; awaitingSnapshot = false; }
+          if (frame.type === "event" && ["local_delivery", "run_finished"].includes(frame.record.event)) {
+            awaitingSnapshot = true;
+            socket?.send(JSON.stringify({ type: "subscribe", session_id: options.sessionId, after: 0 }));
+          }
           failures = 0;
           options.status("connected");
         } catch {

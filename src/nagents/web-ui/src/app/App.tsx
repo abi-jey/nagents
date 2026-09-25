@@ -126,6 +126,7 @@ export function App() {
           <Icon name="chevron" size={14} />
         </button>
         <Conversation
+          token={config?.token || ""}
           key={`${sessionId}:${chat.transcriptVersion}`}
           entries={chat.entries}
           sessionId={sessionId}

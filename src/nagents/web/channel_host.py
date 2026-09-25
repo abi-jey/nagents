@@ -28,6 +28,7 @@ from .channel_activity import ChannelActivities
 from .channel_management import ChannelManagement
 from .channel_privacy import CredentialGuard
 from .channel_privacy import CredentialProtectionError
+from .local_delivery import WebChannel
 from .routing import RoutingStore
 
 if TYPE_CHECKING:
@@ -80,6 +81,12 @@ class _ProtectedInstructions(_Instructions):
                 + json.dumps({"channel": owner.channel, "destination": owner.conversation_id})
                 + ". Send/action tools cannot target another chat; actions must require an explicit destination."
             )
+        else:
+            self.text += (
+                "\nOrdinary replies already appear in this browser. For an explicit text or media delivery, "
+                f"use builtin.web with destination {context.session_id!r}. "
+                "Files must match its declared media types. This does not enable browser uploads."
+            )
         return await super().before_model(context, request)
 
 
@@ -92,6 +99,7 @@ class ChannelHost:
             harness.config.data_dir, harness.agent.session.db_path, allow_plugins=not harness.config.demo
         )
         self.channels: dict[str, Channel] = {}
+        self.local = WebChannel(state)
         self.sources: dict[str, asyncio.Task[None]] = {}
         self.tasks: list[asyncio.Task[None]] = []
         self.changed = asyncio.Event()
@@ -122,6 +130,12 @@ class ChannelHost:
         await self.state.designed_channels.initialize()
         self.initialized = True
         self.catalog.initialize()
+        if (
+            self.local.name in self.catalog.connections
+            or self.local.name in self.state.harness.agent._channels
+            or any(channel.name == self.local.name for channel in self.state.harness.agent._channels.values())
+        ):
+            raise ChannelError("Channel name collision: builtin.web")
         self.register_tools()
         for id, connection in self.catalog.connections.items():
             if connection.enabled:
@@ -173,7 +187,7 @@ class ChannelHost:
         # one, so a failed refresh cannot leave stale sensitive instructions.
         self.dispatcher = None
         self.instructions.update([])
-        dispatcher = ChannelDispatcher(tuple(self.channels.values()), workspace=self.state.harness.workspace)
+        dispatcher = ChannelDispatcher((self.local, *self.channels.values()), workspace=self.state.harness.workspace)
         catalog = dispatcher.catalog()
         self.catalog.check_public(catalog)
         self.instructions.update(catalog)
@@ -297,11 +311,15 @@ class ChannelHost:
             raise ChannelError("Channel result withheld by credential protection", outcome_unknown=True) from None
 
     async def open(self, id: str, channel: Channel) -> None:
+        if id == self.local.name or channel.name == self.local.name:
+            raise ChannelError("Channel name collision: builtin.web")
         self.catalog.require_live()
         ChannelDispatcher((channel,))
         try:
             async with asyncio.timeout(15):
                 await channel.open()
+            if channel.name == self.local.name:
+                raise ChannelError("Channel name collision: builtin.web")
             # open() may change descriptions/actions after factory validation.
             self.catalog.check_public(ChannelDispatcher((channel,)).catalog()[0])
         except BaseException:
@@ -454,6 +472,8 @@ class ChannelHost:
                 )
 
     async def save(self, id: str, body: ConnectionInput) -> dict[str, object]:
+        if id == self.local.name:
+            raise HTTPException(409, "builtin.web is managed by this host, not a configurable connector.")
         self.catalog.require_live()
         roots = {session.id for session in await self.state.harness.list_sessions()}
         old = self.catalog.connections.get(id)
@@ -465,6 +485,8 @@ class ChannelHost:
             self.catalog.check_public(self.dispatcher.catalog(), additional=connection.secrets)
         channel = self.catalog.construct(id, connection) if connection.enabled else None
         if channel is not None:
+            if channel.name == self.local.name:
+                raise HTTPException(409, "Channel name collision: builtin.web")
             ChannelDispatcher((channel,))
         # Commit configuration before changing live connectors. A failed open is
         # a persisted error state, not a silent rollback or lost accepted inbox.

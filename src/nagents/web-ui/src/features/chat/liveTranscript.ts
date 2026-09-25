@@ -22,6 +22,9 @@ export function pendingApprovals(run?: ActiveRun): WireEvent[] {
   return [...pending.values()];
 }
 function compatible(saved: Entry, previous: Entry): boolean {
+  if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
+  if (saved.abandoned || previous.abandoned) return false;
+  if (saved.callPosition !== undefined && previous.callPosition !== undefined && saved.callPosition !== previous.callPosition) return false;
   if (saved.kind !== previous.kind || previous.taskId || (previous.recorded && previous.kind !== "context")) return false;
   return saved.kind !== "tool" || saved.callId === previous.callId;
 }
@@ -33,6 +36,7 @@ function conflictingRows(left: Entry, right: Entry): boolean {
 }
 function sameSavedEntry(saved: Entry, previous: Entry): boolean {
   if (!compatible(saved, previous)) return false;
+  if (saved.delivery) return true;
   if (saved.kind === "user" && sameTranscriptUser(saved, previous)) return true;
   const a = rowIds(saved), b = rowIds(previous);
   if (a.length && b.length) return a.some((id) => b.includes(id));
@@ -108,25 +112,29 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   };
   function keep(entry: Entry) {
     if (used.has(entry.id) || matchedIds.has(entry.id)) return;
-    if (entry.runId || entry.queued || (!entry.recorded && entry.taskId)) { next.push(entry); used.add(entry.id); }
+    if (!entry.delivery && (entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
   }
   for (const [position, entry] of roots.entries()) {
     const index = matches[position];
     if (index < 0) {
       const activity = entry.origin && announceNewUsers ? [...previous, ...next].reduce((latest, item) => Math.max(latest, item.activity || 0), 0) + 1 : entry.activity;
-      next.push({ ...entry, id: id(), activity }); continue;
+      next.push({ ...entry, id: entry.delivery ? entry.id : id(), activity }); continue;
     }
     for (let i = after; i < index; i++) keep(previous[i]);
     const old = previous[index];
-    next.push(entry.kind === "user"
+    next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "user"
       ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, activity: old.activity,
           origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext,
           channel: entry.channel, parts: entry.parts }
       : { ...entry, ...old, historyId: entry.historyId, resultHistoryId: entry.resultHistoryId,
+          callPosition: entry.callPosition,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
           text: entry.kind === "assistant" ? entry.text : old.text,
           streaming: entry.kind === "assistant" ? false : old.streaming,
           result: entry.result ?? old.result, queued: false });
+    if (entry.kind === "tool" && entry.result !== undefined &&
+        ["Requested", "Running", "Receiving output", "Waiting for approval", "Awaiting execution result", "No result recorded", "Disconnected", "Interrupted", "Cancelled"].includes(old.state || ""))
+      next[next.length - 1] = { ...next[next.length - 1], state: entry.state };
     used.add(old.id); after = Math.max(after, index + 1);
   }
   for (let i = after; i < previous.length; i++) keep(previous[i]);

@@ -1218,3 +1218,8 @@ button.deny:hover:not(:disabled) {
 .delete-session-trigger:hover:not(:disabled) { color: var(--danger, #d77979); }
 .delete-session-dialog .dialog-actions .cancel { background: #4b2b30; color: var(--state-error); border-color: #a76c72; }
 .delete-session-dialog .dialog-actions .cancel:hover:not(:disabled) { background: #5c333c; border-color: var(--state-error); }
+.local-delivery { border-left: 3px solid var(--accent, #6688bb); padding: 0.75rem 1rem; }
+.delivery-asset { margin-top: 0.75rem; }
+.delivery-asset img, .delivery-asset video { display: block; max-width: 100%; max-height: 32rem; object-fit: contain; }
+.delivery-asset audio { max-width: 100%; }
+.delivery-asset button, .delivery-asset a { margin-right: 0.75rem; }

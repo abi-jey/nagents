@@ -21,12 +21,14 @@ from nagents.channels.store import InboxStore
 from nagents.extensions import AgentPlugin
 from nagents.harness.execution import _register_owned_adapter_type
 from nagents.harness.runtime import _HarnessSession
+from nagents.session.deliveries import DeliveryJournal
 from nagents.types import AudioContent
 from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
 from ._async import finish_on_cancel
+from .local_delivery import presentation
 from .routing import RoutingStore
 
 if TYPE_CHECKING:
@@ -77,9 +79,11 @@ class WebHistory(_HarnessSession):
         self.identity = _InputIdentity(self)
         self._annotations_ready = False
         self._annotations_lock = asyncio.Lock()
+        self.deliveries = DeliveryJournal(path)
 
     async def initialize(self) -> None:
         await super().initialize()
+        await self.deliveries.initialize()
         if not self._annotations_ready:
             async with self._annotations_lock:
                 if not self._annotations_ready:
@@ -249,13 +253,34 @@ class WebHistory(_HarnessSession):
             with closing(sqlite3.connect(self.db_path, timeout=5)) as db, db:
                 db.execute("BEGIN")
                 RoutingStore.root(db, session_id)
+                deliveries = self.deliveries._history_in(db, session_id)
                 db.row_factory = sqlite3.Row
                 rows = db.execute(
                     self._select() + " WHERE m.session_id = ? AND m.id >= COALESCE("
                     "(SELECT compacted_at_message_id FROM v2_sessions WHERE id = ?), 0) ORDER BY m.id",
                     (session_id, session_id),
                 ).fetchall()
-                return [self._project(row) for row in rows if row["role"] not in {"system", "developer"}]
+                records = [self._project(row) for row in rows if row["role"] not in {"system", "developer"}]
+                for record in records:
+                    attached = [
+                        presentation(receipt)
+                        for receipt in deliveries.current
+                        if str(receipt.origin.anchor_message_id) == record["history_id"]
+                    ]
+                    if attached:
+                        record["deliveries"] = attached
+                earlier: list[dict[str, object]] = [
+                    {
+                        "role": "local_delivery",
+                        "content": "",
+                        "name": "",
+                        "tool_call_id": "",
+                        "tool_calls": [],
+                        "deliveries": [presentation(receipt, earlier=True)],
+                    }
+                    for receipt in deliveries.earlier
+                ]
+                return [*earlier, *records]
 
         return await finish_on_cancel(asyncio.to_thread(read))
 

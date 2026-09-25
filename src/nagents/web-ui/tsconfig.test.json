@@ -9,6 +9,7 @@
   "include": [
     "src/api/*.ts",
     "src/features/chat/transcript*.ts",
+    "src/features/chat/deliveries*.ts",
     "src/features/context/*.ts",
     "src/features/settings/*.ts",
     "src/features/designer/*.ts",
