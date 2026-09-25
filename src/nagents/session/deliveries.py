@@ -377,29 +377,33 @@ class DeliveryJournal:
     def _history(self, root: str) -> DeliveryHistory:
         with closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("BEGIN")
-            boundary = _active(db, root)
-            earlier: list[DeliveryReceipt] = []
-            current: list[DeliveryReceipt] = []
-            rows = db.execute(
-                f"SELECT delivery_id, sequence, channel, {_ORIGIN_COLUMNS}, text, created_at "
-                "FROM ngn_local_deliveries WHERE root_session_id = ? "
-                "ORDER BY anchor_message_id, call_position, sequence",
-                (root,),
-            ).fetchall()
-            for row in rows:
-                origin = DeliveryOrigin(*row[3:14])
-                _anchor(db, origin)
-                assets = tuple(
-                    DeliveryAsset(*asset)
-                    for asset in db.execute(
-                        "SELECT asset_id, position, filename, media_type, byte_length "
-                        "FROM ngn_local_delivery_assets WHERE delivery_id = ? ORDER BY position",
-                        (row[0],),
-                    )
+            return self._history_in(db, root)
+
+    def _history_in(self, db: sqlite3.Connection, root: str) -> DeliveryHistory:
+        """Read metadata in an owned caller's transcript snapshot transaction."""
+        boundary = _active(db, root)
+        earlier: list[DeliveryReceipt] = []
+        current: list[DeliveryReceipt] = []
+        rows = db.execute(
+            f"SELECT delivery_id, sequence, channel, {_ORIGIN_COLUMNS}, text, created_at "
+            "FROM ngn_local_deliveries WHERE root_session_id = ? "
+            "ORDER BY anchor_message_id, call_position, sequence",
+            (root,),
+        ).fetchall()
+        for row in rows:
+            origin = DeliveryOrigin(*row[3:14])
+            _anchor(db, origin)
+            assets = tuple(
+                DeliveryAsset(*asset)
+                for asset in db.execute(
+                    "SELECT asset_id, position, filename, media_type, byte_length "
+                    "FROM ngn_local_delivery_assets WHERE delivery_id = ? ORDER BY position",
+                    (row[0],),
                 )
-                receipt = DeliveryReceipt(row[0], row[1], row[2], origin, row[14], row[15], assets)
-                (earlier if origin.anchor_message_id < boundary else current).append(receipt)
-            return DeliveryHistory(boundary, tuple(earlier), tuple(current))
+            )
+            receipt = DeliveryReceipt(row[0], row[1], row[2], origin, row[14], row[15], assets)
+            (earlier if origin.anchor_message_id < boundary else current).append(receipt)
+        return DeliveryHistory(boundary, tuple(earlier), tuple(current))
 
     async def read_asset(self, root_session_id: str, delivery_id: str, asset_id: str) -> bytes:
         await self.initialize()

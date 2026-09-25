@@ -162,3 +162,7 @@ DictationModal #dictation-destination { color: $ngn-info; }
 DictationModal #dictation-status { color: $ngn-tool; }
 DictationModal #dictation-preview { background: $ngn-background; color: $ngn-text; border: tall $ngn-border; }
 DictationModal #dictation-preview:focus { border: tall $ngn-accent; }
+.channel-delivery { height: auto; margin: 0 0 1 0; padding: 0 1; border-left: thick $ngn-accent; }
+.channel-delivery Static { height: auto; color: $ngn-text; }
+.channel-delivery .delivery-label { color: $ngn-info; text-style: bold; }
+.channel-delivery .delivery-attachment { color: $ngn-muted; }

@@ -41,6 +41,8 @@ from .execution import _is_owned_adapter
 from .execution import _register_owned_adapter_type
 from .execution import capture_write
 from .execution import host_run_id
+from .execution import observe_host_event
+from .execution import publish_anchor
 from .provider import DemoCompaction
 from .provider import HarnessProvider
 from .skills import HarnessSkillDiscoverer
@@ -101,6 +103,7 @@ class _HarnessSession(SessionManager):
         row_id = await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))
         if reservation is not None and type(row_id) is int and row_id > 0:
             reservation.row_id = row_id
+            await publish_anchor(self, session_id, reservation)
         return row_id
 
     async def replace_context(self, session_id: str, messages: list["Message"]) -> None:
@@ -407,6 +410,7 @@ class Harness:
 
     async def emit(self, event: HarnessEvent) -> None:
         if self._queue is not None:
+            observe_host_event(self, event)
             await self._queue.put(event)
 
     async def run(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
@@ -523,7 +527,7 @@ class Harness:
                                 else:
                                     if isinstance(event, ErrorEvent) and not event.recoverable:
                                         failed = True
-                                    await queue.put(event)
+                                    await self.emit(event)
                         if failed:
                             break
                         notification = await self.tasks.notification()
@@ -534,7 +538,7 @@ class Harness:
                         message = notification
                     await self.tasks.end()
                     if final is not None:
-                        await queue.put(final)
+                        await self.emit(final)
                 finally:
                     self.agent._execution_bridge = None
                     await self.tasks.end()

@@ -26,6 +26,7 @@ from textual.widgets import Markdown
 from textual.widgets import Static
 from textual.widgets import TextArea
 
+from nagents._async import join_owned
 from nagents.events import CompactionDoneEvent
 from nagents.events import CompactionStartedEvent
 from nagents.events import DoneEvent
@@ -36,6 +37,7 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness import Harness
 from nagents.harness import provider_login
 from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.credentials import ProviderLogin
@@ -45,10 +47,14 @@ from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
+from nagents.harness.types import TranscriptAbandoned
+from nagents.harness.types import TranscriptAnchor
 from nagents.types import TextContent
 
+from .channel import TuiChannelHost
 from .clipboard import copy_native
 from .commands import SlashMenu
+from .delivery import DeliveryWidget
 from .dictation import DictationModal
 from .login import DeviceLoginModal
 from .login import LoginMethodModal
@@ -82,7 +88,8 @@ if TYPE_CHECKING:
     from textual.widget import Widget
     from textual.worker import Worker
 
-    from nagents.harness import Harness
+    from nagents.channels.delivery_types import DeliveryReceipt
+    from nagents.channels.types import ChannelValue
     from nagents.harness.auth import DeviceAuthorization
     from nagents.harness.commands import Command
     from nagents.harness.provider_login import LoginMethod
@@ -176,6 +183,13 @@ class NagentsApp(App[None]):
         self._clipboard_task: asyncio.Task[None] | None = None
         self._clipboard_pending: str | None = None
         self._mouse_selection_editor: TextArea | Input | None = None
+        self._channel_host: TuiChannelHost | None = None
+        self._delivery_ids: set[str] = set()
+        self._delivery_anchors: dict[tuple[int, int], Widget] = {}
+        self._unanchored_tools: dict[int, tuple[ToolCallEvent, ToolCard]] = {}
+        self._called_tools: set[str] = set()
+        self._delivery_dirty = False
+        self._delivery_session = ""
 
     @property
     def busy(self) -> bool:
@@ -540,6 +554,10 @@ class NagentsApp(App[None]):
         pick, self._pick_session = self._pick_session, False
         # Resuming or choosing must not first register an empty session for this run.
         await self.harness.initialize(create_session=not (resume or continue_session or pick))
+        if self._channel_host is None and isinstance(self.harness, Harness):
+            host = TuiChannelHost(self.harness, self._delivery_notice)
+            host.open()
+            self._channel_host = host
         if resume:
             await self.harness.resume(resume)
         elif continue_session:
@@ -552,8 +570,22 @@ class NagentsApp(App[None]):
             await self._sessions()
 
     async def _load_history(self) -> None:
-        history = await self.harness.history()
-        for message in history:
+        self._delivery_ids.clear()
+        self._delivery_anchors.clear()
+        self._unanchored_tools.clear()
+        self._called_tools.clear()
+        self._delivery_session = self.harness.session_id
+        deliveries: tuple[DeliveryReceipt, ...] = ()
+        host = self._channel_host
+        if host is not None and host.supports_history and self.harness._session_created:
+            snapshot = await host.snapshot(self._delivery_session)
+            rows = snapshot.rows
+            deliveries = snapshot.deliveries.current
+            if snapshot.deliveries.earlier:
+                await self._earlier_deliveries(snapshot.deliveries.earlier)
+        else:
+            rows = tuple((0, message) for message in await self.harness.history())
+        for row_id, message in rows:
             content = message.content
             text = (
                 content
@@ -565,8 +597,13 @@ class NagentsApp(App[None]):
                     await self._add(Turn(message.role, text))
                 if message.role == "user":
                     self.query_one(Composer).remember(text)
-                for call in message.tool_calls:
-                    await self._tool(call.id, call.name, call.arguments)
+                for position, call in enumerate(message.tool_calls):
+                    self._tools.pop(call.id, None)
+                    card = await self._tool(call.id, call.name, call.arguments)
+                    self._delivery_anchors[row_id, position] = card
+                    for receipt in deliveries:
+                        if (receipt.origin.anchor_message_id, receipt.origin.call_position) == (row_id, position):
+                            await self._delivery(receipt)
             elif message.role == "tool":
                 card = await self._tool(message.tool_call_id or "", message.name or "tool")
                 # Core history persists tool failures with this literal prefix.
@@ -576,6 +613,66 @@ class NagentsApp(App[None]):
                     card.finish(text, None, 0)
             elif message.role == "compaction_summary":
                 await self._notice("Earlier context was compacted.")
+
+    async def _delivery_notice(self, notice: dict[str, ChannelValue]) -> None:
+        # Observer tasks never mutate widgets or route sends through selection.
+        if notice.get("session_id") == self._delivery_session:
+            self._delivery_dirty = True
+
+    async def _delivery(self, receipt: DeliveryReceipt) -> None:
+        if receipt.delivery_id in self._delivery_ids:
+            return
+        await self._flush_stream()
+        self._answer = None
+        self._answer_text = ""
+        widget = DeliveryWidget(receipt)
+        key = (receipt.origin.anchor_message_id, receipt.origin.call_position)
+        anchor = self._delivery_anchors.get(key)
+        if anchor is not None and anchor.is_attached:
+            await self.query_one("#conversation", VerticalScroll).mount(widget, after=anchor)
+            self._delivery_anchors[key] = widget
+        else:
+            await self._add(widget)
+        self._delivery_ids.add(receipt.delivery_id)
+
+    async def _reconcile_deliveries(self, *, force: bool = False) -> None:
+        host = self._channel_host
+        if self._shutting_down or host is None or not host.supports_history or not self._delivery_session:
+            return
+        if not force and not self._delivery_dirty:
+            return
+        self._delivery_dirty = False
+        history = await host.journal.history(self._delivery_session)
+        if history.earlier:
+            await self._earlier_deliveries(history.earlier)
+        for receipt in history.current:
+            key = (receipt.origin.anchor_message_id, receipt.origin.call_position)
+            if key in self._delivery_anchors:
+                await self._delivery(receipt)
+            elif receipt.delivery_id not in self._delivery_ids:
+                # The producer may be ahead of the UI queue. Wait for its exact
+                # committed anchor event rather than guessing from call IDs.
+                self._delivery_dirty = True
+
+    async def _earlier_deliveries(self, receipts: tuple[DeliveryReceipt, ...]) -> None:
+        conversation = self.query_one("#conversation", VerticalScroll)
+        headers = conversation.query(".earlier-deliveries")
+        if headers:
+            previous: Widget = headers.first()
+        else:
+            previous = Static("Deliveries from earlier context", markup=False, classes="notice earlier-deliveries")
+            await conversation.mount(previous, before=0)
+        widgets = {widget.receipt.delivery_id: widget for widget in conversation.query(DeliveryWidget)}
+        for receipt in receipts:
+            widget = widgets.get(receipt.delivery_id)
+            if widget is None:
+                await self._delivery(receipt)
+                widget = next(
+                    w for w in conversation.query(DeliveryWidget) if w.receipt.delivery_id == receipt.delivery_id
+                )
+            # Move existing widgets, never rebuild tool disclosures or focus.
+            conversation.move_child(widget, after=previous)
+            previous = widget
 
     async def _add(self, widget: Widget) -> None:
         conversation = self.query_one("#conversation", VerticalScroll)
@@ -684,15 +781,39 @@ class NagentsApp(App[None]):
         self._run_text = ""
         self._pending.clear()
         self._tools.clear()
+        self._unanchored_tools.clear()
+        self._called_tools.clear()
+        self._delivery_session = self.harness.session_id
         self._usage = ""
         if not task_id:
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
         stream = self.harness.continue_task(task_id, text) if task_id else self.harness.run(text)
-        with host_run(self.harness, uuid4().hex):
-            async with aclosing(stream) as events:
-                async for event in events:
-                    await self._event(event)
+        pending_events: deque[HarnessEvent] = deque()
+
+        async def present(event: HarnessEvent) -> None:
+            try:
+                await self._event(event)
+            finally:
+                # Identity, never equality: repeated tool calls and identical
+                # text events remain distinct. Diagnostics need not be observed.
+                for index, pending in enumerate(pending_events):
+                    if pending is event:
+                        del pending_events[index]
+                        break
+
+        try:
+            with host_run(self.harness, uuid4().hex, observe=pending_events.append):
+                async with aclosing(stream) as events:
+                    async for event in events:
+                        await join_owned(asyncio.create_task(present(event)))
+        finally:
+            # Closing the stream joins the producer. Recover its bounded tail,
+            # including an anchor already dequeued when cancellation arrived.
+            # Finish only incremental presentation; existing cards retain state.
+            while pending_events and not self._shutting_down:
+                await present(pending_events[0])
+            await self._reconcile_deliveries(force=True)
 
     async def _text(self, text: str) -> None:
         if not text:
@@ -731,6 +852,33 @@ class NagentsApp(App[None]):
         return self._tools[call_id]
 
     async def _event(self, event: HarnessEvent) -> None:
+        if isinstance(event, TranscriptAbandoned):
+            if event.session_id == self._delivery_session:
+                for call in event.calls:
+                    pending = self._unanchored_tools.pop(id(call), None)
+                    if pending is not None:
+                        _, card = pending
+                        card.cancel()
+                        if self._tools.get(call.id) is card:
+                            self._tools.pop(call.id)
+                            self._called_tools.discard(call.id)
+                            self._running_tools.discard(call.id)
+            return
+        if isinstance(event, TranscriptAnchor):
+            if event.session_id == self._delivery_session:
+                cards: list[ToolCard] = []
+                for call in event.calls:
+                    pending = self._unanchored_tools.get(id(call))
+                    if pending is None or pending[0] is not call:
+                        raise RuntimeError("Committed transcript anchor has no matching streamed tool card")
+                    cards.append(pending[1])
+                for position, (call, card) in enumerate(zip(event.calls, cards, strict=True)):
+                    self._delivery_anchors[event.message_id, position] = card
+                    self._unanchored_tools.pop(id(call))
+                await self._reconcile_deliveries(force=True)
+            return
+        if isinstance(event, (TextChunkEvent, TextDoneEvent, ToolResultEvent, DoneEvent)):
+            await self._reconcile_deliveries(force=not isinstance(event, TextChunkEvent))
         if isinstance(event, TaskStarted):
             key = f"task:{event.task_id}" + (f":{event.followup}" if event.followup else "")
             await self._tool(
@@ -768,6 +916,7 @@ class NagentsApp(App[None]):
             self._status("Compacting context...")
         elif isinstance(event, CompactionDoneEvent):
             self._compacting = False
+            await self._reconcile_deliveries(force=True)
             await self._notice(
                 f"Context compacted: {event.original_message_count} -> {event.new_message_count} messages."
             )
@@ -793,7 +942,11 @@ class NagentsApp(App[None]):
         elif isinstance(event, ReasoningChunkEvent):
             self._status("Thinking  /  Esc to cancel")
         elif isinstance(event, ToolCallEvent):
-            await self._tool(event.id, event.name, event.arguments)
+            if event.id in self._called_tools:
+                self._tools.pop(event.id, None)
+            self._called_tools.add(event.id)
+            card = await self._tool(event.id, event.name, event.arguments)
+            self._unanchored_tools[id(event)] = (event, card)
             self._running_tools.add(event.id)
             self._status(f"Running {event.name}  /  Esc to cancel")
         elif isinstance(event, ToolOutput):
@@ -914,6 +1067,8 @@ class NagentsApp(App[None]):
                 if not self._active.cancelling():
                     self._active.cancel()
                 await asyncio.gather(self._active, return_exceptions=True)
+            if self._channel_host is not None:
+                self._channel_host.close()
             await self.harness.close()
         finally:
             try:
@@ -1316,7 +1471,12 @@ class NagentsApp(App[None]):
         self._tools.clear()
         self._usage = ""
         conversation = self.query_one("#conversation", VerticalScroll)
-        await conversation.remove_children(".turn, .tool-card, .notice")
+        await conversation.remove_children(".turn, .tool-card, .notice, .channel-delivery")
+        self._delivery_ids.clear()
+        self._delivery_anchors.clear()
+        self._unanchored_tools.clear()
+        self._called_tools.clear()
+        self._delivery_session = ""
         self.query_one("#welcome").display = True
 
     async def _change(self, name: str, argument: str) -> None:

@@ -229,8 +229,39 @@ Registration does not install a system prompt; the host supplies trusted,
 request-local destination context through its normal instructions.
 
 The web channel host uses this same dispatcher behind its existing approval,
-credential-protection and chat-ownership wrappers. Built-in terminal/browser
-delivery adapters and durable media presentation are separate follow-up work.
+credential-protection and chat-ownership wrappers.
+
+### Built-in TUI text delivery
+
+The interactive TUI hosts `builtin.tui` for explicit text delivery. Normal
+assistant replies already appear in the conversation; use `channel_send` when
+an explicit delivery is requested. Discover the available route and capabilities
+through `channel_list`; the host supplies the current destination in its model
+instructions. The destination is the executing root session, not a terminal
+process or a separate chat.
+
+An approved send produces a distinct delivery entry while retaining its compact
+tool card as execution evidence. Deliveries are saved separately from model
+messages and restored with the conversation. Separate sends remain separate
+even when their text is identical. After compaction, retained deliveries from
+outside the current context appear in a labeled earlier-context section.
+
+`builtin.tui` accepts only the message's text field. All attachments, including
+`.txt` files, are unsupported: a send containing text and an attachment fails
+as a whole, without delivering the text first. Historical attachments from
+compatible shared storage appear as filename/type/channel notes, without loading
+or rendering their media bytes.
+
+The TUI keeps its existing input queue, Harness execution and approval modal.
+Channel tools remain subject to profiles and approval; reviewer/demo restrictions
+still apply, including to discovery. Subagents gain no channel tools or sending
+permission. The adapter declares host-managed text input, does not advertise
+legacy `receive`, and rejects direct `listen()` calls. It starts no additional
+listener and is not an external connector eligible for automatic replies.
+
+The built-in route is owned by the running TUI. Tool registration detects
+collisions and shutdown removes only its own definitions. Browser delivery and
+media playback are separate follow-up work.
 
 ### Durable local delivery foundation
 

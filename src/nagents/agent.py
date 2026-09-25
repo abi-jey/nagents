@@ -1751,6 +1751,9 @@ class Agent:
 
             # Generate response
             pending_tool_calls: list[ToolCall] = []
+            # Exact streamed event identities for this generation only. A retry
+            # discards these with its uncommitted calls, even if IDs are reused.
+            pending_tool_events: list[ToolCallEvent] = []
             full_text = ""
             has_error = False
             finish_reason = FinishReason.UNKNOWN
@@ -1848,12 +1851,15 @@ class Agent:
                         pending_tool_calls.append(deepcopy(call))
                         event.arguments = deepcopy(call.arguments)
                         event.metadata = deepcopy(call.metadata)
+                        pending_tool_events.append(event)
 
                     yield event
 
                     if isinstance(event, ErrorEvent):
                         has_error = True
                         if not event.recoverable:
+                            if self._execution_bridge:
+                                await self._execution_bridge.abandon(tuple(pending_tool_events))
                             yield DoneEvent(
                                 final_text="",
                                 session_id=session_id,
@@ -1864,6 +1870,8 @@ class Agent:
 
             # If we hit an error, don't continue
             if has_error:
+                if self._execution_bridge:
+                    await self._execution_bridge.abandon(tuple(pending_tool_events))
                 continue
 
             # If we got tool calls, execute them
@@ -1871,7 +1879,7 @@ class Agent:
                 # Add assistant message with tool calls to history
                 assistant_block = Message(role="assistant", content=full_text or None, tool_calls=pending_tool_calls)
                 bridge = self._execution_bridge
-                with bridge.reserve(assistant_block) if bridge else nullcontext():
+                with bridge.reserve(assistant_block, tuple(pending_tool_events)) if bridge else nullcontext():
                     await self.session.add_message(session_id, assistant_block)
 
                 # Execute each tool

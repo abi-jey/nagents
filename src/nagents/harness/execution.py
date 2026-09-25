@@ -7,6 +7,7 @@ revalidate them while the explicitly bound async channel_send definition runs.
 import asyncio
 import copy
 import uuid
+from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -14,8 +15,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from nagents.channels.delivery_types import DeliveryOrigin
+from nagents.harness.types import HarnessEvent
+from nagents.harness.types import TranscriptAbandoned
+from nagents.harness.types import TranscriptAnchor
 
 if TYPE_CHECKING:
+    from nagents.events import ToolCallEvent
     from nagents.session import SessionManager
     from nagents.types import Message
     from nagents.types import ToolCall
@@ -27,6 +32,9 @@ if TYPE_CHECKING:
 
 _current: ContextVar["ExecutionBridge | None"] = ContextVar("delivery_execution", default=None)
 _host: ContextVar[tuple[object, str]] = ContextVar("delivery_host_run", default=(None, ""))
+_observer: ContextVar[tuple[object, Callable[[HarnessEvent], None] | None]] = ContextVar(
+    "delivery_host_observer", default=(None, None)
+)
 _owned_adapter_types: set[type["SessionManager"]] = set()
 
 
@@ -44,15 +52,30 @@ def _is_owned_adapter(adapter: "SessionManager") -> bool:
 
 
 @contextmanager
-def host_run(harness: "Harness", run_id: str) -> Iterator[None]:
+def host_run(
+    harness: "Harness", run_id: str, *, observe: Callable[[HarnessEvent], None] | None = None
+) -> Iterator[None]:
     """Bind a host's run ID at its owned stream boundary (not its worker task)."""
     if not run_id:
         raise ValueError("Host run ID must not be empty")
     token = _host.set((harness, run_id))
+    observer_token = _observer.set((harness, observe))
     try:
         yield
     finally:
         _host.reset(token)
+        _observer.reset(observer_token)
+
+
+def observe_host_event(harness: "Harness", event: HarnessEvent) -> None:
+    """Let an owning UI retain the bounded, unconsumed stream tail on cancellation.
+
+    This is a synchronous host-local observer, not a second consumer or an agent
+    plugin. Child Harnesses cannot inherit the root's observer.
+    """
+    owner, observe = _observer.get()
+    if owner is harness and observe is not None:
+        observe(event)
 
 
 def host_run_id(harness: "Harness") -> str:
@@ -64,6 +87,7 @@ def host_run_id(harness: "Harness") -> str:
 class _Block:
     message: "Message"
     calls: list["ToolCall"]
+    events: tuple["ToolCallEvent", ...]
     row_id: int = 0
     writing: bool = True
 
@@ -120,13 +144,19 @@ class ExecutionBridge:
             _current.reset(token)
 
     @contextmanager
-    def reserve(self, message: "Message") -> Iterator[None]:
-        block = _Block(message, copy.deepcopy(message.tool_calls or []))
+    def reserve(self, message: "Message", events: tuple["ToolCallEvent", ...]) -> Iterator[None]:
+        if len(message.tool_calls) != len(events):
+            raise RuntimeError("Committed tool block is missing its streamed call correspondence")
+        block = _Block(message, copy.deepcopy(message.tool_calls), events)
         self.block = block
         try:
             yield
         finally:
             block.writing = False
+
+    async def abandon(self, events: tuple["ToolCallEvent", ...]) -> None:
+        if self.live() and events:
+            await self.harness.emit(TranscriptAbandoned(self.session_id, events))
 
     @contextmanager
     def executing(self, call: "ToolCall", position: int) -> Iterator[None]:
@@ -223,6 +253,13 @@ def capture_write(adapter: "SessionManager", session_id: str, message: "Message"
     if block is None or not block.writing or block.message is not message or block.row_id:
         return None
     return block
+
+
+async def publish_anchor(adapter: "SessionManager", session_id: str, block: _Block) -> None:
+    """Preserve producer queue ordering between streamed calls and their results."""
+    bridge = _current.get()
+    if bridge is not None and bridge.live() and bridge.adapter is adapter and block is bridge.block:
+        await bridge.harness.emit(TranscriptAnchor(session_id, block.row_id, block.events))
 
 
 @contextmanager
