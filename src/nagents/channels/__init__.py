@@ -1,5 +1,6 @@
 """One persistent agent identity, many independent information channels."""
 
+from .dispatcher import ChannelDispatcher
 from .plugins import load_channel
 from .runtime import dispatch_channel_execution_event
 from .types import Channel
@@ -8,6 +9,7 @@ from .types import ChannelActivity
 from .types import ChannelApproval
 from .types import ChannelAttachment
 from .types import ChannelCommand
+from .types import ChannelContentCapabilities
 from .types import ChannelDelivery
 from .types import ChannelError
 from .types import ChannelEvent
@@ -18,8 +20,11 @@ from .types import ChannelFactory
 from .types import ChannelFile
 from .types import ChannelMessage
 from .types import ChannelPlugin
+from .types import ChannelReceiveCapabilities
 from .types import ChannelReceiver
+from .types import ChannelRenderCapabilities
 from .types import ChannelSend
+from .types import ChannelSendCapabilities
 from .types import ChannelValue
 from .types import sanitize_channel_tool_arguments
 
@@ -30,7 +35,9 @@ __all__ = [
     "ChannelApproval",
     "ChannelAttachment",
     "ChannelCommand",
+    "ChannelContentCapabilities",
     "ChannelDelivery",
+    "ChannelDispatcher",
     "ChannelError",
     "ChannelEvent",
     "ChannelEventHandler",
@@ -40,8 +47,11 @@ __all__ = [
     "ChannelFile",
     "ChannelMessage",
     "ChannelPlugin",
+    "ChannelReceiveCapabilities",
     "ChannelReceiver",
+    "ChannelRenderCapabilities",
     "ChannelSend",
+    "ChannelSendCapabilities",
     "ChannelValue",
     "dispatch_channel_execution_event",
     "load_channel",

@@ -137,6 +137,103 @@ async def observe(item: ChannelEvent) -> None:
 
 ## Delivery and lifecycle
 
+### Directional content capabilities
+
+Connectors can optionally declare the content they receive, send and render.
+These are separate directions: a browser can play a video without the model
+being able to understand it, and a host can admit input without using a connector
+listener.
+
+```python
+from nagents.channels import (
+    ChannelContentCapabilities,
+    ChannelReceiveCapabilities,
+    ChannelRenderCapabilities,
+    ChannelSendCapabilities,
+)
+
+# Assign this to a connector's content_capabilities attribute.
+content_capabilities = ChannelContentCapabilities(
+    receive=ChannelReceiveCapabilities(via="listen", text=True),
+    send=ChannelSendCapabilities(
+        text=True,
+        file_media_types=("image/png", "image/jpeg"),
+        max_files=2,
+        max_file_bytes=8 * 1024 * 1024,
+    ),
+    render=ChannelRenderCapabilities(text=True, file_media_types=("image/png", "image/jpeg")),
+)
+```
+
+`channel_list` includes `content_capabilities` only when the connector declares it.
+Legacy entries keep their existing shape and behavior. An omitted descriptor or
+direction means **undeclared**; an explicit direction with `text=False` and an
+empty file-type tuple supports neither text nor files.
+
+- `text` describes the message text field, not `.txt` attachments.
+- `file_media_types` is an explicit MIME allowlist, normalized to lowercase.
+  Wildcards, parameters and duplicate types are rejected at binding.
+- Receive declarations use `via="listen"` or `via="host"`; the latter does not
+  advertise standalone listener support.
+- Optional receive/send limits must be positive integers. Unspecified limits do
+  not override the host's existing file caps.
+- Render declarations can use `playback="browser_dependent"` to indicate that
+  decoding depends on the recipient browser. The default is `"none"`.
+- Each direction permits up to 32 MIME types of at most 127 characters each;
+  the serialized descriptor is limited to 8 KiB.
+
+Binding validates and snapshots the descriptor. Rebuild the dispatcher when
+capabilities change; modifying a returned catalog does not change dispatch.
+Declared send restrictions are checked before calling the connector, including
+actual file sizes. A rejected mixed text/file send delivers neither part.
+Receive/render declarations do not become send permissions. Tool approval,
+profiles, destination ownership and provider limits remain independent.
+
+### Host-managed dispatch
+
+Applications that already own execution can use `ChannelDispatcher` without
+starting a channel listener or creating another Agent/session owner:
+
+```python
+from nagents.channels import ChannelDispatcher
+
+# connector and workspace are supplied by the owning application.
+dispatcher = ChannelDispatcher((connector,), workspace=workspace)
+catalog = dispatcher.catalog()
+
+# Call only after the host's normal authorization/approval checks.
+delivery = await dispatcher.channel_send(
+    connector.name,
+    destination="room-123",
+    text="Here is the plot.",
+    attachments=["plot.png"],
+)
+```
+
+Construction and discovery do not open connectors, start listeners or access a
+session database. The dispatcher shares validation and one-attempt send/action
+semantics with `Agent.listen()`. It does not retry uncertain sends, broadcast final
+answers, manage input admission, choose session destinations or grant permission.
+The host owns connector open/close, approval, routing and cancellation/joining of
+in-flight operations. An empty dispatcher can represent a host with no connected
+transports; duplicate connector names are rejected before any dispatch.
+
+For a host that does not need additional routing wrappers,
+`with dispatcher.register_tools(harness.agent.tool_registry): ...` temporarily
+registers `channel_list`, `channel_send` and `channel_action`. Initialize the
+Harness and its trusted extensions first, then keep this scope open until owned
+execution has finished. Registration rejects existing tool names; cleanup removes
+only the definitions it installed and preserves subsequent replacements. Tool
+execution still passes through normal Harness approval and profile checks.
+Registration does not install a system prompt; the host supplies trusted,
+request-local destination context through its normal instructions.
+
+The web channel host uses this same dispatcher behind its existing approval,
+credential-protection and chat-ownership wrappers. Built-in terminal/browser
+delivery adapters and durable media presentation are separate follow-up work.
+
+### Standalone listener lifecycle
+
 - `add_channel()` is synchronous and chainable; it performs no connection I/O.
 - `listen()` opens connectors and owns a single serial execution worker. Messages
   arriving while the agent is busy wait in its inbox; they do not interrupt a

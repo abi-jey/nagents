@@ -121,7 +121,7 @@ async def automatic_reply(state: WebState, run: Run, request: ApprovalRequest) -
     connection = host.catalog.connections.get(channel)
     source = host.sources.get(channel)
     transport = host.channels.get(channel)
-    runtime = host.runtime
+    dispatcher = host.dispatcher
 
     def eligible() -> bool:
         return (
@@ -140,10 +140,9 @@ async def automatic_reply(state: WebState, run: Run, request: ApprovalRequest) -
             and host.sources.get(channel) is source
             and transport is not None
             and host.channels.get(channel) is transport
-            and runtime is not None
-            and host.runtime is runtime
-            and runtime._active
-            and any(binding.name == channel and binding.channel is transport for binding in runtime._bindings)
+            and dispatcher is not None
+            and host.dispatcher is dispatcher
+            and dispatcher.contains_channel(channel, transport)
             and harness.agent.tool_registry.get(request.tool) is definition
             and definition.func is function
             and definition.name == request.tool

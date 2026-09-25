@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 import os
 import secrets
 import sys
@@ -21,9 +20,9 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import JsonValue
 
-from nagents.channels.runtime import _bind
-from nagents.channels.runtime import _object_copy
-from nagents.channels.runtime import _validate_schema
+from nagents.channels.dispatcher import ChannelDispatcher
+from nagents.channels.dispatcher import _object_copy
+from nagents.channels.dispatcher import _validate_schema
 from nagents.channels.types import Channel
 from nagents.channels.types import ChannelPlugin
 from nagents.channels.types import ChannelValue
@@ -260,7 +259,7 @@ class ChannelCatalog:
             channel = plugin.load()(_object_copy({**connection.config, **connection.secrets, "name": id}))
             if not isinstance(channel, Channel) or channel.name != id:
                 raise ValueError("Connector did not preserve instance identity")
-            self.check_public(json.loads(_bind(channel).catalog))
+            self.check_public(ChannelDispatcher((channel,)).catalog()[0])
             return channel
         except Exception:
             raise HTTPException(

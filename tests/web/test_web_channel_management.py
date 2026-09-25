@@ -173,7 +173,8 @@ def test_approved_tool_queues_then_real_turn_finishes_and_worker_opens_at_idle(
         assert app.client.portal is not None
         app.client.portal.call(_wait, queued)
         assert not app.channels and not host.catalog.path.exists()
-        assert host.runtime is None and host.instructions.catalog == []
+        assert host.dispatcher is not None
+        assert host.dispatcher.catalog() == host.instructions.catalog == []
         status = app.client.portal.call(host.management.channel_configuration, "status")
         requests = status["requests"]
         assert isinstance(requests, list)

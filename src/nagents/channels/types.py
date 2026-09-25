@@ -191,6 +191,56 @@ class ChannelFile:
 
 
 @dataclass(frozen=True)
+class ChannelReceiveCapabilities:
+    """Content admitted into agent input; ``via`` identifies the admission owner.
+
+    Host-managed input does not imply support for ``Channel.listen``. File
+    limits are optional declarations, independent of provider modality support.
+    """
+
+    via: Literal["host", "listen"] = "listen"
+    text: bool = False
+    file_media_types: tuple[str, ...] = ()
+    max_files: int | None = None
+    max_file_bytes: int | None = None
+    max_total_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class ChannelSendCapabilities:
+    """Accepted explicit outbound content. Text support does not permit text files."""
+
+    text: bool = False
+    file_media_types: tuple[str, ...] = ()
+    max_files: int | None = None
+    max_file_bytes: int | None = None
+    max_total_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class ChannelRenderCapabilities:
+    """Recipient presentation support, independent of model input or authorization."""
+
+    text: bool = False
+    file_media_types: tuple[str, ...] = ()
+    playback: Literal["none", "browser_dependent"] = "none"
+
+
+@dataclass(frozen=True)
+class ChannelContentCapabilities:
+    """Optional directional declarations, validated and snapshotted at binding.
+
+    An omitted direction is undeclared, not unsupported or unrestricted. An
+    explicit direction with false text support and no file types supports
+    neither. Existing transport ``Channel.capabilities`` retain their meanings.
+    """
+
+    receive: ChannelReceiveCapabilities | None = None
+    send: ChannelSendCapabilities | None = None
+    render: ChannelRenderCapabilities | None = None
+
+
+@dataclass(frozen=True)
 class ChannelSend:
     """An explicit outgoing message selected by the application or model."""
 
@@ -352,6 +402,7 @@ class Channel(ABC):
     name: str
     description: str = ""
     capabilities: tuple[str, ...] = ("receive", "send_text")
+    content_capabilities: ChannelContentCapabilities | None = None
     actions: tuple[ChannelAction, ...] = ()
 
     async def open(self) -> None:

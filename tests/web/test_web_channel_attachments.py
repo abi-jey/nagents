@@ -108,12 +108,12 @@ def test_web_history_exposes_channel_parts_and_provenance(tmp_path: Path, monkey
         assert isinstance(messages[0].content, list)
 
 
-def test_web_channel_runtime_receives_the_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_web_channel_dispatcher_receives_the_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with site(tmp_path, monkeypatch) as app:
         app.configure()
-        runtime = app.state.channels.runtime
-        assert runtime is not None
-        assert runtime.workspace == app.state.harness.workspace
+        dispatcher = app.state.channels.dispatcher
+        assert dispatcher is not None
+        assert dispatcher.workspace == app.state.harness.workspace
 
 
 def test_web_channel_send_exposes_and_forwards_attachments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

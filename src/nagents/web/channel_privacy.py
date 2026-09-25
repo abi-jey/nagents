@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from nagents.channels.runtime import _json
+from nagents.channels.dispatcher import _json
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

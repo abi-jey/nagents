@@ -119,6 +119,7 @@ nav:
   - Development:
       - Contributing: development/contributing.md
       - Harness Research: development/harness-research.md
+      - Built-in UI Channels Design: development/builtin-ui-channels.md
 
 extra:
   social:

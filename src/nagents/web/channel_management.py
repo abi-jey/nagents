@@ -26,8 +26,8 @@ from typing import cast
 
 from fastapi import HTTPException
 
-from nagents.channels.runtime import _identifier
-from nagents.channels.runtime import _object_copy
+from nagents.channels.dispatcher import _identifier
+from nagents.channels.dispatcher import _object_copy
 from nagents.channels.types import ChannelError
 from nagents.extensions import AgentPlugin
 
