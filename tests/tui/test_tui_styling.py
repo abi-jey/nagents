@@ -90,7 +90,7 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
             check_visible("#compose-area", "#composer", "#footer", "#status", painted=True)
             assert app.query_one(Composer).styles.border_top[0] in {"", "none"}
             for selector, section_title in (
-                ("#conversation", "Conversation"),
+                ("#conversation", "Conversation / F6"),
                 ("#rail", "Agents / Ctrl+T"),
             ):
                 section = app.query_one(selector)

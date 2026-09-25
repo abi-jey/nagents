@@ -88,7 +88,7 @@ MarkdownBullet { color: $ngn-assistant; }
 .error, #rail-activity.error { color: $ngn-error; }
 #status.error { color: $ngn-message-error; }
 .tool-card { height: auto; padding: 0; margin: 0 0 1 0; border: none; border-left: solid $ngn-tool; background: $ngn-panel; }
-.tool-card > CollapsibleTitle { color: $ngn-tool; background: transparent; padding: 0 1; }
+.tool-card > CollapsibleTitle { color: $ngn-tool; background: transparent; padding: 0 1; width: 1fr; height: 1; text-wrap: nowrap; text-overflow: ellipsis; }
 .tool-card > CollapsibleTitle:hover, .tool-card > CollapsibleTitle:focus { background: $ngn-hover; color: $ngn-text; text-style: $ngn-focus-style; }
 .tool-card:focus-within, #rail-details:focus-within { background-tint: transparent; }
 .tool-card > Contents { padding: 1; }
@@ -99,6 +99,7 @@ MarkdownBullet { color: $ngn-assistant; }
 .tool-card.cancelled { border-left: solid $ngn-warning; }
 .tool-card.cancelled > CollapsibleTitle { color: $ngn-warning; }
 .tool-arguments, .tool-output, .tool-diff { height: auto; }
+.tool-name { height: auto; margin-bottom: 1; }
 .tool-arguments { margin-bottom: 1; color: $ngn-text; }
 .tool-output { color: $ngn-text; }
 .tool-diff { margin-top: 1; }

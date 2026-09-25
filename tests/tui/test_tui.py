@@ -500,7 +500,9 @@ def test_final_only_after_tools_and_error_status(tmp_path: Path) -> None:
             children = list(app.query_one("#conversation").children)
             assert children.index(app.query_one(ToolCard)) < children.index(list(app.query(".assistant"))[-1])
             assert app.query_one("#status").has_class("error")
-            assert "exited 1" in str(app.query_one("#status", Static).content)
+            assert "Tool failed" in str(app.query_one("#status", Static).content)
+            assert "exited 1" not in str(app.query_one("#status", Static).content)
+            assert app.query_one(ToolCard).collapsed
 
     asyncio.run(scenario())
 

@@ -160,6 +160,35 @@ tmux. If the terminal blocks it, configure its clipboard permissions or use the
 terminal's own selection/copy mechanism. Usual terminal paste shortcuts continue
 to work; pasted multiline text is never submitted automatically.
 
+### Compact tool activity
+
+Tool cards start collapsed, including restored history and failed tools. Their
+single-line header shows the tool name, a short command or target hint when
+available, and a running, complete, failed, or cancelled label. Completed calls
+show their reported duration when available. Long names and hints are shortened
+to keep the outcome visible on narrow terminals.
+
+Press **F6** to switch from the composer to the conversation without changing
+your scroll position, or back to your draft. In the conversation, PageUp/PageDown
+scroll and Tab/Shift+Tab navigate tool headers and other controls. Tab in the
+composer retains its configured agent/completion/focus behavior. The conversation
+border and `/help` show the pane-focus shortcut.
+
+Click a tool header, or focus it and press Enter or Space, to inspect the tool
+name, arguments, output, error, and diff. Press Enter, Space, or click again to
+collapse. Output and
+lifecycle updates never change your choice; failures stay visibly labeled without
+opening their details. While an expanded card's header is focused and visible,
+incoming details pause bottom-follow so the header stays available. Scrolling
+away does not pull the header back into view. Expansion choices last for the mounted card, not across
+session reloads. Details retain the existing 16,000-character output/argument
+preview limit with an explicit truncation marker; approval dialogs still show
+the exact proposal separately. In approval dialogs, PageUp/PageDown scroll the
+full proposal even with Deny or Allow once focused; paging does not change the
+decision focus. Deny remains the initial choice, and Escape denies.
+Closing an approval restores the previously focused control without scrolling;
+if that control is no longer available, focus returns to the composer.
+
 ## Themes and motion
 
 The message editor and its status footer share one borderless, filled surface.

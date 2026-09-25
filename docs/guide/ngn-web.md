@@ -261,9 +261,22 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   names or event arrival order. Later activations retain separate execution
   evidence beneath the same task identity. Child approval decisions stay with
   that child's call, even when another agent uses the same call ID.
-  Task branches, the retained registry, and notification payloads start collapsed
+  Tool calls, task branches, the retained registry, and notification payloads start collapsed
   to keep the conversation visible. Expand a record for its full identifiers,
   inputs, results, and errors; explicit expansion choices survive live updates.
+  Tool summaries show a bounded plain-text command or target when recognized,
+  the observed state, approval decision, and measured duration when available.
+  Desktop summaries use one row; mobile summaries put name and outcome on the
+  first row and a single-line ellipsized target on the second. Full exact inputs
+  remain in details and in the target's title.
+  Open records prioritize inputs, errors, and results (including returned diffs).
+  **Execution metadata** separately reveals full tool/run/call/task identities.
+  Evidence initially above 2,400 characters or 24 lines requires **Expand full content**;
+  smaller evidence starts open. Later growth preserves the disclosure choice and
+  focus, using a bounded keyboard-scrollable output region. Identical
+  streamed output and final results are displayed once with an explicit note;
+  differing partial output is retained separately. Promoting an identical stream
+  to a result preserves its reading position and disclosure. Backend output limits still apply.
 - Missing results are never inferred to be successful. Resumed history labels
   results as recorded, since live duration/approval/status events are not persisted
   in the Harness message history. Same-process reloads also show the retained task
@@ -313,6 +326,31 @@ accepting a connection. The browser offers `ngn.events.v1` and
 Tokens never belong in a WebSocket URL. Subscriptions can read only validated root
 sessions in this workspace. Subscriber queues and replay history are bounded so a
 slow tab does not block model execution.
+
+### Tool Execution Browser QA
+
+Use `ngn serve --demo` for **Inspect workspace** and `demo approval`; deny and
+allow separate approvals to check visible decisions and the existing diff review.
+For shell scenarios use a configured live provider (omit `--demo`) and ask it to
+execute exactly these commands with the shell tool:
+
+- Slow: `python -u -c "import time; print('starting', flush=True); time.sleep(10); print('finished')"`.
+- Failure: `python -u -c "import sys; print('partial evidence', flush=True); sys.exit(7)"`.
+- Large output: `python -c "print('\n'.join('line %04d ' % i + 'x' * 80 for i in range(500)))"`.
+
+Approve the intended shell call. During slow execution, open/close the call and
+metadata, then check those choices after completion, failure, and subscription
+reconnect. A full page reload starts fresh disclosure state. Read earlier messages
+while output arrives and verify the scroll anchor; explicitly use **New task
+activity** to reveal nested child activity. Check a delegated slow/failing call
+inside a closed task branch as well. At 320px width and with keyboard-only
+navigation, verify readable status/approval labels, single-line target ellipsis, focus rings,
+and independent Enter/Space activation of each disclosure. Large results start
+collapsed inside the opened call when initially large; expanding them must preserve
+the final received line without a second identical output block. Check focus and
+output scroll position across incremental growth and completion, including while
+reading midway through a record. The output region is height-bounded. A backend
+truncation notice, when applicable, is evidence and must remain visible in the text.
 
 ## API Outline
 
