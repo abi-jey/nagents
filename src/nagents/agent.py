@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from contextlib import aclosing
 from contextlib import asynccontextmanager
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from enum import Enum
@@ -96,6 +97,7 @@ from .types import ToolCall
 from .types import ToolDefinition
 
 if TYPE_CHECKING:
+    from ._delivery_execution import _DeliveryExecution
     from .live import _LiveUpdates
     from .realtime import AudioDuplex
     from .realtime import RealtimeConfig
@@ -203,6 +205,8 @@ class Agent:
     # Set by the Harness, or an embedding application, to allow bounded workspace
     # file reads (for example outbound channel attachments). None disables them.
     workspace: Path | None = None
+
+    _execution_bridge: "_DeliveryExecution | None" = None
 
     def __init__(
         self,
@@ -1520,13 +1524,14 @@ class Agent:
         self._check_channel_access()
         self._active_runs += 1
         try:
-            async with aclosing(
-                self._run_interaction(
-                    user_message, session_id, user_id, config, auto_commit=auto_commit, log_file=log_file
-                )
-            ) as events:
-                async for event in events:
-                    yield event
+            with self._execution_bridge.turn(session_id) if self._execution_bridge else nullcontext():
+                async with aclosing(
+                    self._run_interaction(
+                        user_message, session_id, user_id, config, auto_commit=auto_commit, log_file=log_file
+                    )
+                ) as events:
+                    async for event in events:
+                        yield event
         finally:
             self._active_runs -= 1
 
@@ -1864,13 +1869,13 @@ class Agent:
             # If we got tool calls, execute them
             if pending_tool_calls:
                 # Add assistant message with tool calls to history
-                await self.session.add_message(
-                    session_id,
-                    Message(role="assistant", content=full_text or None, tool_calls=pending_tool_calls),
-                )
+                assistant_block = Message(role="assistant", content=full_text or None, tool_calls=pending_tool_calls)
+                bridge = self._execution_bridge
+                with bridge.reserve(assistant_block) if bridge else nullcontext():
+                    await self.session.add_message(session_id, assistant_block)
 
                 # Execute each tool
-                for tool_call in pending_tool_calls:
+                for call_position, tool_call in enumerate(pending_tool_calls):
                     logger.debug(f"Executing tool: {tool_call.name}")
 
                     # _save_to convention: remove from args before tool execution
@@ -1878,7 +1883,8 @@ class Agent:
                     observe("tool_started", call=execution_call)
                     save_path = _extract_save_path(execution_call) if self.save_tool_outputs else None
 
-                    result_event = await self._execute_text_tool(execution_call, context, plugins)
+                    with bridge.executing(execution_call, call_position) if bridge else nullcontext():
+                        result_event = await self._execute_text_tool(execution_call, context, plugins)
                     observe("tool_finished", result=result_event)
                     # Attach last known usage info to tool result events
                     result_event.usage = replace(last_usage, session=replace(session_usage))

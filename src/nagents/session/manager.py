@@ -20,6 +20,7 @@ from ..types import ImageContent
 from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
+from .deliveries import delivery_cleanup_statements
 
 logger = logging.getLogger(__name__)
 
@@ -317,7 +318,11 @@ class SessionManager:
         await self.initialize()
 
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            for sql, parameters in delivery_cleanup_statements(session_id):
+                await db.execute(sql, parameters)
             await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
+            await db.execute("UPDATE v2_sessions SET compacted_at_message_id = NULL WHERE id = ?", (session_id,))
             await db.commit()
             logger.debug(f"Cleared session: {session_id}")
 
@@ -331,6 +336,9 @@ class SessionManager:
         await self.initialize()
 
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            for sql, parameters in delivery_cleanup_statements(session_id):
+                await db.execute(sql, parameters)
             await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
             await db.commit()

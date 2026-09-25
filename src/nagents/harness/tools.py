@@ -45,6 +45,8 @@ from nagents.types import JsonSchemaProperty
 from nagents.types import JsonValue
 from nagents.types import ToolCall
 
+from .execution import _execution_for
+from .execution import _mask_delivery_authority
 from .types import ToolOutput
 
 READ_ONLY_TOOLS = frozenset(
@@ -53,6 +55,7 @@ READ_ONLY_TOOLS = frozenset(
 MODIFYING_TOOLS = frozenset({"edit", "write", "shell"})
 
 if TYPE_CHECKING:
+    from .execution import ExecutionBridge
     from .runtime import Harness
 
 _PRUNED = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
@@ -130,6 +133,11 @@ class HarnessExecutor(ToolExecutor):
         self.tools = tools
 
     async def execute(self, tool_call: ToolCall) -> ToolResultEvent:
+        bridge = _execution_for(self.harness)
+        with _mask_delivery_authority():
+            return await self._execute_guarded(tool_call, bridge)
+
+    async def _execute_guarded(self, tool_call: ToolCall, bridge: "ExecutionBridge | None") -> ToolResultEvent:
         started = time.monotonic()
         call = copy.deepcopy(tool_call)
         token = self.tools.call_id.set(call.id)
@@ -170,6 +178,17 @@ class HarnessExecutor(ToolExecutor):
                     tool is not None and (tool.func is not function or tool.parameters != parameters)
                 ):
                     raise PermissionError("Tool definition changed during approval; retry the call for fresh approval")
+            if (
+                bridge is not None
+                and tool is not None
+                and tool is self.harness._delivery_definition
+                and inspect.iscoroutinefunction(tool.func)
+            ):
+                with bridge.invoke(self, tool, tool_call, call):
+                    result = await tool.func(**call.arguments)
+                return ToolResultEvent(
+                    id=call.id, name=call.name, result=result, duration_ms=(time.monotonic() - started) * 1000
+                )
             return await super().execute(call)
         except Exception as exc:
             return ToolResultEvent(

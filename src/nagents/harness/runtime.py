@@ -36,6 +36,11 @@ from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .credentials import ProviderLogin
 from .credentials import ProviderLoginStore
+from .execution import ExecutionBridge
+from .execution import _is_owned_adapter
+from .execution import _register_owned_adapter_type
+from .execution import capture_write
+from .execution import host_run_id
 from .provider import DemoCompaction
 from .provider import HarnessProvider
 from .skills import HarnessSkillDiscoverer
@@ -58,6 +63,7 @@ if TYPE_CHECKING:
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolArguments
+    from nagents.types import ToolDefinition
 
     from .auth import DeviceAuthorization
     from .config import HarnessConfig
@@ -91,10 +97,17 @@ class _HarnessSession(SessionManager):
         return await _await_cleanup(asyncio.create_task(super().get_history(session_id, limit)))
 
     async def add_message(self, session_id: str, message: "Message") -> int:
-        return await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))
+        reservation = capture_write(self, session_id, message)
+        row_id = await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))
+        if reservation is not None and type(row_id) is int and row_id > 0:
+            reservation.row_id = row_id
+        return row_id
 
     async def replace_context(self, session_id: str, messages: list["Message"]) -> None:
         await _await_cleanup(asyncio.create_task(super().replace_context(session_id, messages)))
+
+
+_register_owned_adapter_type(_HarnessSession)
 
 
 class Harness:
@@ -119,6 +132,8 @@ class Harness:
         self._task_id = ""
         self._task_name = ""
         self._activation = 0
+        self._delivery_definition: ToolDefinition | None = None
+        self._delivery_binding: ToolDefinition | None = None
         self._permission_ceiling = "reviewer" if config.read_only else "build"
         self._approval_lock = asyncio.Lock()
         self._owns_auth = True
@@ -473,12 +488,19 @@ class Harness:
             queue: asyncio.Queue[HarnessEvent] = asyncio.Queue(maxsize=64)
             self._queue = queue
             session_id = self.session_id
+            run_id = host_run_id(self)
 
             async def produce() -> None:
                 self.tasks.begin(session_id, reset_budget=not self._is_subagent and not task_id and trigger == "human")
                 message: str | list[ContentPart] | None = prompt
                 final: DoneEvent | None = None
                 try:
+                    if (
+                        self._delivery_definition is not None
+                        and not self._is_subagent
+                        and _is_owned_adapter(self.agent.session)
+                    ):
+                        self.agent._execution_bridge = ExecutionBridge(self, self.agent.session, run_id)
                     if task_id:
                         self.tasks.continue_task(task_id, prompt_text, trigger=trigger)
                         message = await self.tasks.notification(wait_for_tasks=True)
@@ -514,6 +536,7 @@ class Harness:
                     if final is not None:
                         await queue.put(final)
                 finally:
+                    self.agent._execution_bridge = None
                     await self.tasks.end()
 
             worker = asyncio.create_task(produce(), name=f"ngn-run-{self.session_id}")

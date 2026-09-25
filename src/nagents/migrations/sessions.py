@@ -76,9 +76,53 @@ MIGRATION_002_COMPACTION = Migration(
 )
 
 
+MIGRATION_003_DELIVERIES = Migration(
+    version=3,
+    description="Durable local channel deliveries and attachment bytes",
+    up_sql="""
+        CREATE TABLE ngn_local_deliveries (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            delivery_id TEXT NOT NULL UNIQUE,
+            channel TEXT NOT NULL,
+            root_session_id TEXT NOT NULL,
+            actor_session_id TEXT NOT NULL,
+            host_run_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            activation INTEGER NOT NULL CHECK(activation >= 0),
+            invocation_id TEXT NOT NULL,
+            anchor_message_id INTEGER NOT NULL CHECK(anchor_message_id > 0),
+            call_position INTEGER NOT NULL CHECK(call_position >= 0),
+            call_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX ngn_local_deliveries_root ON ngn_local_deliveries
+            (root_session_id, anchor_message_id, call_position, sequence);
+        CREATE INDEX ngn_local_deliveries_actor ON ngn_local_deliveries(actor_session_id);
+        CREATE TABLE ngn_local_delivery_assets (
+            asset_id TEXT PRIMARY KEY,
+            delivery_id TEXT NOT NULL REFERENCES ngn_local_deliveries(delivery_id),
+            position INTEGER NOT NULL CHECK(position >= 0),
+            filename TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            byte_length INTEGER NOT NULL CHECK(byte_length >= 0),
+            data BLOB NOT NULL CHECK(typeof(data) = 'blob' AND length(data) = byte_length),
+            UNIQUE(delivery_id, position)
+        );
+    """,
+    down_sql="""
+        DROP TABLE ngn_local_delivery_assets;
+        DROP TABLE ngn_local_deliveries;
+    """,
+)
+
+
 migrations = [
     MIGRATION_001_INITIAL,
     MIGRATION_002_COMPACTION,
+    MIGRATION_003_DELIVERIES,
 ]
 
-__all__ = ["MIGRATION_001_INITIAL", "MIGRATION_002_COMPACTION", "migrations"]
+__all__ = ["MIGRATION_001_INITIAL", "MIGRATION_002_COMPACTION", "MIGRATION_003_DELIVERIES", "migrations"]
