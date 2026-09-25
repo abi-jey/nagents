@@ -3,6 +3,7 @@ import { ExecutionRecord } from "./ExecutionRecord.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
+import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import {
   groupTranscript,
@@ -119,7 +120,7 @@ export function TranscriptItems({
         data-record-key={entry.id}
         data-level={entry.level}
       >
-        {entry.kind === "tool" ||
+        {entry.delivery ? <LocalDeliveryCard delivery={entry.delivery} /> : entry.kind === "tool" ||
         entry.kind === "task" ||
         entry.kind === "context" ? (
           <ExecutionRecord
@@ -171,12 +172,14 @@ export function Conversation({
   demo,
   canSubmit,
   submit,
+  token = "",
 }: {
   entries: Entry[];
   sessionId: string;
   demo: boolean;
   canSubmit: boolean;
   submit: (prompt: string) => void;
+  token?: string;
 }) {
   const feed = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -287,7 +290,8 @@ export function Conversation({
     );
     if (!activityVisible()) setNewActivity(true);
   }, [activity, latestActivity]);
-  const items = groupTranscript(entries);
+  const earlier = groupTranscript(entries.filter((entry) => entry.delivery?.earlier));
+  const items = groupTranscript(entries.filter((entry) => !entry.delivery?.earlier));
   const names = new Map(
     entries
       .filter((entry) => entry.kind === "task" && entry.taskId)
@@ -364,12 +368,18 @@ export function Conversation({
             </div>
           </section>
         )}
+        <MediaToken.Provider value={token} key={sessionId}>
+        {!!earlier.length && <section aria-label="Deliveries from earlier context">
+          <h3>Deliveries from earlier context</h3>
+          <TranscriptItems items={earlier} names={names} disclosures={disclosures} toggle={toggle} />
+        </section>}
         <TranscriptItems
           items={items}
           names={names}
           disclosures={disclosures}
           toggle={toggle}
         />
+        </MediaToken.Provider>
       </div>
     </div>
   );

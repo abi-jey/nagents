@@ -22,7 +22,7 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "microphone=(self), camera=()",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src blob:; "
         "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     ),
 }

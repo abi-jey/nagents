@@ -1,6 +1,7 @@
 import { preview, text } from "../../api/events.js";
 import type { ActivityReply, MessagePart, Snapshot, WireEvent } from "../../types.js";
 import type { ChannelMeta } from "./channelMessage.js";
+import type { LocalDelivery } from "./deliveries.js";
 import { channelMessage, sameUserMessage } from "./channelMessage.js";
 
 export type Entry = {
@@ -16,7 +17,9 @@ export type Entry = {
     | "wakeup"
     | "followup"
     | "context"
+    | "delivery"
     | "retained_tasks";
+  delivery?: LocalDelivery;
   text: string;
   title?: string;
   callId?: string;
@@ -60,6 +63,9 @@ export type Entry = {
   queued?: boolean;
   historyIndex?: number;
   historyId?: string;
+  callPosition?: number;
+  transcriptEventId?: string;
+  abandoned?: boolean;
   resultHistoryId?: string;
   ingressId?: string;
   sourceVerified?: boolean;
@@ -116,6 +122,15 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     actor(entry) &&
     (entry.activation || 0) === activation &&
     (entry.followup || 0) === followup;
+  if (["transcript_anchor", "transcript_abandoned"].includes(event.event) && Array.isArray(event.calls)) {
+    const calls = event.calls as { event_id: string; call_position: number }[];
+    return entries.map((entry) => {
+      const call = calls.find((call) => call.event_id === entry.transcriptEventId);
+      if (!call || entry.runId !== runId || entry.taskId) return entry;
+      return event.event === "transcript_abandoned" ? { ...entry, abandoned: true, state: "Cancelled" }
+        : { ...entry, historyId, callPosition: call.call_position };
+    });
+  }
   if (event.event === "run_started") {
     const ingressId = ingressIdentity(event.ingress_id);
     const input = { historyId, ingressId, messageId: !text(event, "channel") ? text(event, "message_id") : "", taskId };
@@ -268,6 +283,8 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     };
     if (event.event === "tool_call") {
       entry.historyId = historyId || previous?.historyId;
+      entry.transcriptEventId = text(event, "transcript_event_id") || undefined;
+      entry.callPosition = typeof event.call_position === "number" ? event.call_position : undefined;
       entry.inputs = preview(event.arguments);
       entry.provisional = false;
       entry.state = previous?.state || "Requested";
@@ -670,7 +687,15 @@ export function fromHistory({
   ];
   let entries: Entry[] = [];
   let historyTurn = -1;
+  function deliver(delivery: LocalDelivery) {
+    if (delivery.session_id !== session_id || entries.some((entry) => entry.delivery?.delivery_id === delivery.delivery_id)) return;
+    entries.push({ id: `delivery:${delivery.delivery_id}`, kind: "delivery", text: delivery.text, delivery });
+  }
   for (const [historyIndex, message] of messages.entries()) {
+    if (message.role === "local_delivery") {
+      for (const delivery of message.deliveries || []) deliver(delivery);
+      continue;
+    }
     if (message.role === "user") historyTurn = historyIndex;
     const identity = { history_id: message.history_id, history_index: historyIndex, history_turn: historyTurn };
     if (message.role === "tool") {
@@ -754,14 +779,18 @@ export function fromHistory({
           entries[entries.length - 1] = { ...entry, historyIndex };
       }
     }
-    for (const call of message.tool_calls)
+    for (const [position, call] of message.tool_calls.entries()) {
       entries = appendEvent(entries, {
         event: "tool_call",
         id: call.id,
         name: call.name,
         arguments: call.arguments,
+        call_position: position,
         ...identity,
       });
+      for (const delivery of message.deliveries || [])
+        if (delivery.anchor_message_id === message.history_id && delivery.call_position === position) deliver(delivery);
+    }
   }
   entries = entries.map((entry) =>
     entry.state === "Requested"
