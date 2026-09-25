@@ -126,6 +126,8 @@ export function TranscriptItems({
             entry={entry}
             open={disclosures.get(entry.id) ?? false}
             toggle={(open) => toggle(entry.id, open)}
+            disclosures={disclosures}
+            toggleDetail={toggle}
           />
         ) : entry.kind === "notification" || entry.kind === "wakeup" ? (
           <ActivityRecord entry={entry} open={disclosures.get(entry.id) ?? false}
@@ -220,14 +222,18 @@ export function Conversation({
   function rememberPosition() {
     const element = feed.current;
     if (!element) return;
-    const top = element.getBoundingClientRect().top;
-    const visible = [
+    const region = element.getBoundingClientRect();
+    const top = region.top;
+    const candidates = [
       ...element.querySelectorAll<HTMLElement>("[data-record-key]"),
-    ].find(
-      (item) =>
-        item.getBoundingClientRect().bottom > top &&
-        item.getBoundingClientRect().top >= top - 1,
-    );
+    ].filter((item) => {
+      const rect = item.getBoundingClientRect();
+      return rect.height > 0 && rect.bottom > top && rect.top < region.bottom;
+    });
+    // Prefer the innermost record containing the reading position, not a later
+    // (possibly offscreen) record pushed down by appended output. Task ancestors
+    // precede their children in DOM order, so findLast selects the actual record.
+    const visible = candidates.findLast((item) => item.getBoundingClientRect().top <= top) || candidates[0];
     anchor.current = visible
       ? {
           key: visible.dataset.recordKey!,

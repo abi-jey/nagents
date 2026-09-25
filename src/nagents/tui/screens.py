@@ -31,7 +31,11 @@ if TYPE_CHECKING:
 
 
 class ApprovalModal(ModalScreen[bool]):
-    BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "deny", show=False, priority=True)]
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("escape", "deny", show=False, priority=True),
+        Binding("pageup", "page_preview(False)", show=False, priority=True),
+        Binding("pagedown", "page_preview(True)", show=False, priority=True),
+    ]
 
     def __init__(self, request: ApprovalRequest) -> None:
         super().__init__()
@@ -48,7 +52,11 @@ class ApprovalModal(ModalScreen[bool]):
                 if self.request.preview:
                     yield Static("PROPOSED CHANGE / PREVIEW", classes="section-label", markup=False)
                     yield Static(highlight(self.request.preview, language="diff", theme=CodeTheme))
-            yield Static("Only this request. Nothing is allowed by default.", classes="dialog-hint", markup=False)
+            yield Static(
+                "PgUp/PgDn scroll · Tab decisions · Esc deny\nOnly this request. Nothing is allowed by default.",
+                classes="dialog-hint",
+                markup=False,
+            )
             with Horizontal(classes="dialog-actions"):
                 yield Button("Deny", id="deny")
                 yield Button("Allow once", id="allow", variant="warning")
@@ -58,6 +66,13 @@ class ApprovalModal(ModalScreen[bool]):
 
     def action_deny(self) -> None:
         self.dismiss(False)
+
+    def action_page_preview(self, down: bool) -> None:
+        preview = self.query_one(".approval-content", VerticalScroll)
+        if down:
+            preview.scroll_page_down(animate=False)
+        else:
+            preview.scroll_page_up(animate=False)
 
     @on(Button.Pressed)
     def decide(self, event: Button.Pressed) -> None:

@@ -6,9 +6,11 @@ import json
 from typing import TYPE_CHECKING
 from typing import ClassVar
 
-from rich.markup import escape
+from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.containers import VerticalScroll
+from textual.content import Content
 from textual.highlight import highlight
 from textual.message import Message
 from textual.widgets import Collapsible
@@ -24,7 +26,6 @@ if TYPE_CHECKING:
 
     from textual.app import ComposeResult
     from textual.binding import BindingType
-    from textual.content import Content
     from textual.events import Key
     from textual.events import Paste
     from textual.widgets.markdown import MarkdownBlock
@@ -170,6 +171,8 @@ class ToolCard(Collapsible):
     def __init__(self, call_id: str, tool: str, arguments: object = None) -> None:
         self.call_id = call_id
         self.tool = tool
+        self._hint = self._argument_hint(arguments)
+        self._outcome = "running"
         self.output_text = ""
         self.arguments = Static(
             highlight(bounded(format_value(arguments)), language="json", theme=CodeTheme),
@@ -179,26 +182,104 @@ class ToolCard(Collapsible):
         self.diff = Static(classes="tool-diff")
         self.diff.display = False
         super().__init__(
+            Static(tool, markup=False, classes="tool-name"),
             self.arguments,
             self.output,
             self.diff,
-            title=escape(f"{tool}  /  running"),
+            title="",
+            collapsed=True,
             collapsed_symbol=">",
             expanded_symbol="v",
             classes="tool-card running",
         )
+        self._update_summary()
+
+    @staticmethod
+    def _plain_line(text: str) -> str:
+        return " ".join("".join(char for char in text if char.isprintable() or char.isspace()).split())
+
+    @classmethod
+    def _argument_hint(cls, arguments: object) -> str:
+        # Only recognizable targets; never summarize arbitrary payloads or errors.
+        if isinstance(arguments, dict):
+            for key in ("command", "path", "file_path", "pattern", "url"):
+                value = arguments.get(key)
+                if isinstance(value, str) and value.strip():
+                    return cls._plain_line(value)
+        return ""
+
+    @staticmethod
+    def _shorten(text: str, width: int) -> str:
+        line = Text(text)
+        line.truncate(max(0, width), overflow="ellipsis")
+        return line.plain
+
+    def _update_summary(self) -> None:
+        # Reserve the outcome first. Cell-aware clipping also handles wide Unicode
+        # names without wrapping or pushing failures off the right edge.
+        width = max(0, (self.content_size.width or 72) - 4)
+        suffix = f"  /  {self._outcome}"
+        available = max(0, width - len(suffix))
+        name = self._plain_line(self.tool)
+        if self._hint and available >= 16:
+            name = self._shorten(name, max(12, available // 2))
+            hint = self._shorten(self._hint, available - Text(name).cell_len - 3)
+            name = f"{name} — {hint}"
+        else:
+            name = self._shorten(name, available)
+        self.title = name + suffix
+
+    def _watch_title(self, title: str) -> None:
+        # Collapsible normally parses title strings as markup. In particular,
+        # truncation may leave unmatched brackets, so bypass parsing entirely.
+        self._title.label = Content(title)
+
+    def on_resize(self) -> None:
+        self._update_summary()
+
+    def on_key(self, event: Key) -> None:
+        if event.key == "space" and self._title.has_focus:
+            event.stop()
+            event.prevent_default()
+            self.collapsed = not self.collapsed
+
+    def _watch_collapsed(self, collapsed: bool) -> None:
+        # Keep Collapsible's state and notifications, but target its header
+        # rather than starting a scroll animation toward the entire large card.
+        self._update_collapsed(collapsed)
+        self.post_message(self.Collapsed(self) if collapsed else self.Expanded(self))
+        if self.is_mounted:
+            self.call_after_refresh(lambda: self._title.scroll_visible(animate=False))
 
     def append_output(self, text: str) -> None:
+        self._preserve_inspection_position()
         self.output_text = bounded(self.output_text + text)
         self.output.update(self.output_text)
 
+    def _preserve_inspection_position(self) -> None:
+        conversation = self.parent
+        if self.collapsed or not self._title.has_focus or not isinstance(conversation, VerticalScroll):
+            return
+        header = self._title.region
+        viewport = conversation.content_region
+        if header.height and viewport.y <= header.y and header.bottom <= viewport.bottom:
+            # Stop bottom-follow before layout grows. Do not schedule a scroll:
+            # it could override a subsequent user scroll or chase an offscreen
+            # header. Returning to the bottom resumes normal app following.
+            conversation.release_anchor()
+
     def set_arguments(self, arguments: object) -> None:
+        self._preserve_inspection_position()
         self.arguments.update(highlight(bounded(format_value(arguments)), language="json", theme=CodeTheme))
+        self._hint = self._argument_hint(arguments)
+        self._update_summary()
 
     def finish(self, result: object, error: str | None, duration_ms: float) -> None:
-        state = "error" if error else "complete"
+        self._preserve_inspection_position()
+        state = "failed" if error else "complete"
         duration = f"  {duration_ms / 1000:.2f}s" if duration_ms > 0 else ""
-        self.title = escape(f"{self.tool}  /  {state}{duration}")
+        self._outcome = f"{state}{duration}"
+        self._update_summary()
         self.remove_class("running", "cancelled")
         self.set_class(bool(error), "failed")
         self.set_class(not error, "complete")
@@ -208,13 +289,13 @@ class ToolCard(Collapsible):
             result = {key: value for key, value in result.items() if key != "diff"}
         if error:
             self.append_output(("\n" if self.output_text else "") + error)
-            self.collapsed = False
         elif result is not None and result != {}:
             self.append_output(("\n" if self.output_text else "") + format_value(result))
         elif not self.output_text:
             self.output.update("No text output" if not self.diff.display else "Diff preview below")
 
     def cancel(self) -> None:
-        self.title = escape(f"{self.tool}  /  cancelled")
+        self._outcome = "cancelled"
+        self._update_summary()
         self.remove_class("running", "complete", "failed")
         self.add_class("cancelled")

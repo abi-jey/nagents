@@ -93,6 +93,8 @@ Shift+Enter           Insert a newline (Ctrl+J / Alt+Enter fallback)
 Up / Down             Prompt history at start / end of text
 While / menu is open  Up/Down select; Enter prefills; then Enter runs
 Tab / Shift+Tab       Next / previous agent (configurable)
+F6                    Switch between message and conversation
+In conversation       Tab/Shift+Tab navigate; PgUp/PgDn scroll
 Esc                   Cancel work; deny an approval
 Ctrl+P                Commands
 Ctrl+N / Ctrl+L       New session / saved sessions
@@ -103,7 +105,9 @@ Ctrl+C                Copy selection; otherwise cancel / exit
 Ctrl+Shift+C           Copy selection without cancelling
 Ctrl+Q                Quit
 
-Tool cards expand with Enter or a click. Scroll up to pause
+Tool cards expand with Enter, Space, or a click. Approval previews
+scroll with PgUp/PgDn even while a decision button is focused.
+Scroll up to pause
 following the response; return to the bottom to follow again.
 """
 
@@ -120,6 +124,7 @@ class NagentsApp(App[None]):
         Binding("ctrl+l", "sessions", "Sessions", priority=True),
         Binding("ctrl+t", "tasks", "Agents", priority=True),
         Binding("ctrl+g", "dictation", "Dictation", priority=True),
+        Binding("f6", "focus_pane", "Message / conversation", priority=True),
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("ctrl+c", "interrupt", "Cancel / exit", priority=True),
         Binding("ctrl+shift+c,super+c", "copy_selection", "Copy", priority=True),
@@ -178,7 +183,7 @@ class NagentsApp(App[None]):
         yield Static(id="mode", markup=False)
         with Horizontal(id="main"):
             with VerticalScroll(id="conversation", can_focus=True) as conversation, Vertical(id="welcome"):
-                conversation.border_title = "Conversation"
+                conversation.border_title = "Conversation / F6"
                 if self.harness.config.demo:
                     yield Static(
                         "An offline walkthrough. No API key or workspace writes.", id="welcome-subtitle", markup=False
@@ -425,6 +430,16 @@ class NagentsApp(App[None]):
             name = profiles[(current + (-1 if event.reverse else 1)) % len(profiles)]
             self._hide_completions()
             self._launch(lambda: self._change("/agent", name), f"Switching to {name}...")
+
+    def action_focus_pane(self) -> None:
+        if self.screen is not self.default_screen:
+            return
+        composer = self.query_one(Composer)
+        if composer.has_focus:
+            self._hide_completions()
+            self.query_one("#conversation", VerticalScroll).focus(scroll_visible=False)
+        else:
+            composer.focus()
 
     def _size_composer(self) -> None:
         composer = self.query_one(Composer)
@@ -787,7 +802,7 @@ class NagentsApp(App[None]):
             card.finish(event.result, event.error, event.duration_ms)
             self._running_tools.discard(event.id)
             if event.error:
-                self._status(f"Tool error: {event.error}", error=True)
+                self._status("Tool failed  /  expand its card for details", error=True)
         elif isinstance(event, Notice):
             await self._notice(event.text, error=event.level == "error", warning=event.level == "warning")
         elif isinstance(event, ErrorEvent):
@@ -808,6 +823,8 @@ class NagentsApp(App[None]):
     async def request_approval(self, request: ApprovalRequest) -> bool:
         if self._shutting_down:
             return False
+        previous_screen = self.screen
+        previous_focus = previous_screen.focused
         self._hide_completions()
         result: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         modal = ApprovalModal(request)
@@ -825,7 +842,14 @@ class NagentsApp(App[None]):
                 if modal in self.screen_stack:
                     modal.dismiss(False)
                 self._status("Working  /  Esc to cancel")
-                self.query_one(Composer).focus()
+                if (
+                    previous_focus is not None
+                    and previous_focus.is_attached
+                    and previous_focus in previous_screen.focus_chain
+                ):
+                    previous_focus.focus(scroll_visible=False)
+                else:
+                    self.query_one(Composer).focus(scroll_visible=False)
 
     def action_cancel(self) -> None:
         if isinstance(self.screen, DictationModal):

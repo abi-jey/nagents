@@ -545,6 +545,130 @@ main {
 .execution-detail {
   padding: 4px 8px 10px;
 }
+.execution-heading {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.execution-target {
+  color: var(--text-secondary);
+  font: 12px/1.5 ui-monospace, monospace;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.execution-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px 8px;
+  max-width: 48%;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.execution-outcome .execution-state {
+  max-width: 100%;
+}
+.execution-approval {
+  overflow-wrap: anywhere;
+}
+.execution-duration {
+  white-space: nowrap;
+}
+/* Tool summaries occupy one desktop row, or exactly two mobile rows when a
+   target exists. Grid/flex children shrink and elide rather than adding lines. */
+.execution-tool-summary {
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
+  align-items: baseline;
+}
+.execution-tool-summary .execution-heading {
+  display: contents;
+}
+.execution-tool-summary .execution-name {
+  grid-column: 1;
+  grid-row: 1;
+  max-width: 16rem;
+}
+.execution-tool-summary .execution-target {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.execution-tool-summary .execution-outcome {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.execution-tool-summary .execution-state,
+.execution-tool-summary .execution-approval {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.execution-tool-summary .execution-duration {
+  flex-shrink: 0;
+}
+.execution-metadata,
+.execution-evidence {
+  margin-block: 10px;
+  font-size: 13px;
+}
+.execution-metadata > summary,
+.execution-evidence > summary {
+  cursor: pointer;
+  padding-block: 6px;
+  overflow-wrap: anywhere;
+}
+.execution-record summary:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+/* A growing stream keeps its mounted, focusable reading region and never grows
+   the conversation without bound. Wrap lines to avoid horizontal scrolling. */
+.execution-detail .code-block pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 24rem;
+  overflow: auto;
+}
+.execution-evidence .code-block > h3 {
+  display: none; /* The disclosure summary labels the content; pre retains aria-label. */
+}
+@media (max-width: 600px) {
+  .execution-record > summary .execution-summary {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .execution-record .execution-heading {
+    width: 100%;
+  }
+  .execution-outcome {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+  .execution-record > summary .execution-tool-summary {
+    grid-template-columns: minmax(0, 1fr) fit-content(78%);
+    gap: 2px 8px;
+  }
+  .execution-tool-summary .execution-outcome {
+    grid-column: 2;
+    justify-content: flex-end;
+    gap: 5px;
+  }
+  .execution-tool-summary .execution-target {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
 .request-identity {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
