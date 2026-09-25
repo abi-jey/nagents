@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
 from nagents.extensions import AgentPlugin
+from nagents.harness.execution import _register_owned_adapter_type
 from nagents.harness.runtime import _HarnessSession
 from nagents.types import AudioContent
 from nagents.types import DocumentContent
@@ -257,3 +258,8 @@ class WebHistory(_HarnessSession):
                 return [self._project(row) for row in rows if row["role"] not in {"system", "developer"}]
 
         return await finish_on_cancel(asyncio.to_thread(read))
+
+
+# Only this exact, host-owned adapter has the audited assistant-write path.
+# Its execution scope remains task-local when designed roots share an instance.
+_register_owned_adapter_type(WebHistory)

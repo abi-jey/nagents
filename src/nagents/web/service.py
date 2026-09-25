@@ -23,6 +23,7 @@ from nagents.cli import _json_default
 from nagents.compaction import estimate_tokens
 from nagents.context_stats import ContextComponent
 from nagents.events import ErrorEvent
+from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
 
 from ._async import join_owned as _join
@@ -413,19 +414,20 @@ class WebState:
                 source = self.running_harness.wake(prompt, task_id=task_id)
             else:
                 source = self.running_harness.run(prompt)
-            async with aclosing(source) as events:
-                async for event in events:
-                    if isinstance(event, ErrorEvent):
-                        run.outcome = "failed"
-                        record = {
-                            "event": "error",
-                            "message": "The provider run failed. Check local provider configuration before trying again.",
-                            "recoverable": event.recoverable,
-                        }
-                    else:
-                        record = _event_record(event)
-                    await notices.observe(record, live=True)
-                    await self.send(run, record)
+            with host_run(self.running_harness, run.id):
+                async with aclosing(source) as events:
+                    async for event in events:
+                        if isinstance(event, ErrorEvent):
+                            run.outcome = "failed"
+                            record = {
+                                "event": "error",
+                                "message": "The provider run failed. Check local provider configuration before trying again.",
+                                "recoverable": event.recoverable,
+                            }
+                        else:
+                            record = _event_record(event)
+                        await notices.observe(record, live=True)
+                        await self.send(run, record)
         except asyncio.CancelledError:
             run.outcome = "cancelled"
             self.wakeups.cancel(run.chain)

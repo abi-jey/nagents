@@ -232,6 +232,84 @@ The web channel host uses this same dispatcher behind its existing approval,
 credential-protection and chat-ownership wrappers. Built-in terminal/browser
 delivery adapters and durable media presentation are separate follow-up work.
 
+### Durable local delivery foundation
+
+Local deliveries have a separate journal in the session database. They do not
+create extra assistant messages. `DeliveryJournal` in
+`nagents.session.deliveries` stores text and attachment BLOBs in one transaction,
+returning a stable `DeliveryReceipt`. This is host infrastructure; it does not
+automatically install terminal or browser channels, media HTTP routes or players.
+
+The host integration combines:
+
+1. An explicitly bound, approved `channel_send` definition in the real Harness
+   executor. The private execution bridge captures the committed assistant
+   tool-call row and the call's position within it.
+2. `LocalDeliveryService`, supplied with a live authority check backed by that
+   bridge. It validates the exact channel and destination before starting storage.
+3. `DeliveryJournal.prepare(origin, channel, message, capabilities)`, which
+   validates and snapshots the complete payload, followed by the prepared
+   operation's single-use `commit()`.
+
+The authority is host-owned, synchronous and side-effect-free. Constructing a
+`DeliveryOrigin` or inheriting a context variable does not authorize a delivery.
+The bridge checks the actual task, executor, approved definition and live call.
+It rejects spawned/stale invocations, other tools, unsupported persistence
+adapters and child sends. Ordinary execution and external connectors do not
+require this local-delivery bridge.
+
+Origins record root and actor session IDs, host run and turn IDs, invocation and
+tool identities, and the exact assistant-row/call-position anchor. A host run
+can include several Agent turns. Web execution uses its existing run ID; the TUI
+binds a generated ID at its owned run/continuation boundary. These scopes reset
+when execution ends. Input events and tool-result rows are not anchor sources.
+
+#### Commit and cancellation
+
+Preparation rejects unsupported multipart sends as a whole, including mismatched
+destinations and nonempty thread/reply references or metadata. It checks actual
+attachment bytes and host limits even when callers bypass workspace-file loading.
+The transaction rechecks active root membership and the committed assistant
+anchor before writing text and every attachment together.
+
+Each prepared operation has a preallocated `delivery_id`, an `outcome` and a
+zero-or-one `receipt` tuple. Outcomes are `prepared`, `pending`, `committed`,
+`failed` or `unknown`. A second `commit()` is rejected; a separate preparation
+creates a new identity even for identical content.
+
+Cancellation joins owned storage before propagating. A known successful commit
+retains its receipt, including when cancellation prevents a normal tool result.
+An ambiguous acknowledgement is checked using the preallocated ID, without
+retrying the write; `outcome_unknown=True` is reported only when the status cannot
+be established. An established rollback is a known failure.
+
+Notification is a bounded, best-effort step after commit. Observer failure does
+not erase the delivery. `receipt.notification()` contains only its ID, root,
+channel and sequence; `receipt.channel_delivery()` returns a compact tool receipt
+with asset references. Neither duplicates the delivery text or includes media
+bytes. Presentation code can reconcile repeated notices by delivery ID and load
+content separately.
+
+#### Reading and lifecycle
+
+- `await journal.history(root_session_id)` returns metadata and text grouped into
+  `earlier` and `current` deliveries using the inclusive compaction boundary.
+  Both groups preserve assistant-anchor, call-position and delivery-sequence
+  ordering. Compaction copies never inherit an older call's delivery.
+- `await journal.read_asset(root_session_id, delivery_id, asset_id)` reads bounded
+  bytes after checking access in the same transaction. Filenames are not paths.
+- Web trash retains the journal but revokes access. Restore exposes the same
+  delivery and asset IDs; purge removes the rows and BLOBs.
+- Library session clear/delete and web permanent deletion remove related
+  deliveries and assets in the same content transaction. Switching sessions or
+  clearing TUI widgets does not delete saved deliveries.
+- SQLite backups include the attachment bytes. Deliveries survive restart and
+  changes to the original workspace file. Purge does not promise physical database
+  shrinkage or secure erasure.
+
+Actual interface rendering, replay reconciliation, and authenticated browser asset
+routes are the next adapter-layer increments.
+
 ### Standalone listener lifecycle
 
 - `add_channel()` is synchronous and chainable; it performs no connection I/O.

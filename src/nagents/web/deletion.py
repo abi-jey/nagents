@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 import anyio
 from fastapi import HTTPException
 
+from nagents.session.deliveries import cleanup_deliveries
+
 from ._async import finish_on_cancel
 from .routing import RoutingStore
 
@@ -91,6 +93,7 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
 
 
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
+    cleanup_deliveries(db, session_id)
 
     # Preserve only channel/message identities, never envelopes or conversation
     # content. A late connector redelivery must not re-execute deleted history.

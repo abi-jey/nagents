@@ -1,13 +1,15 @@
 # Built-in TUI and web channels: design proposal
 
-**Status:** package A (#42) accepted for implementation; packages B–E remain proposals.
+**Status:** package A (#42) merged; package B (#43) accepted for implementation;
+packages C–E remain proposals.
 **Origin:** [issue #40](https://github.com/abi-jey/nagents/issues/40).
 **Baseline:** v0.13.4 (`b317873`), investigated on 2026-09-25.
 
 The maintainer first selected **design first**, then accepted package A (#42):
-shared dispatch and capability declarations. Concrete UI adapters, persistence
-and browser media remain proposed. This design is not a claim that those features
-are available in the current release; the channel guide documents implemented APIs.
+shared dispatch and capability declarations, merged in PR #47. Package B (#43),
+the durable delivery journal, is now accepted. Concrete UI adapters and browser
+media remain proposed. This design is not a claim that those features are
+available in the current release; the channel guide documents implemented APIs.
 
 ## Recommendation
 
@@ -271,9 +273,9 @@ provides the delivery receipt; the journal supplies the UI presentation.
 ### Send transaction
 
 1. Check the execution-bound destination, supported types and all file bounds.
-   Bound file reads and validate actual byte lengths at storage time. The current
-   loader's `stat()` followed by `read_bytes()` is not sufficient against a file
-   growing between those operations.
+   Package A already bounds workspace reads and checks actual byte lengths.
+   The journal must independently validate lengths at storage time, including
+   callers supplying `ChannelFile` bytes directly instead of using that loader.
 2. Reject the entire send if any part is unsupported. In particular, a TUI media
    rejection must not first emit the accompanying text.
 3. Commit the complete delivery and its bytes atomically.
@@ -364,8 +366,8 @@ heuristically suppress equal text: intentionally repeated sends are valid.
 
 ## Implementation work packages
 
-Package A is accepted. The other reviewable follow-ups each require their own
-acceptance before application changes begin.
+Package A is merged and package B is accepted. The other reviewable follow-ups
+each require their own acceptance before application changes begin.
 
 | Package | Scope | Dependencies |
 | --- | --- | --- |

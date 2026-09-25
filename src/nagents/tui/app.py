@@ -9,6 +9,7 @@ from contextlib import suppress
 from time import monotonic
 from typing import TYPE_CHECKING
 from typing import ClassVar
+from uuid import uuid4
 
 from textual import on
 from textual.app import App
@@ -38,6 +39,7 @@ from nagents.events import ToolResultEvent
 from nagents.harness import provider_login
 from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.credentials import ProviderLogin
+from nagents.harness.execution import host_run
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
@@ -687,9 +689,10 @@ class NagentsApp(App[None]):
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
         stream = self.harness.continue_task(task_id, text) if task_id else self.harness.run(text)
-        async with aclosing(stream) as events:
-            async for event in events:
-                await self._event(event)
+        with host_run(self.harness, uuid4().hex):
+            async with aclosing(stream) as events:
+                async for event in events:
+                    await self._event(event)
 
     async def _text(self, text: str) -> None:
         if not text:
