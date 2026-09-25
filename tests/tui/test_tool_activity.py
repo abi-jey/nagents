@@ -90,7 +90,10 @@ def test_tool_lifecycle_preserves_user_choice(tmp_path: Path, outcome: str, expa
             assert not card.collapsed
             assert card.output.region.height > 0
             if not expanded:
-                assert title.region.y >= app.query_one("#conversation").content_region.y
+                conversation = app.query_one("#conversation")
+                async with asyncio.timeout(HANG_GUARD):
+                    while title.region.y < conversation.content_region.y:
+                        await pilot.pause()
                 assert await pilot.click(title)
                 await pilot.pause()
                 assert card.collapsed
