@@ -6,7 +6,27 @@ from dataclasses import dataclass
 from typing import Literal
 
 from nagents.events import Event
+from nagents.events import ToolCallEvent
 from nagents.types import ToolArguments
+
+
+@dataclass(frozen=True)
+class TranscriptAnchor:
+    """Owned persistence notification for a committed root tool-call block."""
+
+    session_id: str
+    message_id: int
+    # Host-local references to the exact events emitted by this generation,
+    # in committed call-position order. Never serialized or matched by call ID.
+    calls: tuple[ToolCallEvent, ...]
+
+
+@dataclass(frozen=True)
+class TranscriptAbandoned:
+    """Streamed calls discarded without an assistant-row commit."""
+
+    session_id: str
+    calls: tuple[ToolCallEvent, ...]
 
 
 @dataclass
@@ -102,6 +122,16 @@ class TaskNotification:
     text: str
 
 
-HarnessEvent = Event | ToolOutput | Notice | TaskStarted | TaskCompleted | TaskMessage | TaskNotification
+HarnessEvent = (
+    Event
+    | ToolOutput
+    | Notice
+    | TaskStarted
+    | TaskCompleted
+    | TaskMessage
+    | TaskNotification
+    | TranscriptAnchor
+    | TranscriptAbandoned
+)
 ApprovalHandler = Callable[[ApprovalRequest], Awaitable[bool]]
 WakeupHandler = Callable[[str, float, str], Awaitable[dict[str, str]]]

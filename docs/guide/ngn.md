@@ -71,6 +71,19 @@ LiteLLM requires an explicit `base_url` and an API-key reference such as
 `api_key_env: LITELLM_API_KEY`; it does not use ChatGPT OAuth or require a
 gateway SDK in ngn. See [provider recipes](ngn-configuration.md#provider-recipes).
 
+## Explicit text deliveries
+
+The interactive TUI exposes the `builtin.tui` channel for explicitly requested
+text sends. Ordinary assistant replies already appear in the conversation.
+An approved `channel_send` appears as a separate saved delivery alongside its
+compact tool card; it does not create another assistant message or another
+execution loop. Deliveries survive session reload.
+
+The route is text-only: attachments, including text files, cause the entire send
+to be rejected. Existing profile restrictions and terminal approvals apply.
+See [built-in TUI text delivery](channels.md#built-in-tui-text-delivery) for
+discovery, history and lifecycle behavior.
+
 ## Composer and commands
 
 Typing `/` at the start of the composer opens suggestions immediately. Use
