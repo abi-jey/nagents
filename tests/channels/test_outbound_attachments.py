@@ -5,15 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from nagents.channels.runtime import MAX_OUTBOUND_FILES
-from nagents.channels.runtime import ChannelRuntime
-from nagents.channels.runtime import _outbound_files
+from nagents.channels.dispatcher import MAX_OUTBOUND_FILES
+from nagents.channels.dispatcher import ChannelDispatcher
+from nagents.channels.dispatcher import _outbound_files
 from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelFile
 from nagents.channels.types import ChannelSend
 from tests.channels.test_channels_runtime import MemoryChannel
-from tests.channels.test_channels_runtime import OfflineProvider
-from tests.channels.test_channels_runtime import make_agent
 
 PDF = b"%PDF-1.7 offline"
 
@@ -80,17 +78,12 @@ def test_channel_send_dispatches_workspace_files(tmp_path: Path) -> None:
     async def drive() -> None:
         (tmp_path / "note.txt").write_text("hello")
         channel = MemoryChannel("left")
-        agent = make_agent(tmp_path / "outbound.db", OfflineProvider())
-        runtime = ChannelRuntime(agent, (channel,), "identity", workspace=tmp_path)
-        runtime._active = True
-        try:
-            result = await runtime._channel_send(channel="left", destination="room", text="", attachments=["note.txt"])
-            assert result["message_ids"] == ["remote-1"]
-            assert channel.sent == [
-                ChannelSend(destination="room", text="", files=(ChannelFile("note.txt", "text/plain", b"hello"),))
-            ]
-        finally:
-            await agent.close()
+        dispatcher = ChannelDispatcher((channel,), workspace=tmp_path)
+        result = await dispatcher.channel_send(channel="left", destination="room", text="", attachments=["note.txt"])
+        assert result["message_ids"] == ["remote-1"]
+        assert channel.sent == [
+            ChannelSend(destination="room", text="", files=(ChannelFile("note.txt", "text/plain", b"hello"),))
+        ]
 
     asyncio.run(drive())
 
@@ -98,17 +91,10 @@ def test_channel_send_dispatches_workspace_files(tmp_path: Path) -> None:
 def test_channel_send_rejects_attachment_escapes(tmp_path: Path) -> None:
     async def drive() -> None:
         channel = MemoryChannel("left")
-        agent = make_agent(tmp_path / "escape.db", OfflineProvider())
-        runtime = ChannelRuntime(agent, (channel,), "identity", workspace=tmp_path)
-        runtime._active = True
-        try:
-            with pytest.raises(ChannelError):
-                await runtime._channel_send(
-                    channel="left", destination="room", text="x", attachments=["../outside.txt"]
-                )
-            assert channel.sent == []
-        finally:
-            await agent.close()
+        dispatcher = ChannelDispatcher((channel,), workspace=tmp_path)
+        with pytest.raises(ChannelError):
+            await dispatcher.channel_send(channel="left", destination="room", text="x", attachments=["../outside.txt"])
+        assert channel.sent == []
 
     asyncio.run(drive())
 
@@ -116,14 +102,9 @@ def test_channel_send_rejects_attachment_escapes(tmp_path: Path) -> None:
 def test_channel_send_requires_text_or_files(tmp_path: Path) -> None:
     async def drive() -> None:
         channel = MemoryChannel("left")
-        agent = make_agent(tmp_path / "blank.db", OfflineProvider())
-        runtime = ChannelRuntime(agent, (channel,), "identity", workspace=tmp_path)
-        runtime._active = True
-        try:
-            with pytest.raises(ChannelError):
-                await runtime._channel_send(channel="left", destination="room", text="")
-            assert channel.sent == []
-        finally:
-            await agent.close()
+        dispatcher = ChannelDispatcher((channel,), workspace=tmp_path)
+        with pytest.raises(ChannelError):
+            await dispatcher.channel_send(channel="left", destination="room", text="")
+        assert channel.sent == []
 
     asyncio.run(drive())

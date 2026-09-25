@@ -115,15 +115,20 @@ from .channels import ChannelAction
 from .channels import ChannelActivity
 from .channels import ChannelAttachment
 from .channels import ChannelCommand
+from .channels import ChannelContentCapabilities
 from .channels import ChannelDelivery
+from .channels import ChannelDispatcher
 from .channels import ChannelError
 from .channels import ChannelEvent
 from .channels import ChannelEventHandler
 from .channels import ChannelFactory
 from .channels import ChannelMessage
 from .channels import ChannelPlugin
+from .channels import ChannelReceiveCapabilities
 from .channels import ChannelReceiver
+from .channels import ChannelRenderCapabilities
 from .channels import ChannelSend
+from .channels import ChannelSendCapabilities
 from .channels import ChannelValue
 from .channels import load_channel
 from .compaction import estimate_messages_tokens
@@ -290,15 +295,20 @@ __all__ = [
     "ChannelActivity",
     "ChannelAttachment",
     "ChannelCommand",
+    "ChannelContentCapabilities",
     "ChannelDelivery",
+    "ChannelDispatcher",
     "ChannelError",
     "ChannelEvent",
     "ChannelEventHandler",
     "ChannelFactory",
     "ChannelMessage",
     "ChannelPlugin",
+    "ChannelReceiveCapabilities",
     "ChannelReceiver",
+    "ChannelRenderCapabilities",
     "ChannelSend",
+    "ChannelSendCapabilities",
     "ChannelValue",
     "CodexCredentials",
     "CompactionDoneEvent",

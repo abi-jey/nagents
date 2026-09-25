@@ -6,6 +6,16 @@ delivery semantics, and an extension example.
 
 ::: nagents.channels.Channel
 
+::: nagents.channels.ChannelDispatcher
+
+::: nagents.channels.ChannelContentCapabilities
+
+::: nagents.channels.ChannelReceiveCapabilities
+
+::: nagents.channels.ChannelSendCapabilities
+
+::: nagents.channels.ChannelRenderCapabilities
+
 ::: nagents.channels.ChannelMessage
 
 ::: nagents.channels.ChannelSend

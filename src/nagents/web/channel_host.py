@@ -11,12 +11,11 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
+from nagents.channels.dispatcher import ChannelDispatcher
+from nagents.channels.dispatcher import _failure
 from nagents.channels.runtime import _INBOUND_PREFIX
-from nagents.channels.runtime import ChannelRuntime
 from nagents.channels.runtime import _Instructions
-from nagents.channels.runtime import _bind
 from nagents.channels.runtime import _envelope
-from nagents.channels.runtime import _failure
 from nagents.channels.runtime import inbound_content
 from nagents.channels.types import ChannelApproval
 from nagents.channels.types import ChannelError
@@ -100,7 +99,7 @@ class ChannelHost:
         self.initialized = False
         self.owned = False
         self.tools: list[ToolDefinition] = []
-        self.runtime: ChannelRuntime | None = None
+        self.dispatcher: ChannelDispatcher | None = None
         self.activities = ChannelActivities(self.store, self.channels)
         self.instructions = _ProtectedInstructions(self.catalog.protection, self.execution_owner)
         self.management = ChannelManagement(self, self.management_eligible)
@@ -170,28 +169,15 @@ class ChannelHost:
         self.state.harness.agent.plugins.append(self.management)
 
     def update_tools(self) -> None:
-        # Reuse core catalog/schema/dispatch validation, without Agent.listen's
-        # task-ownership guard: Harness owns a separate child producer task.
         # Clear the previously published view before constructing/checking a new
         # one, so a failed refresh cannot leave stale sensitive instructions.
-        self.runtime = None
+        self.dispatcher = None
         self.instructions.update([])
-        runtime = (
-            ChannelRuntime(
-                self.state.harness.agent,
-                tuple(self.channels.values()),
-                self.state.selected_session_id,
-                workspace=self.state.harness.workspace,
-            )
-            if self.channels
-            else None
-        )
-        catalog = [json.loads(binding.catalog) for binding in runtime._bindings] if runtime is not None else []
+        dispatcher = ChannelDispatcher(tuple(self.channels.values()), workspace=self.state.harness.workspace)
+        catalog = dispatcher.catalog()
         self.catalog.check_public(catalog)
         self.instructions.update(catalog)
-        if runtime is not None:
-            runtime._active = True
-        self.runtime = runtime
+        self.dispatcher = dispatcher
 
     async def inbound_content(self, channel_id: str, prompt: str) -> str | list[ContentPart]:
         """Format a stored channel prompt for model input.
@@ -214,7 +200,7 @@ class ChannelHost:
     async def channel_list(self) -> list[dict[str, ChannelValue]]:
         """Discover connected channels and their action schemas."""
         try:
-            result = await self.runtime._channel_list() if self.runtime is not None else []
+            result = await self.dispatcher.channel_list() if self.dispatcher is not None else []
             self.catalog.protection.check(result)
             owner = await self.execution_owner()
             if owner is not None:
@@ -236,12 +222,12 @@ class ChannelHost:
     ) -> dict[str, ChannelValue]:
         """Send once to an explicit channel and destination. Never use an ingress ID as reply_to."""
         try:
-            if self.runtime is None:
+            if self.dispatcher is None:
                 raise ChannelError("No connected channels")
             owner = await self.execution_owner()
             if owner is not None and (channel, destination) != (owner.channel, owner.conversation_id):
                 raise ChannelError("Channel destination is outside this session's chat ownership")
-            result = await self.runtime._channel_send(channel, destination, text, thread_id, reply_to, attachments)
+            result = await self.dispatcher.channel_send(channel, destination, text, thread_id, reply_to, attachments)
             self.check_result(result)
             return result
         except Exception as error:
@@ -252,15 +238,14 @@ class ChannelHost:
     ) -> dict[str, ChannelValue]:
         """Perform an explicit advertised channel action once, under normal human approval."""
         try:
-            if self.runtime is None:
+            if self.dispatcher is None:
                 raise ChannelError("No connected channels")
             copied = deepcopy(arguments)
             owner = await self.execution_owner()
             if owner is not None:
                 if (channel, copied.get("destination")) != (owner.channel, owner.conversation_id):
                     raise ChannelError("Channel action destination is outside this session's chat ownership")
-                binding = self.runtime._route(channel)
-                schema: dict[str, ChannelValue] = json.loads(dict(binding.actions).get(action, "{}"))
+                schema = self.dispatcher.action_schema(channel, action)
                 properties = schema.get("properties")
                 destination = properties.get("destination") if isinstance(properties, dict) else None
                 required = schema.get("required")
@@ -271,7 +256,7 @@ class ChannelHost:
                     and "destination" in required
                 ):
                     raise ChannelError("Chat-owned sessions require destination-addressed channel actions")
-            result = await self.runtime._channel_action(channel, action, copied)
+            result = await self.dispatcher.channel_action(channel, action, copied)
             self.check_result(result)
             return result
         except Exception as error:
@@ -313,12 +298,12 @@ class ChannelHost:
 
     async def open(self, id: str, channel: Channel) -> None:
         self.catalog.require_live()
-        _bind(channel)
+        ChannelDispatcher((channel,))
         try:
             async with asyncio.timeout(15):
                 await channel.open()
             # open() may change descriptions/actions after factory validation.
-            self.catalog.check_public(json.loads(_bind(channel).catalog))
+            self.catalog.check_public(ChannelDispatcher((channel,)).catalog()[0])
         except BaseException:
             with suppress(Exception):
                 async with asyncio.timeout(5):
@@ -476,13 +461,11 @@ class ChannelHost:
         if main not in roots:
             raise HTTPException(404, "Main session not found in this workspace.")
         connection = self.catalog.prepare(id, body, main)
-        if self.runtime is not None:
-            self.catalog.check_public(
-                [json.loads(binding.catalog) for binding in self.runtime._bindings], additional=connection.secrets
-            )
+        if self.dispatcher is not None:
+            self.catalog.check_public(self.dispatcher.catalog(), additional=connection.secrets)
         channel = self.catalog.construct(id, connection) if connection.enabled else None
         if channel is not None:
-            _bind(channel)
+            ChannelDispatcher((channel,))
         # Commit configuration before changing live connectors. A failed open is
         # a persisted error state, not a silent rollback or lost accepted inbox.
         self.catalog.save({**self.catalog.connections, id: connection})
@@ -659,4 +642,4 @@ class ChannelHost:
                 registry.unregister(tool.name)
         plugins = self.state.harness.agent.plugins
         plugins[:] = [plugin for plugin in plugins if plugin is not self.instructions and plugin is not self.management]
-        self.runtime = None
+        self.dispatcher = None

@@ -30,7 +30,7 @@ from nagents.channels import ChannelMessage
 from nagents.channels import ChannelReceiver
 from nagents.channels import ChannelSend
 from nagents.channels import ChannelValue
-from nagents.channels.runtime import MAX_PAYLOAD_BYTES
+from nagents.channels.dispatcher import MAX_PAYLOAD_BYTES
 from nagents.channels.runtime import ChannelRuntime
 from nagents.channels.runtime import _envelope
 from nagents.channels.store import Admission
