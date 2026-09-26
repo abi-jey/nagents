@@ -23,7 +23,7 @@ export function useClient() {
   );
   const operations = useOperations();
   const { operating, error, setError } = operations;
-  const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
+  const [panel, setPanel] = useState<"none" | "tools" | "designer" | "live">("none");
   const busy = operating || !!chat.runId || sessions.globalBusy;
   const dictation = useDictation(
     sessions.config?.token || "",
@@ -160,7 +160,8 @@ export function useClient() {
     panel,
     showTools: () => { if (access().tools) setPanel("tools"); },
     showDesigner: () => { if (access().designer) setPanel("designer"); },
-    closePanel: () => { setPanel("none"); void connect(); },
+    showLive: () => { if (access().live) setPanel("live"); },
+    closePanel: () => { setPanel("none"); if (panel !== "live") void connect(); },
     dismissError: () => setError(""),
     sessions,
     context,

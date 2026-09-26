@@ -1,4 +1,4 @@
-type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools";
+type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "phone-end";
 
 const paths: Record<IconName, string> = {
   plus: "M10 4v12M4 10h12",
@@ -12,6 +12,12 @@ const paths: Record<IconName, string> = {
   chevron: "m7 4 6 6-6 6",
   more: "M4 10h.01M10 10h.01M16 10h.01",
   tools: "M12 3a5 5 0 0 0-6 6L2.5 13.5a2 2 0 0 0 4 4L11 13a5 5 0 0 0 6-6l-3 3-4-4Z",
+  wave: "M2 8v4M6 5v10M10 2v16M14 5v10M18 8v4",
+  mic: "M7 5a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0ZM4 9v1a6 6 0 0 0 12 0V9M10 16v3M7 19h6",
+  "mic-off": "m2 2 16 16M7 7v3a3 3 0 0 0 5 2M8 2.7A3 3 0 0 1 13 5v3M4 9v1a6 6 0 0 0 10 4M16 9v1M10 16v3M7 19h6",
+  volume: "M3 7h3l4-4v14l-4-4H3ZM13 6a6 6 0 0 1 0 8M15 3a10 10 0 0 1 0 14",
+  "volume-off": "M3 7h3l4-4v14l-4-4H3Zm10 0 5 6M18 7l-5 6",
+  "phone-end": "M2 10a13 13 0 0 1 16 0v4h-4v-3a9 9 0 0 0-8 0v3H2Z",
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

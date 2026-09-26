@@ -248,6 +248,9 @@ transcription endpoint requires its own paid API access; ChatGPT device login
 and subscription benefits do not authorize this call. See
 [dictation usage and privacy](ngn.md#dictation).
 
+Browser GPT-Live connections are configured in **GPT-Live → Connection settings**
+and saved per workspace. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
+
 ### Storage and extensions
 
 | Field | YAML type | Default | Accepted values and meaning |
