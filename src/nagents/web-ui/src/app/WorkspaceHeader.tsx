@@ -16,6 +16,8 @@ export function WorkspaceHeader({ client, navOpen, toggleNavigation }: {
         <h1 title={title}>{title}</h1>
         <span title={model}>{model}</span>
       </div>
+      <button type="button" id="live-launch" className="live-launch" aria-label="Open GPT-Live voice studio" aria-haspopup="dialog" title="GPT-Live voice conversation"
+        disabled={!client.available.live} onClick={client.showLive}><Icon name="wave" size={16} /><span>GPT-Live</span></button>
       <ContextIndicator {...context} />
     </header>
   );

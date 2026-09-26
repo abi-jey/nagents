@@ -1,5 +1,6 @@
 """Same-origin loopback boundary. This is not authentication against local users."""
 
+import re
 import secrets
 from typing import TYPE_CHECKING
 
@@ -91,7 +92,14 @@ class LocalOnly:
         if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
             await reject(404, "Not found.")
             return
-        if scope["query_string"]:
+        # Live polling has one bounded, non-secret cursor. Every other query is
+        # still rejected, including duplicate cursors and tokens in URLs.
+        live_cursor = (
+            scope["method"] == "GET"
+            and re.fullmatch(r"/api/live/sessions/[A-Za-z0-9_-]{1,128}", path) is not None
+            and re.fullmatch(rb"after=[0-9]{1,16}", scope["query_string"]) is not None
+        )
+        if scope["query_string"] and not live_cursor:
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return
         method = scope["method"]

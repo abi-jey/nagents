@@ -39,6 +39,9 @@ from .catalog import ConnectionInput
 from .deletion import delete_session
 from .designer import Designer
 from .designer import register as register_designer
+from .live import create_agent as create_live_agent
+from .live import register as register_live
+from .live_runtime import LiveService
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
@@ -115,14 +118,18 @@ def create_app(
     token = secrets.token_urlsafe(32)
     state: WebState
     designer: Designer
+    live: LiveService
+    live_config = copy.deepcopy(config)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, designer
+        nonlocal state, designer, live
         harness = harness_factory(copy.deepcopy(config))
         state = WebState(harness)
+        live = LiveService(lambda voice: create_live_agent(live_config, voice))
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
+        app.state.live = live
         try:
             await harness.initialize(create_session=not (resume_session or continue_session))
             designer = Designer(state)
@@ -169,9 +176,12 @@ def create_app(
 
             async def close_resources() -> None:
                 try:
-                    await state.trash.close()
+                    await live.shutdown()
                 finally:
-                    await close_host()
+                    try:
+                        await state.trash.close()
+                    finally:
+                        await close_host()
 
             cleanup = asyncio.create_task(close_resources())
             try:
@@ -183,6 +193,7 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
+    register_live(app, lambda: live, live_config)
     from .local_delivery import register_assets
 
     register_assets(app, lambda: state)

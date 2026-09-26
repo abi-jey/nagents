@@ -18,7 +18,9 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from nagents.live import LiveConfig
 from nagents.provider import ProviderType
+from nagents.provider.auth import validate_prefix
 
 from .credentials import ProviderLoginStore
 from .private_store import ProtectedStoreError
@@ -34,6 +36,7 @@ PROVIDERS.update(
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
 API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
+LIVE_VOICES: tuple[str, ...] = ("marin", "cedar")
 
 
 def _data_dir() -> Path:
@@ -83,6 +86,13 @@ class HarnessConfig:
     dictation_language: str = ""
     dictation_max_seconds: int = 120
     skill_token_limit: int = 10000
+    live_enabled: bool = False
+    live_provider: str = "openai"
+    live_model: str = "gpt-live-1"
+    live_backend_model: str = field(default_factory=lambda: LiveConfig().backend_model)
+    live_voice: str = "marin"
+    live_base_url: str = ""
+    live_api_key_env: str = "OPENAI_API_KEY"
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
@@ -172,6 +182,25 @@ class HarnessConfig:
             raise ValueError("dictation_language must be empty (auto-detect) or a two-letter lowercase language code")
         if type(self.dictation_max_seconds) is not int or not 1 <= self.dictation_max_seconds <= 300:
             raise ValueError("dictation_max_seconds must be an integer between 1 and 300")
+        if type(self.live_enabled) is not bool:
+            raise ValueError("live_enabled must be a boolean")
+        if self.live_provider not in PROVIDERS:
+            raise ValueError("live_provider must be a known provider name")
+        for name in ("live_model", "live_backend_model"):
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}", getattr(self, name)):
+                raise ValueError(f"{name} must be a model ID of 1 through 128 characters without whitespace")
+        if self.live_voice not in LIVE_VOICES:
+            raise ValueError(f"live_voice must be one of: {', '.join(LIVE_VOICES)}")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.live_api_key_env):
+            raise ValueError("live_api_key_env must be an environment variable name, not a literal secret")
+        if self.live_base_url:
+            try:
+                validate_prefix(self.live_base_url)
+            except ValueError:
+                raise ValueError(
+                    "live_base_url must be an HTTPS API prefix (HTTP is allowed on loopback only), "
+                    "without credentials, query parameters, or fragments"
+                ) from None
 
     def profile(self, name: str) -> AgentProfile:
         if name == "assistant":
@@ -232,6 +261,12 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "dictation_base_url",
         "dictation_api_key_env",
         "dictation_language",
+        "live_provider",
+        "live_model",
+        "live_backend_model",
+        "live_voice",
+        "live_base_url",
+        "live_api_key_env",
     }
     integers = {
         "max_output",
@@ -241,7 +276,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_subagent_depth",
         "dictation_max_seconds",
     }
-    booleans = {"demo", "animations", "dictation_enabled", "read_only"}
+    booleans = {"demo", "animations", "dictation_enabled", "read_only", "live_enabled"}
     allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles"}
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")

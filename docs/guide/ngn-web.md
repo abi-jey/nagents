@@ -402,6 +402,10 @@ contract below.
 | `POST cancel` | `{run_id}` cancels/joins exactly that active run |
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
 | `POST dictation/transcribe` | Bounded raw `audio/wav` recording; returns `{text}` without starting a chat run |
+| `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
+| `POST live/sessions` | `{sdp, voice?: string}` creates a browser WebRTC call; returns `201 {session_id, sdp, model, voice}` |
+| `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
+| `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
 
 The run stream uses the CLI's normalized `schema_version: 1` event names and
 adds `run_id` to every record. Web lifecycle records are `run_started`, `heartbeat`,
@@ -753,6 +757,114 @@ Unsupported inputs are rejected rather than forwarded to external connectors.
 Audio/video understanding, upload-to-external-channel forwarding, and uploads in
 offline demo/custom persistence adapters are outside this input path. See
 [browser input lifecycle](channels.md#browser-image-and-pdf-input) for details.
+
+### GPT-Live Voice Conversations
+
+The **GPT-Live** interface starts a real-time speech-to-speech conversation from
+your browser. Connect explicitly, choose a voice for the new call, and grant
+microphone access when prompted. Microphone mute and output mute are independent;
+muting either does not end the provider session. Use the call's disconnect/end
+control to finish. Live captions and connection/error feedback belong to that call.
+
+#### Server Setup
+
+Supply an OpenAI Platform API key in the **server's environment**, then enable
+Live through trusted flat YAML:
+
+```yaml
+live_enabled: true
+live_provider: openai
+live_model: gpt-live-1
+live_voice: marin
+live_api_key_env: OPENAI_API_KEY
+```
+
+Start with `ngn serve --config /path/to/settings.yaml`, without `--demo`. An
+environment-only setup is also supported, assuming the key is already injected:
+
+```bash
+NGN_LIVE_ENABLED=true ngn serve
+```
+
+The default hosted backend is the library's `LiveConfig.backend_model`
+(`gpt-5.6-luna`); `live_backend_model` or `NGN_LIVE_BACKEND_MODEL` selects another
+compatible hosted Responses model. `live_voice` defaults to `marin`; the initial
+voice choices are `marin` and `cedar`. A voice change applies to a new call.
+
+Chat can keep using any configured provider, including ChatGPT/Codex login. Live
+uses its own API-key connection and API billing; it does not use a ChatGPT
+subscription token or fall back to saved provider-login credentials. The default
+key reference is `OPENAI_API_KEY`, regardless of the chat provider. To separate
+voice credentials, inject another server environment variable and set, for example,
+`live_api_key_env: TEAM_LIVE_API_KEY`. YAML holds the **variable name**, never the
+key. Credentials, provider authentication headers, and raw upstream errors are
+not returned to the browser.
+
+For a compatible dedicated endpoint, use `live_provider: openai_compatible` and
+`live_base_url: https://voice.example.com/v1`. Azure v1 is also supported with
+`live_provider: azure_openai_compatible_v1`, an explicit `live_base_url`, and the
+endpoint's key in `live_api_key_env`. The existing Foundry API-key transport handles
+its sideband authentication. Custom endpoints must implement GPT-Live WebRTC
+creation and sideband controls as well as hosted Responses; chat compatibility is
+insufficient. Endpoint URLs require HTTPS, except loopback HTTP for development,
+and cannot embed credentials, query strings, or fragments. The browser cannot
+override the provider, endpoint, model, or key reference in a session request.
+
+All seven fields have `NGN_LIVE_*` environment defaults. Normal YAML precedence
+still applies. Live setup is startup configuration: restart the server after
+changes. The UI reads the effective Live provider/model/voice and a clear setup
+reason when disabled, in demo mode, missing credentials, or using an unsupported
+provider. Readiness is a local configuration check, not a remote access test.
+See the [configuration reference](ngn-configuration.md#gpt-live-in-ngn-serve).
+
+#### Browser Requirements And Initial Scope
+
+Use a browser with `getUserMedia`, WebRTC audio tracks/data channels, and a secure
+context: loopback HTTP or HTTPS. Microphone permission and a working input device
+are required. Browser media connects to the Live provider over WebRTC; firewalls
+or restrictive networks can prevent negotiation even when HTTP setup succeeds.
+The server holds provider credentials and owns the control sideband. No host
+microphone, PortAudio, `voice` extra, or container audio-device mount is needed.
+
+The initial Live agent has a **hosted Responses backend with no workspace tools**,
+plugins, skills, chat history, or selected chat-agent context. It cannot edit the
+workspace, run shell commands, or delegate into the Harness. Voice captions are
+bounded process-local observations, not persisted chat messages. The session
+requests `store: false`; this does not override the provider's general data policy.
+Restarting the server discards local voice-session records. Microphone dictation
+below remains the separate workflow for inserting an editable draft into chat.
+
+Only one voice call may be active per `ngn serve` instance, shared by its tabs.
+End it manually before starting another. Successful snapshot polling renews the
+call's browser lease; abandoned calls expire when polling stops. Server shutdown,
+failed setup, and transport errors also trigger owned session/sideband cleanup.
+Browser close/disconnect cleanup is best-effort, with server expiry as the fallback.
+Reconnecting creates a new voice session; it does not replay old audio, restore
+chat history, or silently retry a provider call. Ending a call and **Stop run** for
+chat are separate actions.
+
+#### Live HTTP Contract
+
+All four Live routes use the existing same-origin, Host, fetch-metadata, and
+`X-Ngn-Token` checks. Writes require the Origin and JSON content-type headers.
+`GET /api/live` returns `{available, reason, provider, model, backend_model, voice,
+voices, active_session_id}`; `reason` is empty when locally ready and the active
+ID is empty when there is no active call.
+
+Creation accepts only a nonblank SDP string of at most 60,000 characters and an
+optional supported voice string (`""` means the configured default). The normal
+64 KiB JSON-body limit also applies. SDP negotiation is server-side; the browser
+uses the returned answer and must not send a second `session.start` on its data
+channel. The API exposes no credential, endpoint, arbitrary command, or tool
+configuration input.
+
+Snapshots contain `{session_id, status, model, voice, events, cursor}` and may
+include a safe `message`. Status is `connecting`, `connected`, `closing`, `closed`,
+or `error`. Events have `seq` and a normalized `type` (`transcript`, `status`, or
+`error`); transcript records include `speaker`, `text`, and timing when available.
+Pass the last cursor as `after`, an integer in `0..9007199254740991`. This is the
+only allowed Live query parameter; duplicate cursors and tokens in URLs are
+rejected. Polling returns bounded retained observations, not a durable replay log.
 
 ### Microphone Dictation
 
