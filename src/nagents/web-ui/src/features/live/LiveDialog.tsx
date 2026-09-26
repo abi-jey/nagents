@@ -16,13 +16,13 @@ function duration(seconds: number) {
   return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
 
-export function LiveDialog({ token, close }: { token: string; close: () => void }) {
+export function LiveDialog({ token, sessionId, close }: { token: string; sessionId: string; close: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const loadingRequest = useRef<AbortController | undefined>(undefined);
-  const [controller] = useState(() => new LiveController({ ...liveApi(token), media: browserMedia }));
+  const [controller] = useState(() => new LiveController({ ...liveApi(token), token, media: browserMedia }));
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [config, setConfig] = useState<LiveCapability>();
   const [loadError, setLoadError] = useState("");
@@ -39,6 +39,10 @@ export function LiveDialog({ token, close }: { token: string; close: () => void 
   const unavailable = unsupported || (config && !config.available ? config.reason : "") || (occupied ? "Another Live conversation is active. End it in its browser tab, or wait for a closed tab's session to expire, then refresh." : "");
   const status = state.phase === "idle" ? loading ? "Checking availability" : unavailable || loadError ? "Setup needed" : labels.idle : labels[state.phase];
   const provider = providerLabel(config?.provider || "Hosted intelligence");
+  const main = config?.backend_mode === "assistant";
+  const backend = main
+    ? `${config.assistant.agent} · ${config.assistant.provider}: ${config.assistant.model}`
+    : config?.backend_model || "Hosted Responses";
 
   async function refresh() {
     loadingRequest.current?.abort();
@@ -93,7 +97,7 @@ export function LiveDialog({ token, close }: { token: string; close: () => void 
             : state.phase === "error" ? "Let's try that again."
               : "Think out loud.";
   const subtitle = state.phase === "permission" ? "Allow microphone access in your browser to continue."
-    : state.phase === "connecting" ? "Setting up a direct, low-latency audio connection."
+    : state.phase === "connecting" ? "Connecting your audio through ngn serve."
       : connected ? (state.micMuted ? "Your microphone is muted. You can still listen." : "Speak naturally. Interrupt, explore, and follow your curiosity.")
         : state.phase === "ended" ? "Your microphone is off. Start fresh whenever you're ready."
           : "A conversation that moves at the speed of your thoughts.";
@@ -116,7 +120,7 @@ export function LiveDialog({ token, close }: { token: string; close: () => void 
             <button type="button" className={`live-control ${state.micMuted ? "muted" : ""}`} aria-label={state.micMuted ? "Unmute microphone" : "Mute microphone"} title={state.micMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={state.micMuted} disabled={!connected} onClick={() => controller.muteInput()}><Icon name={state.micMuted ? "mic-off" : "mic"} size={21} /></button>
             <button type="button" className="live-end" disabled={state.phase === "ending"} onClick={() => void controller.end()}><Icon name="phone-end" size={20} />{connected ? "End conversation" : state.phase === "ending" ? "Ending…" : "Cancel connection"}</button>
             <button type="button" className={`live-control ${state.outputMuted ? "muted" : ""}`} aria-label={state.outputMuted ? "Unmute speaker" : "Mute speaker"} title={state.outputMuted ? "Unmute speaker" : "Mute speaker"} aria-pressed={state.outputMuted} disabled={!connected} onClick={() => controller.muteOutput()}><Icon name={state.outputMuted ? "volume-off" : "volume"} size={21} /></button>
-          </> : <button type="button" className="live-connect" disabled={settingsOpen || loading || !!loadError || !config?.available || !!unavailable} onClick={() => { if (!config) return; follow.current = true; void controller.start(voice, config.revision); }}><Icon name="wave" size={21} />{loading ? "Checking connection…" : state.phase === "idle" ? "Start conversation" : "Start a new conversation"}<span aria-hidden="true">↗</span></button>}
+          </> : <button type="button" className="live-connect" disabled={settingsOpen || loading || !!loadError || !config?.available || !!unavailable || (main && !sessionId)} onClick={() => { if (!config) return; follow.current = true; void controller.start(voice, config.revision, sessionId); }}><Icon name="wave" size={21} />{loading ? "Checking connection…" : state.phase === "idle" ? "Start conversation" : "Start a new conversation"}<span aria-hidden="true">↗</span></button>}
         </div>
         {state.playbackBlocked && <button type="button" className="live-enable-audio" onClick={() => void controller.play()}><Icon name="volume" />Enable audio playback</button>}
         <p className="live-audio-note">{connected ? `${state.micMuted ? "Microphone muted" : "Microphone on"} · ${state.outputMuted ? "Speaker muted" : "Speaker on"}` : settingsOpen ? "Save your settings, then start a conversation." : "Your microphone turns on only when you connect."}</p>
@@ -126,16 +130,16 @@ export function LiveDialog({ token, close }: { token: string; close: () => void 
           {state.notice && <p>{state.notice}</p>}
           {!active && <div className="live-feedback-actions"><button type="button" disabled={loading} onClick={configure}>Configure connection</button><button type="button" disabled={loading} onClick={() => void refresh()}>Refresh</button></div>}
         </div>}
-        <div className="live-configuration"><label htmlFor="live-voice">VOICE<select id="live-voice" value={voice} disabled={active || settingsOpen || !config || loading} onChange={(event) => setVoice(event.target.value)}>{[...new Set([config?.voice || "marin", ...(config?.voices || [])])].map((name) => <option key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</option>)}</select></label><div><span>VOICE MODEL</span><strong>{config?.model || "gpt-live-1"}</strong></div><div><span>BACKEND</span><strong title={config?.backend_model}>{config?.backend_model || "Set in connection settings"}</strong></div></div>
+        <div className="live-configuration"><label htmlFor="live-voice">VOICE<select id="live-voice" value={voice} disabled={active || settingsOpen || !config || loading} onChange={(event) => setVoice(event.target.value)}>{[...new Set([config?.voice || "marin", ...(config?.voices || [])])].map((name) => <option key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</option>)}</select></label><div><span>VOICE MODEL</span><strong>{config?.model || "gpt-live-1"}</strong></div><div><span>BACKEND</span><strong title={backend}>{backend}</strong></div></div>
       </section>
-      {settingsOpen ? <LiveSettings token={token} blocked={active || !!config?.active_session_id} saved={(snapshot) => void saved(snapshot)} back={closeSettings} /> : <section className="live-transcript-panel" aria-label="Live captions">
+      {settingsOpen ? <LiveSettings token={token} assistant={config?.assistant} blocked={active || !!config?.active_session_id} saved={(snapshot) => void saved(snapshot)} back={closeSettings} /> : <section className="live-transcript-panel" aria-label="Live captions">
         <header><div><Icon name="chat" size={17} /><h3>The conversation</h3></div><span className="live-caption-label">LIVE CAPTIONS</span></header>
         <div className="live-transcript" ref={transcript} role="log" aria-label="Conversation captions" aria-live="polite" aria-relevant="additions text" tabIndex={0} onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 70; }}>
           {state.captions.length ? state.captions.map((caption) => <article key={caption.id} className={`live-caption ${caption.speaker}`}><div className="live-caption-meta"><span className="live-speaker-mark">{caption.speaker === "user" ? "Y" : <Icon name="wave" size={13} />}</span><strong>{caption.speaker === "user" ? "You" : "GPT-Live"}</strong><time>{duration(Math.floor(caption.start / 1000))}</time></div><p>{caption.text}</p></article>) : <div className="live-transcript-empty"><span><Icon name="chat" size={28} /></span><h4>Words will find their way here.</h4><p>Your conversation appears as you speak.<br />For now, just bring yourself.</p><div className="live-caption-preview" aria-hidden="true"><i /><i /><i /></div></div>}
         </div>
-        <footer><span className="live-privacy-dot" /><p>Captions stay in this view. This voice conversation is separate from your workspace chat.</p></footer>
+        <footer><span className="live-privacy-dot" /><p>{main ? "Captions stay in this view; delegated requests and answers join your selected chat." : "Captions stay in this view. This voice conversation is separate from your workspace chat."}</p></footer>
       </section>}
     </div>
-    <footer className="live-footer"><span><i />POWERED BY GPT-LIVE</span><p>{provider} · Browser audio · No workspace tools</p></footer>
+    <footer className="live-footer"><span><i />POWERED BY GPT-LIVE</span><p>{provider} voice · {main ? "Main assistant, chat history & normal approvals" : "Hosted Responses"}</p></footer>
   </dialog>;
 }

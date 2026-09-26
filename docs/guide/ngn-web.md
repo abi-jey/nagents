@@ -409,7 +409,8 @@ contract below.
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET live/settings` | Workspace Live connection values, revision, key-configured indicator, and provider/voice choices |
 | `POST live/settings` | `{revision, values, api_key?: string, clear_api_key?: boolean}` atomically saves the connection and write-only key; unavailable during a call |
-| `POST live/sessions` | `{sdp, voice?: string, revision}` creates a browser WebRTC call using that committed connection; returns `201 {session_id, sdp, model, voice}` |
+| `POST live/sessions` | `{voice?: string, revision, session_id}` starts a server-owned GPT-Live WebSocket call. `session_id` is required in main-assistant mode and binds the selected chat. Returns `201 {session_id, model, voice}`. |
+| `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
 | `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
 
@@ -775,10 +776,14 @@ control to finish. Live captions and connection/error feedback belong to that ca
 #### Connection Settings
 
 1. Start **`ngn serve`**, then open **GPT-Live → Connection settings**.
-2. Enable Live and choose the provider, voice model, hosted backend model, voice,
-   and optional API base URL.
-3. Enter the provider's API key in the write-only key field and save.
-4. Connect when the panel reports that the connection is ready.
+2. Enable Live. **Main assistant (selected chat provider)** is the default reasoning
+   backend: the selected conversation's assistant, provider, model, history, tools,
+   and approvals remain in charge. The Live service handles speech only.
+   **Hosted Responses** remains an option for an independent voice conversation.
+3. Choose the Live voice provider, voice model, voice, and optional API base URL.
+   The hosted backend model is used only for Hosted Responses.
+4. Enter the **Live voice provider's** API key in the write-only key field and save.
+5. Select the chat you want to talk to, then connect when the panel reports ready.
 
 All Live setup is available in this form. Defaults are disabled, provider
 `openai`, voice model `gpt-live-1`, the library's `LiveConfig.backend_model`
@@ -797,17 +802,21 @@ control to remove it. Changing the provider or effective endpoint discards the
 previous key unless the same save includes a replacement, preventing an existing
 key from being forwarded to a different connection.
 
-Chat can use any configured provider, including ChatGPT/Codex login. Live uses
-the key saved in its own Connection settings and its own API billing. It does not
-borrow chat credentials, saved login tokens, or process environment keys. Entered
-keys are sent only to the same-origin backend; saved key values, provider
-authentication headers, and raw upstream errors are never returned by the API.
+Chat can use any configured provider, including ChatGPT/Codex login. The
+**voice connection** uses the key saved in its own Connection settings and its
+own API billing; it does not borrow chat credentials, saved login tokens, or
+process environment keys. In Main assistant mode, the **reasoning backend**
+uses the current provider and model from the ordinary workspace/global chat
+settings, with their existing authentication. Entered Live keys are sent only
+to the same-origin backend; saved key values, provider authentication headers,
+and raw upstream errors are never returned by the API.
 
 For a compatible dedicated endpoint, choose `openai_compatible` and enter its API
 prefix, for example `https://voice.example.com/v1`. Azure v1 is supported through
 `azure_openai_compatible_v1` with an explicit base URL and its API key; the existing
 Foundry transport handles sideband authentication. Custom endpoints must implement
-GPT-Live WebRTC creation, sideband controls, and hosted Responses. Endpoint URLs
+GPT-Live native WebSocket sessions (plus hosted Responses only in Hosted
+Responses mode). Endpoint URLs
 require HTTPS, except loopback HTTP for development, and cannot embed credentials,
 query strings, fragments, or generation-route suffixes.
 
@@ -820,20 +829,34 @@ After a competing tab changes settings, reload the form before saving or connect
 
 #### Browser Requirements And Initial Scope
 
-Use a browser with `getUserMedia`, WebRTC audio tracks/data channels, and a secure
+Use a browser with `getUserMedia`, AudioWorklet and WebSocket in a secure
 context: loopback HTTP or HTTPS. Microphone permission and a working input device
-are required. Browser media connects to the Live provider over WebRTC; firewalls
-or restrictive networks can prevent negotiation even when HTTP setup succeeds.
-The server holds provider credentials and owns the control sideband. No host
+are required. Browser audio goes only to the same-origin `ngn serve` WebSocket;
+the server opens the provider WebSocket with its stored Live key and relays PCM
+frames in both directions. Provider audio never connects directly to the browser.
+The server also owns GPT-Live delegation and transcript events. No host
 microphone, PortAudio, `voice` extra, or container audio-device mount is needed.
 
-The initial Live agent has a **hosted Responses backend with no workspace tools**,
-plugins, skills, chat history, or selected chat-agent context. It cannot edit the
-workspace, run shell commands, or delegate into the Harness. Voice captions are
-bounded process-local observations, not persisted chat messages. The session
-requests `store: false`; this does not override the provider's general data policy.
-Restarting the server discards local voice-session records. Microphone dictation
-below remains the separate workflow for inserting an editable draft into chat.
+In **Main assistant** mode, GPT-Live delegates requests through the normal
+Harness run for the chat selected when voice connects. The assistant retains
+that chat's history, current provider/model, profile, tools, permissions and
+human approval dialog. Voice requests and assistant answers join the selected
+chat history; the browser shows tool activity in the same conversation. The
+voice service receives the assistant's result to speak, not a copy of workspace
+tools or provider credentials. The transcript is partial speech data rather
+than a fabricated finished turn: review proposed writes and shell commands
+before approving them, just as with typed messages. An approval without a
+connected browser subscriber is denied. A concurrent chat run is serialized
+before a voice request; a call ending during an action cancels its run and
+does not retry the action.
+
+**Hosted Responses** mode keeps the previous standalone voice conversation:
+it has no workspace tools, chat history or main-agent context. In both modes,
+voice captions are bounded process-local observations, and audio is not saved
+to chat history. The session requests `store: false`; this does not override
+the provider's general data policy. Restarting the server discards local
+voice-session records. Microphone dictation below remains the separate
+workflow for inserting an editable draft into chat.
 
 Only one voice call may be active per `ngn serve` instance, shared by its tabs.
 End it manually before starting another. Successful snapshot polling renews the
@@ -848,13 +871,17 @@ chat are separate actions.
 
 All Live routes use the existing same-origin, Host, fetch-metadata, and
 `X-Ngn-Token` checks. Writes require the Origin and JSON content-type headers.
-`GET /api/live` returns `{available, reason, provider, model, backend_model, voice,
-voices, active_session_id, revision, enabled, key_configured}`; `reason` is empty
+`GET /api/live` returns `{available, reason, provider, model, backend_model,
+backend_mode, assistant, voice, voices, active_session_id, revision, enabled,
+key_configured}`; `assistant` contains the selected chat provider/model/profile,
+not a credential. `reason` is empty
 when locally ready and the active ID is empty when there is no active call.
 
 `GET /api/live/settings` returns `{values, revision, key_configured, providers,
-voices}`. `values` contains exactly `{enabled, provider, model, backend_model,
-voice, base_url}`. The `revision` is a 64-character lowercase hexadecimal token.
+voices}`. `values` contains exactly `{enabled, backend_mode, provider, model,
+backend_model, voice, base_url}`. `backend_mode` is `assistant` (the default)
+or `hosted`; `backend_model` applies only to hosted mode. The `revision` is a
+64-character lowercase hexadecimal token.
 `POST /api/live/settings` takes `{revision, values, api_key?: string,
 clear_api_key?: boolean}` and returns the same public settings snapshot. The
 optional key defaults to an empty string; clearing defaults to false. Supplying
@@ -867,14 +894,19 @@ revision or a busy Live service returns `409`; reload settings before retrying.
 If a save acknowledgement is lost, fetch the settings again to see the committed
 state. Cancellation waits for an admitted transaction to finish.
 
-Creation requires the current committed `revision`, a nonblank SDP string of at
-most 60,000 characters, and an optional supported voice string (`""` means the
-configured default). A stale permission-pending tab receives `409` before provider
-setup. Admission captures one committed connection/key for that call. The normal
-64 KiB JSON-body limit also applies. SDP negotiation is server-side; the browser
-uses the returned answer and must not send a second `session.start` on its data
-channel. Session creation accepts no connection override, arbitrary command, or
-tool configuration input; connection changes go through the revisioned settings route.
+Creation requires the current committed `revision` and an optional supported
+voice string (`""` means the configured default). Main assistant mode also
+requires the **selected root `session_id`**, which binds all delegated work and
+approvals to that chat even if another tab changes the selection. A stale
+permission-pending tab receives `409` before provider setup. Admission captures
+one committed connection/key for that call. The normal
+64 KiB JSON-body limit also applies. The server alone sends `session.start` to
+GPT-Live; the browser sends audio frames only. Each browser WebSocket uses
+`ngn.live.v1` and `ngn.token.<bootstrap token>` subprotocols, with no query
+parameters or provider credentials. Frames are bounded to 100 ms; a browser
+disconnect ends and finalizes the call. Session creation accepts no connection
+override, arbitrary command, or tool configuration input; connection changes
+go through the revisioned settings route.
 
 Snapshots contain `{session_id, status, model, voice, events, cursor}` and may
 include a safe `message`. Status is `connecting`, `connected`, `closing`, `closed`,

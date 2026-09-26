@@ -2,7 +2,8 @@ import type { Caption, LiveCreated, LiveEvent, LiveMedia, LiveSnapshot, LiveStat
 
 interface Dependencies {
   media(handlers: MediaHandlers): LiveMedia;
-  create(sdp: string, voice: string, signal: AbortSignal, revision: string): Promise<LiveCreated>;
+  create(voice: string, signal: AbortSignal, revision: string, sessionId: string): Promise<LiveCreated>;
+  token: string;
   read(id: string, after: number, signal: AbortSignal): Promise<LiveSnapshot>;
   close(id: string): Promise<LiveSnapshot>;
   pollMs?: number;
@@ -108,7 +109,7 @@ export class LiveController {
     });
   }
 
-  async start(voice: string, revision: string): Promise<void> {
+  async start(voice: string, revision: string, sessionId = ""): Promise<void> {
     if (this.disposed || ["permission", "connecting", "connected", "ending"].includes(this.state.phase)) return;
     const epoch = ++this.epoch;
     const abort = new AbortController(); this.abort = abort; this.cursor = 0; this.endingDeadline = 0;
@@ -124,18 +125,18 @@ export class LiveController {
         playbackBlocked: (blocked) => { if (epoch === this.epoch) this.update({ playbackBlocked: blocked }); },
       });
       this.media = media;
-      const sdp = await media.offer(abort.signal);
+      await media.prepare(abort.signal);
       if (epoch !== this.epoch) return;
       this.update({ phase: "connecting" });
       // Keep awaiting a cancelled creation so a late-created server session can
       // be explicitly closed. The server lease covers a lost HTTP response.
-      const session = await this.deps.create(sdp, voice, AbortSignal.timeout(70_000), revision);
+      const session = await this.deps.create(voice, AbortSignal.timeout(70_000), revision, sessionId);
       if (epoch !== this.epoch) { await this.closeRemote(session.session_id); return; }
       this.update({ sessionId: session.session_id });
       this.connectionTimer = setTimeout(() => {
-        if (epoch === this.epoch) this.fail("The audio connection timed out. Check that your network allows WebRTC, then try again.");
+        if (epoch === this.epoch) this.fail("The audio relay timed out. Check the connection to ngn serve, then try again.");
       }, 25_000);
-      await media.answer(session.sdp);
+      await media.connect(session.session_id, this.deps.token);
       if (epoch !== this.epoch) return;
       void this.poll(epoch, abort.signal);
     } catch (cause) {

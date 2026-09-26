@@ -1,9 +1,8 @@
-"""Bounded, server-owned WebRTC calls; the browser owns all audio devices.
+"""Bounded, server-owned Live calls and browser audio relays.
 
-One supervisor owns provisioning, the Agent sideband, and finalization. Request
-cancellation stops that supervisor cooperatively: an in-flight provisioning
-response is collected so that its newly allocated session can still be hung up.
-Only normalized captions and application status survive a completed call.
+The server's native connection owns audio, delegation, and finalization. The
+legacy WebRTC supervisor remains for its standalone API lifecycle. Only
+normalized captions and application status survive a completed call.
 """
 
 from __future__ import annotations
@@ -22,7 +21,11 @@ from typing import cast
 from uuid import uuid4
 
 from fastapi import HTTPException
+from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect
 
+from nagents.audio import AudioDuplex
+from nagents.audio import AudioFormat
 from nagents.events import AudioTranscriptDeltaEvent
 from nagents.events import ErrorEvent
 from nagents.events import InputTranscriptDeltaEvent
@@ -32,12 +35,15 @@ from nagents.live import LiveEvent
 from ._async import join_owned
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from collections.abc import Callable
 
     from nagents import Agent
     from nagents.events import Event
 
 MAX_SDP_BYTES = 65536
+MAX_AUDIO_FRAME = 9600  # 100 ms of mono PCM16 at 24 kHz.
+SILENCE_FRAME = bytes(960)
 MAX_EVENTS = 256
 MAX_TEXT_CHARACTERS = 4096
 MAX_COMPLETED = 8
@@ -96,6 +102,10 @@ class _Call:
     failure: str = ""
     http_status: int = 502
     reason: str = "Live session closed."
+    stream: bool = False
+    audio_in: _BrowserInput | None = None
+    audio_out: _BrowserOutput | None = None
+    browser: bool = False
 
     def fail(self, message: str, status: int = 502) -> None:
         if not self.failure:
@@ -150,6 +160,48 @@ def _transcript(record: _Record, speaker: str, text: object, payload: Payload, s
     ):
         fields.update(start_ms=start, end_ms=end)
     record.append("transcript", text, **fields)
+
+
+class _BrowserInput:
+    """Bounded microphone frames; keep the provider input clock moving during gaps."""
+
+    audio_format = AudioFormat()
+
+    def __init__(self) -> None:
+        self.frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=50)
+        self.connected = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        await self.connected.wait()
+        while True:
+            try:
+                async with asyncio.timeout(0.02):
+                    frame = await self.frames.get()
+            except TimeoutError:
+                frame = SILENCE_FRAME
+            yield frame
+
+
+class _BrowserOutput:
+    """Do not accumulate unbounded audio when browser playback falls behind."""
+
+    audio_format = AudioFormat()
+
+    def __init__(self) -> None:
+        self.frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
+
+    async def write(self, chunk: bytes) -> None:
+        if len(chunk) % 2:
+            raise ValueError("Live PCM16 output ended with an incomplete sample")
+        for offset in range(0, len(chunk), MAX_AUDIO_FRAME):
+            self.frames.put_nowait(chunk[offset : offset + MAX_AUDIO_FRAME])
+
+    async def interrupt(self) -> None:
+        while not self.frames.empty():
+            self.frames.get_nowait()
+
+    async def close(self) -> None:
+        await self.interrupt()
 
 
 class LiveService:
@@ -208,6 +260,78 @@ class LiveService:
         finally:
             call.answer = ""
 
+    async def create_stream(self, voice: str = "") -> Payload:
+        """Start one server-to-provider WebSocket; browser audio joins separately."""
+        if self._closed:
+            raise HTTPException(503, "Live is shutting down.")
+        if self._active:
+            raise HTTPException(409, "End the active Live conversation before starting another.")
+        if not isinstance(voice, str) or (voice and not _NAME.fullmatch(voice)):
+            raise HTTPException(422, "Invalid Live voice.")
+        call = _Call(stream=True, audio_in=_BrowserInput(), audio_out=_BrowserOutput())
+        identifier = call.record.identifier
+        self._active[identifier] = call
+        self._records[identifier] = call.record
+        call.record.append("status", call.record.message)
+        call.task = asyncio.create_task(self._run_stream(call, voice), name="web-live-relay")
+        try:
+            await call.ready.wait()
+            if call.stop.is_set() or call.failure or call.task.done():
+                await join_owned(call.task)
+                raise HTTPException(call.http_status, call.failure or "Live session creation was stopped.")
+            return {"session_id": identifier, "model": call.record.model, "voice": call.record.voice}
+        except asyncio.CancelledError:
+            call.request_stop("Live session creation was cancelled.")
+            await join_owned(call.task)
+            raise
+
+    async def serve_audio(self, session_id: str, socket: WebSocket) -> None:
+        """Only the reserved browser owns the raw PCM connection."""
+        call = self._active.get(session_id)
+        if call is None or not call.stream or call.browser or call.stop.is_set() or call.record.status != "connected":
+            await socket.close(code=1008)
+            return
+        source, sink = call.audio_in, call.audio_out
+        assert source is not None and sink is not None
+        call.browser = True
+        await socket.accept(subprotocol="ngn.live.v1")
+        source.connected.set()
+
+        async def playback() -> None:
+            while True:
+                await socket.send_bytes(await sink.frames.get())
+
+        sender = asyncio.create_task(playback(), name="web-live-playback")
+        stopped = asyncio.create_task(call.stop.wait())
+        try:
+            while not call.stop.is_set() and not sender.done():
+                incoming = asyncio.create_task(socket.receive())
+                done, _ = await asyncio.wait({incoming, sender, stopped}, return_when=asyncio.FIRST_COMPLETED)
+                if incoming not in done:
+                    incoming.cancel()
+                    await asyncio.gather(incoming, return_exceptions=True)
+                    if sender in done:
+                        sender.result()
+                    break
+                packet = incoming.result()
+                frame = packet.get("bytes")
+                if packet["type"] != "websocket.receive" or not isinstance(frame, bytes):
+                    break
+                if not frame or len(frame) > MAX_AUDIO_FRAME or len(frame) % 2:
+                    await socket.close(code=1003)
+                    break
+                source.frames.put_nowait(frame)
+        except (WebSocketDisconnect, asyncio.QueueFull):
+            pass
+        finally:
+            call.request_stop("Live browser audio disconnected.")
+            sender.cancel()
+            stopped.cancel()
+            await asyncio.gather(sender, stopped, return_exceptions=True)
+            await join_owned(call.task)
+            with suppress(Exception):
+                await socket.close()
+
     async def snapshot(self, session_id: str, after: int = 0) -> Payload:
         record = self._lookup(session_id)
         if type(after) is not int or after < 0:
@@ -261,17 +385,18 @@ class LiveService:
                 config = agent.provider.live_config
                 if (
                     config is None
-                    or config.delegation != "responses"
+                    or config.delegation not in {"responses", "client"}
                     or config.attach_to
                     or config.fork_from
-                    or config.client_handler is not None
+                    or (config.delegation == "responses" and config.client_handler is not None)
+                    or (config.delegation == "client" and config.client_handler is None)
                     or agent.delegation_agent is not None
                     or agent.tool_registry.get_all()
                     or not isinstance(config.voice, str)
                     or not _NAME.fullmatch(config.voice)
                     or not _NAME.fullmatch(agent.provider.model)
                 ):
-                    call.fail("Live requires a dedicated hosted voice agent.", 503)
+                    call.fail("Live requires a dedicated voice agent with an owned backend.", 503)
                     return
                 call.record.model, call.record.voice = agent.provider.model, config.voice
                 api = LiveAPI(agent.provider)
@@ -293,7 +418,7 @@ class LiveService:
                         attach_to=identifier,
                         close_session_on_exit=True,
                         close_timeout=min(config.close_timeout, FINALIZE_SECONDS),
-                        handle_delegations=False,
+                        handle_delegations=config.delegation == "client",
                     )
                     agent.audio = None
                     observer = asyncio.create_task(self._observe(call, agent, identifier), name="web-live-sideband")
@@ -313,6 +438,67 @@ class LiveService:
                     except Exception:
                         call.fail("Live resource cleanup could not be confirmed.")
         finally:
+            confirmation = "Finalization confirmed." if call.finalized else "Finalization is unconfirmed."
+            call.record.transition(
+                "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
+            )
+            self._active.pop(call.record.identifier, None)
+            completed = [key for key in self._records if key not in self._active]
+            for key in completed[:-MAX_COMPLETED]:
+                del self._records[key]
+            call.ready.set()
+
+    async def _run_stream(self, call: _Call, voice: str) -> None:
+        agent: Agent | None = None
+        try:
+            try:
+                agent = self._factory(voice)
+                config = agent.provider.live_config
+                if (
+                    config is None
+                    or config.delegation not in {"responses", "client"}
+                    or config.attach_to
+                    or config.fork_from
+                    or (config.delegation == "responses" and config.client_handler is not None)
+                    or (config.delegation == "client" and config.client_handler is None)
+                    or agent.delegation_agent is not None
+                    or agent.tool_registry.get_all()
+                    or not isinstance(config.voice, str)
+                    or not _NAME.fullmatch(config.voice)
+                    or not _NAME.fullmatch(agent.provider.model)
+                ):
+                    call.fail("Live requires a dedicated voice agent with an owned backend.", 503)
+                    return
+                call.record.model, call.record.voice = agent.provider.model, config.voice
+                assert call.audio_in is not None and call.audio_out is not None
+                agent.audio = AudioDuplex(input=call.audio_in, output=call.audio_out)
+                observer = asyncio.create_task(self._observe(call, agent, ""), name="web-live-upstream")
+                await self._connected(call, observer)
+                if call.record.status != "closing":
+                    call.record.transition("closing", "Closing Live session.")
+                if call.attached.is_set() and not observer.done():
+                    with suppress(Exception):
+                        async with asyncio.timeout(CLEANUP_SECONDS):
+                            if not agent.live.closing:
+                                await agent.live.close()
+                        await asyncio.wait({observer}, timeout=FINALIZE_SECONDS)
+                if not observer.done():
+                    observer.cancel()
+                await asyncio.gather(observer, return_exceptions=True)
+                with suppress(RuntimeError):
+                    call.finalized = call.finalized or agent.live.status.finalized
+                if call.attached.is_set() and not call.finalized:
+                    call.fail("Live session shutdown could not be confirmed.")
+            except Exception:
+                if not call.failure:
+                    call.fail("Live connection failed. Provider finalization is unconfirmed.")
+        finally:
+            if agent is not None:
+                try:
+                    async with asyncio.timeout(CLEANUP_SECONDS):
+                        await agent.close()
+                except Exception:
+                    call.fail("Live resource cleanup could not be confirmed.")
             confirmation = "Finalization confirmed." if call.finalized else "Finalization is unconfirmed."
             call.record.transition(
                 "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
@@ -377,7 +563,9 @@ class LiveService:
                 call.fail("Live connection reported an error.")
                 return True
         elif isinstance(event, LiveEvent):
-            if event.event_type == "connection.attached":
+            if event.event_type == "session.started" and not identifier:
+                call.attached.set()
+            elif event.event_type == "connection.attached":
                 session = event.payload.get("session")
                 if not isinstance(session, dict) or session.get("id") != identifier:
                     call.fail("Live sideband attachment could not be verified.")

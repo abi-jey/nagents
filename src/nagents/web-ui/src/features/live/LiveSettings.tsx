@@ -5,8 +5,9 @@ import type { LiveSettingsSnapshot } from "./types.js";
 
 export const providerLabel = (name: string) => ({ openai: "OpenAI", openai_compatible: "OpenAI-compatible", azure_openai_compatible_v1: "Azure OpenAI" })[name] || name;
 
-export function LiveSettings({ token, blocked, saved, back }: {
-  token: string; blocked: boolean; saved: (snapshot: LiveSettingsSnapshot) => void; back: () => void;
+export function LiveSettings({ token, assistant, blocked, saved, back }: {
+  token: string; assistant?: { provider: string; model: string; agent: string };
+  blocked: boolean; saved: (snapshot: LiveSettingsSnapshot) => void; back: () => void;
 }) {
   const [controller] = useState(() => new LiveSettingsController(settingsApi(token)));
   const heading = useRef<HTMLHeadingElement>(null);
@@ -31,12 +32,14 @@ export function LiveSettings({ token, blocked, saved, back }: {
       {loading && <p role="status">Loading connection settings…</p>}
       {values && snapshot && <fieldset disabled={disabled}>
         <label className="live-enabled"><span><strong>Enable GPT-Live</strong><small>Ready when you choose to connect.</small></span><input type="checkbox" role="switch" checked={values.enabled} onChange={(event) => controller.edit({ enabled: event.target.checked })} /></label>
+        <label>Reasoning backend<select value={values.backend_mode} onChange={(event) => controller.edit({ backend_mode: event.target.value as "assistant" | "hosted" })}><option value="assistant">Main assistant (selected chat provider)</option><option value="hosted">Hosted Responses (separate assistant)</option></select></label>
+        {values.backend_mode === "assistant" && <p className="live-backend-note">{assistant ? `${assistant.agent} · ${assistant.provider}: ${assistant.model}.` : "Uses the main assistant selected in workspace settings."} Voice requests join the selected chat's history and use its tools and approval rules. Change its provider and model in normal workspace settings.</p>}
         <label>Provider<select value={values.provider} onChange={(event) => controller.edit({ provider: event.target.value })}>{snapshot.providers.map((provider) => <option key={provider} value={provider}>{providerLabel(provider)}</option>)}</select></label>
         <label>API endpoint<input type="url" autoComplete="off" value={values.base_url} placeholder={values.provider === "azure_openai_compatible_v1" ? "https://your-resource.openai.azure.com/openai/v1" : "https://api.openai.com/v1"} maxLength={2048} onChange={(event) => controller.edit({ base_url: event.target.value })} /><small>{values.provider === "azure_openai_compatible_v1" ? "Your Azure v1 API prefix." : "Leave blank for the standard OpenAI endpoint."}</small></label>
         <label>API key<input type="password" autoComplete="new-password" spellCheck={false} value={apiKey} placeholder={hasSavedKey ? "Saved key · leave blank to keep" : "Enter your API key"} maxLength={4096} onChange={(event) => controller.key(event.target.value)} aria-describedby="live-key-help" /><small id="live-key-help">{hasSavedKey ? "A key is saved on the server. Its value is never returned to this form." : "Stored on the server. No environment variables needed."}</small></label>
         {snapshot.key_configured && <label className="live-clear-key"><input type="checkbox" checked={clearKey} onChange={(event) => controller.clearKey(event.target.checked)} />Remove the saved API key</label>}
         {changed && snapshot.key_configured && <p className="live-key-change">This is a different provider or endpoint. Enter its key; the previous connection's key will be removed when you save.</p>}
-        <div className="live-settings-models"><label>Voice model<input value={values.model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ model: event.target.value })} /></label><label>Backend model<input value={values.backend_model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ backend_model: event.target.value })} /></label></div>
+        <div className="live-settings-models"><label>Voice model<input value={values.model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ model: event.target.value })} /></label>{values.backend_mode === "hosted" && <label>Hosted backend model<input value={values.backend_model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ backend_model: event.target.value })} /></label>}</div>
         <label>Default voice<select value={values.voice} onChange={(event) => controller.edit({ voice: event.target.value })}>{snapshot.voices.map((voice) => <option key={voice} value={voice}>{voice.charAt(0).toUpperCase() + voice.slice(1)}</option>)}</select></label>
       </fieldset>}
       {blocked && <p className="live-settings-feedback" role="status">End the active conversation before changing its connection settings.</p>}

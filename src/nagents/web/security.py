@@ -48,14 +48,22 @@ class LocalOnly:
             tokens = [
                 protocol.removeprefix("ngn.token.") for protocol in protocols if protocol.startswith("ngn.token.")
             ]
+            path = scope["path"]
+            expected = (
+                "ngn.events.v1"
+                if path == "/api/events"
+                else "ngn.live.v1"
+                if re.fullmatch(r"/api/live/sessions/[A-Za-z0-9_-]{1,128}/audio", path)
+                else ""
+            )
             if (
-                scope["path"] != "/api/events"
+                not expected
                 or scope["query_string"]
                 or (self.enforce_authority and headers.getlist("host") != [self.authority])
                 or (self.enforce_authority and headers.getlist("origin") != [f"http://{self.authority}"])
                 or headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}
                 or len(protocols) != 2
-                or protocols.count("ngn.events.v1") != 1
+                or protocols.count(expected) != 1
                 or len(tokens) != 1
                 or not secrets.compare_digest(tokens[0].encode(), self.token.encode())
             ):
