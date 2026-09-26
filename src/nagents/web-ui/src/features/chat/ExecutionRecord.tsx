@@ -1,5 +1,6 @@
 import { ExecutionEvidence } from "./ExecutionEvidence.js";
 import { executionDuration, executionTarget } from "./executionPresentation.js";
+import { ToolExecution } from "./ToolExecution.js";
 import type { Entry } from "./transcript.js";
 
 export function ExecutionRecord({
@@ -36,13 +37,9 @@ export function ExecutionRecord({
     ...(entry.text ? [evidence("stream", sameOutput ? resultLabel : entry.kind === "context" ? "Original saved content" : "Streamed output", entry.text)] : []),
   ];
   const metadata = entry.kind !== "context" && (
-    <details className="execution-metadata" data-disclosure-key={`metadata:${entry.id}`}
-      open={disclosures.get(`metadata:${entry.id}`) ?? false}
-      onToggle={(event) => toggleDetail(`metadata:${entry.id}`, event.currentTarget.open)}>
-      <summary>Execution metadata</summary>
           <dl className="request-identity">
             {entry.kind === "tool" && (
-              <><dt>Tool name</dt><dd>{name}</dd></>
+              <><dt>Tool name</dt><dd>{name}</dd><dt>Status</dt><dd>{state}</dd></>
             )}
             {entry.kind === "task" && (
               <>
@@ -117,13 +114,13 @@ export function ExecutionRecord({
               </>
             )}
           </dl>
-    </details>
   );
+  if (entry.kind === "tool") return <ToolExecution entry={entry} open={open} toggle={toggle} metadata={metadata} statusDescription={state} />;
   return (
     <details className="execution-record" data-disclosure-key={entry.id} open={open}
       onToggle={(event) => toggle?.(event.currentTarget.open)}>
       <summary>
-        <span className={`execution-summary${entry.kind === "tool" ? " execution-tool-summary" : ""}`}>
+        <span className="execution-summary">
           <span className="execution-heading">
             <span className="execution-name" title={name}>
               {entry.kind === "task" ? `${entry.recorded ? "Latest known activation" : "Activation"} ${entry.activation || 0}: ` : ""}
@@ -179,7 +176,11 @@ export function ExecutionRecord({
               : "No final result received."}
           </p>
         )}
-        {metadata}
+        {metadata && <details className="execution-metadata" data-disclosure-key={`metadata:${entry.id}`}
+          open={disclosures.get(`metadata:${entry.id}`) ?? false}
+          onToggle={(event) => toggleDetail(`metadata:${entry.id}`, event.currentTarget.open)}>
+          <summary>Execution metadata</summary>{metadata}
+        </details>}
       </div>
     </details>
   );
