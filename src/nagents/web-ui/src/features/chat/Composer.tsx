@@ -41,6 +41,10 @@ export function Composer({
   dictation,
   review,
   status,
+  attachments,
+  hasAttachments = false,
+  attachmentTypes = [],
+  addAttachments,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -54,12 +58,22 @@ export function Composer({
   dictation?: ReactNode;
   review?: ReactNode;
   status?: ReactNode;
+  attachments?: ReactNode;
+  hasAttachments?: boolean;
+  attachmentTypes?: string[];
+  addAttachments?: (files: File[]) => void;
 }) {
   return (
     <form
+      onPaste={(event) => {
+        const files = [...event.clipboardData.files];
+        if (files.length && addAttachments && !disabled) { event.preventDefault(); addAttachments(files); }
+      }}
+      onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+      onDrop={(event) => { if (event.dataTransfer.files.length) { event.preventDefault(); if (!disabled) addAttachments?.([...event.dataTransfer.files]); } }}
       onSubmit={(event) => {
         event.preventDefault();
-        if (canSubmit) submit();
+        if (canSubmit && (prompt.trim() || hasAttachments)) submit();
       }}
     >
       <label htmlFor="composer" className="sr-only">
@@ -86,12 +100,17 @@ export function Composer({
             !event.nativeEvent.isComposing
           ) {
             event.preventDefault();
-            if (canSubmit) submit();
+            if (canSubmit && (prompt.trim() || hasAttachments)) submit();
           }
         }}
       />
       {review}
+      {attachments}
       <div className="composer-bottom">
+        {!!attachmentTypes.length && <label className="attachment-picker">Attach
+          <input type="file" aria-label="Attach images or PDFs" multiple accept={attachmentTypes.join(",")} disabled={disabled}
+            onChange={(event) => { addAttachments?.([...event.currentTarget.files || []]); event.currentTarget.value = ""; }} />
+        </label>}
         {dictation}
         {status}
         <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.</span>
@@ -103,7 +122,7 @@ export function Composer({
         <button
           type="submit"
           className="primary"
-          disabled={!canSubmit || !prompt.trim()}
+          disabled={!canSubmit || (!prompt.trim() && !hasAttachments)}
         >
           Send
         </button>

@@ -83,7 +83,9 @@ class PromptInput(SessionInput):
     prompt: str = Field(min_length=1, max_length=32000)
 
 
-class MessageInput(PromptInput):
+class MessageInput(SessionInput):
+    prompt: str = Field(default="", max_length=32000)
+    attachments: list[str] = Field(default_factory=list, max_length=3)
     message_id: str = Field(pattern=r"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$")
 
 
@@ -184,6 +186,9 @@ def create_app(
     from .local_delivery import register_assets
 
     register_assets(app, lambda: state)
+    from .uploads import register_uploads
+
+    register_uploads(app, lambda: state)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request: Request, error: RequestValidationError) -> JSONResponse:
@@ -219,11 +224,17 @@ def create_app(
 
     @app.post("/api/messages")
     async def message(body: MessageInput) -> dict[str, str]:
-        if not body.prompt.strip():
+        if not body.prompt.strip() and not body.attachments:
             raise HTTPException(422, "Prompt must not be blank.")
 
         async def accept() -> dict[str, str]:
-            session_id, admitted = await state.channels.store.web(body.session_id, body.message_id, body.prompt)
+            if body.attachments:
+                media = await state.uploads.capabilities(body.session_id)
+                session_id, admitted = await state.channels.store.web(
+                    body.session_id, body.message_id, body.prompt, tuple(body.attachments), media
+                )
+            else:
+                session_id, admitted = await state.channels.store.web(body.session_id, body.message_id, body.prompt)
             active = state.active
             if (
                 admitted

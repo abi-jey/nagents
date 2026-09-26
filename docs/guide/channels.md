@@ -300,9 +300,46 @@ restrictions; acquiring external ownership does not hide earlier local deliverie
 The built-in adapter is not a configurable connector or automatic-reply target,
 and its `listen()` method fails because the web host already owns input admission.
 
-Browser upload, paste, and attachment-aware model input are separate follow-up
-work (#46). Web receive capabilities remain text-only; dictation still produces
-editable text.
+### Browser image and PDF input
+
+In `ngn serve`, use **Attach**, paste an image, or drop files into the composer.
+Images show a local draft preview; PDFs show their filename/type. Remove an
+attachment before sending to discard it. Uploading or pasting only stages a draft:
+**Send** (or Enter) explicitly submits it, with or without accompanying text.
+Switching conversations discards that conversation's attachment drafts. Dictation
+continues to produce editable text rather than an audio attachment.
+
+The host accepts up to **3 attachments, 8 MiB each**, from JPEG, PNG, GIF, WebP,
+and PDF. The available picker types are the intersection of this allowlist and
+the executing provider/adapter's declared input support, including pinned designed
+roots. For example, the Responses adapter accepts images but not PDFs. Unsupported
+types fail before native input is sent; browser audio/video playback does not
+imply model support. Offline demo and custom persistence adapters do not expose
+upload admission.
+
+Uploads use the existing same-origin token authentication, streaming byte limits,
+container checks, and opaque session-scoped IDs. The server binds the submitted
+text and **ordered attachment IDs** to the message UUID in the inbox transaction.
+An identical retry observes the same admission; changing text or attachments with
+that UUID is a conflict. Accepted work survives browser disconnection and process
+restart. Provider support is checked again when the queued work begins. Missing
+attachments reject the entire input rather than silently submitting partial text.
+
+Unsubmitted uploads expire after **one hour**. Removing a draft, changing sessions,
+or unmounting the composer aborts uploads, releases preview URLs, and requests
+deletion of staged bytes. Expiry cleans up abandoned browsers and cancellation
+races whose acknowledgement cannot be received. The server admits four concurrent
+upload streams, at most three staged files per root, and 128 MiB of staged bytes
+per workspace. Clearing/deleting a session also invalidates in-flight upload
+generations, preventing a late completion from recreating its discarded draft.
+
+After admission, bytes are retained for queued execution and normal model history;
+draft removal cannot retract an accepted message. Trash discards staged drafts
+and retains admitted history for restore. Permanent deletion or session clearing
+removes the stored uploads. Browser history and event streams expose filename/type/
+size metadata rather than attachment bytes, and there is no direct upload-media
+serving endpoint. Attached content and filenames are untrusted user input, and
+uploading never authorizes forwarding files to an external connector.
 
 ### Durable local delivery foundation
 

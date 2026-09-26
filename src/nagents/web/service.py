@@ -39,6 +39,7 @@ from .history import WebHistory
 from .replay import RunReplay
 from .subscriptions import EventBus
 from .trash import SessionTrash
+from .uploads import Uploads
 from .wakeups import Chain
 from .wakeups import Wakeups
 
@@ -180,6 +181,7 @@ class WebState:
         )
         self.channels = ChannelHost(self)
         self.designed_channels = DesignedChannels(self)
+        self.uploads = Uploads(self)
         self.trash = SessionTrash(self)
         harness.approval_handler = self.approve
         harness.wakeup_handler = self.schedule
@@ -485,7 +487,7 @@ class WebState:
                         prompt: str | list[ContentPart] = (
                             await self.channels.inbound_content(work.channel, work.prompt)
                             if work.channel
-                            else work.prompt
+                            else await self.uploads.content(work, harness)
                         )
                         await self.produce(run, prompt)
             except asyncio.CancelledError:

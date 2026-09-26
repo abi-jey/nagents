@@ -1,5 +1,6 @@
 import type { DictationConfig } from "./features/dictation/types";
 import type { LocalDelivery } from "./features/chat/deliveries.js";
+import type { UploadMetadata } from "./features/chat/uploads.js";
 
 export type Bootstrap = {
   token: string;
@@ -68,6 +69,7 @@ export type Snapshot = {
   history: {
     role: string;
     deliveries?: LocalDelivery[];
+    uploads?: UploadMetadata[];
     history_id?: string;
     ingress_id?: string | number;
     // Missing on legacy replies; only explicit true authorizes channel source metadata.

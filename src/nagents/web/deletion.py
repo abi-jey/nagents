@@ -73,6 +73,8 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
     Rows stay for restore/history joins, but a late connector redelivery of the
     same ``(channel, message_id)`` must not re-execute deleted work.
     """
+    db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ? AND inbox_id = 0", (session_id,))
+    db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
     with closing(
         db.execute(
             "INSERT OR IGNORE INTO ngn_web_deleted_messages "
@@ -94,6 +96,8 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
 
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
     cleanup_deliveries(db, session_id)
+    db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
+    db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
 
     # Preserve only channel/message identities, never envelopes or conversation
     # content. A late connector redelivery must not re-execute deleted history.

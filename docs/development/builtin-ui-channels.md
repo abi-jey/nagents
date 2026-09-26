@@ -1,7 +1,7 @@
 # Built-in TUI and web channels: design proposal
 
-**Status:** packages A–C (#42–#44) merged; package D (#45) accepted for
-implementation; package E (#46) remains a proposal.
+**Status:** packages A–D (#42–#45) merged; package E (#46) accepted for
+implementation.
 **Origin:** [issue #40](https://github.com/abi-jey/nagents/issues/40).
 **Baseline:** v0.13.4 (`b317873`), investigated on 2026-09-25.
 
@@ -9,7 +9,7 @@ The maintainer first selected **design first**, then accepted package A (#42):
 shared dispatch and capability declarations, merged in PR #47. Package B (#43),
 the durable delivery journal, is merged in PR #48. Package C (#44), the TUI text
 channel, is merged in PR #49. Package D (#45), the web adapter and browser media,
-is now accepted. Browser upload/paste remains proposed.
+is merged in PR #50. Package E (#46), browser upload/paste, is now accepted.
 This design is not a claim that those features are
 available in the current release; the channel guide documents implemented APIs.
 
@@ -368,8 +368,7 @@ heuristically suppress equal text: intentionally repeated sends are valid.
 
 ## Implementation work packages
 
-Packages A–C are merged and package D is accepted. Package E requires its own
-acceptance before application changes begin.
+Packages A–D are merged and package E is accepted for implementation.
 
 | Package | Scope | Dependencies |
 | --- | --- | --- |

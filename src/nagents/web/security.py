@@ -107,6 +107,12 @@ class LocalOnly:
             if self.enforce_authority and headers.getlist("origin") != [origin]:
                 await reject(403, "An exact same-origin Origin header is required.")
                 return
+            parts = path.split("/")
+            if method == "POST" and len(parts) == 6 and parts[1:3] == ["api", "sessions"] and parts[4] == "uploads":
+                # Authentication precedes streaming. The dedicated route enforces
+                # MIME, actual byte counts, concurrency and a read deadline.
+                await self.app(scope, receive, secure_send)
+                return
             if path == "/api/dictation/transcribe":
                 if [value.lower() for value in headers.getlist("content-type")] != ["audio/wav"]:
                     await reject(415, "Use audio/wav for the recording upload.")

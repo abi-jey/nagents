@@ -1,4 +1,5 @@
 import type { ActiveRun, Bootstrap, Session, Snapshot, WireEvent } from "../types.js";
+import { uploadedAttachments } from "../features/chat/uploads.js";
 
 export type Position = { cursor: number; epoch: string };
 export type EventFrame = Position & (
@@ -17,6 +18,7 @@ function integer(value: unknown): value is number {
 }
 export function validRecord(value: unknown): value is WireEvent {
   return object(value) && typeof value.event === "string" &&
+    (value.uploads === undefined || uploadedAttachments(value.uploads)) &&
     ["session_id", "run_id", "task_id", "call_id", "id", "approval_id", "parent_task_id", "message_id"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
     ) && ["activation", "followup", "depth"].every((key) => value[key] === undefined || integer(value[key]));
@@ -50,6 +52,7 @@ export function validSnapshot(value: unknown): value is Snapshot {
       ["role", "content", "name", "tool_call_id"].every((key) => typeof item[key] === "string") &&
       (item.message_id === undefined || typeof item.message_id === "string") &&
       deliveries(item.deliveries) &&
+      (item.uploads === undefined || uploadedAttachments(item.uploads)) &&
       Array.isArray(item.tool_calls) && item.tool_calls.every((call: unknown) => object(call) &&
         typeof call.id === "string" && typeof call.name === "string")) &&
     Array.isArray(value.retained_tasks) && value.retained_tasks.every((item: unknown) => object(item) &&

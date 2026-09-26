@@ -2,6 +2,7 @@ import { preview, text } from "../../api/events.js";
 import type { ActivityReply, MessagePart, Snapshot, WireEvent } from "../../types.js";
 import type { ChannelMeta } from "./channelMessage.js";
 import type { LocalDelivery } from "./deliveries.js";
+import { uploadedAttachments } from "./uploads.js";
 import { channelMessage, sameUserMessage } from "./channelMessage.js";
 
 export type Entry = {
@@ -20,6 +21,7 @@ export type Entry = {
     | "delivery"
     | "retained_tasks";
   delivery?: LocalDelivery;
+  uploads?: Snapshot["history"][number]["uploads"];
   text: string;
   title?: string;
   callId?: string;
@@ -208,6 +210,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     });
   }
   if (event.event === "user_message") {
+    const uploads = uploadedAttachments(event.uploads) ? event.uploads : undefined;
     const messageId = text(event, "message_id");
     const ingressId = ingressIdentity(event.ingress_id) || undefined;
     // IDs establish message identity, not channel provenance. Only an explicit
@@ -222,11 +225,11 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         sourceVerified, origin: message.origin, originId: message.originId,
         provenance: message.provenance, channelContext: message.channelContext,
         // A stable row keeps the same metadata object so identical replays stay value-equal.
-        channel: previous.channel ?? message.channel, parts: previous.parts ?? messageParts(event),
+         channel: previous.channel ?? message.channel, parts: previous.parts ?? messageParts(event), uploads: uploads ?? previous.uploads,
         runId: previous.runId || runId }, index);
     }
     return save({ ...entries[index], kind: "user", ...message, ...scope, historyId, ingressId,
-      sourceVerified, parts: messageParts(event),
+       sourceVerified, parts: messageParts(event), uploads,
       messageId: messageId || entries[index]?.messageId,
       queued: event.queued === true }, index, !!message.origin && index < 0 && !event.saved);
   }
@@ -709,7 +712,7 @@ export function fromHistory({
       });
       continue;
     }
-    if (message.content) {
+    if (message.content || message.uploads?.length) {
       let context = false;
       const prefix =
         message.role === "user"
@@ -769,6 +772,7 @@ export function fromHistory({
           source_verified: message.source_verified,
           source: message.role === "user" ? message.source : undefined,
           parts: message.role === "user" ? message.parts : undefined,
+          uploads: message.role === "user" ? message.uploads : undefined,
           saved: true,
           ...identity,
         });
