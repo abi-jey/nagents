@@ -10,6 +10,7 @@ import { useContextStats } from "../features/context/useContext";
 import { deleteSessionFromView, SessionDeletion, type DeletionState } from "../api/deletion";
 import { purgeTrash, readTrash, restoreTrash, saveRetention, type TrashItem } from "../api/trash";
 import { TrashController, type TrashDependencies } from "../features/sessions/trashController";
+import { UploadDraft } from "../features/chat/uploads";
 
 export function useClient() {
   const sessions = useSessions();
@@ -64,6 +65,10 @@ export function useClient() {
   });
   const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
   const token = sessions.config?.token || "";
+  const [uploads] = useState(() => new UploadDraft());
+  const uploadState = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot, uploads.getSnapshot);
+  useEffect(() => { uploads.configure(token, sessions.sessionId); }, [uploads, token, sessions.sessionId, sessions.config?.model, sessions.config?.provider, sessions.config?.agent, settings.snapshot?.revision]);
+  useEffect(() => () => uploads.dispose(), [uploads]);
   const context = useContextStats(
     token,
     sessions.sessionId,
@@ -174,7 +179,7 @@ export function useClient() {
       sessions.activityOnly ||
       channels.open || settings.open || deletion.target || trash.open ||
       dictation.controller.active ||
-      !value.trim()
+      (!value.trim() && !uploadState.items.length)
     )
       return;
     const failure = promptFailure(value, sessions.sessionId);
@@ -183,7 +188,10 @@ export function useClient() {
       return;
     }
     await operate(async () => {
-      await chat.submit(value);
+      const ids = uploads.begin();
+      let confirmed = false;
+      try { await chat.submit(value, ids); confirmed = true; }
+      finally { uploads.finish(ids, confirmed); }
     });
   }
 
@@ -225,6 +233,8 @@ export function useClient() {
     trash,
     trashController,
     chat,
+    uploads,
+    uploadState,
     settings,
     channels,
     dictation,

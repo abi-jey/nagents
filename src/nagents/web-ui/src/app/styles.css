@@ -1223,3 +1223,8 @@ button.deny:hover:not(:disabled) {
 .delivery-asset img, .delivery-asset video { display: block; max-width: 100%; max-height: 32rem; object-fit: contain; }
 .delivery-asset audio { max-width: 100%; }
 .delivery-asset button, .delivery-asset a { margin-right: 0.75rem; }
+.upload-drafts { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0; }
+.upload-draft { display: flex; flex-direction: column; gap: 0.25rem; max-width: 12rem; overflow-wrap: anywhere; font-size: 0.8rem; }
+.upload-draft img { max-width: 10rem; max-height: 6rem; object-fit: contain; }
+.attachment-picker { font-size: 0.8rem; max-width: 12rem; }
+.attachment-picker input { max-width: 100%; }

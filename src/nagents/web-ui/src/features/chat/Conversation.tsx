@@ -152,6 +152,7 @@ export function TranscriptItems({
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
             <MessageContent text={entry.text} />
+            {entry.uploads?.map((upload) => <p key={upload.upload_id} className="record-note">Attachment: {upload.filename} · {upload.media_type} · {Math.ceil(upload.byte_length / 1024)} KiB</p>)}
             {entry.channel && <ChannelAttachments parts={entry.parts} />}
             {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}
               open={disclosures.get(`source:${entry.id}`) ?? false} onToggle={(event) => toggle(`source:${entry.id}`, event.currentTarget.open)}>

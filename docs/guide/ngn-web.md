@@ -160,10 +160,11 @@ the current server/browser selection or starting a model run. Choose **Open rest
 when you want to navigate to the restored conversation; a late restore response
 must not overwrite a newer selection or draft.
 
-Soft deletion preserves the current unsent draft, including when its selected
-root is removed. Drafts remain **browser-local** and are not uploaded or stored
-by the Trash API. Server-side history restoration does not recover browser-local
-text on another device or after that local state is lost.
+Soft deletion preserves the current unsent **text** draft, including when its
+selected root is removed. Text drafts remain browser-local; server-side history
+restoration does not recover that text on another device. Unsubmitted attachment
+drafts are discarded when leaving or deleting their root; admitted attachments
+remain part of the saved conversation available for restoration.
 
 #### Retention And Automatic Cleanup
 
@@ -287,11 +288,11 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   the review heading, show exact inputs alongside the diff, and keep Deny conspicuous.
   Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
   a stream does not steal focus or scroll a reader away from earlier messages.
-- No remote binding, CORS wildcard, model-provider authentication/endpoint editor,
-  attachment upload into chat, arbitrary file HTTP access, or direct shell
-  endpoint is provided. The separate [dictation upload](#microphone-dictation)
-  produces editable text. Only built frontend assets are served. Unknown routes
-  remain 404.
+- Image/PDF [attachment drafts](#image-and-pdf-attachments) use authenticated,
+  session-scoped uploads and explicit submission. The separate
+  [dictation upload](#microphone-dictation) produces editable text. Arbitrary file
+  HTTP access, a CORS wildcard, and a direct shell endpoint are not provided.
+  Unknown routes remain 404.
 
 This is a **trusted local-user tool, not a sandbox or multi-user service**. Other
 processes/users with access to your loopback interface may access it. Do not expose
@@ -703,6 +704,45 @@ buffer is bounded and process-local. A gap is reported explicitly, not filled
 with invented success or an automatic replay of a prompt. Ordinary request
 streams remain non-replayable. Saved history is still the recovery path for
 persisted conversation text, not a durable event or timer log.
+
+### Image And PDF Attachments
+
+Use **Attach**, paste an image, or drop files into the composer. Images have draft
+previews and all attachments have a **Remove** control. Attaching only stages the
+draft; **Send** or Enter explicitly admits a message. Image-only messages are
+supported. Choose up to three files of at most 8 MiB each: JPEG, PNG, GIF, WebP,
+or PDF, subject to the active provider/adapter's declared input support. The
+picker omits unsupported formats, and the backend checks again at admission and
+execution. This applies to the root's pinned designed provider as well.
+
+The authenticated API is:
+
+- `GET /api/sessions/{root}/uploads` returns the supported `file_media_types`
+  and limits for that root.
+- `POST /api/sessions/{root}/uploads/{upload_uuid}` stages raw bytes with the
+  appropriate `Content-Type` and a percent-encoded `X-Ngn-Filename` header. Use
+  a fresh canonical UUID for each draft file. Token and same-origin requirements
+  are the same as other API writes; bytes are counted while streaming.
+- `DELETE /api/sessions/{root}/uploads/{upload_uuid}` removes an unsubmitted
+  draft. An admitted attachment cannot be retracted with this endpoint.
+- `POST /api/messages` accepts `attachments`, an ordered array of those IDs,
+  alongside `session_id`, `message_id`, and `prompt`. The prompt may be empty
+  when attachments are present. Text and IDs are bound atomically to the message
+  UUID; retrying that UUID with changed attachments or text fails.
+
+Unsubmitted bytes expire after one hour. Removal, navigation, and unmounting
+request early cleanup and revoke local previews; expiry handles abandoned tabs
+and interrupted acknowledgements. The server bounds staging to four simultaneous
+uploads, three staged files per root, and 128 MiB per workspace. Session clear or
+deletion invalidates in-flight upload generations as well as deleting drafts.
+
+Accepted queued input survives restart and browser disconnection. Its bytes are
+retained in storage/model history; the web transcript shows metadata rather than
+putting image/PDF bytes into event frames. There is no public upload-byte URL.
+Unsupported inputs are rejected rather than forwarded to external connectors.
+Audio/video understanding, upload-to-external-channel forwarding, and uploads in
+offline demo/custom persistence adapters are outside this input path. See
+[browser input lifecycle](channels.md#browser-image-and-pdf-input) for details.
 
 ### Microphone Dictation
 

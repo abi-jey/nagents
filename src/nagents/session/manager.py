@@ -321,6 +321,8 @@ class SessionManager:
             await db.execute("BEGIN IMMEDIATE")
             for sql, parameters in delivery_cleanup_statements(session_id):
                 await db.execute(sql, parameters)
+            await db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
             await db.execute("UPDATE v2_sessions SET compacted_at_message_id = NULL WHERE id = ?", (session_id,))
             await db.commit()
@@ -339,6 +341,8 @@ class SessionManager:
             await db.execute("BEGIN IMMEDIATE")
             for sql, parameters in delivery_cleanup_statements(session_id):
                 await db.execute(sql, parameters)
+            await db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))
+            await db.execute("DELETE FROM ngn_web_upload_scopes WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM v2_messages WHERE session_id = ?", (session_id,))
             await db.execute("DELETE FROM v2_sessions WHERE id = ?", (session_id,))
             await db.commit()

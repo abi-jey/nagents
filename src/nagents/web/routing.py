@@ -18,6 +18,8 @@ from fastapi import HTTPException
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
 
+from .upload_store import bind as bind_uploads
+
 if TYPE_CHECKING:
     import sqlite3
     from pathlib import Path
@@ -37,6 +39,7 @@ class Work:
     reply_to: str
     acknowledgement: str
     command: str = ""
+    attachments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,8 @@ class RoutingStore(InboxStore):
             db.execute("CREATE INDEX IF NOT EXISTS ngn_web_inbox_pending ON ngn_web_inbox(status, id)")
             if "command" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
                 db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN command TEXT NOT NULL DEFAULT ''")
+            if "attachments" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
+                db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS ngn_web_deleted_messages ("
                 "channel TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(channel, message_id))"
@@ -317,23 +322,33 @@ class RoutingStore(InboxStore):
         ):
             raise HTTPException(429, "Message inbox is full. Retry with the same message ID.")
 
-    async def web(self, session_id: str, message_id: str, prompt: str) -> tuple[str, bool]:
+    async def web(
+        self,
+        session_id: str,
+        message_id: str,
+        prompt: str,
+        attachments: tuple[str, ...] = (),
+        supported_media_types: tuple[str, ...] = (),
+    ) -> tuple[str, bool]:
         """Return the root and whether this is newly admitted (not an HTTP retry)."""
 
         def admit(db: sqlite3.Connection) -> tuple[str, bool]:
             self.execution_root(db, session_id)
             row = db.execute(
-                "SELECT session_id, prompt FROM ngn_web_inbox WHERE channel = '' AND message_id = ?", (message_id,)
+                "SELECT session_id, prompt, attachments FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
+                (message_id,),
             ).fetchone()
             if row:
-                if row != (session_id, prompt):
+                if row[:2] != (session_id, prompt) or tuple(json.loads(row[2])) != attachments:
                     raise HTTPException(409, "Message ID already belongs to a different submission.")
                 return session_id, False
             self.capacity(db)
-            db.execute(
-                "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt) VALUES (?, '', ?, ?)",
-                (session_id, message_id, prompt),
+            cursor = db.execute(
+                "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments) VALUES (?, '', ?, ?, ?)",
+                (session_id, message_id, prompt, json.dumps(attachments)),
             )
+            assert cursor.lastrowid is not None
+            bind_uploads(db, session_id, cursor.lastrowid, attachments, supported_media_types)
             return session_id, True
 
         return await self._transaction(admit)
@@ -485,13 +500,25 @@ class RoutingStore(InboxStore):
             self._quarantine_work(db)
             row = db.execute(
                 "SELECT id, session_id, channel, message_id, prompt, conversation_id, thread_id, reply_to, "
-                f"acknowledgement, command FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
+                f"acknowledgement, command, attachments FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
                 parameters,
             ).fetchone()
             if row is None:
                 return None
             db.execute("UPDATE ngn_web_inbox SET status = 'running' WHERE id = ?", (row[0],))
-            return Work(*row)
+            return Work(
+                id=row[0],
+                session_id=row[1],
+                channel=row[2],
+                message_id=row[3],
+                prompt=row[4],
+                conversation_id=row[5],
+                thread_id=row[6],
+                reply_to=row[7],
+                acknowledgement=row[8],
+                command=row[9],
+                attachments=tuple(json.loads(row[10])),
+            )
 
         return await self._transaction(claim)
 

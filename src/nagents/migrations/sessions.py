@@ -119,10 +119,43 @@ MIGRATION_003_DELIVERIES = Migration(
 )
 
 
+MIGRATION_004_UPLOADS = Migration(
+    version=4,
+    description="Session-scoped staged browser uploads and immutable inbox attachment references",
+    up_sql="""
+        CREATE TABLE ngn_web_upload_scopes (
+            session_id TEXT PRIMARY KEY,
+            generation TEXT NOT NULL
+        );
+        CREATE TABLE ngn_web_uploads (
+            upload_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            byte_length INTEGER NOT NULL CHECK(byte_length > 0 AND byte_length <= 8388608),
+            data BLOB NOT NULL CHECK(typeof(data) = 'blob' AND length(data) = byte_length),
+            expires_at REAL NOT NULL,
+            inbox_id INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX ngn_web_uploads_session ON ngn_web_uploads(session_id, inbox_id);
+        CREATE INDEX ngn_web_uploads_expiry ON ngn_web_uploads(inbox_id, expires_at);
+    """,
+    down_sql="DROP TABLE ngn_web_uploads; DROP TABLE ngn_web_upload_scopes;",
+)
+
+
 migrations = [
     MIGRATION_001_INITIAL,
     MIGRATION_002_COMPACTION,
     MIGRATION_003_DELIVERIES,
+    MIGRATION_004_UPLOADS,
 ]
 
-__all__ = ["MIGRATION_001_INITIAL", "MIGRATION_002_COMPACTION", "MIGRATION_003_DELIVERIES", "migrations"]
+__all__ = [
+    "MIGRATION_001_INITIAL",
+    "MIGRATION_002_COMPACTION",
+    "MIGRATION_003_DELIVERIES",
+    "MIGRATION_004_UPLOADS",
+    "migrations",
+]

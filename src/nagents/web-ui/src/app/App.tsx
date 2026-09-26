@@ -3,6 +3,7 @@ import { Icon } from "../components/Icon.js";
 import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
 import { Composer } from "../features/chat/Composer";
 import { Conversation } from "../features/chat/Conversation";
+import { UploadPreviews } from "../features/chat/UploadPreviews";
 import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
 import { TrashDialog, TrashNotice } from "../features/sessions/TrashDialog";
@@ -31,7 +32,7 @@ export function App() {
   const composer = useRef<HTMLTextAreaElement>(null);
   const selectedSession = sessions.sessions.find((session) => session.id === sessionId);
   const canSubmit =
-    !!config && !!sessionId && !client.operating && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target && !client.trash.open && !toolsOpen;
+    !!config && !!sessionId && !client.operating && !client.uploadState.items.some((item) => item.status !== "ready") && !dictation.unfinished && !client.channels.open && !client.settings.open && !client.deletion.target && !client.trash.open && !toolsOpen;
   const trashBlocked = busy || (dictation.unfinished && dictation.state.phase !== "review");
   function openRestored(id: string) { client.trashController.close(); void select(id); }
   async function moveToTrash(session: typeof sessions.sessions[number]) {
@@ -163,7 +164,11 @@ export function App() {
             prompt={chat.prompt}
             setPrompt={chat.setPrompt}
             demo={!!config?.demo}
-            disabled={!config}
+            disabled={!config || client.operating}
+            attachmentTypes={client.uploadState.types}
+            hasAttachments={!!client.uploadState.items.length}
+            addAttachments={(files) => void client.uploads.add(files)}
+            attachments={<UploadPreviews state={client.uploadState} disabled={client.operating} remove={(id) => client.uploads.remove(id)} />}
             canSubmit={canSubmit}
             running={busy && !!chat.runId}
             submit={() => void submit()}

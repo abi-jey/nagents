@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState, type SetStateAction } from "react";
 import { insertDraft } from "../dictation/draft";
-import { request } from "../../api/client";
+import { request, RequestError } from "../../api/client";
 import { text } from "../../api/events";
 import { MessageQueue, queueMessage, queuedMessageFailure } from "../../api/messages";
 import { subscribeEvents, type EventFrame } from "../../api/subscription";
@@ -113,14 +113,14 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     if (discardDraft) setPrompt("");
     if (id === selected.current) { approval.close(); setActivityError(""); }
   }
-  async function submit(value: string) {
+  async function submit(value: string, attachments: string[] = []) {
     if (sending.current) return;
-    const failure = queuedMessageFailure(value, sessionId);
+    const failure = queuedMessageFailure(value, sessionId, attachments);
     if (failure) throw new Error(failure);
     sending.current = true;
     const root = sessionId;
     const revision = draftRevision.current;
-    const message = queue.current.prepare(root, value);
+    const message = queue.current.prepare(root, value, undefined, attachments);
     setView(cache.current.enqueue(message)); setStatus("Queueing message");
     try {
       await queueMessage(token, message);
@@ -130,7 +130,12 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
         if (latestPrompt.current === value && draftRevision.current === revision) setPrompt("");
         setStatus(cache.current.get(root).activeRun ? "Working" : "Message queued");
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof RequestError && [409, 413, 415, 422].includes(error.status)) {
+        const rejected = cache.current.reject(message);
+        if (selected.current === root) { setView(rejected); setStatus("Submission rejected; draft kept"); }
+        throw error;
+      }
       setStatus("Message acknowledgement unconfirmed");
       throw new Error("Message acknowledgement was not confirmed. Your draft is kept. Retry the same prompt to check its queued identity without starting a duplicate run.");
     } finally { sending.current = false; }

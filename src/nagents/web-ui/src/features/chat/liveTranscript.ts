@@ -125,7 +125,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "user"
       ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, activity: old.activity,
           origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext,
-          channel: entry.channel, parts: entry.parts }
+           channel: entry.channel, parts: entry.parts, uploads: entry.uploads }
       : { ...entry, ...old, historyId: entry.historyId, resultHistoryId: entry.resultHistoryId,
           callPosition: entry.callPosition,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
@@ -248,5 +248,10 @@ export class LiveSessions {
     return this.set(message.session_id, { ...state, entries: appendEvent(state.entries, {
       event: "user_message", text: message.prompt, message_id: message.message_id, queued: true,
     }) });
+  }
+  reject(message: QueuedMessage): LiveTranscript {
+    const state = this.get(message.session_id);
+    return this.set(message.session_id, { ...state, entries: state.entries.filter((entry) =>
+      !(entry.queued && !entry.historyId && !entry.ingressId && entry.messageId === message.message_id)) });
   }
 }

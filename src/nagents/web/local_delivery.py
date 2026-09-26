@@ -12,6 +12,9 @@ from nagents.channels.dispatcher import MAX_OUTBOUND_FILES
 from nagents.channels.dispatcher import MAX_OUTBOUND_FILE_BYTES
 from nagents.channels.dispatcher import MAX_OUTBOUND_TOTAL_BYTES
 from nagents.channels.local_delivery import LocalDeliveryService
+from nagents.channels.runtime import INLINE_DOCUMENT_TYPES
+from nagents.channels.runtime import INLINE_IMAGE_TYPES
+from nagents.channels.runtime import MAX_INLINE_ATTACHMENT_BYTES
 from nagents.channels.types import Channel
 from nagents.channels.types import ChannelContentCapabilities
 from nagents.channels.types import ChannelError
@@ -101,7 +104,13 @@ class WebChannel(Channel):
     )
     capabilities = ("send_text", "send_files")
     content_capabilities = ChannelContentCapabilities(
-        receive=ChannelReceiveCapabilities(via="host", text=True),
+        receive=ChannelReceiveCapabilities(
+            via="host",
+            text=True,
+            file_media_types=tuple(sorted(INLINE_IMAGE_TYPES | INLINE_DOCUMENT_TYPES)),
+            max_files=3,
+            max_file_bytes=MAX_INLINE_ATTACHMENT_BYTES,
+        ),
         send=SEND,
         render=ChannelRenderCapabilities(text=True, file_media_types=MEDIA_TYPES, playback="browser_dependent"),
     )

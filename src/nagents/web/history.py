@@ -162,8 +162,14 @@ class WebHistory(_HarnessSession):
     @staticmethod
     def _select() -> str:
         return (
-            "SELECT m.*, i.id AS origin_id, i.channel AS origin_channel, i.message_id AS origin_message_id, "
-            "i.prompt AS origin_prompt FROM v2_messages m "
+            "SELECT m.id, m.session_id, m.role, m.tool_calls, m.tool_call_id, m.name, m.created_at, "
+            "CASE WHEN i.channel = '' AND i.attachments != '[]' THEN NULL ELSE m.content END AS content, "
+            "i.id AS origin_id, i.channel AS origin_channel, i.message_id AS origin_message_id, "
+            "i.prompt AS origin_prompt, (SELECT json_group_array(json_object('upload_id', u.upload_id, "
+            "'filename', u.filename, 'media_type', u.media_type, 'byte_length', u.byte_length)) "
+            "FROM (SELECT upload_id, filename, media_type, byte_length, inbox_id, position "
+            "FROM ngn_web_uploads ORDER BY position) u WHERE u.inbox_id = i.id) AS upload_metadata "
+            "FROM v2_messages m "
             "LEFT JOIN ngn_web_message_origins o ON o.history_id = m.id "
             "LEFT JOIN ngn_web_inbox i ON i.id = o.inbox_id AND i.session_id = m.session_id"
         )
@@ -187,6 +193,12 @@ class WebHistory(_HarnessSession):
         if row["origin_id"] is None or message.role != "user":
             return record
         message_id = str(row["origin_message_id"])
+        if not row["origin_channel"]:
+            uploads = json.loads(row["upload_metadata"])
+            if uploads:
+                record["uploads"] = uploads
+                record["parts"] = []
+                record["content"] = str(row["origin_prompt"])
         if row["origin_channel"]:
             # Parse the durable ingress journal, never the user/history content.
             try:

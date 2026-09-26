@@ -30,6 +30,7 @@ from .channel_privacy import CredentialGuard
 from .channel_privacy import CredentialProtectionError
 from .local_delivery import WebChannel
 from .routing import RoutingStore
+from .upload_store import expire as expire_uploads
 
 if TYPE_CHECKING:
     import sqlite3
@@ -85,7 +86,7 @@ class _ProtectedInstructions(_Instructions):
             self.text += (
                 "\nOrdinary replies already appear in this browser. For an explicit text or media delivery, "
                 f"use builtin.web with destination {context.session_id!r}. "
-                "Files must match its declared media types. This does not enable browser uploads."
+                "Outbound files must match its declared send types. Browser uploads use host admission and provider input capabilities."
             )
         return await super().before_model(context, request)
 
@@ -598,6 +599,7 @@ class ChannelHost:
         previous: dict[str, str] = {}
         while not self.closed:
             try:
+                await self.store._transaction(expire_uploads)
                 sessions = await self.state.list_sessions()
                 catalog = json.dumps([session.__dict__ for session in sessions], sort_keys=True)
                 if previous.get("") != catalog:
