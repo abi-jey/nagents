@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -118,8 +119,17 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
         asyncio.run(scenario())
 
 
-def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("tool", ["custom", "shell"])
+def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp_path: Path, tool: str) -> None:
+    if tool == "shell" and os.name != "posix":
+        pytest.skip("Shell process-group cleanup requires POSIX")
     calls: list[str] = []
+    executed: list[str] = []
+
+    async def custom_action() -> str:
+        """An action that must wait for the ordinary Harness approval."""
+        executed.append("executed")
+        return "should not run"
 
     async def generate(
         provider: HarnessProvider,
@@ -130,24 +140,31 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
         verify_model: bool = False,
     ) -> AsyncIterator[Event]:
         if messages[-1].role == "tool":
-            yield TextDoneEvent(text="The shell request was denied")
+            yield TextDoneEvent(text="The tool request was denied")
         else:
-            yield ToolCallEvent(id="voice-shell-1", name="shell", arguments={"command": "touch forbidden.txt"})
+            yield ToolCallEvent(
+                id="voice-tool-1",
+                name="shell" if tool == "shell" else "custom_action",
+                arguments={"command": "touch forbidden.txt"} if tool == "shell" else {},
+            )
 
     async def scenario() -> None:
         async with client_app(tmp_path, config=_config(tmp_path)) as (app, client, headers, _):
             state = app.state.web
+            if tool == "custom":
+                state.harness.agent.register_tool(custom_action)
             with patch.object(state.bus, "listening", return_value=True):
                 root = state.selected_session_id
                 bridge = MainAgentBridge(state, root)
-                task = asyncio.create_task(bridge.handle(speech("Make a file using the shell")))
+                task = asyncio.create_task(bridge.handle(speech("Use a tool requiring approval")))
                 try:
                     async with asyncio.timeout(5):
                         while state.active is None or state.active.pending is None:
                             await asyncio.sleep(0.001)
                     pending = state.active.pending
                     assert pending is not None
-                    assert pending.record["tool"] == "shell" and pending.call_id == "voice-shell-1"
+                    assert pending.record["tool"] == ("shell" if tool == "shell" else "custom_action")
+                    assert pending.call_id == "voice-tool-1"
                     decision = await client.post(
                         "/api/approval",
                         headers=headers,
@@ -165,6 +182,7 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
                         task.cancel()
                         await asyncio.gather(task, return_exceptions=True)
             assert not (tmp_path / "forbidden.txt").exists()
+            assert not executed
             assert state.active is None
 
     with (
@@ -173,7 +191,7 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
         patch.object(HarnessProvider, "generate", generate),
     ):
         asyncio.run(scenario())
-    assert calls == ["The shell request was denied"]
+    assert calls == ["The tool request was denied"]
 
 
 def test_a_typed_interrupt_queues_instead_of_cancelling_the_active_voice_delegation(tmp_path: Path) -> None:
