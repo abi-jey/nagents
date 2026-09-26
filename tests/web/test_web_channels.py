@@ -13,6 +13,7 @@ from typing import cast
 
 import pytest
 from fastapi import HTTPException
+from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from nagents.channels.types import ChannelActivity
@@ -516,21 +517,47 @@ def test_web_activity_control_failure_does_not_fail_model_or_expose_credentials(
             assert [event.active for event in app.channels[0].activities] == [True, False]
 
 
+@pytest.mark.parametrize("buffered", [False, True])
 def test_real_ws_slow_subscriber_closes_without_blocking_publisher(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, buffered: bool
 ) -> None:
+    sent = asyncio.Event()
+    original_send = WebSocket.send_text
+
+    async def send(socket: WebSocket, data: str) -> None:
+        await original_send(socket, data)
+        if json.loads(data).get("record", {}).get("text") == "already buffered":
+            sent.set()
+
+    monkeypatch.setattr(WebSocket, "send_text", send)
     with site(tmp_path, monkeypatch) as app, app.socket() as socket:
         socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
-        socket.receive_json()
+        while socket.receive_json()["type"] != "snapshot":
+            pass  # A global catalog can arrive before the selected-root snapshot.
 
-        def burst() -> None:
+        async def burst() -> None:
+            subscriber = next(item for item in app.state.bus.subscribers if item.session_id == app.main and item.ready)
+            if buffered:
+                app.state.bus.event({"session_id": app.main, "event": "notice", "text": "already buffered"})
+                await asyncio.wait_for(sent.wait(), HANG_GUARD)
+            # No yield in this burst: publishing must finish and revoke the slow
+            # subscriber even while the socket client is not consuming frames.
             for _ in range(100):
                 app.state.bus.event({"session_id": app.main, "event": "notice", "text": "burst"})
+            assert subscriber.lagged and subscriber.close_code == 1013
+            assert not app.state.bus.listening(app.main)
 
         assert app.client.portal is not None
         app.client.portal.call(burst)
         with pytest.raises(WebSocketDisconnect) as error:
-            socket.receive_json()
+            # Revocation clears the subscriber queue, not frames already sent
+            # to ASGI. Those frames may legitimately precede the close message.
+            for _ in range(100):
+                frame = socket.receive_json()
+                assert (
+                    frame["type"] in {"sessions", "snapshot"}
+                    or frame.get("record", {}).get("text") == "already buffered"
+                )
         assert error.value.code == 1013
 
 
