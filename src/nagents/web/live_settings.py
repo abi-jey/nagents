@@ -216,6 +216,10 @@ class LiveSettings:
         ):
             raise ValueError("Invalid Live settings")
         values = LiveValues.model_validate_json(payload)
+        # Saved connections created before backend_mode existed were hosted.
+        # Keep their behavior until the user explicitly chooses another mode.
+        if "backend_mode" not in values.model_fields_set:
+            values = values.model_copy(update={"backend_mode": "hosted"})
         key = SecretStr("")
         if key_id is not None:
             if (
