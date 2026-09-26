@@ -223,6 +223,15 @@ export function Conversation({
       target.bottom <= region.bottom
     );
   }
+  function inspectingTool() {
+    const element = feed.current;
+    const focused = element?.ownerDocument.activeElement;
+    const tool = focused?.closest(".tool-record");
+    if (!element || !tool || !element.contains(tool)) return false;
+    const target = focused!.getBoundingClientRect();
+    const region = element.getBoundingClientRect();
+    return target.height > 0 && target.bottom > region.top && target.top < region.bottom;
+  }
   function rememberPosition() {
     const element = feed.current;
     if (!element) return;
@@ -259,7 +268,7 @@ export function Conversation({
       stickToBottom.current = true;
       lastUser.current = last.id;
     }
-    if (stickToBottom.current && feed.current)
+    if (stickToBottom.current && !inspectingTool() && feed.current)
       feed.current.scrollTop = feed.current.scrollHeight;
     else if (feed.current && anchor.current) {
       const previous = anchor.current;
@@ -306,6 +315,11 @@ export function Conversation({
       role="region"
       tabIndex={0}
       ref={feed}
+      onFocusCapture={(event) => {
+        if (!event.target.closest(".tool-record")) return;
+        stickToBottom.current = false;
+        rememberPosition();
+      }}
       onClick={(event) => {
         const href = (event.target as Element).closest("a")?.getAttribute("href");
         if (!href?.startsWith("#task-")) return;
@@ -319,7 +333,7 @@ export function Conversation({
         if (element)
           stickToBottom.current =
             element.scrollHeight - element.scrollTop - element.clientHeight <
-            100;
+            100 && !inspectingTool();
         if (activityVisible()) setNewActivity(false);
         rememberPosition();
       }}

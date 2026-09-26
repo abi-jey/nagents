@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import { Conversation } from "./Conversation.js";
 import { ExecutionRecord } from "./ExecutionRecord.js";
-import { executionTarget } from "./executionPresentation.js";
+import { executionName, executionStatus, executionTarget } from "./executionPresentation.js";
 import { LiveSessions } from "./liveTranscript.js";
 import type { Entry } from "./transcript.js";
 import type { WireEvent } from "../../types.js";
@@ -23,43 +22,41 @@ test("summary targets are bounded plain text selected from recognized inputs onl
   for (const inputs of ["partial {", '{"password":"secret"}', '["command"]', 'null'])
     assert.equal(executionTarget({ ...entry, inputs }), "");
   assert.equal(executionTarget({ ...entry, inputs: '{"path":"src/example.ts"}' }), "src/example.ts");
+  assert.equal(executionTarget({ ...entry, title: "channel_send", inputs: '{"channel":"telegram","destination":"chat-123","text":"Private message","token":"secret"}' }), "telegram · chat-123");
+  assert.equal(executionName("channel_send"), "Send to channel");
+  assert.equal(executionName("constructor"), "constructor");
 });
 
-test("tool summary layout fixes mobile to two rows and preserves clipped evidence in titles/details", () => {
-  const css = readFileSync(new URL("../../../src/app/styles.css", import.meta.url), "utf8");
-  // jsdom has no layout engine. Assert the sizing contract directly, leaving
-  // real 320/390px geometry and font rendering to the parent browser QA.
-  const rule = (selector: string) => {
-    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]+)\\}`, "g"))];
-    assert.ok(matches.length, selector);
-    return matches.map((match) => match[1]).join("\n");
-  };
-  assert.match(rule(".execution-tool-summary"), /display:\s*inline-grid/);
-  assert.match(rule(".execution-tool-summary .execution-heading"), /display:\s*contents/);
-  const targetRule = rule(".execution-tool-summary .execution-target");
-  for (const declaration of [/white-space:\s*nowrap/, /text-overflow:\s*ellipsis/, /overflow:\s*hidden/, /min-width:\s*0/, /grid-row:\s*2/, /grid-column:\s*1 \/ -1/])
-    assert.match(targetRule, declaration);
-  assert.match(rule(".execution-tool-summary .execution-outcome"), /flex-wrap:\s*nowrap/);
-  assert.match(rule(".execution-record > summary .execution-tool-summary"), /grid-template-columns:\s*minmax\(0, 1fr\) fit-content\(78%\)/);
-  assert.match(rule(".execution-detail .code-block pre"), /max-height:\s*24rem/);
-  assert.match(rule(".execution-detail .code-block pre"), /overflow:\s*auto/);
-  assert.match(rule(".execution-evidence .code-block > h3"), /display:\s*none/);
+test("compact summaries retain long names, exact inputs, approval state and duration in the inspector", () => {
   for (const title of ["read_file", "shell", "custom_".repeat(40)]) {
     const inputs = JSON.stringify({ path: "/long-segment".repeat(80), command: "python " + "argument ".repeat(80) });
     const html = renderToStaticMarkup(createElement(ExecutionRecord, {
       entry: { id: title, kind: "tool", title, inputs, text: "", state: "Waiting for approval", durationMs: 1200 },
     }));
     const dom = new JSDOM(html);
-    const summary = dom.window.document.querySelector(".execution-tool-summary")!;
-    assert.equal(summary.querySelector(".execution-target")!.getAttribute("title"), inputs);
+    const summary = dom.window.document.querySelector("summary")!;
+    assert.equal(summary.querySelector(".execution-target")!.getAttribute("title"), executionTarget({ id: title, kind: "tool", inputs, text: "" }));
     assert.equal(summary.querySelector(".execution-name")!.getAttribute("title"), title);
-    assert.equal(summary.querySelector(".execution-state")!.textContent, "Waiting for approval");
+    assert.equal(summary.querySelector(".execution-state")!.textContent, "Needs approval");
     assert.equal(summary.querySelector(".execution-duration")!.textContent, "1.2 s");
     assert.equal(dom.window.document.querySelector(".execution-record")!.hasAttribute("open"), false);
-    assert.ok(dom.window.document.querySelector(".execution-detail")!.textContent!.includes(inputs));
+    assert.ok(dom.window.document.querySelector('[data-panel="inputs"]')!.textContent!.includes(inputs));
+    assert.equal(dom.window.document.querySelectorAll("details").length, 1, "One disclosure, without nested accordions");
     dom.window.close();
   }
+});
+
+test("saved results and delegated requests never imply an unobserved successful execution", () => {
+  const entry: Entry = { id: "saved", kind: "tool", title: "channel_send", text: "", state: "Recorded result", result: "{'message_ids': ['123']}" };
+  assert.deepEqual(executionStatus(entry), { label: "Saved result", tone: "neutral" });
+  assert.deepEqual(executionStatus({ ...entry, error: "Recorded error" }), { label: "Saved error", tone: "error" });
+  assert.deepEqual(executionStatus({ ...entry, state: "Completed" }), { label: "Completed", tone: "complete" });
+  for (const title of ["delegate", "schedule_wakeup", "wake_up_in"]) {
+    assert.equal(executionStatus({ ...entry, title, state: "Completed" }).label, "Request completed");
+  }
+  const html = renderToStaticMarkup(createElement(ExecutionRecord, { entry, open: true }));
+  assert.match(html, /Original execution status and timing may be unavailable/);
+  assert.doesNotMatch(html, /data-state="Completed"/);
 });
 
 test("mounted conversation preserves disclosure choices and nodes across progress, terminal events and replay", async () => {
@@ -90,15 +87,16 @@ test("mounted conversation preserves disclosure choices and nodes across progres
       receive({ event: "tool_call", name: "shell", arguments: { command: "slow command" } });
       await render();
       const tool = container.querySelector<HTMLDetailsElement>(".execution-record")!;
-      const metadata = tool.querySelector<HTMLDetailsElement>(".execution-metadata")!;
+      const metadata = tool.querySelector<HTMLElement>('[data-panel="metadata"]')!;
+      const tab = (label: string) => [...tool.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((button) => button.textContent === label)!;
       const key = tool.dataset.disclosureKey;
       assert.equal(tool.open, false);
-      assert.equal(metadata.open, false);
+      assert.equal(metadata.hidden, true);
       await toggle(tool, true);
-      await toggle(metadata, true);
+      await act(async () => tab("Details").click());
       receive({ event: "approval", approval_id: "nonce", tool: "shell" });
       await render();
-      assert.match(tool.querySelector("summary")!.textContent!, /Waiting for approval/);
+      assert.match(tool.querySelector("summary")!.textContent!, /Needs approval/);
       receive({ event: "approval_closed", approval_id: "nonce", decision: "allow" });
       const output = "unique evidence line\n".repeat(300) + "FINAL RECEIVED LINE";
       receive({ event: "tool_output", text: output });
@@ -106,10 +104,10 @@ test("mounted conversation preserves disclosure choices and nodes across progres
       assert.equal(container.querySelector(".execution-record"), tool);
       assert.equal(tool.dataset.disclosureKey, key);
       assert.equal(tool.open, true);
-      assert.equal(metadata.open, true);
-      const stream = tool.querySelector<HTMLDetailsElement>('[data-disclosure-key^="stream:"]')!;
-      assert.equal(stream.open, false);
-      await toggle(stream, true);
+      assert.equal(metadata.hidden, false, "Incoming output does not replace the selected tab");
+      const stream = tool.querySelector<HTMLElement>('[data-panel="stream"]')!;
+      assert.equal(stream.hidden, true);
+      await act(async () => tab("Output").click());
       const reading = stream.querySelector("pre")!;
       reading.focus();
       reading.scrollTop = 77;
@@ -122,9 +120,9 @@ test("mounted conversation preserves disclosure choices and nodes across progres
         assert.equal(dom.window.document.activeElement, reading, "Promotion preserves the focused reading node");
         assert.equal(reading.scrollTop, 77);
       }
-      assert.equal(metadata.open, true);
+      assert.equal(metadata.hidden, true);
       assert.match(tool.querySelector("summary")!.textContent!, failure ? /Error/ : /Completed/);
-      assert.match(tool.querySelector("summary")!.textContent!, /Approval: Allowed once/);
+      assert.match(metadata.textContent!, /ApprovalAllowed once/);
       assert.match(tool.querySelector("summary")!.textContent!, /1.2 s/);
       cache.receive({ type: "event", epoch: "one", cursor, session_id: "root", record: terminal });
       await render();
@@ -134,19 +132,19 @@ test("mounted conversation preserves disclosure choices and nodes across progres
       await toggle(tool, true);
       assert.ok(tool.textContent!.includes("FINAL RECEIVED LINE"));
       if (failure) {
-        assert.equal(tool.querySelector('[data-disclosure-key^="stream:"]'), stream);
-        assert.equal(stream.open, true);
+        assert.equal(tool.querySelector('[data-panel="stream"]'), stream);
+        assert.equal(stream.hidden, false);
         assert.match(tool.textContent!, /Exit code 7/);
       } else {
-        assert.equal(tool.querySelector('[data-disclosure-key^="stream:"]'), stream);
-        assert.equal(tool.querySelector('[data-disclosure-key^="result:"]'), null);
-        assert.equal(stream.open, true);
+        assert.equal(tool.querySelector('[data-panel="stream"]'), stream);
+        assert.equal(tool.querySelector('[data-panel="result"]'), null);
+        assert.equal(stream.hidden, false);
         assert.equal(stream.querySelector("pre"), reading);
         assert.equal(dom.window.document.activeElement, reading);
-        assert.match(stream.querySelector("summary")!.textContent!, /^Result/);
-        assert.match(tool.textContent!, /Streamed output matches/);
+        assert.equal(tab("Result").getAttribute("aria-selected"), "true");
+        assert.equal(reading.getAttribute("aria-label"), "Result");
       }
-      assert.ok(tool.textContent!.indexOf("Inputs") < tool.textContent!.indexOf("Execution metadata"));
+      assert.ok(tool.textContent!.includes("Inputs"));
     }
     let nested: Entry[] = [
       { id: "earlier", kind: "user", text: "Earlier message" },
@@ -221,7 +219,7 @@ test("mounted conversation preserves disclosure choices and nodes across progres
   }
 });
 
-test("incremental evidence crosses character and line limits without replacing, hiding or defocusing content", async () => {
+test("incremental output stays mounted, bounded and selected across growth and result promotion", async () => {
   const dom = new JSDOM("<div id='root'></div>");
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
@@ -239,39 +237,159 @@ test("incremental evidence crosses character and line limits without replacing, 
       });
       await render();
       await toggle(container.querySelector<HTMLDetailsElement>(".execution-record")!, true);
-      const evidence = container.querySelector<HTMLDetailsElement>('[data-disclosure-key^="stream:"]')!;
+      const evidence = container.querySelector<HTMLElement>('[data-panel="stream"]')!;
       const reading = evidence.querySelector("pre")!;
-      assert.equal(evidence.open, true);
+      assert.equal(evidence.hidden, false);
       assert.equal(reading.getAttribute("role"), "region");
       assert.equal(reading.getAttribute("aria-label"), "Streamed output");
-      assert.doesNotMatch(evidence.querySelector("summary")!.textContent!, /Collapse content|Expand full content/);
       reading.focus();
       reading.scrollTop = 40;
       // 2399 → 2400 → 2401 characters; 23 → 24 → 25 lines.
       for (let step = 0; step < 2; step++) {
         entry = { ...entry, text: entry.text + (boundary === "characters" ? "x" : "\nnext") };
         await render();
-        assert.equal(container.querySelector('[data-disclosure-key^="stream:"]'), evidence);
+        assert.equal(container.querySelector('[data-panel="stream"]'), evidence);
         assert.equal(evidence.querySelector("pre"), reading);
-        assert.equal(evidence.open, true);
+        assert.equal(evidence.hidden, false);
         assert.equal(dom.window.document.activeElement, reading);
         assert.equal(reading.scrollTop, 40);
         assert.equal(reading.textContent, entry.text);
       }
-      await toggle(evidence, false);
-      const summary = evidence.querySelector("summary")!;
-      summary.focus();
+      const details = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((button) => button.textContent === "Details")!;
+      await act(async () => { details.click(); details.focus(); });
       entry = { ...entry, text: entry.text + "growth" };
       await render();
-      assert.equal(evidence.open, false, "User-closed output never auto-expands on growth");
+      assert.equal(evidence.hidden, true, "Selecting another tab is not undone by growth");
       entry = { ...entry, result: entry.text, state: "Completed" };
       await render();
-      assert.equal(container.querySelector('[data-disclosure-key^="stream:"]'), evidence);
-      assert.equal(evidence.open, false, "Promotion preserves an explicit closed choice too");
-      assert.equal(dom.window.document.activeElement, summary);
-      assert.match(summary.textContent!, /^Result/);
+      assert.equal(container.querySelector('[data-panel="stream"]'), evidence);
+      assert.equal(evidence.hidden, true, "Promotion preserves tab selection too");
+      assert.equal(dom.window.document.activeElement, details);
       assert.equal(reading.getAttribute("aria-label"), "Result");
     }
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    for (const name of ["window", "document", "IS_REACT_ACT_ENVIRONMENT"]) {
+      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+});
+
+test("inspector tabs support keyboard navigation, preserve raw evidence, and report clipboard failure", async () => {
+  const dom = new JSDOM("<div id='root'></div>");
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  let copied = "";
+  let reject = false;
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+    clipboard: { writeText: async (value: string) => { if (reject) throw new Error("Denied"); copied = value; } },
+  } });
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    let entry: Entry = { id: "inspect", kind: "tool", title: "channel_send", state: "Recorded result", text: "",
+      inputs: '{"channel":"telegram","destination":"chat-123","large_id":9007199254740993}',
+      result: "{'message_ids': ['123'], 'text': '<script>plain text</script>'}" };
+    const render = () => act(async () => root.render(createElement(ExecutionRecord, { entry, open: true })));
+    const selected = () => container.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+    const panel = () => container.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])')!;
+    const key = async (value: string) => act(async () => selected().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: value, bubbles: true })));
+    await render();
+    assert.equal(selected().textContent, "Result", "Opening a saved call prioritizes its result");
+    assert.equal(panel().querySelector("pre")!.textContent, entry.result);
+    assert.equal(container.querySelector("script"), null);
+    selected().focus();
+    await key("ArrowRight");
+    assert.equal(selected().textContent, "Inputs");
+    assert.equal(dom.window.document.activeElement, selected());
+    assert.equal(panel().id, selected().getAttribute("aria-controls"));
+    assert.equal(panel().getAttribute("aria-labelledby"), selected().id);
+    assert.equal(panel().querySelector("pre")!.textContent, entry.inputs, "Large integer literals are not reserialized or rounded");
+    const copy = panel().querySelector<HTMLButtonElement>("button")!;
+    await act(async () => copy.click());
+    assert.equal(copied, entry.inputs);
+    assert.equal(copy.textContent, "Copied");
+    entry = { ...entry, inputs: entry.inputs + "\n" };
+    await render();
+    assert.equal(copy.textContent, "Copy", "Changed evidence does not keep a stale copied confirmation");
+    reject = true;
+    await act(async () => copy.click());
+    assert.match(panel().querySelector('[role="status"]')!.textContent!, /Could not copy/);
+    await key("End");
+    assert.equal(selected().textContent, "Details");
+    await key("ArrowRight");
+    assert.equal(selected().textContent, "Result");
+    await key("ArrowLeft");
+    assert.equal(selected().textContent, "Details");
+    await key("Home");
+    assert.equal(selected().textContent, "Result");
+    assert.equal(container.querySelectorAll('[role="tab"][tabindex="0"]').length, 1);
+
+    // A result is a stable reading surface even if matching late output arrives.
+    const reading = panel().querySelector("pre")!;
+    reading.focus();
+    reading.scrollTop = 45;
+    entry = { ...entry, text: entry.result! };
+    await render();
+    assert.equal(panel().querySelector("pre"), reading);
+    assert.equal(dom.window.document.activeElement, reading);
+    assert.equal(reading.scrollTop, 45);
+    await key("End");
+    assert.equal(selected().textContent, "Details");
+    await key("Home");
+    assert.equal(selected().textContent, "Result");
+    assert.equal(panel().querySelector("pre"), reading, "Late matching output must not replace the result when switching tabs");
+    assert.equal(reading.scrollTop, 45);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    for (const name of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) {
+      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]);
+      else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+});
+
+test("inspecting a tool near the bottom pauses conversation following until the reader returns to the feed", async () => {
+  const dom = new JSDOM("<div id='root'></div>");
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    let entry: Entry = { id: "live", kind: "tool", title: "shell", text: "Starting", state: "Receiving output" };
+    const render = () => act(async () => root.render(createElement(Conversation, {
+      entries: [entry], sessionId: "focus", demo: false, canSubmit: false, submit: () => undefined,
+    })));
+    await render();
+    const feed = container.querySelector<HTMLElement>(".conversation")!;
+    const article = container.querySelector<HTMLElement>("article")!;
+    const summary = article.querySelector("summary")!;
+    let height = 1000;
+    Object.defineProperties(feed, { scrollHeight: { get: () => height }, clientHeight: { value: 300 } });
+    feed.getBoundingClientRect = () => new dom.window.DOMRect(0, 0, 390, 300);
+    article.getBoundingClientRect = () => new dom.window.DOMRect(0, 200, 370, 100);
+    summary.getBoundingClientRect = () => new dom.window.DOMRect(0, 200, 370, 44);
+    feed.scrollTop = 700;
+    await act(async () => feed.dispatchEvent(new dom.window.Event("scroll")));
+    await act(async () => summary.focus());
+    // Focus and an incidental scroll event must not re-enable following merely
+    // because this short card was near the bottom when inspection began.
+    await act(async () => feed.dispatchEvent(new dom.window.Event("scroll")));
+    height = 1300;
+    entry = { ...entry, text: "output\n".repeat(300) };
+    await render();
+    assert.equal(feed.scrollTop, 700);
+    assert.equal(dom.window.document.activeElement, summary);
+    await act(async () => feed.focus());
+    feed.scrollTop = 1000;
+    await act(async () => feed.dispatchEvent(new dom.window.Event("scroll")));
+    height = 1400;
+    entry = { ...entry, result: entry.text, state: "Completed" };
+    await render();
+    assert.equal(feed.scrollTop, 1400, "Returning to the feed's bottom resumes following");
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
