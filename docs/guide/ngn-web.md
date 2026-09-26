@@ -403,7 +403,9 @@ contract below.
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
 | `POST dictation/transcribe` | Bounded raw `audio/wav` recording; returns `{text}` without starting a chat run |
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
-| `POST live/sessions` | `{sdp, voice?: string}` creates a browser WebRTC call; returns `201 {session_id, sdp, model, voice}` |
+| `GET live/settings` | Workspace Live connection values, revision, key-configured indicator, and provider/voice choices |
+| `POST live/settings` | `{revision, values, api_key?: string, clear_api_key?: boolean}` atomically saves the connection and write-only key; unavailable during a call |
+| `POST live/sessions` | `{sdp, voice?: string, revision}` creates a browser WebRTC call using that committed connection; returns `201 {session_id, sdp, model, voice}` |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
 | `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
 
@@ -766,56 +768,51 @@ microphone access when prompted. Microphone mute and output mute are independent
 muting either does not end the provider session. Use the call's disconnect/end
 control to finish. Live captions and connection/error feedback belong to that call.
 
-#### Server Setup
+#### Connection Settings
 
-Supply an OpenAI Platform API key in the **server's environment**, then enable
-Live through trusted flat YAML:
+1. Start **`ngn serve`**, then open **GPT-Live → Connection settings**.
+2. Enable Live and choose the provider, voice model, hosted backend model, voice,
+   and optional API base URL.
+3. Enter the provider's API key in the write-only key field and save.
+4. Connect when the panel reports that the connection is ready.
 
-```yaml
-live_enabled: true
-live_provider: openai
-live_model: gpt-live-1
-live_voice: marin
-live_api_key_env: OPENAI_API_KEY
-```
+All Live setup is available in this form. Defaults are disabled, provider
+`openai`, voice model `gpt-live-1`, the library's `LiveConfig.backend_model`
+(`gpt-5.6-luna`), voice `marin`, and an empty base URL selecting
+`https://api.openai.com/v1`. Available voices are `marin` and `cedar`. Settings
+apply immediately to new calls and survive server restarts; no environment
+variable, YAML entry, or restart is needed to configure the connection.
 
-Start with `ngn serve --config /path/to/settings.yaml`, without `--demo`. An
-environment-only setup is also supported, assuming the key is already injected:
+The enabled preference, provider, model, backend model, voice, and base URL are
+saved in this workspace's server-side session database. The key is stored in a
+separate private table in that database, so server backups must protect it as
+credential data. Responses expose only a **key configured** indicator. The key
+field stays blank after saving; leave it blank to retain the saved key for the
+same connection, enter a replacement to rotate it, or use the explicit clear-key
+control to remove it. Changing the provider or effective endpoint discards the
+previous key unless the same save includes a replacement, preventing an existing
+key from being forwarded to a different connection.
 
-```bash
-NGN_LIVE_ENABLED=true ngn serve
-```
+Chat can use any configured provider, including ChatGPT/Codex login. Live uses
+the key saved in its own Connection settings and its own API billing. It does not
+borrow chat credentials, saved login tokens, or process environment keys. Entered
+keys are sent only to the same-origin backend; saved key values, provider
+authentication headers, and raw upstream errors are never returned by the API.
 
-The default hosted backend is the library's `LiveConfig.backend_model`
-(`gpt-5.6-luna`); `live_backend_model` or `NGN_LIVE_BACKEND_MODEL` selects another
-compatible hosted Responses model. `live_voice` defaults to `marin`; the initial
-voice choices are `marin` and `cedar`. A voice change applies to a new call.
+For a compatible dedicated endpoint, choose `openai_compatible` and enter its API
+prefix, for example `https://voice.example.com/v1`. Azure v1 is supported through
+`azure_openai_compatible_v1` with an explicit base URL and its API key; the existing
+Foundry transport handles sideband authentication. Custom endpoints must implement
+GPT-Live WebRTC creation, sideband controls, and hosted Responses. Endpoint URLs
+require HTTPS, except loopback HTTP for development, and cannot embed credentials,
+query strings, fragments, or generation-route suffixes.
 
-Chat can keep using any configured provider, including ChatGPT/Codex login. Live
-uses its own API-key connection and API billing; it does not use a ChatGPT
-subscription token or fall back to saved provider-login credentials. The default
-key reference is `OPENAI_API_KEY`, regardless of the chat provider. To separate
-voice credentials, inject another server environment variable and set, for example,
-`live_api_key_env: TEAM_LIVE_API_KEY`. YAML holds the **variable name**, never the
-key. Credentials, provider authentication headers, and raw upstream errors are
-not returned to the browser.
-
-For a compatible dedicated endpoint, use `live_provider: openai_compatible` and
-`live_base_url: https://voice.example.com/v1`. Azure v1 is also supported with
-`live_provider: azure_openai_compatible_v1`, an explicit `live_base_url`, and the
-endpoint's key in `live_api_key_env`. The existing Foundry API-key transport handles
-its sideband authentication. Custom endpoints must implement GPT-Live WebRTC
-creation and sideband controls as well as hosted Responses; chat compatibility is
-insufficient. Endpoint URLs require HTTPS, except loopback HTTP for development,
-and cannot embed credentials, query strings, or fragments. The browser cannot
-override the provider, endpoint, model, or key reference in a session request.
-
-All seven fields have `NGN_LIVE_*` environment defaults. Normal YAML precedence
-still applies. Live setup is startup configuration: restart the server after
-changes. The UI reads the effective Live provider/model/voice and a clear setup
-reason when disabled, in demo mode, missing credentials, or using an unsupported
-provider. Readiness is a local configuration check, not a remote access test.
-See the [configuration reference](ngn-configuration.md#gpt-live-in-ngn-serve).
+Save without a key if you want to finish setup later. The panel explains missing
+setup in **Connection settings**. Demo mode also permits inspecting and saving
+settings, but real calls require starting `ngn serve` without `--demo`. Readiness
+checks local configuration; provider access and network failures are reported when
+connecting. Settings saves conflict while a call is connecting, active, or closing.
+After a competing tab changes settings, reload the form before saving or connecting.
 
 #### Browser Requirements And Initial Scope
 
@@ -845,18 +842,35 @@ chat are separate actions.
 
 #### Live HTTP Contract
 
-All four Live routes use the existing same-origin, Host, fetch-metadata, and
+All Live routes use the existing same-origin, Host, fetch-metadata, and
 `X-Ngn-Token` checks. Writes require the Origin and JSON content-type headers.
 `GET /api/live` returns `{available, reason, provider, model, backend_model, voice,
-voices, active_session_id}`; `reason` is empty when locally ready and the active
-ID is empty when there is no active call.
+voices, active_session_id, revision, enabled, key_configured}`; `reason` is empty
+when locally ready and the active ID is empty when there is no active call.
 
-Creation accepts only a nonblank SDP string of at most 60,000 characters and an
-optional supported voice string (`""` means the configured default). The normal
+`GET /api/live/settings` returns `{values, revision, key_configured, providers,
+voices}`. `values` contains exactly `{enabled, provider, model, backend_model,
+voice, base_url}`. The `revision` is a 64-character lowercase hexadecimal token.
+`POST /api/live/settings` takes `{revision, values, api_key?: string,
+clear_api_key?: boolean}` and returns the same public settings snapshot. The
+optional key defaults to an empty string; clearing defaults to false. Supplying
+both a replacement key and `clear_api_key: true` is rejected. Unknown fields and
+invalid input receive a generic validation error, without echoing request values.
+
+Values, key binding, and revision commit atomically in SQLite. Competing saves
+use the stored revision rather than an in-memory last-write-wins value. A stale
+revision or a busy Live service returns `409`; reload settings before retrying.
+If a save acknowledgement is lost, fetch the settings again to see the committed
+state. Cancellation waits for an admitted transaction to finish.
+
+Creation requires the current committed `revision`, a nonblank SDP string of at
+most 60,000 characters, and an optional supported voice string (`""` means the
+configured default). A stale permission-pending tab receives `409` before provider
+setup. Admission captures one committed connection/key for that call. The normal
 64 KiB JSON-body limit also applies. SDP negotiation is server-side; the browser
 uses the returned answer and must not send a second `session.start` on its data
-channel. The API exposes no credential, endpoint, arbitrary command, or tool
-configuration input.
+channel. Session creation accepts no connection override, arbitrary command, or
+tool configuration input; connection changes go through the revisioned settings route.
 
 Snapshots contain `{session_id, status, model, voice, events, cursor}` and may
 include a safe `message`. Status is `connecting`, `connected`, `closing`, `closed`,

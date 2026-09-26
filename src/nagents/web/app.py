@@ -42,6 +42,7 @@ from .designer import register as register_designer
 from .live import create_agent as create_live_agent
 from .live import register as register_live
 from .live_runtime import LiveService
+from .live_settings import LiveSettings
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
@@ -119,19 +120,24 @@ def create_app(
     state: WebState
     designer: Designer
     live: LiveService
-    live_config = copy.deepcopy(config)
+    live_settings: LiveSettings
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, designer, live
+        nonlocal state, designer, live, live_settings
         harness = harness_factory(copy.deepcopy(config))
         state = WebState(harness)
-        live = LiveService(lambda voice: create_live_agent(live_config, voice))
+        live_settings = LiveSettings(
+            harness.agent.session.db_path, demo=config.demo, active=lambda: live.active_session_id
+        )
+        live = LiveService(lambda voice: create_live_agent(live_settings.admitted(), voice, demo=live_settings.demo))
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
         app.state.live = live
+        app.state.live_settings = live_settings
         try:
             await harness.initialize(create_session=not (resume_session or continue_session))
+            await live_settings.load()
             designer = Designer(state)
             await designer.traces.initialize()
             await state.history.initialize()
@@ -176,12 +182,15 @@ def create_app(
 
             async def close_resources() -> None:
                 try:
-                    await live.shutdown()
+                    await live_settings.shutdown()
                 finally:
                     try:
-                        await state.trash.close()
+                        await live.shutdown()
                     finally:
-                        await close_host()
+                        try:
+                            await state.trash.close()
+                        finally:
+                            await close_host()
 
             cleanup = asyncio.create_task(close_resources())
             try:
@@ -193,7 +202,7 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
-    register_live(app, lambda: live, live_config)
+    register_live(app, lambda: live, lambda: live_settings)
     from .local_delivery import register_assets
 
     register_assets(app, lambda: state)

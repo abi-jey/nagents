@@ -2,6 +2,9 @@ export interface LiveCapability {
   available: boolean;
   reason: string;
   provider?: string;
+  revision: string;
+  enabled: boolean;
+  key_configured: boolean;
   model: string;
   backend_model: string;
   voice: string;
@@ -14,6 +17,30 @@ export interface LiveCreated {
   sdp: string;
   model: string;
   voice: string;
+}
+
+export interface LiveSettingsValues {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  backend_model: string;
+  voice: string;
+  base_url: string;
+}
+
+export interface LiveSettingsSnapshot {
+  values: LiveSettingsValues;
+  revision: string;
+  key_configured: boolean;
+  providers: string[];
+  voices: string[];
+}
+
+export interface LiveSettingsInput {
+  revision: string;
+  values: LiveSettingsValues;
+  api_key: string;
+  clear_api_key: boolean;
 }
 
 export interface LiveEvent {

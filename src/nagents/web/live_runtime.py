@@ -410,12 +410,13 @@ class LiveService:
                     pass  # Not attached, disconnected, or command rejected: use HTTP.
         with suppress(RuntimeError):
             call.finalized = call.finalized or agent.live.status.finalized
+        hangup_failed = False
         if not call.finalized:
             try:
                 async with asyncio.timeout(CLEANUP_SECONDS):
                     await api.hangup(identifier)
             except Exception:
-                call.fail("Live session shutdown could not be confirmed.")
+                hangup_failed = True
         for observer in observers:
             if not observer.done():
                 observer.cancel()
@@ -430,3 +431,7 @@ class LiveService:
                 call.fail("Live sideband cleanup could not be confirmed.")
         with suppress(RuntimeError):
             call.finalized = call.finalized or agent.live.status.finalized
+        # Native finalization can race the HTTP fallback or arrive during drain.
+        # Defer only the fallback failure; independent errors remain recorded.
+        if hangup_failed and not call.finalized:
+            call.fail("Live session shutdown could not be confirmed.")

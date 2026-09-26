@@ -2,9 +2,9 @@ import type { Caption, LiveCreated, LiveEvent, LiveMedia, LiveSnapshot, LiveStat
 
 interface Dependencies {
   media(handlers: MediaHandlers): LiveMedia;
-  create(sdp: string, voice: string, signal: AbortSignal): Promise<LiveCreated>;
+  create(sdp: string, voice: string, signal: AbortSignal, revision: string): Promise<LiveCreated>;
   read(id: string, after: number, signal: AbortSignal): Promise<LiveSnapshot>;
-  close(id: string): Promise<void>;
+  close(id: string): Promise<LiveSnapshot>;
   pollMs?: number;
 }
 
@@ -49,6 +49,7 @@ export class LiveController {
   private timer?: ReturnType<typeof setTimeout>;
   private connectionTimer?: ReturnType<typeof setTimeout>;
   private cursor = 0;
+  private endingDeadline = 0;
   private disposed = false;
 
   constructor(private readonly deps: Dependencies) {}
@@ -58,34 +59,64 @@ export class LiveController {
     this.state = { ...this.state, ...change };
     if (!this.disposed) this.listeners.forEach((listener) => listener());
   }
-  private release() {
-    clearTimeout(this.timer); clearTimeout(this.connectionTimer);
-    this.abort?.abort(); this.abort = undefined;
+  private stopMedia() {
+    clearTimeout(this.connectionTimer);
     const media = this.media; this.media = undefined;
     media?.close();
   }
-  private async closeRemote(id: string): Promise<string> {
-    if (!id) return "";
-    try { await this.deps.close(id); return ""; }
-    catch { return "Microphone and playback stopped. Server closure could not be confirmed; the abandoned session will expire automatically."; }
+  private release() {
+    clearTimeout(this.timer);
+    this.abort?.abort(); this.abort = undefined;
+    this.stopMedia();
+  }
+  private async closeRemote(id: string): Promise<{ snapshot?: LiveSnapshot; notice: string }> {
+    if (!id) return { notice: "" };
+    try {
+      const snapshot = await this.deps.close(id);
+      if (snapshot.session_id !== id) throw new Error("Mismatched closure");
+      return { snapshot, notice: "" };
+    } catch { return { notice: "Microphone and playback stopped. Server closure could not be confirmed; the abandoned session will expire automatically." }; }
+  }
+  private consume(snapshot: LiveSnapshot) {
+    const events = snapshot.events.filter((event) => event.seq > this.cursor);
+    this.cursor = Math.max(this.cursor, snapshot.cursor);
+    const warning = events.filter((event) => event.type === "error").at(-1);
+    this.update({ captions: appendCaptions(this.state.captions, events), ...(warning ? { notice: warning.message || warning.text || "A Live command was rejected." } : {}) });
+  }
+  private terminal(snapshot: LiveSnapshot): boolean {
+    if (snapshot.status !== "closed" && snapshot.status !== "error") return false;
+    ++this.epoch; this.release();
+    this.update({ phase: snapshot.status === "error" ? "error" : "ended", endedAt: this.state.endedAt || Date.now(), playbackBlocked: false,
+      error: snapshot.status === "error" ? snapshot.message || "Live finalization could not be confirmed." : "",
+      notice: snapshot.status === "closed" ? snapshot.message || "Conversation ended. Your microphone is off." : "" });
+    return true;
+  }
+  private ending(message: string) {
+    this.stopMedia();
+    this.endingDeadline ||= Date.now() + 45_000;
+    this.update({ phase: "ending", notice: message, endedAt: this.state.endedAt || Date.now(), playbackBlocked: false });
   }
   private fail(message: string) {
     const id = this.state.sessionId;
     ++this.epoch; this.release();
     this.update({ phase: "error", error: message, endedAt: Date.now() });
     const epoch = this.epoch;
-    void this.closeRemote(id).then((notice) => { if (epoch === this.epoch && notice) this.update({ notice }); });
+    void this.closeRemote(id).then(({ snapshot, notice }) => {
+      if (epoch !== this.epoch) return;
+      if (snapshot) this.consume(snapshot);
+      if (notice || snapshot?.status === "error") this.update({ notice: notice || snapshot?.message || "Live finalization could not be confirmed." });
+    });
   }
 
-  async start(voice: string): Promise<void> {
+  async start(voice: string, revision: string): Promise<void> {
     if (this.disposed || ["permission", "connecting", "connected", "ending"].includes(this.state.phase)) return;
     const epoch = ++this.epoch;
-    const abort = new AbortController(); this.abort = abort; this.cursor = 0;
+    const abort = new AbortController(); this.abort = abort; this.cursor = 0; this.endingDeadline = 0;
     this.update({ ...initial(), phase: "permission" });
     try {
       const media = this.deps.media({
         connected: () => {
-          if (epoch !== this.epoch) return;
+          if (epoch !== this.epoch || this.state.phase === "ending") return;
           clearTimeout(this.connectionTimer);
           this.update({ phase: "connected", startedAt: this.state.startedAt || Date.now() });
         },
@@ -98,7 +129,7 @@ export class LiveController {
       this.update({ phase: "connecting" });
       // Keep awaiting a cancelled creation so a late-created server session can
       // be explicitly closed. The server lease covers a lost HTTP response.
-      const session = await this.deps.create(sdp, voice, AbortSignal.timeout(70_000));
+      const session = await this.deps.create(sdp, voice, AbortSignal.timeout(70_000), revision);
       if (epoch !== this.epoch) { await this.closeRemote(session.session_id); return; }
       this.update({ sessionId: session.session_id });
       this.connectionTimer = setTimeout(() => {
@@ -114,19 +145,15 @@ export class LiveController {
 
   private async poll(epoch: number, signal: AbortSignal): Promise<void> {
     try {
+      if (this.endingDeadline && Date.now() >= this.endingDeadline) {
+        this.fail("Microphone and playback stopped, but Live finalization could not be confirmed."); return;
+      }
       const snapshot = await this.deps.read(this.state.sessionId, this.cursor, AbortSignal.any([signal, AbortSignal.timeout(12_000)]));
       if (epoch !== this.epoch) return;
       if (snapshot.session_id !== this.state.sessionId) throw new Error("The Live session changed. Please reconnect.");
-      const events = snapshot.events.filter((event) => event.seq > this.cursor);
-      this.cursor = Math.max(this.cursor, snapshot.cursor);
-      const warning = events.filter((event) => event.type === "error").at(-1);
-      this.update({ captions: appendCaptions(this.state.captions, events), ...(warning ? { notice: warning.message || warning.text || "A Live command was rejected." } : {}) });
-      if (snapshot.status === "error") { this.fail(snapshot.message || "The Live connection ended unexpectedly. You can start a new conversation."); return; }
-      if (snapshot.status === "closed" || snapshot.status === "closing") {
-        ++this.epoch; this.release();
-        this.update({ phase: "ended", notice: snapshot.message || "Conversation ended.", endedAt: Date.now() });
-        return;
-      }
+      this.consume(snapshot);
+      if (this.terminal(snapshot)) return;
+      if (snapshot.status === "closing") this.ending(snapshot.message || "Waiting for Live to finish closing…");
       this.timer = setTimeout(() => void this.poll(epoch, signal), this.deps.pollMs ?? 1000);
     } catch (cause) {
       if (epoch === this.epoch) this.fail(`Lost contact with ngn serve. ${liveFailure(cause)}`);
@@ -138,8 +165,15 @@ export class LiveController {
     const epoch = ++this.epoch, id = this.state.sessionId;
     this.release();
     this.update({ phase: "ending", error: "", endedAt: Date.now(), playbackBlocked: false });
-    const notice = await this.closeRemote(id);
-    if (epoch === this.epoch) this.update({ phase: "ended", notice: notice || "Conversation ended. Your microphone is off." });
+    const { snapshot, notice } = await this.closeRemote(id);
+    if (epoch !== this.epoch) return;
+    if (snapshot) {
+      this.consume(snapshot);
+      if (this.terminal(snapshot)) return;
+      this.ending(snapshot.message || "Waiting for Live to finish closing…");
+      const abort = new AbortController(); this.abort = abort;
+      void this.poll(epoch, abort.signal);
+    } else this.update({ phase: "ended", notice: notice || "Conversation ended. Your microphone is off." });
   }
 
   muteInput() {

@@ -82,6 +82,7 @@ class FakeAgent:
         self.cancelled = 0
         self.sent: list[Payload] = []
         self.finalize_on_close = True
+        self.finalize_on_drain = False
         self.fail_close_command = False
         self.fail_resource_close = False
         self.attachment_id = ""
@@ -121,6 +122,10 @@ class FakeAgent:
             self.cancelled += 1
             raise
         finally:
+            if self.finalize_on_drain:
+                # Native Agent.run can drain final usage after it stops emitting
+                # events, leaving confirmation only in the retained controls.
+                self.controls.observe({"type": "session.closed"})
             self.stopped.set()
 
     async def send(self, event: Payload) -> None:
@@ -240,7 +245,20 @@ def test_create_attaches_fresh_hosted_agent_and_close_is_confirmed_and_idempoten
 
 
 @pytest.mark.parametrize(
-    "sdp", [None, 10, {}, "", " ", "offer", "v=0bad", "v=0\r\n\x00", "v=0\n" + "x" * 65536, "v=0\n" + "é" * 40000]
+    "sdp",
+    [None, 10, {}, "", " ", "offer", "v=0bad", "v=0\r\n\x00", "v=0\n" + "x" * 65536, "v=0\n" + "é" * 40000],
+    ids=[
+        "null",
+        "number",
+        "object",
+        "empty",
+        "blank",
+        "not-sdp",
+        "bad-version",
+        "control",
+        "too-long",
+        "too-many-bytes",
+    ],
 )
 def test_create_rejects_invalid_offers_before_factory(rig: Rig, sdp: object) -> None:
     async def scenario() -> None:
@@ -642,6 +660,69 @@ def test_unconfirmed_finalization_falls_back_to_http_hangup(rig: Rig, command_fa
         assert result["status"] == "closed" and "unconfirmed" in str(result["message"])
         assert rig.hangups == ["native-1"]
         assert rig.agents[0].cancelled == 1 and rig.agents[0].closed == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("during_drain", [False, True])
+@pytest.mark.parametrize("resource_error", [False, True])
+def test_late_finalization_supersedes_failed_hangup_without_hiding_resource_errors(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, during_drain: bool, resource_error: bool
+) -> None:
+    async def scenario() -> None:
+        identifier = await create(rig.service)
+        agent = rig.agents[0]
+        agent.finalize_on_close = False
+        agent.finalize_on_drain = during_drain
+        agent.fail_resource_close = resource_error
+
+        async def hangup(session_id: str) -> None:
+            rig.hangups.append(session_id)
+            assert not agent.controls.status.finalized
+            if not during_drain:
+                # The close event wins the race with the outstanding HTTP
+                # fallback, which can now fail because the session has ended.
+                agent.events.put_nowait(LiveEvent(event_type="session.closed"))
+                agent.events.put_nowait(End())
+                await agent.stopped.wait()
+            raise RuntimeError(SECRET)
+
+        monkeypatch.setattr(rig, "hangup", hangup)
+        result = await asyncio.wait_for(rig.service.close(identifier), WAIT)
+        assert agent.controls.status.finalized
+        assert "Finalization confirmed." in str(result["message"])
+        errors = [event["text"] for event in cast("list[Payload]", result["events"]) if event["type"] == "error"]
+        if resource_error:
+            assert result["status"] == "error"
+            assert errors == ["Live resource cleanup could not be confirmed."]
+        else:
+            assert result["status"] == "closed"
+            assert result["message"] == "Live session closed. Finalization confirmed."
+            assert not errors
+        assert SECRET not in json.dumps(result)
+        assert rig.hangups == ["native-1"]
+        assert agent.cancelled == int(during_drain)
+        assert agent.closed == 1 and agent.stopped.is_set() and not rig.service._active
+
+    asyncio.run(scenario())
+
+
+def test_confirmed_finalization_preserves_prior_connection_error(rig: Rig) -> None:
+    async def scenario() -> None:
+        identifier = await create(rig.service)
+        agent = rig.agents[0]
+        agent.finalize_on_drain = True
+        agent.events.put_nowait(ErrorEvent(message=SECRET))
+        await until(lambda: not rig.service._active)
+        result = await rig.service.snapshot(identifier)
+        assert result["status"] == "error"
+        assert result["message"] == "Live connection reported an error. Finalization confirmed."
+        assert [event["text"] for event in cast("list[Payload]", result["events"]) if event["type"] == "error"] == [
+            "Live connection reported an error."
+        ]
+        assert SECRET not in json.dumps(result)
+        assert agent.controls.status.finalized and agent.closed == 1
+        assert not rig.hangups
 
     asyncio.run(scenario())
 
