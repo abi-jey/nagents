@@ -148,7 +148,7 @@ export function TranscriptItems({
                       ? `Human follow-up ${entry.followup}`
                        : "Status"}
               {entry.origin && !entry.channel && <span className="origin-badge">{entry.origin}</span>}
-              {entry.queued && <span className="origin-badge">Queued / awaiting confirmation</span>}
+              {entry.queued && <span className="origin-badge">{entry.admission === "queued" ? "Queued" : entry.admission === "sending" ? "Sending…" : "Delivery unconfirmed"}</span>}
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
             <MessageContent text={entry.text} />

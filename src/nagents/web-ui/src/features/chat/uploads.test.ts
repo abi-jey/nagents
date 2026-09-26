@@ -162,6 +162,21 @@ test("paste, drop and picker only add drafts; image-only Send requires an explic
     await act(async () => root.render(createElement(Composer, { ...props, hasAttachments: true })));
     await act(async () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
     assert.equal(sent, 1);
+    await act(async () => root.render(createElement(Composer, {
+      ...props, prompt: "Next draft while sending", canSubmit: false, submitting: true,
+      attachmentsDisabled: true, running: true, stopping: true,
+    })));
+    assert.equal(container.querySelector("textarea")!.disabled, false, "Admission does not take away the editor");
+    assert.equal(container.querySelector("textarea")!.value, "Next draft while sending");
+    assert.equal(container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled, true);
+    assert.equal(container.querySelector('button[type="submit"]')!.textContent, "Sending…");
+    assert.equal(container.querySelector<HTMLButtonElement>("button.cancel")!.disabled, true);
+    const drop = new dom.window.Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [file], types: ["Files"] } });
+    await act(async () => container.querySelector("textarea")!.dispatchEvent(drop));
+    await act(async () => container.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })));
+    assert.equal(added, 3, "The attachment set stays immutable during admission");
+    assert.equal(sent, 1, "Pending admission cannot be submitted twice");
   } finally {
     await act(async () => root.unmount()); dom.window.close();
     for (const key of ["window", "document", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"]) {

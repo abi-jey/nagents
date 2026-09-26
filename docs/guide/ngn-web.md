@@ -128,11 +128,20 @@ still stored locally in the Harness data directory.
 ### Workspace Navigation
 
 The sidebar keeps **New session** above an independently scrolling session list.
-**Global settings**, **Channels**, **Trash**, and the workspace information overlay stay
+**Global settings**, **Channels**, **Tools**, **Agent Designer**, **Trash**, and the workspace information overlay stay
 in the bottom section, so they remain reachable with a long conversation history. On narrow
 screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
 it and returns focus to the navigation toggle. Dialogs opened from the drawer
 return to their controls without losing the open navigation.
+
+Unsent text belongs to its session. Switching conversations or creating a new one
+shows that conversation's own draft, and switching back recovers the text. Drafts
+are held in this browser tab's memory; reloading or closing the tab discards them.
+The composer stays editable while a message is being admitted. A late server
+acknowledgement clears only the unchanged submitted draft, preserving newer typing.
+Message badges distinguish **Sending…**, confirmed **Queued**, and **Delivery
+unconfirmed** states. Working sessions have an indicator in the sidebar; when
+another session is running, **View active session** takes you to it.
 
 ### Delete A Session
 
@@ -160,9 +169,10 @@ the current server/browser selection or starting a model run. Choose **Open rest
 when you want to navigate to the restored conversation; a late restore response
 must not overwrite a newer selection or draft.
 
-Soft deletion preserves the current unsent **text** draft, including when its
-selected root is removed. Text drafts remain browser-local; server-side history
-restoration does not recover that text on another device. Unsubmitted attachment
+Soft deletion preserves the removed session's unsent **text** draft in this tab.
+Restore and open that session to recover its draft; the replacement conversation
+shows its own draft. Text drafts remain browser-local; server-side history
+restoration does not recover that text on another device or after a page reload. Unsubmitted attachment
 drafts are discarded when leaving or deleting their root; admitted attachments
 remain part of the saved conversation available for restoration.
 
@@ -1035,11 +1045,16 @@ the published `v0.5.0` web/API surface.
 
 The frontend is organized by responsibility within `src/nagents/web-ui/src/`:
 
-- `app/App.tsx` composes the layout and features. `app/useClient.ts` coordinates
-  connection, shared busy state, and explicit recovery.
+- `app/App.tsx` composes `WorkspaceHeader`, `WorkspaceSidebar`, `WorkspaceComposer`,
+  and `WorkspaceDialogs`. `app/useClient.ts` connects feature hooks;
+  `app/useOperations.ts` owns mutation admission and feedback, and
+  `app/availability.ts` shares action rules between buttons and command handlers.
 - `features/chat/` contains conversation/composer rendering, the owning run-stream
   hook, and a tested transcript reducer/history adapter.
-- `features/sessions/` owns session transport/state and session navigation.
+- `features/sessions/` owns session transport/state and session navigation;
+  `useSessionActions.ts` coordinates deletion, Trash, restoration, and selection races.
+- `features/chat/useSessionDraft.ts` owns per-session tab-local text drafts;
+  `useUploads.ts` owns attachment staging lifecycle independently of the composer.
 - `features/approvals/` owns the exact pending decision and its accessible modal.
 - `api/` contains HTTP transport with the per-process CSRF token and tested NDJSON parsing.
 - `types.ts` defines shared backend contracts; `main.tsx` only mounts the app.

@@ -7,7 +7,9 @@
     "outDir": ".test-build"
   },
   "include": [
+    "src/app/*.test.ts",
     "src/api/*.ts",
+    "src/features/chat/drafts*.ts",
     "src/features/chat/transcript*.ts",
     "src/features/chat/deliveries*.ts",
     "src/features/chat/uploads*.ts",

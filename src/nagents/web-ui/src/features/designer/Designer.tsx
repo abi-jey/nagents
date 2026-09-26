@@ -142,7 +142,7 @@ export function Designer({ token, close, configureChannels }: { token: string; c
 
   return <section className="designer" aria-label="Agent Designer">
     <header className="designer-toolbar">
-      <button className="designer-back" onClick={close} title="Back to chat" aria-label="Back to chat"><Icon name="chat" /></button>
+      <button className="designer-back" autoFocus onClick={close} title="Back to chat" aria-label="Back to chat"><Icon name="chat" /></button>
        <div className="designer-brand"><span>ngn</span><span className="designer-divider">/</span><h1>Agent Designer</h1><small className="designer-experimental">Experimental</small></div>
       <select aria-label="Open saved design" value="" disabled={pending} onChange={(event) => void action(async () => {
         const result = await api<{ source: string; revision: string }>(`/designs/${event.target.value}`);
