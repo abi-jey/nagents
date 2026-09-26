@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
 import { useSettings } from "../features/settings/useSettings";
@@ -7,10 +7,10 @@ import { promptFailure } from "../features/dictation/draft";
 import { recordingSupport } from "../features/dictation/browser";
 import { useChannels } from "../features/channels/useChannels";
 import { useContextStats } from "../features/context/useContext";
-import { deleteSessionFromView, SessionDeletion, type DeletionState } from "../api/deletion";
-import { purgeTrash, readTrash, restoreTrash, saveRetention, type TrashItem } from "../api/trash";
-import { TrashController, type TrashDependencies } from "../features/sessions/trashController";
-import { UploadDraft } from "../features/chat/uploads";
+import { useSessionActions } from "../features/sessions/useSessionActions";
+import { useUploads } from "../features/chat/useUploads";
+import { useOperations } from "./useOperations";
+import { availability } from "./availability";
 
 export function useClient() {
   const sessions = useSessions();
@@ -21,14 +21,10 @@ export function useClient() {
     sessions.acceptCredentials,
     () => void connect(),
   );
-  const [operating, setBusy] = useState(false);
+  const operations = useOperations();
+  const { operating, error, setError } = operations;
+  const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
   const busy = operating || !!chat.runId || sessions.globalBusy;
-  const [error, setError] = useState("");
-  const occupied = useRef(false);
-  const [deletion, setDeletion] = useState<DeletionState>({ pending: false, error: "" });
-  const removeAction = useRef(confirmPermanent);
-  removeAction.current = confirmPermanent;
-  const [deletionController] = useState(() => new SessionDeletion(setDeletion, (id, item) => removeAction.current(id, item), () => sessions.currentSelection().id));
   const dictation = useDictation(
     sessions.config?.token || "",
     sessions.sessionId,
@@ -37,24 +33,8 @@ export function useClient() {
 
   // The UI rejects competing operations immediately, matching the backend's 409 policy.
   async function operate(action: () => Promise<void>): Promise<boolean> {
-    if (occupied.current || dictation.controller.active) return false;
-    occupied.current = true;
-    setBusy(true);
-    setError("");
-    try {
-      await action();
-      return true;
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Local request failed. No operation was retried.",
-      );
-      return false;
-    } finally {
-      occupied.current = false;
-      setBusy(false);
-    }
+    if (dictation.controller.active) return false;
+    return operations.operate(action);
   }
 
   const settings = useSettings({
@@ -65,32 +45,30 @@ export function useClient() {
   });
   const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
   const token = sessions.config?.token || "";
-  const [uploads] = useState(() => new UploadDraft());
-  const uploadState = useSyncExternalStore(uploads.subscribe, uploads.getSnapshot, uploads.getSnapshot);
-  useEffect(() => { uploads.configure(token, sessions.sessionId); }, [uploads, token, sessions.sessionId, sessions.config?.model, sessions.config?.provider, sessions.config?.agent, settings.snapshot?.revision]);
-  useEffect(() => () => uploads.dispose(), [uploads]);
+  const configuration = `${sessions.config?.provider}:${sessions.config?.model}:${sessions.config?.agent}:${settings.snapshot?.revision}`;
+  const { uploads, uploadState } = useUploads(token, sessions.sessionId, configuration);
   const context = useContextStats(
     token,
     sessions.sessionId,
     { active: !!chat.runId, revision: chat.contextRevision, enabled: !sessions.activityOnly,
-      configuration: `${sessions.config?.provider}:${sessions.config?.model}:${sessions.config?.agent}:${settings.snapshot?.revision}` },
+      configuration },
   );
-  const dependencies: TrashDependencies = {
-    read: (signal) => readTrash(token, signal), save: (revision, days) => saveRetention(token, revision, days),
-    restore: (item) => restoreTrash(token, item), purge: (item) => purgeTrash(token, item), restored: sessions.restored,
-    softDelete: async (id) => { const reply = await removeSession(id, false); if (!reply.trash) throw new Error("Trash acknowledgement missing."); return reply.trash; },
-    permanent: async (id) => { await removeSession(id, true); }, mutate: trashMutation,
-  };
-  const trashDeps = useRef(dependencies);
-  trashDeps.current = dependencies;
-  const [trashController] = useState(() => new TrashController({
-    read: (signal) => trashDeps.current.read(signal), save: (revision, days) => trashDeps.current.save(revision, days),
-    restore: (item) => trashDeps.current.restore(item), purge: (item) => trashDeps.current.purge(item),
-    restored: (reply) => trashDeps.current.restored(reply), softDelete: (id) => trashDeps.current.softDelete(id),
-    permanent: (id) => trashDeps.current.permanent(id), mutate: (action) => trashDeps.current.mutate(action),
-  }));
-  const trash = useSyncExternalStore(trashController.subscribe, trashController.getSnapshot, trashController.getSnapshot);
-  useEffect(() => { trashController.activate(); return () => trashController.dispose(); }, [trashController]);
+  const membership = useSessionActions({ sessions, chat, dictation, operations, busy,
+    blocked: channels.open || settings.open || panel !== "none" || !!chat.approval.pending });
+
+  function access() {
+    return availability({
+      ready: !!token && !!sessions.sessionId,
+      operating: operations.occupied(),
+      running: !!chat.runId || sessions.globalBusy,
+      dictating: dictation.unfinished,
+      reviewing: dictation.state.phase === "review",
+      modal: channels.open || settings.open || !!membership.deletion.target ||
+        membership.trashController.getSnapshot().open || panel !== "none",
+      approval: !!chat.approval.pending,
+      uploadsReady: uploadState.items.every((item) => item.status === "ready"),
+    });
+  }
 
   async function connect() {
     dictation.controller.cancel("");
@@ -118,8 +96,7 @@ export function useClient() {
 
   async function select(id = "") {
     if (id && id === sessions.sessionId) return true;
-    if (!sessions.config || (!id && busy) || channels.open || settings.open || deletion.target || trashController.getSnapshot().open)
-      return false;
+    if (!(id ? access().navigate : access().create)) return false;
     return operate(async () => {
       chat.pause();
       try {
@@ -129,55 +106,10 @@ export function useClient() {
     });
   }
 
-  function canDeleteSession(id: string): boolean {
-    const keepingReview = id !== sessions.currentSelection().id && dictation.controller.getSnapshot().phase === "review";
-    return !!sessions.config && !occupied.current && !busy && !channels.open && !settings.open && !trash.open &&
-      (!dictation.controller.active || keepingReview);
-  }
-
-  async function trashMutation(action: () => Promise<void>): Promise<void> {
-    if (!sessions.config || occupied.current || busy || channels.open || settings.open ||
-        (dictation.controller.active && dictation.controller.getSnapshot().phase !== "review"))
-      throw new Error("Finish the current operation before changing Trash.");
-    occupied.current = true; setBusy(true); setError("");
-    try { await action(); }
-    finally { occupied.current = false; setBusy(false); }
-  }
-  async function removeSession(id: string, permanent: boolean) {
-    if (dictation.controller.active && id === sessions.currentSelection().id)
-      throw new Error("Finish dictation review before deleting this session. Your draft is kept.");
-    return deleteSessionFromView(id, {
-      selection: sessions.currentSelection,
-      remove: (root) => sessions.remove(root, permanent),
-      drop: sessions.drop,
-      forget: chat.forgetSession,
-      replace: (snapshot) => {
-        sessions.acceptDeletion(snapshot);
-        chat.loadHistory(snapshot);
-        chat.setStatus(permanent ? "Session deleted forever" : "Session moved to Trash. Your draft is kept.");
-      },
-      pause: chat.pause,
-      reconnect: chat.reconnect,
-    }, permanent);
-  }
-  async function confirmPermanent(id: string, item?: TrashItem): Promise<boolean> {
-    await trashController.permanent(id, item);
-    return true;
-  }
-  async function softDelete(session: typeof sessions.sessions[number]) {
-    if (!canDeleteSession(session.id)) return false;
-    try {
-      await trashController.move(session);
-      return true;
-    } catch { return false; /* The persistent Trash notice owns the actionable error. */ }
-  }
-
   async function submit(value = chat.prompt) {
     if (
-      !sessions.config ||
-      !sessions.sessionId ||
+      !access().submit ||
       sessions.activityOnly ||
-      channels.open || settings.open || deletion.target || trash.open ||
       dictation.controller.active ||
       (!value.trim() && !uploadState.items.length)
     )
@@ -209,8 +141,7 @@ export function useClient() {
   }
 
   function startDictation() {
-    if (occupied.current || busy || sessions.externalRun || sessions.activityOnly ||
-         chat.approval.pending || settings.open || channels.open || trash.open || !sessions.config?.dictation ||
+    if (!access().create || busy || sessions.externalRun || sessions.activityOnly || !sessions.config?.dictation ||
         !sessions.sessionId || recordingSupport()) return;
     void dictation.controller.start({
       token: sessions.config.token,
@@ -224,14 +155,15 @@ export function useClient() {
   }
 
   return {
+    ...membership,
+    available: access(),
+    panel,
+    showTools: () => { if (access().tools) setPanel("tools"); },
+    showDesigner: () => { if (access().designer) setPanel("designer"); },
+    closePanel: () => { setPanel("none"); void connect(); },
+    dismissError: () => setError(""),
     sessions,
     context,
-    deletion,
-    deletionController,
-    canDeleteSession,
-    softDelete,
-    trash,
-    trashController,
     chat,
     uploads,
     uploadState,
@@ -249,3 +181,5 @@ export function useClient() {
     cancel,
   };
 }
+
+export type Client = ReturnType<typeof useClient>;

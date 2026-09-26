@@ -850,7 +850,8 @@ code {
 }
 .composer-area form:focus-within {
   outline: none;
-  box-shadow: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
 }
 textarea {
   resize: vertical;
@@ -960,7 +961,8 @@ button.primary:not(:disabled) {
 button.primary:hover:not(:disabled) {
   background: #c5d6b2;
 }
-.error-banner {
+.error-banner,
+.activity-banner {
   border-left: 2px solid var(--state-error);
   color: var(--state-error);
   padding: 8px 12px;
@@ -972,10 +974,17 @@ button.primary:hover:not(:disabled) {
   gap: 10px;
   align-items: center;
 }
-.error-banner > span {
+.error-banner > span,
+.activity-banner > span {
   flex: 1 1 240px;
   overflow-wrap: anywhere;
 }
+.activity-banner {
+  color: var(--text-secondary);
+  border-left-color: var(--state-active);
+}
+.activity-banner strong { color: var(--text-reading); }
+.feedback-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .approval-dialog {
   width: min(820px, calc(100% - 24px));
   max-height: calc(100dvh - 24px);
@@ -1085,12 +1094,16 @@ button.deny:hover:not(:disabled) {
     flex-shrink: 0;
   }
   .model {
-    gap: 6px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
     flex: 1;
   }
   .model h1 {
     font-size: 14px;
+    max-width: 100%;
   }
+  .model span { max-width: 100%; margin-left: 0; font-size: 10px; }
   .mode-badge {
     font-size: 11px;
   }

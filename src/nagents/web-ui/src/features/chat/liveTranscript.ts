@@ -245,9 +245,16 @@ export class LiveSessions {
   }
   enqueue(message: QueuedMessage): LiveTranscript {
     const state = this.get(message.session_id);
-    return this.set(message.session_id, { ...state, entries: appendEvent(state.entries, {
+    this.set(message.session_id, { ...state, entries: appendEvent(state.entries, {
       event: "user_message", text: message.prompt, message_id: message.message_id, queued: true,
     }) });
+    return this.admission(message, "sending");
+  }
+  admission(message: QueuedMessage, admission: Entry["admission"]): LiveTranscript {
+    const state = this.get(message.session_id);
+    return this.set(message.session_id, { ...state, entries: state.entries.map((entry) =>
+      entry.queued && !entry.historyId && !entry.ingressId && !entry.runId && entry.messageId === message.message_id
+        ? { ...entry, admission } : entry) });
   }
   reject(message: QueuedMessage): LiveTranscript {
     const state = this.get(message.session_id);

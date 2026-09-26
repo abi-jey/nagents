@@ -63,6 +63,7 @@ export type Entry = {
   channel?: ChannelMeta;
   parts?: MessagePart[];
   queued?: boolean;
+  admission?: "sending" | "queued" | "unconfirmed";
   historyIndex?: number;
   historyId?: string;
   callPosition?: number;
@@ -137,7 +138,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     const ingressId = ingressIdentity(event.ingress_id);
     const input = { historyId, ingressId, messageId: !text(event, "channel") ? text(event, "message_id") : "", taskId };
     const matches = entries.filter((entry) => entry.kind === "user" && sameTranscriptUser(entry, input));
-    return matches.length === 1 ? entries.map((entry) => entry === matches[0] ? { ...entry, runId } : entry) : entries;
+    return matches.length === 1 ? entries.map((entry) => entry === matches[0] ? { ...entry, runId, queued: false, admission: undefined } : entry) : entries;
   }
   function save(
     value: Omit<Entry, "id"> & { id?: string },

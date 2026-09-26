@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type SetStateAction } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { insertDraft } from "../dictation/draft";
 import { request, RequestError } from "../../api/client";
 import { text } from "../../api/events";
@@ -9,6 +9,7 @@ import type { Bootstrap, Snapshot } from "../../types";
 import { useApproval } from "../approvals/useApproval";
 import { applySnapshot, LiveSessions, pendingApprovals, type LiveTranscript } from "./liveTranscript";
 import { changesContext } from "../context/controller";
+import { useSessionDraft } from "./useSessionDraft.js";
 
 export function useChatRun(token: string, sessionId: string, receive: (frame: EventFrame) => void, acceptCredentials: (bootstrap: Bootstrap) => void, unavailable: () => void) {
   const latestToken = useRef(token);
@@ -17,9 +18,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const cache = useRef(new LiveSessions());
   const queue = useRef(new MessageQueue());
   const [view, setView] = useState<LiveTranscript>({ entries: [] });
-  const [prompt, setPromptState] = useState("");
-  const latestPrompt = useRef("");
-  const draftRevision = useRef(0);
+  const { drafts, prompt, setPrompt } = useSessionDraft(sessionId);
   const selected = useRef(sessionId);
   selected.current = sessionId;
   const [status, setStatus] = useState("Connecting to local harness");
@@ -32,14 +31,10 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const [stopping, setStopping] = useState(false);
   const cancelling = useRef(false);
   const sending = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
   const approval = useApproval(token);
   const needsApprovalSync = useRef(true);
 
-  function setPrompt(update: SetStateAction<string>) {
-    draftRevision.current++;
-    latestPrompt.current = typeof update === "function" ? update(latestPrompt.current) : update;
-    setPromptState(latestPrompt.current);
-  }
   function insertDictation(value: string): string {
     let error = "";
     setPrompt((current) => {
@@ -110,7 +105,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   }
   function forgetSession(id: string, discardDraft = false) {
     cache.current.forget(id); queue.current.forget(id);
-    if (discardDraft) setPrompt("");
+    if (discardDraft) drafts.forget(id);
     if (id === selected.current) { approval.close(); setActivityError(""); }
   }
   async function submit(value: string, attachments: string[] = []) {
@@ -118,17 +113,21 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     const failure = queuedMessageFailure(value, sessionId, attachments);
     if (failure) throw new Error(failure);
     sending.current = true;
+    setSubmitting(true);
     const root = sessionId;
-    const revision = draftRevision.current;
+    const draft = drafts.get(root);
     const message = queue.current.prepare(root, value, undefined, attachments);
     setView(cache.current.enqueue(message)); setStatus("Queueing message");
     try {
       await queueMessage(token, message);
       queue.current.confirmed(message);
+      const next = cache.current.admission(message, "queued");
+      drafts.submitted(root, draft, value);
       // HTTP acknowledgements may arrive after typing, navigation, or WS events.
       if (selected.current === root) {
-        if (latestPrompt.current === value && draftRevision.current === revision) setPrompt("");
-        setStatus(cache.current.get(root).activeRun ? "Working" : "Message queued");
+        setView(next);
+        if (next.activeRun) setStatus(pendingApprovals(next.activeRun).length ? "Waiting for approval" : "Working");
+        else if (next.entries.some((entry) => entry.queued)) setStatus("Message queued");
       }
     } catch (error) {
       if (error instanceof RequestError && [409, 413, 415, 422].includes(error.status)) {
@@ -136,9 +135,10 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
         if (selected.current === root) { setView(rejected); setStatus("Submission rejected; draft kept"); }
         throw error;
       }
-      setStatus("Message acknowledgement unconfirmed");
+      const next = cache.current.admission(message, "unconfirmed");
+      if (selected.current === root) { setView(next); setStatus("Message acknowledgement unconfirmed"); }
       throw new Error("Message acknowledgement was not confirmed. Your draft is kept. Retry the same prompt to check its queued identity without starting a duplicate run.");
-    } finally { sending.current = false; }
+    } finally { sending.current = false; setSubmitting(false); }
   }
   async function cancel(id: string) {
     if (!id || cancelling.current) return;
@@ -148,6 +148,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   }
   return {
     entries: view.entries, prompt, setPrompt, insertDictation, runId: view.activeRun?.id || "", connected,
+    submitting, stopping,
     contextRevision,
     backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,
     transcriptVersion: 0, status: stopping ? "Cancelling and waiting for tools to stop" : status,

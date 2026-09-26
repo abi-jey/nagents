@@ -13,6 +13,37 @@ const history = (texts: string[], root = "root", messageIds: string[] = []): Sna
 function event(cache: LiveSessions, cursor: number, record: WireEvent, root = "root") {
   return cache.receive({ type: "event", cursor, epoch: "one", session_id: root, record });
 }
+test("message admission distinguishes sending, accepted queueing and uncertain delivery", () => {
+  const cache = new LiveSessions();
+  const message = { session_id: "root", message_id: "uuid", prompt: "queued work" };
+  const badge = () => renderToStaticMarkup(createElement(Conversation, {
+    entries: cache.get("root").entries, sessionId: "root", demo: false, canSubmit: false, submit: () => assert.fail(),
+  }));
+  cache.enqueue(message);
+  assert.match(badge(), /Sending…/);
+  cache.admission(message, "unconfirmed");
+  assert.match(badge(), /Delivery unconfirmed/);
+  cache.admission(message, "queued");
+  assert.match(badge(), />Queued</);
+  assert.doesNotMatch(badge(), /unconfirmed|awaiting confirmation/);
+  event(cache, 1, { event: "run_started", run_id: "run", message_id: "uuid" });
+  cache.admission(message, "queued");
+  assert.equal(cache.get("root").entries[0].queued, false, "Late HTTP success cannot requeue an executing message");
+  assert.doesNotMatch(badge(), />Queued</);
+});
+
+test("a late acknowledgement after history reconciliation cannot change another root or recreate a queue badge", () => {
+  const cache = new LiveSessions();
+  const message = { session_id: "root", message_id: "uuid", prompt: "work" };
+  cache.enqueue(message);
+  cache.enqueue({ ...message, session_id: "other" });
+  cache.set("root", applySnapshot(cache.get("root"), history(["work"], "root", ["uuid"])));
+  cache.admission(message, "unconfirmed");
+  assert.equal(cache.get("root").entries.length, 1);
+  assert.equal(cache.get("root").entries[0].queued, false);
+  assert.equal(cache.get("other").entries[0].admission, "sending");
+});
+
 test("queued optimism reconciles WS echoes and saved history without consuming a previous identical prompt", () => {
   const cache = new LiveSessions(); cache.set("root", applySnapshot({ entries: [] }, history(["repeat"])));
   const queued = { session_id: "root", message_id: "uuid", prompt: "repeat" };

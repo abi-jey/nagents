@@ -82,7 +82,10 @@ export function useSessions() {
     setConfig(bootstrap);
   }
   return {
-    config, sessions, sessionId, globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
+    config, sessions: sessions.map<Session>((session) => ({ ...session,
+      active_run_id: active.busy && active.sessionId === session.id ? active.id : "",
+    })), sessionId, activeSessionId: active.sessionId,
+    globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
     activityOnly: false, connect, select, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
   };
 }
