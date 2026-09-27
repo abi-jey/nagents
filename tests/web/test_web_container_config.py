@@ -1,8 +1,11 @@
 """Container startup, config sources and credential onboarding without upstream calls."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
@@ -11,15 +14,25 @@ import yaml
 
 from nagents.cli import main
 from nagents.events import ErrorEvent
+from nagents.events import TextDoneEvent
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.auth import OpenAIAuthError
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.provider_setup import provider_error
 from tests.support.web import client_app
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from nagents.events import Event
+    from nagents.types import GenerationConfig
+    from nagents.types import Message
+    from nagents.types import ToolDefinition
 
 
 def test_container_serve_starts_from_defaults_or_env_without_a_file(
@@ -172,6 +185,55 @@ def test_setup_uses_selected_connection_key_not_unrelated_default(
             assert ready == {"configured": True, "message": ""}
 
     asyncio.run(check())
+
+
+@pytest.mark.requires_posix
+def test_missing_selected_key_does_not_block_scripted_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setenv("OPENAI_API_KEY", "UNRELATED-PRIVATE-KEY")
+    monkeypatch.delenv("TEAM_PROVIDER_KEY", raising=False)
+    providers = ScopedProviderRegistryStore(tmp_path)
+    providers.save_scope(
+        ProviderRegistry(
+            active="team",
+            providers={
+                "team": ProviderProfile(
+                    kind="openai", model="team-chat", auth="api-key", api_key_env="TEAM_PROVIDER_KEY"
+                )
+            },
+        ),
+        expected="0" * 64,
+        scope="workspace",
+    )
+
+    async def scripted(
+        provider: HarnessProvider,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: GenerationConfig | None = None,
+        stream: bool = True,
+        verify_model: bool = False,
+    ) -> AsyncIterator[Event]:
+        assert provider.harness_config.provider_id == "team" and provider.model == "team-chat"
+        yield TextDoneEvent(text="Scripted reply")
+
+    async def check() -> None:
+        async with client_app(tmp_path, config=load_config(tmp_path), controlled=False) as (_, client, headers, _):
+            setup = (await client.get("/api/bootstrap")).json()["provider_setup"]
+            assert setup["configured"] is False and "$TEAM_PROVIDER_KEY" in setup["message"]
+            session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
+            response = await client.post("/api/run", json={"session_id": session, "prompt": "hello"}, headers=headers)
+            events = [json.loads(line) for line in response.text.splitlines()]
+            assert events[-1]["status"] == "completed"
+            assert any(event.get("event") == "done" and event.get("final_text") == "Scripted reply" for event in events)
+            assert "UNRELATED-PRIVATE-KEY" not in response.text
+
+    with (
+        patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
+        patch.object(HarnessProvider, "generate", scripted),
+    ):
+        asyncio.run(check())
 
 
 @pytest.mark.requires_posix

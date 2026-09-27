@@ -423,16 +423,6 @@ class WebState:
         try:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
-            setup = provider_setup(self.running_harness)
-            if not setup["configured"]:
-                run.outcome = "failed"
-                logger.warning(
-                    "Provider run blocked: session=%s run=%s reason=missing_credentials", run.session_id, run.id
-                )
-                record: dict[str, object] = {"event": "error", "message": setup["message"], "recoverable": False}
-                await notices.observe(record, live=True)
-                await self.send(run, record)
-                return
             if run.background:
                 if not isinstance(prompt, str):
                     raise ValueError("Background wake prompts must be text")
@@ -497,8 +487,19 @@ class WebState:
             raise
         except Exception:
             run.outcome = "failed"
-            logger.warning("Run producer failed: session=%s run=%s", run.session_id, run.id)
-            await self.send(run, {"event": "error", "message": "Run failed. Completed actions were not rolled back."})
+            # Readiness is advisory: an injected/scripted provider can run without
+            # the configured connection's key. When the real provider fails, give
+            # the same local-only setup guidance without exposing its exception.
+            setup = provider_setup(self.running_harness)
+            reason = "missing_credentials" if not setup["configured"] else "run_failed"
+            logger.warning("Run producer failed: session=%s run=%s reason=%s", run.session_id, run.id, reason)
+            await self.send(
+                run,
+                {
+                    "event": "error",
+                    "message": setup["message"] or "Run failed. Completed actions were not rolled back.",
+                },
+            )
         finally:
             if run.pending is not None and not run.pending.answer.done():
                 run.pending.answer.set_result(False)
