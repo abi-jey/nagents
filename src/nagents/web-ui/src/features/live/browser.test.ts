@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { browserMedia, liveSupport } from "./browser.js";
 
-test("late microphone permission after cancellation stops every track without constructing WebRTC", async () => {
-  const savedAudio = Object.getOwnPropertyDescriptor(globalThis, "Audio");
-  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+test("late microphone permission after cancellation stops tracks and releases the context", async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const savedAudio = Object.getOwnPropertyDescriptor(globalThis, "AudioContext");
   let grant!: (stream: MediaStream) => void;
-  let stopped = 0;
-  Object.defineProperty(globalThis, "Audio", { configurable: true, value: class {
-    autoplay = false; srcObject = null; pause() {} play() { return Promise.resolve(); }
+  let stopped = 0, closed = 0;
+  Object.defineProperty(globalThis, "AudioContext", { configurable: true, value: class {
+    async resume() {}
+    async close() { closed++; }
   } });
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaDevices: {
     getUserMedia: () => new Promise<MediaStream>((resolve) => { grant = resolve; }),
@@ -16,14 +18,15 @@ test("late microphone permission after cancellation stops every track without co
   try {
     const media = browserMedia({ connected: () => assert.fail("No connection expected"), failed: () => {}, playbackBlocked: () => {} });
     const abort = new AbortController();
-    const offer = media.offer(abort.signal);
+    const prepare = media.prepare(abort.signal);
     abort.abort(); media.close();
     grant({ getTracks: () => [{ stop: () => { stopped++; } }] } as unknown as MediaStream);
-    await assert.rejects(offer, { name: "AbortError" });
+    await assert.rejects(prepare, { name: "AbortError" });
     assert.equal(stopped, 1);
+    assert.equal(closed, 1);
   } finally {
-    if (savedAudio) Object.defineProperty(globalThis, "Audio", savedAudio); else Reflect.deleteProperty(globalThis, "Audio");
-    if (savedNavigator) Object.defineProperty(globalThis, "navigator", savedNavigator); else Reflect.deleteProperty(globalThis, "navigator");
+    if (saved) Object.defineProperty(globalThis, "navigator", saved); else Reflect.deleteProperty(globalThis, "navigator");
+    if (savedAudio) Object.defineProperty(globalThis, "AudioContext", savedAudio); else Reflect.deleteProperty(globalThis, "AudioContext");
   }
 });
 
@@ -31,51 +34,69 @@ test("insecure contexts explain why a connection cannot start", () => {
   assert.match(liveSupport(), /localhost or HTTPS/);
 });
 
-test("WebRTC negotiates tracks without restarting Live, recovers blocked playback, and releases media", async () => {
-  const names = ["Audio", "navigator", "RTCPeerConnection", "MediaStream"] as const;
+test("microphone and playback use only the ngn serve WebSocket, release devices and bound playback", async () => {
+  const names = ["navigator", "AudioContext", "AudioWorkletNode", "WebSocket", "location", "RTCPeerConnection"] as const;
   const saved = names.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
   const microphone = Object.assign(new EventTarget(), { enabled: true, stops: 0, stop() { this.stops++; } });
   const stream = { getTracks: () => [microphone], getAudioTracks: () => [microphone] };
-  let playbackAllowed = false, connected = false, channelClosed = false, peerClosed = false;
-  const playback: boolean[] = [], sent: string[] = [];
-  let player!: TestAudio;
-  class TestAudio {
-    autoplay = false; muted = false; srcObject: object | null = null; paused = false;
-    constructor() { player = this; }
-    pause() { this.paused = true; }
-    async play() { if (!playbackAllowed) throw new DOMException("Autoplay blocked", "NotAllowedError"); }
+  const sent: ArrayBuffer[] = [], playback: boolean[] = [];
+  let connected = false, socket!: Socket, node!: Node;
+  class Node {
+    port = { onmessage: (_event: MessageEvent<ArrayBuffer>) => {}, close: () => {} };
+    connect(other: object) { return other as this; }
+    disconnect() {}
   }
-  class Peer extends EventTarget {
-    iceGatheringState = "complete"; connectionState = "new";
-    localDescription: RTCSessionDescriptionInit = { type: "offer", sdp: "offer" };
-    onconnectionstatechange = () => {};
-    ontrack = (_event: { track: object }) => {};
-    addTrack(track: object, source: object) { assert.equal(track, microphone); assert.equal(source, stream); }
-    createDataChannel(label: string) { assert.equal(label, "oai-events"); return { send: (data: string) => sent.push(data), close: () => { channelClosed = true; } }; }
-    async createOffer() { return { type: "offer", sdp: "offer" }; }
-    async setLocalDescription(offer: RTCSessionDescriptionInit) { this.localDescription = offer; }
-    async setRemoteDescription(answer: RTCSessionDescriptionInit) {
-      assert.deepEqual(answer, { type: "answer", sdp: "answer" });
-      this.connectionState = "connected"; this.onconnectionstatechange(); this.ontrack({ track: microphone });
+  class WorkletNode extends Node { constructor() { super(); node = this; } }
+  class Context {
+    state = "suspended";
+    currentTime = 0;
+    destination = {};
+    audioWorklet = { addModule: async (path: string) => { assert.equal(path, "/assets/live-capture.js"); } };
+    createMediaStreamSource(value: object) { assert.equal(value, stream); return new Node(); }
+    createGain() { return Object.assign(new Node(), { gain: { value: 1 } }); }
+    createBuffer(_channels: number, size: number, rate: number) {
+      assert.equal(rate, 24_000);
+      return { duration: size / rate, getChannelData: () => new Float32Array(size) };
     }
-    close() { peerClosed = true; this.connectionState = "closed"; this.onconnectionstatechange(); }
+    createBufferSource() { return Object.assign(new Node(), { buffer: null, onended: () => {}, start: () => {}, stop: () => {} }); }
+    async resume() { this.state = "running"; }
+    async close() {}
   }
-  Object.defineProperty(globalThis, "Audio", { configurable: true, value: TestAudio });
-  Object.defineProperty(globalThis, "MediaStream", { configurable: true, value: class {} });
-  Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: Peer });
+  class Socket {
+    static OPEN = 1;
+    readyState = Socket.OPEN;
+    bufferedAmount = 0;
+    binaryType = "blob";
+    onopen = () => {};
+    onerror = () => {};
+    onclose = () => {};
+    onmessage = (_event: MessageEvent<ArrayBuffer>) => {};
+    constructor(readonly url: string, readonly protocols: string[]) { socket = this; }
+    send(frame: ArrayBuffer) { sent.push(frame); }
+    close() { this.readyState = 3; }
+  }
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: { mediaDevices: { getUserMedia: async () => stream } } });
+  Object.defineProperty(globalThis, "AudioContext", { configurable: true, value: Context });
+  Object.defineProperty(globalThis, "AudioWorkletNode", { configurable: true, value: WorkletNode });
+  Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: Socket });
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { protocol: "http:", host: "127.0.0.1:8765" } });
+  Object.defineProperty(globalThis, "RTCPeerConnection", { configurable: true, value: class { constructor() { assert.fail("WebRTC must not be used"); } } });
   try {
-    const media = browserMedia({ connected: () => { connected = true; }, failed: () => assert.fail("No transport failure"), playbackBlocked: (blocked) => playback.push(blocked) });
-    assert.equal(await media.offer(new AbortController().signal), "offer");
-    await media.answer("answer");
-    assert.equal(connected, true); assert.deepEqual([...sent], []);
-    assert.equal(playback.at(-1), true);
-    playbackAllowed = true; await media.play(); assert.equal(playback.at(-1), false);
+    const media = browserMedia({ connected: () => { connected = true; }, failed: assert.fail, playbackBlocked: (blocked) => playback.push(blocked) });
+    await media.prepare(new AbortController().signal);
+    const opening = media.connect("voice-id", "web-token"); socket.onopen(); await opening;
+    assert.equal(connected, true);
+    assert.equal(socket.url, "ws://127.0.0.1:8765/api/live/sessions/voice-id/audio");
+    assert.deepEqual(socket.protocols, ["ngn.live.v1", "ngn.token.web-token"]);
+    assert.equal(socket.binaryType, "arraybuffer");
+    node.port.onmessage({ data: new ArrayBuffer(960) } as MessageEvent<ArrayBuffer>);
+    assert.equal(sent.length, 1);
+    socket.onmessage({ data: new ArrayBuffer(960) } as MessageEvent<ArrayBuffer>);
     media.muteInput(true); media.muteOutput(true);
-    assert.equal(microphone.enabled, false); assert.equal(player.muted, true);
-    media.close(); media.close();
-    assert.equal(microphone.stops, 1); assert.ok(channelClosed && peerClosed);
-    assert.equal(player.srcObject, null); assert.equal(player.paused, true);
+    assert.equal(microphone.enabled, false);
+    await media.play(); assert.equal(playback.at(-1), false);
+    media.close(); media.close(); await setImmediate();
+    assert.equal(microphone.stops, 1); assert.equal(socket.readyState, 3);
   } finally {
     for (const [name, descriptor] of saved) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);

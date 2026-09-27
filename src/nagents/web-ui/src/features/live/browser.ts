@@ -2,79 +2,110 @@ import type { LiveMedia, MediaHandlers } from "./types.js";
 
 export function liveSupport(): string {
   if (!globalThis.isSecureContext) return "Open ngn serve on localhost or HTTPS to use your microphone.";
-  if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.RTCPeerConnection !== "function")
+  if (!globalThis.navigator?.mediaDevices?.getUserMedia || typeof globalThis.AudioContext !== "function" || typeof globalThis.WebSocket !== "function")
     return "This browser does not support live audio. Try a current version of Chrome, Safari, Edge, or Firefox.";
   return "";
 }
 
 export function browserMedia(handlers: MediaHandlers): LiveMedia {
-  let stream: MediaStream | undefined, peer: RTCPeerConnection | undefined, channel: RTCDataChannel | undefined;
-  let closed = false;
-  let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
-  const audio = new Audio();
-  audio.autoplay = true;
-  const play = async () => {
-    try { await audio.play(); if (!closed) handlers.playbackBlocked(false); }
-    catch { if (!closed) handlers.playbackBlocked(true); }
-  };
+  let stream: MediaStream | undefined, context: AudioContext | undefined, capture: AudioWorkletNode | undefined, socket: WebSocket | undefined;
+  let closed = false, outputMuted = false, playbackTime = 0;
+  const playing = new Set<AudioBufferSourceNode>();
+
   const close = () => {
     if (closed) return;
-    closed = true; clearTimeout(disconnectTimer);
+    closed = true;
     stream?.getTracks().forEach((track) => track.stop());
-    channel?.close(); peer?.close();
-    audio.pause(); audio.srcObject = null;
+    capture?.disconnect(); capture?.port.close();
+    socket?.close();
+    for (const source of playing) source.stop();
+    playing.clear();
+    if (context) void context.close();
   };
+
+  const play = async () => {
+    if (!context) return;
+    try { await context.resume(); if (!closed) handlers.playbackBlocked(false); }
+    catch { if (!closed) handlers.playbackBlocked(true); }
+  };
+
+  const receive = (data: ArrayBuffer) => {
+    if (closed || !context || outputMuted) return;
+    if (data.byteLength === 0 || data.byteLength > 48_000 || data.byteLength % 2) { handlers.failed("The audio relay sent an invalid frame."); return; }
+    const samples = new DataView(data), buffer = context.createBuffer(1, data.byteLength / 2, 24_000);
+    const channel = buffer.getChannelData(0);
+    for (let i = 0; i < channel.length; i++) channel[i] = samples.getInt16(i * 2, true) / 32768;
+    // Avoid building a long delayed playback queue if the browser falls behind.
+    if (playbackTime > context.currentTime + 0.6) {
+      for (const source of playing) source.stop();
+      playing.clear(); playbackTime = 0;
+    }
+    const source = context.createBufferSource();
+    source.buffer = buffer; source.connect(context.destination);
+    source.onended = () => { playing.delete(source); source.disconnect(); };
+    playing.add(source);
+    const start = Math.max(context.currentTime + 0.02, playbackTime);
+    source.start(start);
+    playbackTime = start + buffer.duration;
+    if (context.state !== "running") handlers.playbackBlocked(true);
+  };
+
   return {
-    async offer(signal) {
+    async prepare(signal) {
       signal.throwIfAborted();
       signal.addEventListener("abort", close, { once: true });
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      // Permission prompts cannot be cancelled. Stop a late-granted stream too.
-      if (closed || signal.aborted) { stream.getTracks().forEach((track) => track.stop()); throw new DOMException("Cancelled", "AbortError"); }
-      const connection = new RTCPeerConnection(); peer = connection;
-      for (const track of stream.getTracks()) {
-        connection.addTrack(track, stream);
-        track.addEventListener("ended", () => { if (!closed) handlers.failed("Your microphone was disconnected. Check it, then reconnect."); });
-      }
-      connection.ontrack = (event) => {
-        if (closed) return;
-        audio.srcObject = new MediaStream([event.track]); void play();
-      };
-      connection.onconnectionstatechange = () => {
-        if (closed) return;
-        clearTimeout(disconnectTimer);
-        if (connection.connectionState === "connected") handlers.connected();
-        else if (connection.connectionState === "failed" || connection.connectionState === "closed") handlers.failed("The audio connection was lost. Start a new conversation to reconnect.");
-        else if (connection.connectionState === "disconnected") disconnectTimer = setTimeout(() => {
-          if (!closed) handlers.failed("The audio connection was interrupted. Check your network and reconnect.");
-        }, 8000);
-      };
-      // The session already starts through the HTTP WebRTC handshake. This
-      // channel is negotiated for Live events; never send session.start here.
-      channel = connection.createDataChannel("oai-events");
-      await connection.setLocalDescription(await connection.createOffer());
-      if (connection.iceGatheringState !== "complete") await new Promise<void>((resolve, reject) => {
-        const finish = (error?: Error) => {
-          clearTimeout(timer); connection.removeEventListener("icegatheringstatechange", changed);
-          signal.removeEventListener("abort", aborted);
-          if (error) reject(error); else resolve();
+      // Resume during the explicit Start click, before an asynchronous permission
+      // prompt consumes browser user activation. A blocked resume stays retryable.
+      const audio = new AudioContext(); context = audio;
+      void play();
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        if (closed || signal.aborted) { stream.getTracks().forEach((track) => track.stop()); throw new DOMException("Cancelled", "AbortError"); }
+        for (const track of stream.getAudioTracks())
+          track.addEventListener("ended", () => { if (!closed) handlers.failed("Your microphone was disconnected. Check it, then reconnect."); });
+        await audio.audioWorklet.addModule("/assets/live-capture.js");
+        if (closed || signal.aborted) throw new DOMException("Cancelled", "AbortError");
+        const source = audio.createMediaStreamSource(stream);
+        const processor = new AudioWorkletNode(audio, "ngn-live-capture"); capture = processor;
+        processor.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+          if (closed || !socket || socket.readyState !== WebSocket.OPEN) return;
+          if (socket.bufferedAmount > 192_000) { handlers.failed("The audio relay is falling behind. Reconnect to try again."); return; }
+          socket.send(event.data);
         };
-        const changed = () => { if (connection.iceGatheringState === "complete") finish(); };
-        const aborted = () => finish(new DOMException("Cancelled", "AbortError"));
-        const timer = setTimeout(() => finish(new Error("Could not prepare the audio connection. Check your network and try again.")), 10_000);
-        connection.addEventListener("icegatheringstatechange", changed);
-        signal.addEventListener("abort", aborted, { once: true });
-        if (signal.aborted) aborted(); else changed();
-      });
-      signal.throwIfAborted();
-      const sdp = connection.localDescription?.sdp;
-      if (!sdp) throw new Error("The browser could not create an audio connection.");
-      return sdp;
+        // Keep capture running without playing microphone audio locally.
+        const silent = audio.createGain(); silent.gain.value = 0;
+        source.connect(processor).connect(silent).connect(audio.destination);
+      } catch (error) { close(); throw error; }
     },
-    async answer(sdp) { if (!closed && peer) await peer.setRemoteDescription({ type: "answer", sdp }); },
+    async connect(sessionId, token) {
+      if (closed || !context) throw new DOMException("Cancelled", "AbortError");
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      const channel = new WebSocket(`${scheme}//${location.host}/api/live/sessions/${encodeURIComponent(sessionId)}/audio`, ["ngn.live.v1", `ngn.token.${token}`]);
+      socket = channel; channel.binaryType = "arraybuffer";
+      await new Promise<void>((resolve, reject) => {
+        channel.onopen = () => {
+          if (!closed) {
+            handlers.connected();
+            if (context?.state !== "running") handlers.playbackBlocked(true);
+            void play(); resolve();
+          }
+        };
+        channel.onerror = () => reject(new Error("Could not connect to the ngn serve audio relay."));
+        channel.onclose = () => {
+          if (!closed) handlers.failed("The audio relay disconnected. Start a new conversation to reconnect.");
+          reject(new Error("The audio relay disconnected."));
+        };
+      });
+      channel.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        if (!(event.data instanceof ArrayBuffer)) { handlers.failed("The audio relay sent an invalid frame."); return; }
+        receive(event.data);
+      };
+    },
     muteInput(muted) { stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); },
-    muteOutput(muted) { audio.muted = muted; },
-    play,
-    close,
+    muteOutput(muted) {
+      outputMuted = muted;
+      if (muted) { for (const source of playing) source.stop(); playing.clear(); playbackTime = 0; }
+    },
+    play, close,
   };
 }

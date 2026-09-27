@@ -53,6 +53,7 @@ class LiveValues(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
 
     enabled: bool
+    backend_mode: Literal["assistant", "hosted"] = "assistant"
     provider: Literal["openai", "openai_compatible", "azure_openai_compatible_v1"]
     model: ModelId
     backend_model: ModelId
@@ -75,6 +76,7 @@ class LiveValues(BaseModel):
     def defaults(cls) -> LiveValues:
         return cls(
             enabled=False,
+            backend_mode="assistant",
             provider="openai",
             model="gpt-live-1",
             backend_model=LiveConfig().backend_model,
@@ -169,6 +171,7 @@ class LiveSettings:
         self._loaded = False
         self._tasks: set[asyncio.Task[object]] = set()
         self._admission: ContextVar[LiveConnection] = ContextVar("live_connection")
+        self._session: ContextVar[str] = ContextVar("live_chat_session")
 
     async def _owned(self, operation: Coroutine[object, object, T]) -> T:
         task = asyncio.create_task(operation)
@@ -213,6 +216,10 @@ class LiveSettings:
         ):
             raise ValueError("Invalid Live settings")
         values = LiveValues.model_validate_json(payload)
+        # Saved connections created before backend_mode existed were hosted.
+        # Keep their behavior until the user explicitly chooses another mode.
+        if "backend_mode" not in values.model_fields_set:
+            values = values.model_copy(update={"backend_mode": "hosted"})
         key = SecretStr("")
         if key_id is not None:
             if (
@@ -336,16 +343,18 @@ class LiveSettings:
             return await self._owned(commit())
 
     @asynccontextmanager
-    async def admit(self, revision: str) -> AsyncIterator[LiveConnection]:
+    async def admit(self, revision: str, session_id: str = "") -> AsyncIterator[LiveConnection]:
         with self._idle():
             connection = await self.connection()
             self._ready()  # Shutdown may have started while the database read was running.
             if connection.revision != revision:
                 raise HTTPException(409, "Live settings changed. Reload Connection settings before connecting.")
             token = self._admission.set(connection)
+            session_token = self._session.set(session_id)
             try:
                 yield connection
             finally:
+                self._session.reset(session_token)
                 self._admission.reset(token)
 
     def admitted(self) -> LiveConnection:
@@ -354,6 +363,13 @@ class LiveSettings:
             return self._admission.get()
         except LookupError:
             raise HTTPException(503, "Live connection has not been admitted.") from None
+
+    def admitted_session(self) -> str:
+        """Return the verified root captured with this call's connection."""
+        try:
+            return self._session.get()
+        except LookupError:
+            raise HTTPException(503, "Live conversation has not been admitted.") from None
 
     async def shutdown(self) -> None:
         self._closed = True

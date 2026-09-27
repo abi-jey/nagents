@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,6 +13,7 @@ import anyio
 import pytest
 from aiohttp import web
 from fastapi import HTTPException
+from fastapi import WebSocket
 
 from nagents import Agent
 from nagents import AudioDuplex
@@ -100,7 +102,7 @@ class FakeAgent:
         config = self.provider.live_config
         assert config is not None and config.attach_to
         assert self.audio is None
-        assert not config.handle_delegations
+        assert config.handle_delegations is (config.delegation == "client")
         assert config.close_session_on_exit
         self.started.set()
         try:
@@ -240,6 +242,29 @@ def test_create_attaches_fresh_hosted_agent_and_close_is_confirmed_and_idempoten
         assert SECRET not in json.dumps(result)
         await rig.service.shutdown()
         assert agent.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_client_backend_runs_on_owned_sideband_without_server_media(rig: Rig) -> None:
+    async def handle(transcript: str) -> str:
+        return transcript
+
+    async def scenario() -> None:
+        rig.configure = lambda agent: setattr(
+            agent.provider,
+            "live_config",
+            LiveConfig(delegation="client", client_handler=handle, voice="cedar"),
+        )
+        identifier = await create(rig.service)
+        assert rig.requests[0][1]["delegation"] == {"type": "client"}
+        agent = rig.agents[0]
+        assert agent.provider.live_config is not None
+        assert agent.provider.live_config.attach_to == "native-1"
+        assert agent.provider.live_config.handle_delegations is True
+        assert agent.provider.live_config.client_handler is handle
+        assert agent.audio is None and not agent.sent
+        await rig.service.close(identifier)
 
     asyncio.run(scenario())
 
@@ -868,6 +893,108 @@ def test_real_agent_and_live_api_attach_without_second_start_or_server_audio(mon
             assert [event["type"] for event in commands] == ["session.close"]
             assert agents[0].audio is None and agents[0].live.status.finalized
             assert agents[0]._live_updates is None
+        finally:
+            await service.shutdown()
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+
+
+def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real native provider WebSocket, with the browser end simulated at the ASGI boundary."""
+
+    class Browser:
+        def __init__(self) -> None:
+            self.incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+            self.outgoing: asyncio.Queue[bytes] = asyncio.Queue()
+            self.accepted = ""
+            self.closed = False
+
+        async def accept(self, *, subprotocol: str) -> None:
+            self.accepted = subprotocol
+
+        async def receive(self) -> dict[str, object]:
+            return await self.incoming.get()
+
+        async def send_bytes(self, data: bytes) -> None:
+            await self.outgoing.put(data)
+
+        async def close(self, *, code: int = 1000) -> None:
+            self.closed = True
+
+    async def scenario() -> None:
+        input_audio = b"\x01\x00" * 480
+        output_audio = b"\x02\x00" * 6000
+        upstream_audio = asyncio.Event()
+        commands: list[str] = []
+
+        async def provider_socket(request: web.Request) -> web.WebSocketResponse:
+            assert request.headers["Authorization"] == f"Bearer {SECRET}"
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            first = await socket.receive_json()
+            assert first["type"] == "session.start"
+            assert first["session"]["delegation"] == {"type": "client"}
+            assert first["session"]["audio"]["format"] == {"type": "audio/pcm", "rate": 24000}
+            await socket.send_json({"type": "session.started", "session": {"id": "native-relay"}})
+            async for message in socket:
+                event = message.json()
+                commands.append(str(event["type"]))
+                if event["type"] == "session.input_audio.append":
+                    if base64.b64decode(event["audio"]) == input_audio:
+                        upstream_audio.set()
+                        await socket.send_json(
+                            {"type": "session.output_audio.delta", "delta": base64.b64encode(output_audio).decode()}
+                        )
+                elif event["type"] == "session.close":
+                    await socket.send_json({"type": "session.closed", "reason": "client_close"})
+                    break
+            return socket
+
+        upstream = web.Application()
+        upstream.router.add_get("/v1/live/sessions", provider_socket)
+        runner = web.AppRunner(upstream, access_log=None)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        url = f"http://127.0.0.1:{runner.addresses[0][1]}/v1/live/sessions"
+        monkeypatch.setattr(Provider, "live_endpoint", lambda self, **kwargs: url)
+
+        async def handle(transcript: str) -> str:
+            return transcript
+
+        def factory(voice: str) -> Agent:
+            return Agent(
+                provider=Provider(
+                    ProviderType.OPENAI_COMPATIBLE,
+                    model="gpt-live-1",
+                    api_key=SECRET,
+                    live_config=LiveConfig(delegation="client", client_handler=handle, voice=voice or "marin"),
+                ),
+                session_manager=SessionManager(Path(":memory:")),
+            )
+
+        service = LiveService(factory)
+        try:
+            created = await service.create_stream()
+            assert set(created) == {"session_id", "model", "voice"}
+            identifier = str(created["session_id"])
+            browser = Browser()
+            relay = asyncio.create_task(service.serve_audio(identifier, cast("WebSocket", browser)))
+            await until(lambda: browser.accepted == "ngn.live.v1")
+            browser.incoming.put_nowait({"type": "websocket.receive", "bytes": input_audio})
+            async with asyncio.timeout(WAIT):
+                await upstream_audio.wait()
+                assert b"".join([await browser.outgoing.get(), await browser.outgoing.get()]) == output_audio
+            assert (await service.snapshot(identifier))["status"] == "connected"
+            browser.incoming.put_nowait({"type": "websocket.disconnect"})
+            await asyncio.wait_for(relay, WAIT)
+            result = await service.snapshot(identifier)
+            assert result["status"] == "closed" and "Finalization confirmed" in str(result["message"])
+            assert browser.closed and commands.count("session.close") == 1
+            assert SECRET not in json.dumps(result)
+            rejected = Browser()
+            await service.serve_audio(identifier, cast("WebSocket", rejected))
+            assert rejected.closed and rejected.accepted == ""
         finally:
             await service.shutdown()
             await runner.cleanup()

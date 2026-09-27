@@ -6,7 +6,7 @@ import { connectionChanged, LiveSettingsController, settingsApi, settingsValidat
 import type { LiveSettingsInput, LiveSettingsSnapshot } from "./types.js";
 
 const settings: LiveSettingsSnapshot = {
-  values: { enabled: false, provider: "openai", model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", base_url: "" },
+  values: { enabled: false, backend_mode: "assistant", provider: "openai", model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", base_url: "" },
   revision: "a".repeat(64), key_configured: false, providers: ["openai", "openai_compatible", "azure_openai_compatible_v1"], voices: ["marin", "cedar"],
 };
 function deferred<T>() {
@@ -104,10 +104,10 @@ test("settings and session transport use same-origin authenticated routes with a
     const api = settingsApi("local-web-token"); const signal = new AbortController().signal;
     await api.read(signal);
     const body: LiveSettingsInput = { revision: settings.revision, values: settings.values, api_key: "test-key", clear_api_key: false };
-    await api.save(body); await liveApi("local-web-token").create("offer", "marin", signal, settings.revision);
+    await api.save(body); await liveApi("local-web-token").create("marin", signal, settings.revision, "ngn-chat-root");
     assert.deepEqual(requests.map((r) => r.path), ["/api/live/settings", "/api/live/settings", "/api/live/sessions"]);
     for (const { init } of requests) { assert.equal(new Headers(init?.headers).get("X-Ngn-Token"), "local-web-token"); assert.equal(init?.credentials, "same-origin"); }
     assert.deepEqual(JSON.parse(String(requests[1].init?.body)), body);
-    assert.deepEqual(JSON.parse(String(requests[2].init?.body)), { sdp: "offer", voice: "marin", revision: settings.revision });
+    assert.deepEqual(JSON.parse(String(requests[2].init?.body)), { voice: "marin", revision: settings.revision, session_id: "ngn-chat-root" });
   } finally { globalThis.fetch = original; }
 });
