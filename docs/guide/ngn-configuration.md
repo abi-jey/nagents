@@ -87,8 +87,10 @@ ngn is stopped. A revision prevents an older UI from overwriting another
 process's edits. A separate connection can be selected for a trusted agent profile using
 `profiles.NAME.provider: CONNECTION_NAME`.
 
-The file contains only routing, model, Live preferences and **environment
-variable names**. Use `api_key_env: OPENAI_API_KEY` or
+The provider file identifies the connection, routing and **environment variable
+names**. Voice duplex preferences are edited separately in **GPT-Live → Voice
+settings**: Global supplies defaults, and this workspace may override individual
+fields without freezing the other global values. Use `api_key_env: OPENAI_API_KEY` or
 `api_key_env: ${OPENAI_API_KEY}`; ngn resolves the variable when it makes a
 request. It never writes the key value to this file. Set environment variables
 in the environment of the **ngn process** (including the `ngn serve` process),
@@ -117,12 +119,6 @@ providers:
     base_url: https://resource.openai.azure.com/openai/v1
     api: responses
     auth: entra
-    live:
-      enabled: true
-      model: my-live-deployment
-      backend_model: my-responses-deployment
-      voice: marin
-      backend_mode: hosted
 ```
 
 The UI generates a fresh revision on save. Workspace YAML uses the same schema:
@@ -134,6 +130,16 @@ the allowed fields for the selected type. A provider catalog is a best-effort
 list of model IDs, not a guarantee of access. Providers without a catalog or a
 compatible `/models` endpoint require manual model entry. Saving a named
 connection does not perform network authentication.
+
+On first use, `ngn serve` imports the selected provider's v1 YAML `live` fields
+into global Voice defaults or workspace Voice overrides, respectively. An active
+global connection selected locally continues to inherit global defaults. The
+import happens only if that scope has no Voice record; subsequent Voice edits are
+never replaced by later changes to provider YAML. The new Voice records are stored
+in `$XDG_CONFIG_HOME/ngn/voice.db` and the workspace's session database, with
+no API key values. Future provider schema migrations should keep existing `live`
+entries readable until this import has run, then omit Live fields on provider
+writes.
 
 Create a named connection in the web UI or TUI and set its environment variable;
 the provider editor does not offer an API-key-value field.
@@ -317,8 +323,8 @@ transcription endpoint requires its own paid API access; ChatGPT device login
 and subscription benefits do not authorize this call. See
 [dictation usage and privacy](ngn.md#dictation).
 
-Browser GPT-Live connections are configured in **GPT-Live → Connection settings**
-and saved per workspace. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
+Browser GPT-Live preferences are configured in **GPT-Live → Voice settings**
+at either scope. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
 
 ### Storage and extensions
 

@@ -218,7 +218,7 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
             initial = (await client.get("/api/live", headers=headers)).json()
             assert initial["enabled"] is False and initial["available"] is False and not initial["key_configured"]
             assert initial["model"] == "gpt-live-1" and initial["backend_model"] == LiveConfig().backend_model
-            assert initial["voices"] == list(LIVE_VOICES) and "Connection settings" in initial["reason"]
+            assert initial["voices"] == list(LIVE_VOICES) and "Voice settings" in initial["reason"]
             revision = await configure(client, headers)
             info = await client.get("/api/live", headers=headers)
             assert info.json()["available"] is True and info.json()["reason"] == ""

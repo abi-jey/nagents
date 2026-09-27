@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 from contextlib import closing
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -31,14 +30,16 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 from nagents.harness.connection import live_auth_available
-from nagents.harness.providers import LiveProfile
 from nagents.harness.providers import ProviderProfile
-from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live import LiveConfig
 from nagents.provider.auth import validate_prefix
 
 from ._async import join_owned
+from .voice_preferences import Scope
+from .voice_preferences import VoiceOverrides
+from .voice_preferences import VoicePreferenceStore
+from .voice_preferences import VoicePreferences
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -134,6 +135,22 @@ class LiveSettingsInput(BaseModel):
         return self
 
 
+class GlobalVoiceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    scope: Literal["global"]
+    revision: Revision
+    preferences: VoicePreferences
+
+
+class WorkspaceVoiceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    scope: Literal["workspace"]
+    revision: Revision
+    overrides: VoiceOverrides
+
+
 @dataclass(frozen=True)
 class LiveConnection:
     values: LiveValues
@@ -143,6 +160,9 @@ class LiveConnection:
     profile_name: str = ""
     credential_available: bool = False
     connection_scope: str = ""
+    voice_scope: str = ""
+    global_preferences: VoicePreferences | None = None
+    overrides: VoiceOverrides | None = None
 
     @property
     def key_configured(self) -> bool:
@@ -156,9 +176,19 @@ class LiveConnection:
             "providers": list(LIVE_PROVIDERS),
             "voices": list(LIVE_VOICES),
         }
-        if self.profile is not None:
+        if self.voice_scope and self.global_preferences is not None and self.overrides is not None:
+            selected = self.overrides.selected() if self.voice_scope == "workspace" else {}
             result.update(
                 source="providers",
+                scope=self.voice_scope,
+                global_preferences=self.global_preferences.model_dump(),
+                overrides=selected,
+                origins={name: "workspace" if name in selected else "global" for name in VoicePreferences.model_fields},
+                profile_name=self.profile_name,
+                live_supported=self.profile is not None and self.profile.kind in NAMED_LIVE_PROVIDERS,
+            )
+        if self.profile is not None:
+            result.update(
                 profile_name=self.profile_name,
                 api_key_env=self.profile.key_env,
                 auth=self.profile.auth,
@@ -174,6 +204,20 @@ def _public_values(values: LiveValues, *keys: SecretStr) -> None:
         secret = key.get_secret_value()
         if secret and any(secret in value for value in strings):
             raise ValueError("Keep API keys in the write-only API key field.")
+
+
+def _voice_revision(
+    scope: Scope,
+    global_revision: str,
+    global_provider_revision: str,
+    local_revision: str,
+    local_provider_revision: str,
+    active: str,
+) -> str:
+    parts = [scope, global_revision, global_provider_revision]
+    if scope == "workspace":
+        parts.extend((local_revision, local_provider_revision, active))
+    return hashlib.sha256(":".join(parts).encode()).hexdigest()
 
 
 class LiveSettings:
@@ -202,49 +246,70 @@ class LiveSettings:
         self._tasks: set[asyncio.Task[object]] = set()
         self._admission: ContextVar[LiveConnection] = ContextVar("live_connection")
         self.providers = providers or ScopedProviderRegistryStore(db_path.parent)
+        self.voice = VoicePreferenceStore(db_path, self.providers)
         self._session: ContextVar[str] = ContextVar("live_chat_session")
 
-    def _named(self) -> LiveConnection | None:
-        registry = self.providers.load()
-        if not registry.active:
-            return None
-        profile = registry.providers[registry.active]
-        local = self.providers.load_scope("workspace")
+    def _scoped(self, scope: Scope) -> LiveConnection:
         global_registry = self.providers.load_scope("global")
-        scope = "workspace" if registry.active in local.providers else "global"
-        revision = hashlib.sha256(
-            f"{registry.active}:{scope}:{global_registry.revision}:{local.revision}".encode()
-        ).hexdigest()
-        if profile.kind not in NAMED_LIVE_PROVIDERS:
-            return LiveConnection(
-                LiveValues.defaults().model_copy(update={"enabled": False}),
-                revision,
-                SecretStr(""),
-                profile=profile,
-                profile_name=registry.active,
-                connection_scope=scope,
+        local = self.providers.load_scope("workspace")
+        registry = global_registry if scope == "global" else self.providers.load()
+        name = registry.active
+        profile = registry.providers.get(name)
+        connection_scope = "workspace" if scope == "workspace" and name in local.providers else "global"
+
+        def read(
+            db: sqlite3.Connection,
+            global_values: VoicePreferences,
+            overrides: VoiceOverrides,
+            global_revision: str,
+            local_revision: str,
+        ) -> LiveConnection:
+            del db
+            revision = _voice_revision(
+                scope,
+                global_revision,
+                global_registry.revision,
+                local_revision,
+                local.revision,
+                name,
             )
-        live = profile.live
-        values = LiveValues.model_validate(
-            {
-                "enabled": live.enabled,
-                "backend_mode": live.backend_mode,
-                "provider": profile.kind,
-                "model": live.model,
-                "backend_model": live.backend_model,
-                "voice": live.voice,
-                "base_url": profile.base_url,
-            }
-        )
-        return LiveConnection(
-            values,
-            revision,
-            SecretStr(os.environ.get(profile.key_env, "")),
-            profile=profile,
-            profile_name=registry.active,
-            credential_available=live_auth_available(profile),
-            connection_scope=scope,
-        )
+            preferences = VoicePreferences.model_validate(
+                {
+                    **global_values.model_dump(),
+                    **(overrides.selected() if scope == "workspace" else {}),
+                }
+            )
+            values = LiveValues.model_validate(
+                {
+                    **preferences.model_dump(),
+                    "provider": profile.kind
+                    if profile is not None and profile.kind in NAMED_LIVE_PROVIDERS
+                    else "openai",
+                    "base_url": profile.base_url if profile is not None else "",
+                }
+            )
+            supported = profile is not None and profile.kind in NAMED_LIVE_PROVIDERS
+            return LiveConnection(
+                values,
+                revision,
+                SecretStr(os.environ.get(profile.key_env, "") if supported and profile is not None else ""),
+                profile=profile,
+                profile_name=name,
+                credential_available=live_auth_available(profile, values.model)
+                if supported and profile is not None
+                else False,
+                connection_scope=connection_scope,
+                voice_scope=scope,
+                global_preferences=global_values,
+                overrides=overrides,
+            )
+
+        connection = self.voice.transaction(read)
+        if self.providers.load_scope("global").revision != global_registry.revision or (
+            scope == "workspace" and self.providers.load_scope("workspace").revision != local.revision
+        ):
+            raise HTTPException(409, "Provider connection changed. Reload Voice settings before connecting.")
+        return connection
 
     async def _owned(self, operation: Coroutine[object, object, T]) -> T:
         task = asyncio.create_task(operation)
@@ -310,10 +375,6 @@ class LiveSettings:
         if self._closed:
             raise HTTPException(503, "Live connection settings are unavailable.")
 
-        if self._named() is not None:
-            self._loaded = True
-            return
-
         async def initialize() -> None:
             def create(db: sqlite3.Connection) -> None:
                 db.execute(
@@ -330,10 +391,12 @@ class LiveSettings:
                     "INSERT OR IGNORE INTO ngn_web_live_settings VALUES (1, 1, ?, ?)",
                     (LiveValues.defaults().model_dump_json(), secrets.token_hex(32)),
                 )
-                self._read(db)
+                if not self.providers.load().active:
+                    self._read(db)
 
             try:
                 await self._transaction(create)
+                await asyncio.to_thread(self._scoped, "workspace")
             except Exception:
                 raise HTTPException(
                     503, "Live connection settings could not be loaded. Check the workspace database."
@@ -348,9 +411,8 @@ class LiveSettings:
 
     async def connection(self) -> LiveConnection:
         self._ready()
-        named = self._named()
-        if named is not None:
-            return named
+        if self.providers.load().active:
+            return await self.scoped("workspace")
 
         async def read() -> LiveConnection:
             try:
@@ -362,53 +424,118 @@ class LiveSettings:
 
         return await self._owned(read())
 
-    async def snapshot(self) -> dict[str, object]:
-        return (await self.connection()).snapshot()
+    async def scoped(self, scope: Scope) -> LiveConnection:
+        self._ready()
+
+        async def read() -> LiveConnection:
+            try:
+                return await asyncio.to_thread(self._scoped, scope)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(
+                    503, "Voice preferences could not be loaded. Check the settings database."
+                ) from None
+
+        return await self._owned(read())
+
+    async def snapshot(self, scope: Scope | None = None) -> dict[str, object]:
+        return (await (self.scoped(scope) if scope is not None else self.connection())).snapshot()
 
     @contextmanager
     def _idle(self) -> Iterator[None]:
         self._ready()
         if self._busy or self.active():
-            raise HTTPException(409, "Live is busy. End the call or wait for Connection settings to finish saving.")
+            raise HTTPException(409, "Live is busy. End the call or wait for Voice settings to finish saving.")
         self._busy = True
         try:
             yield
         finally:
             self._busy = False
 
-    async def change(self, body: LiveSettingsInput) -> dict[str, object]:
-        if self._named() is not None:
+    async def change(self, body: LiveSettingsInput | GlobalVoiceInput | WorkspaceVoiceInput) -> dict[str, object]:
+        if isinstance(body, (GlobalVoiceInput, WorkspaceVoiceInput)):
             with self._idle():
-                if body.api_key.get_secret_value() or body.clear_api_key:
-                    raise HTTPException(422, "Named provider connections use environment variables, not saved keys.")
-                selected = self.providers.load()
-                name = selected.active
-                scope = "workspace" if name in self.providers.load_scope("workspace").providers else "global"
-                registry = self.providers.load_scope(scope)
-                profile = registry.providers[name]
-                current = self._named()
-                if current is None or current.revision != body.revision:
-                    raise HTTPException(409, "Provider connection changed. Reload settings before saving.")
-                if body.values.provider != profile.kind or body.values.base_url != profile.base_url:
-                    raise HTTPException(422, "Edit provider type and API endpoint in Provider settings.")
-                live = LiveProfile(
-                    enabled=body.values.enabled,
-                    model=body.values.model,
-                    backend_model=body.values.backend_model,
-                    voice=body.values.voice,
-                    backend_mode=body.values.backend_mode,
-                )
-                updated = ProviderProfile(**{**asdict(profile), "live": live})
-                updated.validate()
-                await self._owned(
-                    asyncio.to_thread(
-                        self.providers.save_scope,
-                        ProviderRegistry(active=registry.active, providers={**registry.providers, name: updated}),
-                        expected=registry.revision,
-                        scope=scope,
+                scope = body.scope
+                global_registry = self.providers.load_scope("global")
+                local_registry = self.providers.load_scope("workspace")
+                name = global_registry.active if scope == "global" else self.providers.load().active
+
+                def save_voice(
+                    db: sqlite3.Connection,
+                    global_values: VoicePreferences,
+                    overrides: VoiceOverrides,
+                    global_revision: str,
+                    local_revision: str,
+                ) -> None:
+                    revision = _voice_revision(
+                        scope,
+                        global_revision,
+                        global_registry.revision,
+                        local_revision,
+                        local_registry.revision,
+                        name,
                     )
-                )
-                return (await self.connection()).snapshot()
+                    if revision != body.revision:
+                        raise HTTPException(409, "Voice preferences changed. Reload settings before saving.")
+                    if self.providers.load_scope("global").revision != global_registry.revision or (
+                        scope == "workspace"
+                        and self.providers.load_scope("workspace").revision != local_registry.revision
+                    ):
+                        raise HTTPException(409, "Provider connection changed. Reload Voice settings before saving.")
+                    preferences = body.preferences if isinstance(body, GlobalVoiceInput) else body.overrides
+                    next_global = (
+                        preferences
+                        if isinstance(preferences, VoicePreferences) and scope == "global"
+                        else global_values
+                    )
+                    next_local = preferences if scope == "workspace" else overrides
+                    assert isinstance(next_global, VoicePreferences)
+                    assert isinstance(next_local, VoiceOverrides)
+                    selected_registry = self.providers.load()
+                    keys = tuple(
+                        SecretStr(os.environ.get(profile.key_env, ""))
+                        for profile in (
+                            global_registry.providers.get(global_registry.active),
+                            selected_registry.providers.get(selected_registry.active),
+                        )
+                        if profile is not None
+                    )
+                    try:
+                        for selected in (
+                            next_global.model_dump(),
+                            {
+                                **next_global.model_dump(),
+                                **next_local.selected(),
+                            },
+                        ):
+                            _public_values(
+                                LiveValues.model_validate({**selected, "provider": "openai", "base_url": ""}), *keys
+                            )
+                    except ValueError:
+                        raise HTTPException(422, "Keep API keys out of Voice preferences.") from None
+                    payload = preferences.model_dump_json(exclude_unset=scope == "workspace")
+                    if len(payload.encode("utf-8")) > MAX_SETTINGS_BYTES:
+                        raise HTTPException(422, "Voice preferences exceed the storage limit.")
+                    schema = "voice_global" if scope == "global" else "main"
+                    db.execute(
+                        f"UPDATE {schema}.ngn_voice_preferences SET payload = ?, revision = ? WHERE id = 1",
+                        (payload, secrets.token_hex(32)),
+                    )
+
+                async def commit_voice() -> dict[str, object]:
+                    try:
+                        await asyncio.to_thread(self.voice.transaction, save_voice)
+                    except HTTPException:
+                        raise
+                    except Exception:
+                        raise HTTPException(500, "Voice preferences could not be saved. Reload settings.") from None
+                    return await self.snapshot(scope)
+
+                return await self._owned(commit_voice())
+
+        if self.providers.load().active:
+            raise HTTPException(422, "Named provider connections use scoped Voice preferences.")
 
         def save(db: sqlite3.Connection) -> LiveConnection:
             current = self._read(db)
@@ -461,7 +588,7 @@ class LiveSettings:
             connection = await self.connection()
             self._ready()  # Shutdown may have started while the database read was running.
             if connection.revision != revision:
-                raise HTTPException(409, "Live settings changed. Reload Connection settings before connecting.")
+                raise HTTPException(409, "Live settings changed. Reload Voice settings before connecting.")
             token = self._admission.set(connection)
             session_token = self._session.set(session_id)
             try:

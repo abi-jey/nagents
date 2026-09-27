@@ -108,7 +108,7 @@ export function LiveDialog({ token, sessionId, close }: { token: string; session
         <h2 id="live-title" ref={title} tabIndex={-1}>GPT-Live <span>VOICE STUDIO</span></h2>
         <p>A little less typing. A little more presence.</p>
       </div></div>
-      <div className="live-header-actions"><button type="button" id="live-settings-toggle" className="live-settings-toggle" disabled={active} aria-label="Connection settings" aria-expanded={settingsOpen} onClick={settingsOpen ? closeSettings : configure}><Icon name="settings" size={17} /><span>Connection settings</span></button><button type="button" className="live-close" aria-label={active ? "End voice and close" : "Close voice studio"} title={active ? "End voice and close" : "Close"} onClick={close}><Icon name="close" size={20} /></button></div>
+      <div className="live-header-actions"><button type="button" id="live-settings-toggle" className="live-settings-toggle" disabled={active} aria-label="Voice settings" aria-expanded={settingsOpen} onClick={settingsOpen ? closeSettings : configure}><Icon name="settings" size={17} /><span>Voice settings</span></button><button type="button" className="live-close" aria-label={active ? "End voice and close" : "Close voice studio"} title={active ? "End voice and close" : "Close"} onClick={close}><Icon name="close" size={20} /></button></div>
     </header>
     <div className="live-layout">
       <section className={`live-stage ${connected ? "is-connected" : ""}`} aria-label="Voice connection">

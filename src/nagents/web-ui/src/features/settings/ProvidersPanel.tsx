@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { request } from "../../api/client.js";
 import type { SettingsScope } from "./transport.js";
 
-type Live = { enabled: boolean; model: string; backend_model: string; voice: string; backend_mode: string };
 type Profile = {
   kind: string; model: string; auth: string; base_url: string; api: string;
-  api_key_env: string; api_version: string; scope: string; live: Live;
+  api_key_env: string; api_version: string; scope: string;
   key_configured?: boolean;
 };
 type Kind = {
@@ -22,7 +21,6 @@ function defaultProfile(kind: string, specs: Record<string, Kind>, model = ""): 
   return {
     kind, model, auth: specs[kind].auth[0], base_url: "", api: specs[kind].apis[0],
     api_key_env: "", api_version: "", scope: "https://ai.azure.com/.default",
-    live: { enabled: false, model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", backend_mode: specs[kind].live ? "assistant" : "hosted" },
   };
 }
 
@@ -74,7 +72,6 @@ export function ProvidersPanel({ token, blocked, initialModel, applied, scope, o
   if (!registry) return <section className="settings-group" aria-label="Provider connections"><h3>Provider connections</h3><p role="status">{error || "Loading connections…"}</p></section>;
   const spec = draft ? registry.kinds[draft.kind] : undefined;
   const edit = (change: Partial<Profile>) => setDraft(current => current && { ...current, ...change });
-  const editLive = (change: Partial<Live>) => setDraft(current => current && { ...current, live: { ...current.live, ...change } });
   const shown = models.filter(id => id.toLowerCase().includes(query.trim().toLowerCase()));
   const route = `${endpoint}/${encodeURIComponent(name)}`;
   const locallySaved = scope === "global" || registry.origins?.[name] === "workspace";
@@ -119,16 +116,9 @@ export function ProvidersPanel({ token, blocked, initialModel, applied, scope, o
       {spec.endpoint_required && <label>API prefix URL <input value={draft.base_url} type="url" autoComplete="off" placeholder="https://resource.example.com/openai/v1" onChange={event => edit({ base_url: event.target.value })} /></label>}
       {spec.version_required && <label>API version <input value={draft.api_version} onChange={event => edit({ api_version: event.target.value })} /></label>}
       {draft.auth === "entra" && <label>Entra token scope <input value={draft.scope} onChange={event => edit({ scope: event.target.value })} /></label>}
-      {spec.live && <details className="settings-disclosure"><summary>GPT-Live settings for this provider</summary>
-        <label className="settings-checkbox"><input type="checkbox" checked={draft.live.enabled} onChange={event => editLive({ enabled: event.target.checked })} /> Enable Live</label>
-        <label>Voice backend <select value={draft.live.backend_mode} onChange={event => editLive({ backend_mode: event.target.value })}><option value="assistant">Main assistant</option><option value="hosted">Separate hosted backend</option></select></label>
-        <label>Voice model <input value={draft.live.model} onChange={event => editLive({ model: event.target.value })} /></label>
-        <label>Hosted backend model <input value={draft.live.backend_model} onChange={event => editLive({ backend_model: event.target.value })} /></label>
-        <label>Voice <select value={draft.live.voice} onChange={event => editLive({ voice: event.target.value })}><option value="marin">Marin</option><option value="cedar">Cedar</option></select></label>
-      </details>}
       </fieldset>
       <div className="settings-model-controls">
-        {!inherited && <button type="button" disabled={busy || blocked || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: draft }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`, true)}>Save connection</button>}
+        {!inherited && <button type="button" disabled={busy || blocked || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { kind: draft.kind, model: draft.model, auth: draft.auth, base_url: draft.base_url, api: draft.api, api_key_env: draft.api_key_env, api_version: draft.api_version, scope: draft.scope } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
           <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active)} onClick={() => void action(async () => (await (await request(`${route}/activate`, token, { revision: registry.revision })).json()) as Registry, `Using ${name} ${scope === "global" ? "globally" : "in this workspace"}.`)}>Make active</button>
           {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as Registry, `Deleted ${name}.`)}>Delete</button>}

@@ -100,14 +100,19 @@ class LocalOnly:
         if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
             await reject(404, "Not found.")
             return
-        # Live polling has one bounded, non-secret cursor. Every other query is
-        # still rejected, including duplicate cursors and tokens in URLs.
+        # Only bounded, non-secret Live cursor and Voice scope selectors are accepted.
+        # Other queries (including duplicate parameters and tokens) remain rejected.
         live_cursor = (
             scope["method"] == "GET"
             and re.fullmatch(r"/api/live/sessions/[A-Za-z0-9_-]{1,128}", path) is not None
             and re.fullmatch(rb"after=[0-9]{1,16}", scope["query_string"]) is not None
         )
-        if scope["query_string"] and not live_cursor:
+        voice_scope = (
+            scope["method"] == "GET"
+            and path == "/api/live/settings"
+            and scope["query_string"] in {b"scope=global", b"scope=workspace"}
+        )
+        if scope["query_string"] and not (live_cursor or voice_scope):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return
         method = scope["method"]

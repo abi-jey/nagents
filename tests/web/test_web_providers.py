@@ -161,8 +161,9 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
                 "/api/live/settings",
                 headers=headers,
                 json={
+                    "scope": "workspace",
                     "revision": live_before["revision"],
-                    "values": live_before["values"],
+                    "overrides": {},
                 },
             )
             assert stale_live.status_code == 409
