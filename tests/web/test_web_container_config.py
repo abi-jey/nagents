@@ -65,6 +65,7 @@ def test_container_serve_starts_from_defaults_or_env_without_a_file(
         assert configured.config_paths == ()
 
 
+@pytest.mark.requires_posix
 def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user"))
     monkeypatch.setenv("NGN_MODEL", "environment-model")
