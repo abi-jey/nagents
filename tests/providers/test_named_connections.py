@@ -27,8 +27,8 @@ from nagents.harness.runtime import Harness
 from nagents.provider.openai import CodexConfigError
 from nagents.web.live import create_agent
 from nagents.web.live_settings import LiveSettings
-from nagents.web.live_settings import LiveSettingsInput
-from nagents.web.live_settings import LiveValues
+from nagents.web.live_settings import WorkspaceVoiceInput
+from nagents.web.voice_preferences import VoiceOverrides
 
 
 def sample(**changes: object) -> ProviderProfile:
@@ -177,12 +177,14 @@ def test_named_live_reads_same_env_and_revisions_without_key_table(
             assert agent.provider.model == "gpt-live-1"
         finally:
             await agent.close()
-        values = LiveValues.model_validate({**before.values.model_dump(), "model": "gpt-live-2"})
-        result = await settings.change(LiveSettingsInput(revision=before.revision, values=values))
+        body = WorkspaceVoiceInput(
+            scope="workspace", revision=before.revision, overrides=VoiceOverrides(model="gpt-live-2")
+        )
+        result = await settings.change(body)
         assert result["values"]["model"] == "gpt-live-2"  # type: ignore[index]
         assert "voice-key-value" not in store.path.read_text()
         with pytest.raises(Exception, match="changed"):
-            await settings.change(LiveSettingsInput(revision=before.revision, values=values))
+            await settings.change(body)
         await settings.shutdown()
 
     asyncio.run(check())

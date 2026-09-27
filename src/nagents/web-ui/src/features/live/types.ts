@@ -30,6 +30,10 @@ export interface LiveSettingsValues {
   base_url: string;
 }
 
+export type VoiceScope = "global" | "workspace";
+export type VoicePreferences = Pick<LiveSettingsValues, "enabled" | "backend_mode" | "model" | "backend_model" | "voice">;
+export type VoiceOverrides = Partial<VoicePreferences>;
+
 export interface LiveSettingsSnapshot {
   values: LiveSettingsValues;
   revision: string;
@@ -42,12 +46,21 @@ export interface LiveSettingsSnapshot {
   api_key_env?: string;
   auth?: string;
   live_supported?: boolean;
+  scope: VoiceScope;
+  global_preferences: VoicePreferences;
+  overrides: VoiceOverrides;
+  origins: Record<keyof VoicePreferences, VoiceScope>;
 }
 
-export interface LiveSettingsInput {
+export type LiveSettingsInput = {
   revision: string;
-  values: LiveSettingsValues;
-}
+  scope: "global";
+  preferences: VoicePreferences;
+} | {
+  revision: string;
+  scope: "workspace";
+  overrides: VoiceOverrides;
+};
 
 export interface LiveEvent {
   seq: number;

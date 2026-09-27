@@ -34,12 +34,16 @@ if TYPE_CHECKING:
 
 class _EntraFoundryProvider(FoundryProvider):
     def __init__(
-        self, credential: AsyncTokenCredential, profile: ProviderProfile, live: LiveConfig | None = None
+        self,
+        credential: AsyncTokenCredential,
+        profile: ProviderProfile,
+        live: LiveConfig | None = None,
+        live_model: str = "",
     ) -> None:
         self._owned_credential = credential
         super().__init__(
             base_url=profile.base_url,
-            model=profile.live.model if live else profile.model,
+            model=live_model if live else profile.model,
             credential=credential,
             scope=profile.scope,
             api="responses" if profile.api == "auto" else profile.api,
@@ -134,7 +138,7 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
     return HarnessProvider(selected, None)
 
 
-def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str) -> Provider:
+def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str, model: str) -> Provider:
     """Use the same connection identity and auth reference as the text provider."""
     if profile.kind in {"foundry", "azure_openai_compatible_v1"}:
         if profile.auth == "entra":
@@ -142,10 +146,10 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str)
                 from azure.identity.aio import DefaultAzureCredential
             except ImportError:
                 raise ValueError("Foundry Entra authentication requires azure-identity") from None
-            return _EntraFoundryProvider(DefaultAzureCredential(), profile, options)
+            return _EntraFoundryProvider(DefaultAzureCredential(), profile, options, model)
         return FoundryProvider(
             base_url=profile.base_url,
-            model=profile.live.model,
+            model=model,
             api_key=key,
             live_config=options,
             retry_config=RetryConfig(max_retries=0),
@@ -153,11 +157,11 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str)
     if profile.kind not in {"openai", "openai_compatible"}:
         raise ValueError("This provider does not support GPT-Live")
     if profile.kind == "openai" and profile.auth in {"codex", "auto"} and not key:
-        return OpenAIProvider(model=profile.live.model, live_config=options)
+        return OpenAIProvider(model=model, live_config=options)
     return Provider(
         ProviderType.OPENAI_COMPATIBLE,
         api_key=key,
-        model=profile.live.model,
+        model=model,
         base_url=profile.base_url or None,
         api="responses",
         live_config=options,
@@ -165,7 +169,7 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str)
     )
 
 
-def live_auth_available(profile: ProviderProfile) -> bool:
+def live_auth_available(profile: ProviderProfile, model: str) -> bool:
     """Local readiness only. Never returns or logs credentials."""
     if profile.auth == "entra":
         return True
@@ -175,7 +179,7 @@ def live_auth_available(profile: ProviderProfile) -> bool:
         if profile.api_key_env and profile.key_env != "OPENAI_API_KEY" and not _codex_files_exist():
             return False
         try:
-            return bool(_load_config(model=profile.live.model, for_live=True).api_key)
+            return bool(_load_config(model=model, for_live=True).api_key)
         except CodexConfigError:
             return False
     return False

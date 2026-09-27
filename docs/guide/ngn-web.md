@@ -449,8 +449,8 @@ contract below.
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
 | `POST dictation/transcribe` | Bounded raw `audio/wav` recording; returns `{text}` without starting a chat run |
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
-| `GET live/settings` | Workspace Live connection values, revision, key-configured indicator, and provider/voice choices |
-| `POST live/settings` | `{revision, values, api_key?: string, clear_api_key?: boolean}` atomically saves the connection and write-only key; unavailable during a call |
+| `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
+| `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
 | `POST live/sessions` | `{voice?: string, revision, session_id}` starts a server-owned GPT-Live WebSocket call. `session_id` is required in main-assistant mode and binds the selected chat. Returns `201 {session_id, model, voice}`. |
 | `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
@@ -819,14 +819,18 @@ microphone access when prompted. Microphone mute and output mute are independent
 muting either does not end the provider session. Use the call's disconnect/end
 control to finish. Live captions and connection/error feedback belong to that call.
 
-#### Connection Settings
+#### Voice Settings
 
 1. Start **`ngn serve`**, then open **Workspace settings → Provider connections**.
-2. Add and activate an OpenAI or Foundry connection. Enable Live on that
-   connection and choose its voice model, hosted backend model and voice.
+2. Add and activate an OpenAI or Foundry connection. Its identity, endpoint and
+   authentication are shared with other provider requests.
 3. Set the referenced API key environment variable in the server's environment
-   (or select Foundry Entra ID), then open **GPT-Live → Connection settings**.
-4. Choose the reasoning backend. **Main assistant (selected chat provider)** is the
+   (or select Foundry Entra ID), then open **GPT-Live → Voice settings**.
+4. Select **Global** for defaults shared by workspaces or **This workspace** to
+   override only chosen fields. Set **Enable voice duplex**, **Voice duplex model**,
+   **Hosted backend model**, and **Default voice** independently of provider
+   connection and chat model selection. Unticked workspace fields follow later
+   global changes. Choose the reasoning backend. **Main assistant (selected chat provider)** is the
    default: the selected conversation's assistant, provider, model, history, tools,
    and approvals remain in charge, and the Live service handles speech only.
    **Hosted Responses** remains an option for an independent voice conversation;
@@ -853,8 +857,9 @@ require HTTPS, except loopback HTTP for development, and cannot embed credential
 query strings, fragments, or generation-route suffixes.
 
 Save without setting the environment variable if you want to finish setup later.
-The panel explains missing setup in **Connection settings**. Demo mode also permits inspecting and saving
-settings, but real calls require starting `ngn serve` without `--demo`. Readiness
+The panel explains missing setup in **Voice settings**. Demo mode also permits
+inspecting and saving settings, but real calls require starting `ngn serve`
+without `--demo`. Readiness
 checks local configuration; provider access and network failures are reported when
 connecting. Settings saves conflict while a call is connecting, active, or closing.
 After a competing tab changes settings, reload the form before saving or connecting.
@@ -909,19 +914,28 @@ key_configured}`; `assistant` contains the selected chat provider/model/profile,
 not a credential. `reason` is empty
 when locally ready and the active ID is empty when there is no active call.
 
-`GET /api/live/settings` returns `{values, revision, key_configured, providers,
-voices}`. `values` contains exactly `{enabled, backend_mode, provider, model,
-backend_model, voice, base_url}`. `backend_mode` is `assistant` (the default)
-or `hosted`; `backend_model` applies only to hosted mode. The `revision` is a
-64-character lowercase hexadecimal token.
-`POST /api/live/settings` takes `{revision, values, api_key?: string,
-clear_api_key?: boolean}` and returns the same public settings snapshot. The
-optional key defaults to an empty string; clearing defaults to false. Supplying
-both a replacement key and `clear_api_key: true` is rejected. Unknown fields and
-invalid input receive a generic validation error, without echoing request values.
+`GET /api/live/settings?scope=global|workspace` returns the effective `values`,
+`global_preferences`, the workspace `overrides`, per-field `origins`, connection
+reference and a 64-character hexadecimal revision. The workspace's missing
+override fields inherit global values. Voice preferences are `{enabled,
+backend_mode, model, backend_model, voice}`; `backend_model` is used in hosted
+mode only. The provider and base URL in `values` describe the selected connection
+and cannot be changed by Voice settings. `POST /api/live/settings` accepts
+`{scope:"global", revision, preferences}` or `{scope:"workspace", revision,
+overrides}`. An empty overrides object clears every workspace override. Unknown
+fields and invalid input are rejected without echoing values.
 
-Values, key binding, and revision commit atomically in SQLite. Competing saves
-use the stored revision rather than an in-memory last-write-wins value. A stale
+For existing installations without a selected named provider, the unscoped
+`GET/POST /api/live/settings` legacy connection/key contract remains available.
+Scoped Voice preferences take effect when a named connection is selected; legacy
+saved key values are not copied into provider YAML or the Voice records.
+
+Each scope has a revisioned SQLite record. Global defaults live under the ngn
+configuration directory and workspace overrides in the workspace session DB;
+reads and writes span both in one SQLite transaction. The active provider's v1
+YAML `live` preferences are imported once into the appropriate scope if no record
+exists. They do not overwrite subsequent Voice edits. Provider YAML is never
+updated by Voice settings. Competing saves use the stored revision. A stale
 revision or a busy Live service returns `409`; reload settings before retrying.
 If a save acknowledgement is lost, fetch the settings again to see the committed
 state. Cancellation waits for an admitted transaction to finish.
