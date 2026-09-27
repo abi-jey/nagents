@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import secrets
@@ -208,8 +209,12 @@ class LiveSettings:
         if not registry.active:
             return None
         profile = registry.providers[registry.active]
-        scope = "workspace" if registry.active in self.providers.load_scope("workspace").providers else "global"
-        revision = self.providers.load_scope(scope).revision
+        local = self.providers.load_scope("workspace")
+        global_registry = self.providers.load_scope("global")
+        scope = "workspace" if registry.active in local.providers else "global"
+        revision = hashlib.sha256(
+            f"{registry.active}:{scope}:{global_registry.revision}:{local.revision}".encode()
+        ).hexdigest()
         if profile.kind not in NAMED_LIVE_PROVIDERS:
             return LiveConnection(
                 LiveValues.defaults().model_copy(update={"enabled": False}),
@@ -381,7 +386,8 @@ class LiveSettings:
                 scope = "workspace" if name in self.providers.load_scope("workspace").providers else "global"
                 registry = self.providers.load_scope(scope)
                 profile = registry.providers[name]
-                if registry.revision != body.revision:
+                current = self._named()
+                if current is None or current.revision != body.revision:
                     raise HTTPException(409, "Provider connection changed. Reload settings before saving.")
                 if body.values.provider != profile.kind or body.values.base_url != profile.base_url:
                     raise HTTPException(422, "Edit provider type and API endpoint in Provider settings.")

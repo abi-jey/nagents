@@ -146,6 +146,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
             assert inherited["origins"] == {"personal": "global"}
             assert not store.workspace_store.path.exists()
             assert store.global_store.path.is_file()
+            live_before = (await client.get("/api/live/settings", headers=headers)).json()
             selected = await client.post(
                 "/api/provider-scopes/workspace/providers/personal/activate",
                 headers=headers,
@@ -154,6 +155,17 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
                 },
             )
             assert selected.status_code == 200 and not selected.json()["inherited_active"]
+            live_selected = (await client.get("/api/live/settings", headers=headers)).json()
+            assert live_selected["revision"] != live_before["revision"]
+            stale_live = await client.post(
+                "/api/live/settings",
+                headers=headers,
+                json={
+                    "revision": live_before["revision"],
+                    "values": live_before["values"],
+                },
+            )
+            assert stale_live.status_code == 409
             local = await client.put(
                 "/api/provider-scopes/workspace/providers/local",
                 headers=headers,

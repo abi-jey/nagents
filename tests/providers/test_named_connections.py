@@ -141,7 +141,8 @@ def test_named_live_reads_same_env_and_revisions_without_key_table(
         settings = LiveSettings(tmp_path / "sessions.db", demo=False, active=lambda: "")
         await settings.load()
         before = await settings.connection()
-        assert before.revision == saved.revision and before.key_configured
+        assert before.revision != saved.revision and before.key_configured
+        assert (await settings.connection()).revision == before.revision
         assert (await settings.snapshot())["profile_name"] == "voice"
         agent = create_agent(before)
         try:

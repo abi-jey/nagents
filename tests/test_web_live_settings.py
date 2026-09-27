@@ -179,7 +179,7 @@ def test_missing_key_or_azure_endpoint_can_be_saved_and_has_actionable_reason(tm
         await settings.load()
         await settings.change(await request(settings))
         info = capabilities(await settings.connection())
-        assert not info["available"] and "Connection settings" in str(info["reason"])
+        assert not info["available"] and "Provider connections" in str(info["reason"])
         await settings.change(await request(settings, provider="azure_openai_compatible_v1", key=SECRET))
         info = capabilities(await settings.connection())
         assert not info["available"] and "base URL" in str(info["reason"])

@@ -71,7 +71,7 @@ def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
                 f"Set ${connection.profile.key_env} in the ngn serve environment, then restart the server. "
                 "ChatGPT/Codex login does not authorize Live."
             )
-        return "Add a named provider connection in Global or Workspace settings to configure Live credentials."
+        return "Open Global or Workspace settings → Provider connections to configure Live credentials."
     return ""
 
 
