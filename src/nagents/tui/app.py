@@ -1248,7 +1248,7 @@ class NagentsApp(App[None]):
                 from nagents.harness.providers import ProviderProfile
 
                 self.push_screen(
-                    ProviderEditor(profile=ProviderProfile(kind="openrouter", model="openrouter/auto")),
+                    ProviderEditor(profile=ProviderProfile(kind="openrouter")),
                     self._save_provider,
                 )
             else:
@@ -1281,7 +1281,8 @@ class NagentsApp(App[None]):
         choices.extend(
             (
                 key,
-                f"{key}  [{'workspace' if key in local.providers else 'global'}]  /  {profile.kind} / {profile.model}"
+                f"{key}  [{'workspace' if key in local.providers else 'global'}]  /  "
+                f"{profile.kind} / {profile.credential_source} / {profile.effective_endpoint}"
                 + ("  [active]" if key == registry.active else ""),
             )
             for key, profile in registry.providers.items()
@@ -1313,7 +1314,7 @@ class NagentsApp(App[None]):
                     ("edit", "Edit connection and Live settings"),
                     ("activate", "Use in this workspace"),
                     *([("global", "Set as global default")] if scope == "global" else []),
-                    ("models", "Fetch model IDs"),
+                    ("models", "Browse model catalog (sets workspace model)"),
                     ("delete", "Delete connection"),
                 ],
             ),
@@ -1349,7 +1350,8 @@ class NagentsApp(App[None]):
         registry = self.harness.provider_store.load_scope(scope)
         await self.harness.save_provider(name, profile, registry.revision, scope)
         await self._notice(
-            f"Saved {name} in {scope} YAML. Environment variable: ${profile.key_env} (if API key authentication)."
+            f"Saved {name} in {self.harness.provider_store.store(scope).path}. "
+            f"Credential: {profile.credential_source}. Endpoint: {profile.effective_endpoint}."
         )
 
     async def _activate_provider(self, name: str, scope: str = "workspace") -> None:
@@ -1370,7 +1372,7 @@ class NagentsApp(App[None]):
     async def _provider_models(self, name: str) -> None:
         models = await self.harness.provider_models(name)
         if not models:
-            await self._notice("The provider returned no models; enter a model ID manually in Edit.")
+            await self._notice("The provider returned no models; use /model to enter an ID manually.")
             return
         self.push_screen(
             ChoiceModal(f"MODELS / {name}", [(model, model) for model in models]),
@@ -1378,17 +1380,9 @@ class NagentsApp(App[None]):
         )
 
     def _choose_provider_model(self, name: str, model: str | None) -> None:
-        from dataclasses import replace
-
         if not model:
             return
-        registry = self.harness.provider_store.load()
-        profile = registry.providers.get(name)
-        if profile is not None:
-            scope = "workspace" if name in self.harness.provider_store.load_scope("workspace").providers else "global"
-            self.push_screen(
-                ProviderEditor(name, replace(profile, model=model)), lambda result: self._save_provider(result, scope)
-            )
+        self.command(f"/model {model}")
 
     def _chosen_provider(self, token: str | None) -> None:
         if not token:
@@ -1601,6 +1595,8 @@ class NagentsApp(App[None]):
             await self._notice(f"Profile changed to {self.harness.config.agent}.")
         elif name == "/model":
             await self.harness.set_model(argument)
+            if hasattr(self.harness, "provider_store"):
+                self.harness.provider_store.model_store("workspace").save(argument)
             await self._notice(f"Model changed to {self.harness.config.model}.")
 
     async def _sessions(self) -> None:

@@ -57,6 +57,7 @@ class HarnessConfig:
     provider: str = "openai"
     provider_id: str = ""
     model: str = DEFAULT_HARNESS_MODEL
+    global_model_default: str = ""  # Loader-only baseline for global web defaults.
     base_url: str = ""
     api_key_env: str = "OPENAI_API_KEY"
     agent: str = "assistant"
@@ -179,7 +180,8 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
     Only secret-free routing fields are read here. The API key remains in the
     protected store and is resolved lazily by the provider at request time.
     """
-    registry = ScopedProviderRegistryStore(config.workspace).load()
+    store = ScopedProviderRegistryStore(config.workspace)
+    registry = store.load()
     if registry.active:
         profile = registry.providers[registry.active]
         return (
@@ -187,8 +189,8 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
                 config,
                 provider_id=registry.active,
                 provider=profile.kind,
-                model=profile.model,
-                model_explicit=True,
+                model=store.model() or config.model,
+                model_explicit=bool(store.model()) or config.model_explicit,
                 base_url=profile.base_url,
                 api=profile.api,
                 auth=profile.auth,
@@ -203,12 +205,14 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
         return config, "Ignored an unreadable saved provider login; run ngn login again."
     if selection is None:
         return config, ""
+    if selection.model and not store.model():
+        store.model_store("global").save(selection.model, only_if_missing=True)
     try:
         candidate = replace(
             config,
             provider=selection.provider,
-            model=selection.model or config.model,
-            model_explicit=bool(selection.model) or config.model_explicit,
+            model=store.model() or config.model,
+            model_explicit=bool(store.model()) or config.model_explicit,
             base_url=selection.base_url,
             api=selection.api or config.api,
             auth=selection.auth or config.auth,
@@ -221,8 +225,13 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
 
 def load_config(workspace: Path, config_path: Path | None = None, *, trust_project: bool = False) -> HarnessConfig:
     """Load trusted config only; never import plugins or read credential values."""
-    config, login_note = _login_defaults(HarnessConfig(workspace=workspace, trust_project=trust_project))
-    model_overridden = os.environ.get("NGN_MODEL") is not None
+    defaults = HarnessConfig(workspace=workspace, trust_project=trust_project)
+    fallback_model = defaults.model
+    config, login_note = _login_defaults(defaults)
+    global_model = ScopedProviderRegistryStore(config.workspace).model_store("global").load() or fallback_model
+    if os.environ.get("NGN_MODEL") is None:
+        config.model = ScopedProviderRegistryStore(config.workspace).model() or config.model
+    model_overridden = False
     strings = {
         "provider_id",
         "provider",
@@ -266,6 +275,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             config.shell_timeout = float(env_value)
         else:
             setattr(config, key, Path(env_value) if key == "data_dir" else env_value)
+            if key == "model":
+                global_model = env_value
 
     user = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn/config.yaml"
     project = config.workspace / ".ngn/config.yaml"
@@ -314,7 +325,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         }:
             config.provider_id = ""
         for key, value in values.items():
-            if key == "model":
+            if key == "model" and isinstance(value, str):
+                global_model = value
                 model_overridden = True
             if key in strings | {"data_dir"}:
                 if not isinstance(value, str):
@@ -370,6 +382,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
+    config.global_model_default = global_model
     if config.provider_id:
         registry = ScopedProviderRegistryStore(config.workspace).load()
         if config.provider_id not in registry.providers:
@@ -381,10 +394,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         config.auth = selected.auth
         config.api_key_env = selected.key_env
         config.api_version = selected.api_version
-        if not model_overridden:
-            config.model = selected.model
-        config.model_explicit = True
-    else:
-        config.model_explicit = config.model_explicit or model_overridden
+    config.model_explicit = (
+        config.model_explicit
+        or model_overridden
+        or bool(os.environ.get("NGN_MODEL") or ScopedProviderRegistryStore(config.workspace).model())
+    )
     config.__post_init__()
     return config

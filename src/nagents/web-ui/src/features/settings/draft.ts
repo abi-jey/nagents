@@ -101,7 +101,7 @@ export function selectProfile(
 ): SettingsDraft {
   const profile = profiles.find((candidate) => candidate.name === name);
   if (!profile) return draft;
-  return { ...draft, agent: name, model: profile.model || draft.model };
+  return { ...draft, agent: name };
 }
 
 export function parseDraft(

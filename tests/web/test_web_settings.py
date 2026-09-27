@@ -18,7 +18,9 @@ from nagents.compactor import Tokens
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
+from nagents.harness.config import load_config
 from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.types import Message
 from nagents.types import ToolCall
 from nagents.web.app import create_app
@@ -74,6 +76,38 @@ def configuration(tmp_path: Path) -> HarnessConfig:
     )
 
 
+def test_web_and_terminal_share_global_model_until_workspace_overrides_it(tmp_path: Path) -> None:
+    store = ScopedProviderRegistryStore(tmp_path)
+    store.model_store("global").save("global-chat-model")
+
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
+            first = (await client.get("/api/settings", headers=headers)).json()
+            assert first["values"]["model"] == "global-chat-model"
+            assert first["defaults"]["model"] == "global-chat-model"
+            assert harnesses[0].agent.provider.model == "global-chat-model"
+            saved = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={
+                    "revision": first["revision"],
+                    "values": {**first["values"], "model": "workspace-chat-model"},
+                },
+            )
+            assert saved.status_code == 200
+            assert store.model_store("workspace").load() == "workspace-chat-model"
+            assert store.model_store("global").load() == "global-chat-model"
+            assert load_config(tmp_path).model == "workspace-chat-model"
+            reset = await client.post(
+                "/api/settings/reset", headers=headers, json={"revision": saved.json()["revision"]}
+            )
+            assert reset.status_code == 200
+            assert store.model_store("workspace").load() == ""
+            assert load_config(tmp_path).model == "global-chat-model"
+
+    asyncio.run(check())
+
+
 def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_API_KEY", "SECRET-key-value")
 
@@ -107,6 +141,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "revision",
                     "persisted",
                     "effective_mode",
+                    "effective_model",
                     "connection",
                     "providers",
                     "apis",
@@ -281,6 +316,7 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
             assert saved["values"] == values and saved["defaults"] == before["defaults"]
             assert saved["persisted"] is True and saved["revision"] != before["revision"]
             assert saved["effective_mode"] == "reviewer"
+            assert saved["effective_model"] == "profile-model"
             assert SettingsValues.current(harness).model_dump() == values
             assert harness.config is config and harness.agent.provider is provider
             assert isinstance(provider, HarnessProvider) and provider.harness_config is config
@@ -294,13 +330,13 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
             with pytest.raises(PermissionError):
                 harness.tools.writable()
             bootstrap = (await client.get("/api/bootstrap")).json()
-            assert bootstrap["model"] == values["model"] and bootstrap["agent"] == "audit"
+            assert bootstrap["model"] == "profile-model" and bootstrap["agent"] == "audit"
             new_child = harness.tasks._create_child("assistant")
-            assert new_child.agent.provider.model == values["model"]
+            assert new_child.agent.provider.model == "profile-model"
             assert old_child.agent.provider.model == before["values"]["model"]
             await old_child.close()
             await new_child.close()
-            # Aliases do not erase the explicitly selected model or permission ceiling.
+            # Leaving the agent's explicit model restores the workspace choice.
             harness._permission_ceiling = "reviewer"
             values.update(agent="assistant", max_subagent_depth=8)
             response = await client.post(

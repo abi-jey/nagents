@@ -173,7 +173,6 @@ def test_setup_uses_selected_connection_key_not_unrelated_default(
             providers={
                 "team": ProviderProfile(
                     kind=kind,
-                    model="chat-model",
                     auth="api-key",
                     api_key_env="TEAM_PROVIDER_KEY",
                     base_url="https://example.openai.azure.com/openai/v1" if kind == "foundry" else "",
@@ -212,15 +211,12 @@ def test_missing_selected_key_does_not_block_scripted_provider(tmp_path: Path, m
     providers.save_scope(
         ProviderRegistry(
             active="team",
-            providers={
-                "team": ProviderProfile(
-                    kind="openai", model="team-chat", auth="api-key", api_key_env="TEAM_PROVIDER_KEY"
-                )
-            },
+            providers={"team": ProviderProfile(kind="openai", auth="api-key", api_key_env="TEAM_PROVIDER_KEY")},
         ),
         expected="0" * 64,
         scope="workspace",
     )
+    providers.model_store("workspace").save("team-chat")
 
     async def scripted(
         provider: HarnessProvider,

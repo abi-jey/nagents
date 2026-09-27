@@ -87,10 +87,15 @@ ngn is stopped. A revision prevents an older UI from overwriting another
 process's edits. A separate connection can be selected for a trusted agent profile using
 `profiles.NAME.provider: CONNECTION_NAME`.
 
-The provider file identifies the connection, routing and **environment variable
-names**. Voice duplex preferences are edited separately in **GPT-Live → Voice
-settings**: Global supplies defaults, and this workspace may override individual
-fields without freezing the other global values. Use `api_key_env: OPENAI_API_KEY` or
+Provider connections contain kind, authentication source, endpoint where needed,
+HTTP API and **environment variable names**. Chat models are chosen separately:
+global `$XDG_CONFIG_HOME/ngn/models.yaml` and workspace
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/models.yaml` provide shared
+defaults for the CLI, TUI and web UI. Trusted YAML `model`, agent-profile models,
+`NGN_MODEL` and explicit `--model` overrides retain their precedence. Switching
+connections does not change the chat model. Voice duplex preferences are edited
+separately in **GPT-Live → Voice settings**: Global supplies defaults, and the
+workspace may override individual fields. Use `api_key_env: OPENAI_API_KEY` or
 `api_key_env: ${OPENAI_API_KEY}`; ngn resolves the variable when it makes a
 request. It never writes the key value to this file. Set environment variables
 in the environment of the **ngn process** (including the `ngn serve` process),
@@ -109,13 +114,12 @@ environment variable; subscription tokens are never used as voice API keys.
 Example:
 
 ```yaml
-version: 1
+version: 2
 revision: "0000000000000000000000000000000000000000000000000000000000000000"
 active: work
 providers:
   work:
     kind: foundry
-    model: my-responses-deployment
     base_url: https://resource.openai.azure.com/openai/v1
     api: responses
     auth: entra
@@ -131,15 +135,9 @@ list of model IDs, not a guarantee of access. Providers without a catalog or a
 compatible `/models` endpoint require manual model entry. Saving a named
 connection does not perform network authentication.
 
-On first use, `ngn serve` imports the selected provider's v1 YAML `live` fields
-into global Voice defaults or workspace Voice overrides, respectively. An active
-global connection selected locally continues to inherit global defaults. The
-import happens only if that scope has no Voice record; subsequent Voice edits are
-never replaced by later changes to provider YAML. The new Voice records are stored
-in `$XDG_CONFIG_HOME/ngn/voice.db` and the workspace's session database, with
-no API key values. Future provider schema migrations should keep existing `live`
-entries readable until this import has run, then omit Live fields on provider
-writes.
+Voice defaults are stored in `$XDG_CONFIG_HOME/ngn/voice.db`, and workspace
+overrides in the workspace session database. Provider connections contain no
+chat or Voice model and no API-key values.
 
 Create a named connection in the web UI or TUI and set its environment variable;
 the provider editor does not offer an API-key-value field.
@@ -151,6 +149,7 @@ the provider editor does not offer an API-key-value field.
 | Global/user YAML | `$XDG_CONFIG_HOME/ngn/config.yaml`; defaults to `~/.config/ngn/config.yaml` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
 | Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.yaml`; defaults to `~/.config/ngn/providers.yaml` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
 | Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml` | Workspace-only connections and selection; inherits global connections and default. |
+| Global/workspace chat-model preferences | `models.yaml` beside the corresponding provider registry | Shared chat-model choice, independent of connection identity; no credentials or Live data. |
 | Project YAML | `<workspace>/.ngn/config.yaml` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
 | Explicit YAML | `--config /any/path/settings.yaml` | Any filename/location is accepted. Selecting the file explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
@@ -369,7 +368,7 @@ string fields:
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
 | `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
-| `provider` | `""` | Optional named connection ID in `providers.yaml`. Empty follows the active connection. The profile's `model`, if set, overrides the connection's model. |
+| `provider` | `""` | Optional named connection ID in `providers.yaml`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
 
 ```yaml
 agent: audit

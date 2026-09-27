@@ -72,7 +72,7 @@ export function useSessions() {
     }
   }
   function acceptSettings(reply: SettingsReply) {
-    setConfig((current) => current && { ...current, model: reply.values.model, agent: reply.values.agent,
+    setConfig((current) => current && { ...current, model: reply.effective_model || reply.values.model, agent: reply.values.agent,
       provider: reply.connection.provider });
   }
   function acceptCredentials(bootstrap: Bootstrap) {

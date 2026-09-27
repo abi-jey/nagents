@@ -6,13 +6,11 @@ import os
 import re
 import secrets
 import sqlite3
-import stat
 from contextlib import closing
 from typing import TYPE_CHECKING
 from typing import Literal
 from typing import TypeVar
 
-import yaml
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
@@ -64,39 +62,6 @@ class VoicePreferenceStore:
         self.global_db = providers.global_store.path.parent / "voice.db"
 
     @staticmethod
-    def _legacy(path: Path, name: str) -> dict[str, str | bool]:
-        """Import the active v1 YAML entry once; never persist preferences back to YAML."""
-        if not name:
-            return {}
-        try:
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024:
-                raise ValueError("Invalid provider configuration")
-            raw = path.read_bytes()
-            if len(raw) > 64 * 1024:
-                raise ValueError("Invalid provider configuration")
-            document = yaml.safe_load(raw)
-        except FileNotFoundError:
-            return {}
-        if not isinstance(document, dict) or type(document.get("version")) is not int:
-            raise ValueError("Invalid provider configuration")
-        if document["version"] != 1:
-            return {}
-        entries = document.get("providers")
-        if not isinstance(entries, dict):
-            raise ValueError("Invalid provider configuration")
-        entry = entries.get(name, {})
-        if not isinstance(entry, dict):
-            raise ValueError("Invalid provider configuration")
-        legacy = entry.get("live", {})
-        if not isinstance(legacy, dict):
-            raise ValueError("Invalid Live preferences")
-        # A partial v1 profile uses v1's hosted default, not the new assistant default.
-        if legacy:
-            return VoicePreferences.model_validate({"backend_mode": "hosted", **legacy}).model_dump()
-        return {}
-
-    @staticmethod
     def _row(db: sqlite3.Connection, schema: str) -> tuple[VoicePreferences | VoiceOverrides, str]:
         with closing(
             db.execute(
@@ -119,28 +84,14 @@ class VoicePreferenceStore:
                 "id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL, "
                 "payload TEXT NOT NULL, revision TEXT NOT NULL)"
             )
-        global_registry = self.providers.load_scope("global")
-        local_registry = self.providers.load_scope("workspace")
-        with closing(db.execute("SELECT 1 FROM voice_global.ngn_voice_preferences WHERE id = 1")) as cursor:
-            global_missing = cursor.fetchone() is None
-        if global_missing:
-            imported = self._legacy(self.providers.global_store.path, global_registry.active)
-            initial = VoicePreferences.model_validate(imported).model_dump_json()
-            db.execute(
-                "INSERT OR IGNORE INTO voice_global.ngn_voice_preferences VALUES (1, 1, ?, ?)",
-                (initial, secrets.token_hex(32)),
-            )
-        with closing(db.execute("SELECT 1 FROM main.ngn_voice_preferences WHERE id = 1")) as cursor:
-            local_missing = cursor.fetchone() is None
-        if local_missing:
-            # A workspace selecting a global connection inherits global voice defaults.
-            name = local_registry.active if local_registry.active in local_registry.providers else ""
-            imported = self._legacy(self.providers.workspace_store.path, name)
-            initial = VoiceOverrides.model_validate(imported).model_dump_json(exclude_unset=True)
-            db.execute(
-                "INSERT OR IGNORE INTO main.ngn_voice_preferences VALUES (1, 1, ?, ?)",
-                (initial, secrets.token_hex(32)),
-            )
+        db.execute(
+            "INSERT OR IGNORE INTO voice_global.ngn_voice_preferences VALUES (1, 1, ?, ?)",
+            (VoicePreferences().model_dump_json(), secrets.token_hex(32)),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO main.ngn_voice_preferences VALUES (1, 1, ?, ?)",
+            (VoiceOverrides().model_dump_json(exclude_unset=True), secrets.token_hex(32)),
+        )
 
     def transaction(
         self, operation: Callable[[sqlite3.Connection, VoicePreferences, VoiceOverrides, str, str], T]

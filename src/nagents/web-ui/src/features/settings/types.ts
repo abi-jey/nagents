@@ -45,6 +45,7 @@ export type SettingsReply = {
   revision: string;
   persisted: boolean;
   effective_mode: "build" | "reviewer";
+  effective_model?: string;
   providers: string[];
   apis: string[];
   auths: string[];

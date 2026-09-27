@@ -163,7 +163,7 @@ class SettingsValues(_SettingsValuesV1):
         config = harness.config
         trigger, tokens, messages = _current_compaction(harness)
         return cls(
-            model=harness.agent.provider.model,
+            model=harness._selected_model if config.profile(config.agent).model else harness.agent.provider.model,
             agent=config.agent,
             shell_timeout=config.shell_timeout,
             max_output=config.max_output,
@@ -187,7 +187,8 @@ class SettingsValues(_SettingsValuesV1):
         # Harness.reconfigure_provider before calling this for the rest.
         config = harness.config
         config.agent = self.agent
-        config.model = self.model
+        harness._selected_model = self.model
+        config.model = config.profile(self.agent).model or self.model
         config.shell_timeout = self.shell_timeout
         config.max_output = self.max_output
         config.max_file_bytes = self.max_file_bytes
@@ -195,7 +196,7 @@ class SettingsValues(_SettingsValuesV1):
         config.max_subagent_depth = self.max_subagent_depth
         config.submit_mode = self.submit_mode
         config.read_only = self.read_only or harness._permission_ceiling == "reviewer"
-        harness.agent.provider.model = self.model
+        harness.agent.provider.model = config.model
         harness.agent.max_tool_rounds = self.max_tool_rounds
         _apply_compaction(harness, self.compact_trigger, self.compact_tokens, self.compact_messages)
         harness.refresh_instructions()
@@ -232,6 +233,10 @@ class WebSettings:
         self._provider_admin = copy.deepcopy(harness.config)
         self.defaults = SettingsValues.current(harness)
         self.startup_defaults = self.defaults
+        self._startup_global_model = harness.provider_store.model_store("global").load()
+        self._global_startup_model = (
+            harness.config.global_model_default or self._startup_global_model or self.defaults.model
+        )
         self.global_path = harness.config.data_dir / "web-defaults.db"
         self.global_revision = "0" * 64
         self.global_persisted = False
@@ -256,14 +261,13 @@ class WebSettings:
         candidate.api = values.api
         candidate.auth = values.auth
         candidate.api_key_env = values.api_key_env
-        candidate.model = values.model
+        candidate.model = candidate.profile(values.agent).model or values.model
         registry = self.harness.provider_store.load()
         name = self.harness.config.profile(values.agent).provider or registry.active
         if name:
             profile = registry.providers[name]
             candidate.provider_id = name
             candidate.provider = profile.kind
-            candidate.model = profile.model
             candidate.base_url = profile.base_url
             candidate.api = profile.api
             candidate.auth = profile.auth
@@ -279,7 +283,6 @@ class WebSettings:
         return values.model_copy(
             update={
                 "provider": candidate.provider,
-                "model": candidate.model,
                 "base_url": candidate.base_url,
                 "api": candidate.api,
                 "auth": candidate.auth,
@@ -290,8 +293,8 @@ class WebSettings:
     def sync_provider(self) -> None:
         """Project a shared provider selection into the existing web settings view."""
         self.values = self._effective_values(self.values)
-        self.harness.config.model = self.values.model
-        self.harness.agent.provider.model = self.values.model
+        self.harness.config.model = self.harness.config.profile(self.values.agent).model or self.values.model
+        self.harness.agent.provider.model = self.harness.config.model
 
     def _install_key(self, env: str, secret: str) -> None:
         if not secret:
@@ -334,6 +337,7 @@ class WebSettings:
             "revision": self.revision,
             "persisted": self.persisted,
             "effective_mode": self.effective_mode,
+            "effective_model": config.profile(self.values.agent).model or self.values.model,
             "providers": sorted(PROVIDERS),
             "apis": list(PROVIDER_APIS),
             "auths": list(PROVIDER_AUTHS),
@@ -417,6 +421,7 @@ class WebSettings:
                     or any(char not in "0123456789abcdef" for char in revision)
                 ):
                     raise ValueError("Invalid saved settings")
+                differences: dict[str, object] = {}
                 if version == 1:
                     legacy = _SettingsValuesV1.model_validate_json(payload)
                     # Only fields absent from older schemas come from trusted
@@ -453,6 +458,15 @@ class WebSettings:
                     values = values.model_copy(
                         update={"agent": "assistant", "read_only": values.read_only or values.agent == "reviewer"}
                     )
+                model_store = self.harness.provider_store.model_store("workspace")
+                if (version < 5 and values.model != self.defaults.model) or "model" in differences:
+                    model_store.save(values.model, only_if_missing=True)
+                selected_model = self.harness.provider_store.model()
+                if selected_model:
+                    values = values.model_copy(update={"model": selected_model})
+                local_model = model_store.load()
+                if version == 5 and local_model:
+                    differences["model"] = local_model
                 effective_defaults = self._effective_values(self.defaults)
                 self.workspace_overrides = (
                     {
@@ -476,12 +490,14 @@ class WebSettings:
                 self.revision = revision
                 self.stored_revision = revision
                 self.persisted = True
-            elif self.global_persisted:
+            elif self.global_persisted or self.harness.provider_store.model():
                 self.defaults = self._effective_values(self.defaults)
+                selected_model = self.harness.provider_store.model() or self.defaults.model
+                effective = self.defaults.model_copy(update={"model": selected_model})
                 with self.harness.operation("load global defaults"):
-                    await self.harness.reconfigure_provider(self.provider_config(self.defaults))
-                    self.defaults.apply(self.harness)
-                self.values = self.defaults
+                    await self.harness.reconfigure_provider(self.provider_config(effective))
+                    effective.apply(self.harness)
+                self.values = effective
                 self.effective_mode = self.harness.mode
             if self.harness.config.provider_id:
                 self.sync_provider()
@@ -493,7 +509,10 @@ class WebSettings:
 
     async def load_global(self) -> None:
         """Defaults shared by workspaces using the same application data directory."""
-        self.defaults = self.startup_defaults
+        self.defaults = self.startup_defaults.model_copy(update={"model": self._global_startup_model})
+        current_model = self.harness.provider_store.model_store("global").load()
+        if current_model:
+            self.defaults = self.defaults.model_copy(update={"model": current_model})
         self.global_revision = "0" * 64
         self.global_persisted = False
         if not self.global_path.is_file():
@@ -520,7 +539,13 @@ class WebSettings:
         values = json.loads(payload)
         if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
             raise ValueError("Invalid global settings fields")
-        self.defaults = SettingsValues.model_validate({**self.startup_defaults.model_dump(), **values})
+        self.defaults = SettingsValues.model_validate({**self.defaults.model_dump(), **values})
+        model_store = self.harness.provider_store.model_store("global")
+        if "model" in values:
+            model_store.save(self.defaults.model, only_if_missing=True)
+        selected_model = model_store.load()
+        if selected_model:
+            self.defaults = self.defaults.model_copy(update={"model": selected_model})
         self.validate(self.defaults)
         self.global_revision = revision
         self.global_persisted = True
@@ -530,7 +555,8 @@ class WebSettings:
         result.update(
             scope="global",
             values=self.defaults.model_dump(),
-            defaults=self.startup_defaults.model_dump(),
+            defaults=self.startup_defaults.model_copy(update={"model": self._global_startup_model}).model_dump(),
+            effective_model=self.defaults.model,
             revision=self.global_revision,
             persisted=self.global_persisted,
             connection={
@@ -574,6 +600,11 @@ class WebSettings:
                     (payload, next_revision),
                 )
             await db.commit()
+        global_model_store = self.harness.provider_store.model_store("global")
+        if reset:
+            global_model_store.save(self._startup_global_model)
+        else:
+            global_model_store.save(values.model)
         await self.load_global()
         if self.persisted:
             inherited = SettingsValues.model_validate({**self.defaults.model_dump(), **self.workspace_overrides})
@@ -678,6 +709,7 @@ class WebSettings:
                     config.max_subagent_depth,
                     config.submit_mode,
                     config.read_only,
+                    harness._selected_model,
                 )
                 previous_keys = dict(self.keys)
                 previous_secret = previous_keys.get(config.provider, "")
@@ -709,6 +741,7 @@ class WebSettings:
                         config.max_subagent_depth,
                         config.submit_mode,
                         config.read_only,
+                        harness._selected_model,
                     ) = previous
                     harness.agent.provider.model = model
                     harness.agent.max_tool_rounds = rounds
@@ -736,6 +769,7 @@ class WebSettings:
             ) from None
         # Publish without an await after commit. GETs see the previous
         # committed snapshot throughout the transaction, never a draft.
+        harness.provider_store.model_store("workspace").save(values.model if not reset and "model" in overrides else "")
         self.values = values
         self.workspace_overrides = {} if reset else overrides
         self.effective_mode = harness.mode

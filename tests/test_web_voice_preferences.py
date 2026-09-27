@@ -1,4 +1,4 @@
-"""Voice defaults, workspace inheritance, v1 import and cross-owner admission."""
+"""Voice defaults, workspace inheritance, and cross-owner admission."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import sqlite3
 import sys
 from contextlib import closing
-from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import TypedDict
@@ -17,7 +16,6 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from nagents.harness.config import HarnessConfig
-from nagents.harness.providers import LiveProfile
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
@@ -50,10 +48,8 @@ def named(path: Path) -> ScopedProviderRegistryStore:
     providers = ScopedProviderRegistryStore(path)
     global_profile = ProviderProfile(
         kind="openai",
-        model="chat-model",
         auth="api-key",
         api_key_env="TEST_VOICE_KEY",
-        live=LiveProfile(enabled=True, model="global-live", backend_model="global-backend", voice="cedar"),
     )
     providers.save_scope(
         ProviderRegistry(active="primary", providers={"primary": global_profile}),
@@ -67,17 +63,15 @@ def settings(path: Path) -> LiveSettings:
     return LiveSettings(path / "sessions.db", demo=False, active=lambda: "")
 
 
-def test_imported_global_and_local_live_values_are_independent_of_provider_yaml(
+def test_global_and_local_voice_values_are_independent_of_provider_yaml(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     providers = named(tmp_path)
     local_profile = ProviderProfile(
         kind="openai",
-        model="other-chat",
         auth="api-key",
         api_key_env="TEST_VOICE_KEY",
-        live=LiveProfile(enabled=True, model="local-live", backend_model="local-backend", voice="marin"),
     )
     providers.save_scope(
         ProviderRegistry(active="local", providers={"local": local_profile}),
@@ -92,9 +86,41 @@ def test_imported_global_and_local_live_values_are_independent_of_provider_yaml(
         first = settings(tmp_path)
         await first.load()
         global_before = voice(await first.snapshot("global"))
+        assert global_before["values"]["model"] == "gpt-live-1"
+        assert global_before["values"]["enabled"] is False
+        await first.change(
+            GlobalVoiceInput(
+                scope="global",
+                revision=global_before["revision"],
+                preferences=VoicePreferences(
+                    enabled=True,
+                    backend_mode="hosted",
+                    model="global-live",
+                    backend_model="global-backend",
+                    voice="cedar",
+                ),
+            )
+        )
+        global_before = voice(await first.snapshot("global"))
         workspace_before = voice(await first.snapshot("workspace"))
         assert global_before["values"]["model"] == "global-live"
         assert global_before["values"]["backend_mode"] == "hosted"
+        assert workspace_before["values"]["model"] == "global-live"
+        assert workspace_before["overrides"] == {}
+        await first.change(
+            WorkspaceVoiceInput(
+                scope="workspace",
+                revision=workspace_before["revision"],
+                overrides=VoiceOverrides(
+                    enabled=True,
+                    backend_mode="hosted",
+                    model="local-live",
+                    backend_model="local-backend",
+                    voice="marin",
+                ),
+            )
+        )
+        workspace_before = voice(await first.snapshot("workspace"))
         assert workspace_before["values"]["model"] == "local-live"
         assert workspace_before["overrides"] == {
             "enabled": True,
@@ -128,16 +154,6 @@ def test_imported_global_and_local_live_values_are_independent_of_provider_yaml(
         assert providers.global_store.path.read_bytes() == original_global
         assert providers.workspace_store.path.read_bytes() == original_local
 
-        # A v1 provider edit after migration must not replace either saved Voice scope.
-        registry = providers.load_scope("global")
-        providers.save_scope(
-            ProviderRegistry(
-                active=registry.active,
-                providers={"primary": replace(registry.providers["primary"], live=LiveProfile(model="later-yaml"))},
-            ),
-            expected=registry.revision,
-            scope="global",
-        )
         second = settings(tmp_path)
         await second.load()
         assert voice(await second.snapshot("global"))["values"]["model"] == "new-global"
@@ -157,6 +173,14 @@ def test_individual_overrides_inherit_later_global_edits_across_workspaces(tmp_p
         other_path.mkdir()
         second = settings(other_path)
         await asyncio.gather(first.load(), second.load())
+        global_snapshot = voice(await first.snapshot("global"))
+        await first.change(
+            GlobalVoiceInput(
+                scope="global",
+                revision=global_snapshot["revision"],
+                preferences=VoicePreferences(enabled=True, model="global-live", voice="cedar"),
+            )
+        )
         initial = voice(await first.snapshot("workspace"))
         assert initial["overrides"] == {} and initial["values"]["voice"] == "cedar"
         saved = voice(
@@ -210,7 +234,6 @@ def test_foundry_live_uses_voice_model_and_connection_credential(
             providers={
                 "foundry": ProviderProfile(
                     kind="foundry",
-                    model="chat-deployment",
                     auth="entra",
                     api="responses",
                     base_url="https://example.openai.azure.com/openai/v1",
@@ -220,6 +243,7 @@ def test_foundry_live_uses_voice_model_and_connection_credential(
         expected="0" * 64,
         scope="global",
     )
+    providers.model_store("global").save("chat-deployment")
 
     class Credential:
         async def get_token(self, *scopes: str) -> SimpleNamespace:
@@ -244,7 +268,7 @@ def test_foundry_live_uses_voice_model_and_connection_credential(
         agent = create_agent(await owner.connection())
         try:
             assert agent.provider.model == "voice-deployment"
-            assert providers.load().providers["foundry"].model == "chat-deployment"
+            assert providers.model() == "chat-deployment"
         finally:
             await agent.close()
 
@@ -257,6 +281,14 @@ def test_scoped_revision_conflicts_and_admission_pins_the_model(tmp_path: Path) 
     async def check() -> None:
         one, two = settings(tmp_path), settings(tmp_path)
         await asyncio.gather(one.load(), two.load())
+        global_snapshot = voice(await one.snapshot("global"))
+        await one.change(
+            GlobalVoiceInput(
+                scope="global",
+                revision=global_snapshot["revision"],
+                preferences=VoicePreferences(enabled=True, voice="cedar"),
+            )
+        )
         old = voice(await one.snapshot("workspace"))
         writes = await asyncio.gather(
             one.change(
@@ -377,7 +409,7 @@ def test_scoped_http_settings_expose_inheritance_and_never_edit_connection(tmp_p
             ).status_code == 400
             global_snapshot = global_response.json()
             local_snapshot = local_response.json()
-            assert global_snapshot["global_preferences"]["model"] == "global-live"
+            assert global_snapshot["global_preferences"]["model"] == "gpt-live-1"
             assert local_snapshot["overrides"] == {}
             assert local_snapshot["origins"]["model"] == "global"
             bad = await client.post(

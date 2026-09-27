@@ -172,10 +172,10 @@ class Harness:
             config.auth = selected.auth
             config.api_key_env = selected.key_env
             config.api_version = selected.api_version
-            config.model = selected.model
-            config.model_explicit = True
         self._built_provider_profile = self.providers.providers.get(config.provider_id)
         self._api_model = config.model
+        self._selected_model = config.model
+        self._selected_model_explicit = config.model_explicit
         self._initialized = False
         self._session_created = False
         self._closed = False
@@ -189,9 +189,7 @@ class Harness:
         self.tool_settings = WorkspaceTools(self.workspace)
         self.agent = Agent(
             provider=(
-                build_provider(
-                    replace(self.providers.providers[config.provider_id], model=config.model), config, self.openai_auth
-                )
+                build_provider(self.providers.providers[config.provider_id], config, self.openai_auth)
                 if config.provider_id and not config.demo
                 else HarnessProvider(config, self.login_store if not config.provider_id else None)
             ),
@@ -668,10 +666,9 @@ class Harness:
             elif self.config.provider_id and self.config.provider_id != self.providers.active and self.providers.active:
                 await self._select_provider(self.providers.active)
             self.config.agent = name
-            if profile.model:
-                self.config.model = profile.model
-                self.config.model_explicit = True
-                self.agent.provider.model = profile.model
+            self.config.model = profile.model or self._selected_model
+            self.config.model_explicit = bool(profile.model) or self._selected_model_explicit
+            self.agent.provider.model = self.config.model
             self.refresh_instructions()
 
     async def set_model(self, model: str) -> None:
@@ -680,6 +677,8 @@ class Harness:
                 raise ValueError("Model must not be empty")
             self.config.model = model
             self.config.model_explicit = True
+            self._selected_model = model
+            self._selected_model_explicit = True
             self.agent.provider.model = model
 
     async def reconfigure_provider(self, config: "HarnessConfig") -> None:
@@ -705,7 +704,7 @@ class Harness:
                 profile = registry.providers.get(config.provider_id)
                 if profile is None:
                     raise ValueError("Named provider connection was removed; reload settings")
-                replacement = build_provider(replace(profile, model=config.model), config, self.openai_auth)
+                replacement = build_provider(profile, config, self.openai_auth)
             elif config.auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
                     self._api_model = self.agent.provider.model
@@ -732,7 +731,6 @@ class Harness:
             self.config,
             provider_id=name,
             provider=profile.kind,
-            model=profile.model,
             base_url=profile.base_url,
             api=profile.api,
             auth=profile.auth,
@@ -831,7 +829,6 @@ class Harness:
             self.config,
             provider_id=name,
             provider=profile.kind,
-            model=profile.model,
             base_url=profile.base_url,
             api=profile.api,
             auth=profile.auth,
@@ -851,6 +848,7 @@ class Harness:
             self._api_model = self.agent.provider.model
         if self.config.model == DEFAULT_HARNESS_MODEL and not self.config.model_explicit:
             self.config.model = DEFAULT_CODEX_MODEL
+            self._selected_model = DEFAULT_CODEX_MODEL
         replacement = OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
         try:
             await self.agent.close()
@@ -893,7 +891,7 @@ class Harness:
             candidate = replace(
                 self.config,
                 provider=login.provider,
-                model=login.model or self.config.model,
+                model=self.config.model,
                 base_url=login.base_url,
                 api=login.api,
                 auth="api-key",
@@ -938,7 +936,7 @@ class Harness:
                     replacement = (
                         build_provider(profile, self.config, self.openai_auth)
                         if profile.auth != "chatgpt"
-                        else OpenAIProvider(self.openai_auth.credentials, model=profile.model)
+                        else OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
                     )
                     try:
                         await self.agent.close()
