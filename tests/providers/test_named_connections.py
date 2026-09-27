@@ -116,6 +116,7 @@ def test_provider_shapes_refuse_invalid_or_secret_values(fields: dict[str, objec
         sample(**fields).validate()
 
 
+@pytest.mark.requires_posix
 def test_agent_binding_uses_named_provider_and_environment_at_request_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
