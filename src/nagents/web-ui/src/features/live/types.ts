@@ -7,6 +7,8 @@ export interface LiveCapability {
   key_configured: boolean;
   model: string;
   backend_model: string;
+  backend_mode: "assistant" | "hosted";
+  assistant: { provider: string; model: string; agent: string };
   voice: string;
   voices: string[];
   active_session_id: string;
@@ -14,14 +16,13 @@ export interface LiveCapability {
 
 export interface LiveCreated {
   session_id: string;
-  sdp: string;
   model: string;
   voice: string;
 }
 
 export interface LiveSettingsValues {
   enabled: boolean;
-  backend_mode: "hosted" | "assistant";
+  backend_mode: "assistant" | "hosted";
   provider: string;
   model: string;
   backend_model: string;
@@ -98,8 +99,8 @@ export interface MediaHandlers {
 }
 
 export interface LiveMedia {
-  offer(signal: AbortSignal): Promise<string>;
-  answer(sdp: string): Promise<void>;
+  prepare(signal: AbortSignal): Promise<void>;
+  connect(sessionId: string, token: string): Promise<void>;
   muteInput(muted: boolean): void;
   muteOutput(muted: boolean): void;
   play(): Promise<void>;

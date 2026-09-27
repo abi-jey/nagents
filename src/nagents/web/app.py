@@ -27,6 +27,7 @@ from starlette.responses import JSONResponse
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
+from nagents.agent import Agent
 from nagents.harness import Harness
 from nagents.harness.providers import LiveProfile
 from nagents.harness.providers import ProviderProfile
@@ -44,6 +45,7 @@ from .designer import Designer
 from .designer import register as register_designer
 from .live import create_agent as create_live_agent
 from .live import register as register_live
+from .live_bridge import MainAgentBridge
 from .live_runtime import LiveService
 from .live_settings import LiveSettings
 from .routing import RoutingStore
@@ -183,7 +185,17 @@ def create_app(
             active=lambda: live.active_session_id,
             providers=harness.provider_store,
         )
-        live = LiveService(lambda voice: create_live_agent(live_settings.admitted(), voice, demo=live_settings.demo))
+
+        def voice_agent(voice: str) -> Agent:
+            connection = live_settings.admitted()
+            handler = (
+                MainAgentBridge(state, live_settings.admitted_session()).handle
+                if connection.values.backend_mode == "assistant"
+                else None
+            )
+            return create_live_agent(connection, voice, demo=live_settings.demo, client_handler=handler)
+
+        live = LiveService(voice_agent)
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
         app.state.live = live
@@ -284,7 +296,7 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
-    register_live(app, lambda: live, lambda: live_settings)
+    register_live(app, lambda: live, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 
     register_assets(app, lambda: state)
@@ -342,6 +354,7 @@ def create_app(
                 admitted
                 and state.harness.config.submit_mode == "interrupt"
                 and active is not None
+                and not active.voice
                 and active.session_id == session_id
                 and active.message_id != body.message_id
                 and not active.finished

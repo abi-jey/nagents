@@ -21,7 +21,6 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.live import LiveConfig
 from nagents.provider import FoundryProvider
-from nagents.web.live import MAX_SDP_CHARACTERS
 from nagents.web.live import create_agent
 from nagents.web.live_runtime import LiveService
 from nagents.web.live_settings import LIVE_PROVIDERS
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
 
 SECRET = "sk-fixture-live-private-key"
 SESSION = "live-fixture-session"
-OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 
 
 def configuration(path: Path, *, demo: bool = False) -> HarnessConfig:
@@ -56,7 +54,7 @@ class FakeLiveService:
         self.factory = factory
         self.loop = asyncio.get_running_loop()
         self.active_session_id = ""
-        self.creates: list[tuple[str, str]] = []
+        self.creates: list[str] = []
         self.snapshots: list[tuple[str, int]] = []
         self.closes: list[str] = []
         self.agents: list[Agent] = []
@@ -65,8 +63,8 @@ class FakeLiveService:
         self.release = asyncio.Event()
         self.release.set()
 
-    async def create(self, sdp: str, voice: str = "") -> dict[str, object]:
-        self.creates.append((sdp, voice))
+    async def create_stream(self, voice: str = "") -> dict[str, object]:
+        self.creates.append(voice)
         self.active_session_id = SESSION
         self.entered.set()
         await self.release.wait()
@@ -78,7 +76,7 @@ class FakeLiveService:
         self.agents.append(agent)
         options = agent.provider.live_config
         assert options is not None
-        return {"session_id": SESSION, "sdp": "fixture-answer", "model": agent.provider.model, "voice": options.voice}
+        return {"session_id": SESSION, "model": agent.provider.model, "voice": options.voice}
 
     async def snapshot(self, session_id: str, after: int = 0) -> dict[str, object]:
         self.snapshots.append((session_id, after))
@@ -133,7 +131,11 @@ async def configure(client: httpx.AsyncClient, headers: dict[str, str], *, key: 
     response = await client.post(
         "/api/live/settings",
         headers=headers,
-        json={"revision": before["revision"], "values": {**before["values"], "enabled": True}, "api_key": key},
+        json={
+            "revision": before["revision"],
+            "values": {**before["values"], "enabled": True, "backend_mode": "hosted"},
+            "api_key": key,
+        },
     )
     assert response.status_code == 200 and SECRET not in response.text
     return str(response.json()["revision"])
@@ -160,6 +162,7 @@ def test_factory_uses_only_committed_key_and_tool_free_hosted_agent(
         {
             **LiveValues.defaults().model_dump(),
             "enabled": True,
+            "backend_mode": "hosted",
             "provider": provider,
             "base_url": "https://voice.example.invalid/openai/v1",
             "model": "voice-deployment",
@@ -225,11 +228,10 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
             before_history = await harnesses[0].history()
             for voice in ("", "cedar"):
                 response = await client.post(
-                    "/api/live/sessions", headers=headers, json={"sdp": OFFER, "voice": voice, "revision": revision}
+                    "/api/live/sessions", headers=headers, json={"voice": voice, "revision": revision}
                 )
                 assert response.status_code == 201 and response.json() == {
                     "session_id": SESSION,
-                    "sdp": "fixture-answer",
                     "model": "gpt-live-1",
                     "voice": voice or "marin",
                 }
@@ -256,37 +258,90 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("provider", LIVE_PROVIDERS)
-def test_settings_routes_create_real_provider_sessions_and_sidebands_after_reload(
-    tmp_path: Path, provider: str
+def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
+    tmp_path: Path, services: list[FakeLiveService]
 ) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
+            before = (await client.get("/api/live/settings", headers=headers)).json()
+            assert before["values"]["backend_mode"] == "assistant"
+            saved = await client.post(
+                "/api/live/settings",
+                headers=headers,
+                json={
+                    "revision": before["revision"],
+                    "values": {**before["values"], "enabled": True},
+                    "api_key": SECRET,
+                },
+            )
+            assert saved.status_code == 200
+            revision = saved.json()["revision"]
+            ready = (await client.get("/api/live", headers=headers)).json()
+            assert ready["backend_mode"] == "assistant"
+            assert ready["assistant"] == {"agent": "assistant", "provider": "anthropic", "model": "chat-only-model"}
+            assert ready["available"] is True and SECRET not in str(ready)
+            missing = await client.post("/api/live/sessions", headers=headers, json={"revision": revision})
+            assert missing.status_code == 422
+            wrong = await client.post(
+                "/api/live/sessions",
+                headers=headers,
+                json={
+                    "revision": revision,
+                    "session_id": "ngn-another-chat",
+                },
+            )
+            assert wrong.status_code == 409 and not services[0].creates
+            selected = harnesses[0].session_id
+            with patch.object(app.state.web.designed_channels, "pin", AsyncMock(return_value=("designed", "source"))):
+                pinned = await client.post(
+                    "/api/live/sessions",
+                    headers=headers,
+                    json={
+                        "revision": revision,
+                        "session_id": selected,
+                    },
+                )
+                assert pinned.status_code == 409 and not services[0].creates
+            started = await client.post(
+                "/api/live/sessions",
+                headers=headers,
+                json={
+                    "revision": revision,
+                    "session_id": selected,
+                },
+            )
+            assert started.status_code == 201
+            options = services[0].agents[0].provider.live_config
+            assert options is not None and options.delegation == "client"
+            assert options.client_handler is not None and services[0].agents[0].delegation_agent is None
+            assert services[0].agents[0].tool_registry.get_all() == []
+            assert harnesses[0].agent.tool_registry.get("shell") is not None
+            await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("provider", LIVE_PROVIDERS)
+def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: Path, provider: str) -> None:
     """Only the remote provider is a fixture: app, settings, runtime, Agent and transports are real."""
 
     async def check() -> None:
-        provisioned: list[dict[str, object]] = []
-        sidebands: list[str] = []
+        started: list[dict[str, object]] = []
         commands: list[tuple[str, str]] = []
         api_path = "/openai/v1" if provider == "azure_openai_compatible_v1" else "/v1"
 
-        async def provision(request: web.Request) -> web.Response:
-            assert request.headers["Authorization"] == f"Bearer {SECRET}"
-            provisioned.append(cast("dict[str, object]", await request.json()))
-            return web.json_response(
-                {
-                    "session": {"id": f"native-{len(provisioned)}", "client_secret": SECRET},
-                    "transport": {"sdp": OFFER},
-                }
-            )
-
-        async def attach(request: web.Request) -> web.WebSocketResponse:
-            identifier = request.match_info["session_id"]
+        async def connect(request: web.Request) -> web.WebSocketResponse:
             if provider == "azure_openai_compatible_v1":
                 assert request.headers["api-key"] == SECRET and "Authorization" not in request.headers
             else:
                 assert request.headers["Authorization"] == f"Bearer {SECRET}"
-            sidebands.append(identifier)
             socket = web.WebSocketResponse()
             await socket.prepare(request)
+            first = await socket.receive_json()
+            assert first["type"] == "session.start"
+            started.append(cast("dict[str, object]", first["session"]))
+            identifier = f"native-{len(started)}"
+            await socket.send_json({"type": "session.started", "session": {"id": identifier}})
             await socket.send_json(
                 {
                     "type": "session.input_transcript.delta",
@@ -315,8 +370,7 @@ def test_settings_routes_create_real_provider_sessions_and_sidebands_after_reloa
             return socket
 
         upstream = web.Application()
-        upstream.router.add_post(f"{api_path}/live/sessions", provision)
-        upstream.router.add_get(f"{api_path}/live/sessions/{{session_id}}/attach", attach)
+        upstream.router.add_get(f"{api_path}/live/sessions", connect)
         runner = web.AppRunner(upstream, access_log=None)
         await runner.setup()
         try:
@@ -345,6 +399,7 @@ def test_settings_routes_create_real_provider_sessions_and_sidebands_after_reloa
                                     "base_url": base_url,
                                     "model": "voice-ui-model",
                                     "backend_model": "hosted-ui-model",
+                                    "backend_mode": "hosted",
                                     "voice": "cedar",
                                 },
                                 "api_key": SECRET,
@@ -359,19 +414,16 @@ def test_settings_routes_create_real_provider_sessions_and_sidebands_after_reloa
                     assert info["available"] and info["provider"] == provider and info["active_session_id"] == ""
                     before_history = await harnesses[0].history()
                     async with asyncio.timeout(HANG_GUARD):
-                        created = await client.post(
-                            "/api/live/sessions", headers=headers, json={"sdp": OFFER, "revision": revision}
-                        )
+                        created = await client.post("/api/live/sessions", headers=headers, json={"revision": revision})
                     assert created.status_code == 201 and SECRET not in created.text
                     identifier = str(created.json()["session_id"])
                     session_ids.append(identifier)
                     assert created.json() == {
                         "session_id": identifier,
-                        "sdp": OFFER,
                         "model": "voice-ui-model",
                         "voice": "cedar",
                     }
-                    assert identifier not in sidebands  # Browser IDs are local opaque handles, not provider IDs.
+                    assert identifier not in [f"native-{i}" for i in range(1, len(started) + 1)]
                     assert (await client.get("/api/live", headers=headers)).json()["active_session_id"] == identifier
                     async with asyncio.timeout(HANG_GUARD):
                         while True:
@@ -402,15 +454,16 @@ def test_settings_routes_create_real_provider_sessions_and_sidebands_after_reloa
                     assert await harnesses[0].history() == before_history
                     assert harnesses[0].config.provider == "anthropic"
                 assert service._closed and not service.active_session_id
-            assert len(set(session_ids)) == 2 and sidebands == ["native-1", "native-2"]
+            assert len(set(session_ids)) == 2
             assert commands == [("native-1", "session.close"), ("native-2", "session.close")]
-            assert len(provisioned) == 2
-            for body in provisioned:
-                assert body["transport"] == {"type": "webrtc", "sdp": OFFER}
-                session = body["session"]
+            assert len(started) == 2
+            for session in started:
                 assert isinstance(session, dict)
                 assert session["model"] == "voice-ui-model" and session["store"] is False and session["input"] == []
-                assert session["audio"] == {"output": {"voice": "cedar"}}
+                assert session["audio"] == {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "output": {"voice": "cedar"},
+                }
                 assert session["delegation"] == {
                     "type": "responses",
                     "responses": {
@@ -436,16 +489,12 @@ def test_unavailable_setup_and_demo_remain_configurable(
             info = (await client.get("/api/live", headers=headers)).json()
             assert not info["available"] and not info["key_configured"]
             assert ("demo" if demo else "Connection settings") in info["reason"]
-            refused = await client.post(
-                "/api/live/sessions", json={"sdp": OFFER, "revision": revision}, headers=headers
-            )
+            refused = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
             assert refused.status_code == 503
             revision = await configure(client, headers)
             assert (await client.get("/api/live", headers=headers)).json()["available"] is (not demo)
             if demo:
-                refused = await client.post(
-                    "/api/live/sessions", json={"sdp": OFFER, "revision": revision}, headers=headers
-                )
+                refused = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
                 assert refused.status_code == 503 and "demo" in refused.text
             assert not services[0].creates
 
@@ -460,7 +509,7 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
             stale = (await client.get("/api/live", headers=headers)).json()["revision"]
             revision = await configure(client, headers)
             for path, body in (
-                ("/api/live/sessions", {"sdp": OFFER, "revision": stale}),
+                ("/api/live/sessions", {"revision": stale}),
                 (
                     "/api/live/settings",
                     {"revision": stale, "values": LiveValues.defaults().model_dump(), "api_key": SECRET},
@@ -473,7 +522,7 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
             service = services[0]
             service.release.clear()
             creating = asyncio.create_task(
-                client.post("/api/live/sessions", headers=headers, json={"sdp": OFFER, "revision": revision})
+                client.post("/api/live/sessions", headers=headers, json={"revision": revision})
             )
             await service.entered.wait()
             try:
@@ -483,7 +532,7 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
                     )
                 ).status_code == 409
                 assert (
-                    await client.post("/api/live/sessions", headers=headers, json={"sdp": OFFER, "revision": revision})
+                    await client.post("/api/live/sessions", headers=headers, json={"revision": revision})
                 ).status_code == 409
             finally:
                 service.release.set()
@@ -573,16 +622,13 @@ def test_strict_bounded_session_settings_and_cursor_inputs(tmp_path: Path, servi
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
             revision = await configure(client, headers)
-            valid: dict[str, object] = {"sdp": OFFER, "revision": revision}
+            valid: dict[str, object] = {"revision": revision}
             body: object
             for body in (
                 {},
                 [],
-                {"sdp": OFFER},
-                {**valid, "sdp": 123},
-                {**valid, "sdp": None},
-                {**valid, "sdp": " \r\n "},
-                {**valid, "sdp": "a" * (MAX_SDP_CHARACTERS + 1)},
+                {"voice": "cedar"},
+                {**valid, "sdp": "no browser SDP"},
                 {**valid, "voice": True},
                 {**valid, "voice": SECRET},
                 {**valid, "api_key": SECRET},
@@ -608,7 +654,7 @@ def test_strict_bounded_session_settings_and_cursor_inputs(tmp_path: Path, servi
             for path in ("/api/live/sessions", "/api/live/settings"):
                 for content, content_type, status in (
                     (f'{{"secret":"{SECRET}",', "application/json", 422),
-                    (OFFER, "application/sdp", 415),
+                    ("offer", "application/sdp", 415),
                     ("x" * 65537, "application/json", 413),
                 ):
                     response = await client.post(
@@ -648,10 +694,8 @@ def test_safe_runtime_errors_and_unexpected_failures_are_redacted(
                 (HTTPException(409, "End the active Live session first."), 409),
                 (RuntimeError(SECRET), 500),
             ):
-                with patch.object(services[0], "create", AsyncMock(side_effect=failure)):
-                    response = await client.post(
-                        "/api/live/sessions", json={"sdp": OFFER, "revision": revision}, headers=headers
-                    )
+                with patch.object(services[0], "create_stream", AsyncMock(side_effect=failure)):
+                    response = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
                     assert response.status_code == status and SECRET not in response.text
                     assert response.headers["cache-control"] == "no-store"
             assert (await client.get("/api/live/sessions/unknown", headers=headers)).status_code == 404

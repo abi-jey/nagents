@@ -24,6 +24,7 @@ from nagents.cli import _event_record
 from nagents.cli import _json_default
 from nagents.compaction import estimate_tokens
 from nagents.context_stats import ContextComponent
+from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
@@ -86,9 +87,11 @@ class Run:
     pending: Pending | None = None
     notices: ChannelNotices | None = field(default=None, repr=False)
     outcome: str = "completed"
+    final_text: str = ""
     finished: bool = False
     background: bool = False
     server_owned: bool = False
+    voice: bool = False
     message_id: str = ""
     source: dict[str, str] = field(default_factory=dict)
     chain: Chain = field(default_factory=Chain)
@@ -435,6 +438,8 @@ class WebState:
             with binding, host_run(self.running_harness, run.id):
                 async with aclosing(source) as events:
                     async for event in events:
+                        if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
+                            run.final_text = event.final_text
                         if isinstance(event, ErrorEvent):
                             logger.warning(
                                 "Provider run error: session=%s run=%s recoverable=%s",

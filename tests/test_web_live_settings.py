@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from contextlib import closing
 from threading import Event as ThreadEvent
@@ -74,6 +75,31 @@ def test_key_values_and_revisions_persist_separately_and_never_serialize(tmp_pat
         assert await second.snapshot() == saved
         assert (await second.connection()).api_key.get_secret_value() == SECRET
         assert not second._tasks
+
+    asyncio.run(check())
+
+
+def test_existing_hosted_connection_remains_hosted_until_explicitly_changed(tmp_path: Path) -> None:
+    async def check() -> None:
+        first = store(tmp_path)
+        await first.load()
+        await first.change(await request(first, key=SECRET))
+        original = await first.connection()
+        legacy = json.dumps(original.values.model_dump(exclude={"backend_mode"}))
+        await sql(first.db_path, "UPDATE ngn_web_live_settings SET values_json = ? WHERE id = 1", (legacy,))
+
+        second = store(tmp_path)
+        await second.load()
+        existing = await second.connection()
+        assert existing.values.backend_mode == "hosted"
+        assert existing.revision == original.revision and existing.api_key.get_secret_value() == SECRET
+        assert (await sql(first.db_path, "SELECT values_json FROM ngn_web_live_settings WHERE id = 1"))[0][0] == legacy
+        saved = await second.change(LiveSettingsInput(revision=existing.revision, values=existing.values))
+        assert saved["key_configured"] is True
+        persisted = await second.connection()
+        assert persisted.values.backend_mode == "hosted" and persisted.api_key.get_secret_value() == SECRET
+        await second.shutdown()
+        await first.shutdown()
 
     asyncio.run(check())
 

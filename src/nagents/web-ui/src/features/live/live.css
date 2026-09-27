@@ -92,6 +92,7 @@
 .live-settings-panel > header button { display: grid; place-items: center; border: 0; background: transparent; padding: 6px; color: #aab4ad; }
 .live-settings-form { padding: 0 22px 22px; max-height: 650px; overflow-y: auto; scrollbar-width: thin; }
 .live-settings-description { margin: 0 0 18px; color: #acb6af; font-size: 11px; line-height: 1.8; }
+.live-backend-note { margin: -4px 0 2px; padding: 10px 12px; border: 1px solid #a8e6d42b; border-radius: 8px; color: #c9ded2; background: #a8e6d409; font-size: 11px; line-height: 1.7; }
 .live-settings-form fieldset { display: grid; gap: 14px; padding: 0; margin: 0; border: 0; min-width: 0; }
 .live-settings-form label { display: flex; flex-direction: column; gap: 6px; color: #c2d3c8; font-size: 11px; min-width: 0; }
 .live-settings-form input:not([type="checkbox"]), .live-settings-form select { width: 100%; min-width: 0; padding: 9px 10px; color: #e0e9e2; background: #242d27; border: 1px solid #596c5e; border-radius: 7px; font: inherit; font-size: 12px; }

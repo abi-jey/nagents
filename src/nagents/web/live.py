@@ -1,6 +1,7 @@
-"""Dedicated, tool-free GPT-Live configuration and same-origin HTTP routes."""
+"""GPT-Live voice configuration and same-origin HTTP routes."""
 
 import logging
+from collections.abc import Awaitable
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import Path as PathParameter
 from fastapi import Query
+from fastapi import WebSocket
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
@@ -26,13 +28,14 @@ from nagents.types import RetryConfig
 from .live_settings import LIVE_VOICES
 from .live_settings import LiveSettingsInput
 from .live_settings import Revision
+from .routing import RoutingStore
 
 if TYPE_CHECKING:
     from .live_runtime import LiveService
     from .live_settings import LiveConnection
     from .live_settings import LiveSettings
+    from .service import WebState
 
-MAX_SDP_CHARACTERS = 60000
 logger = logging.getLogger("uvicorn.error")
 SessionId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
 Cursor = Annotated[int, Query(ge=0, le=2**53 - 1)]
@@ -41,9 +44,9 @@ Cursor = Annotated[int, Query(ge=0, le=2**53 - 1)]
 class SessionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    sdp: str = Field(min_length=1, max_length=MAX_SDP_CHARACTERS)
     voice: str = Field(default="", max_length=64)
     revision: Revision
+    session_id: str = Field(default="", max_length=80, pattern=r"^$|^ngn-[a-zA-Z0-9-]+$")
 
 
 def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
@@ -72,7 +75,13 @@ def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
     return ""
 
 
-def capabilities(connection: "LiveConnection", active_session_id: str = "", *, demo: bool = False) -> dict[str, object]:
+def capabilities(
+    connection: "LiveConnection",
+    active_session_id: str = "",
+    *,
+    demo: bool = False,
+    assistant: dict[str, str] | None = None,
+) -> dict[str, object]:
     """Allowlisted discovery fields without credentials; editable values have their own route."""
     reason = unavailable_reason(connection, demo=demo)
     values = connection.values
@@ -82,6 +91,8 @@ def capabilities(connection: "LiveConnection", active_session_id: str = "", *, d
         "provider": values.provider,
         "model": values.model,
         "backend_model": values.backend_model,
+        "backend_mode": values.backend_mode,
+        "assistant": assistant or {},
         "voice": values.voice,
         "voices": list(LIVE_VOICES),
         "active_session_id": active_session_id,
@@ -91,15 +102,30 @@ def capabilities(connection: "LiveConnection", active_session_id: str = "", *, d
     }
 
 
-def create_agent(connection: "LiveConnection", voice: str = "", *, demo: bool = False) -> Agent:
-    """A fresh owned voice agent, independent of Harness tools, history and login selection."""
+def create_agent(
+    connection: "LiveConnection",
+    voice: str = "",
+    *,
+    demo: bool = False,
+    client_handler: Callable[[str], Awaitable[str]] | None = None,
+) -> Agent:
+    """A fresh voice agent; client mode delegates inference to the selected Harness."""
     reason = unavailable_reason(connection, demo=demo)
     if reason:
         raise HTTPException(503, reason)
     if voice and voice not in LIVE_VOICES:
         raise HTTPException(422, "Choose a supported Live voice.")
     values = connection.values
-    options = LiveConfig(backend_model=values.backend_model, voice=voice or values.voice, store=False)
+    if values.backend_mode == "assistant" and client_handler is None:
+        raise HTTPException(503, "Select an assistant conversation before connecting GPT-Live.")
+    options = LiveConfig(
+        delegation="client" if values.backend_mode == "assistant" else "responses",
+        backend_model=values.backend_model,
+        voice=voice or values.voice,
+        store=False,
+        backend_timeout=420 if values.backend_mode == "assistant" else 120,
+        client_handler=client_handler if values.backend_mode == "assistant" else None,
+    )
     key = connection.api_key.get_secret_value()
     provider: Provider
     if connection.profile is not None:
@@ -137,11 +163,22 @@ def create_agent(connection: "LiveConnection", voice: str = "", *, demo: bool = 
     )
 
 
-def register(app: FastAPI, service: Callable[[], "LiveService"], settings: Callable[[], "LiveSettings"]) -> None:
+def register(
+    app: FastAPI,
+    service: Callable[[], "LiveService"],
+    settings: Callable[[], "LiveSettings"],
+    state: Callable[[], "WebState"],
+) -> None:
+    def assistant() -> dict[str, str]:
+        current = state().settings.values
+        return {"provider": current.provider, "model": current.model, "agent": current.agent}
+
     @app.get("/api/live")
     async def discover() -> dict[str, object]:
         current = settings()
-        return capabilities(await current.connection(), service().active_session_id, demo=current.demo)
+        return capabilities(
+            await current.connection(), service().active_session_id, demo=current.demo, assistant=assistant()
+        )
 
     @app.get("/api/live/settings")
     async def connection_settings() -> dict[str, object]:
@@ -160,24 +197,41 @@ def register(app: FastAPI, service: Callable[[], "LiveService"], settings: Calla
 
     @app.post("/api/live/sessions", status_code=201)
     async def create(body: SessionInput) -> dict[str, object]:
-        if not body.sdp.strip():
-            raise HTTPException(422, "An SDP offer is required.")
         if body.voice and body.voice not in LIVE_VOICES:
             raise HTTPException(422, "Choose a supported Live voice.")
         current = settings()
-        async with current.admit(body.revision) as connection:
-            reason = unavailable_reason(connection, demo=current.demo)
-            if reason:
-                raise HTTPException(503, reason)
-            logger.info(
-                "Live connection requested: provider=%s profile=%s voice=%s",
-                connection.values.provider,
-                connection.profile_name or "(legacy)",
-                body.voice or connection.values.voice,
-            )
-            result = await service().create(body.sdp, body.voice)
-            logger.info("Live connection created: session=%s", result.get("session_id", ""))
-            return result
+        host = state()
+        with host.idle():
+            async with current.admit(body.revision, body.session_id) as connection:
+                reason = unavailable_reason(connection, demo=current.demo)
+                if reason:
+                    raise HTTPException(503, reason)
+                logger.info(
+                    "Live connection requested: provider=%s profile=%s voice=%s",
+                    connection.values.provider,
+                    connection.profile_name or "(legacy)",
+                    body.voice or connection.values.voice,
+                )
+                if connection.values.backend_mode == "assistant":
+                    if not body.session_id:
+                        raise HTTPException(422, "Select an assistant conversation before connecting GPT-Live.")
+                    if body.session_id != host.selected_session_id:
+                        raise HTTPException(
+                            409, "The selected assistant conversation changed. Reconnect before using voice."
+                        )
+                    await host.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
+                    if (await host.designed_channels.pin(body.session_id))[1]:
+                        raise HTTPException(
+                            409,
+                            "This chat uses a pinned designed agent. Select a main assistant chat for voice.",
+                        )
+                result = await service().create_stream(body.voice)
+                logger.info("Live connection created: session=%s", result.get("session_id", ""))
+                return result
+
+    @app.websocket("/api/live/sessions/{session_id}/audio")
+    async def audio(socket: WebSocket, session_id: SessionId) -> None:
+        await service().serve_audio(session_id, socket)
 
     @app.get("/api/live/sessions/{session_id}")
     async def snapshot(session_id: SessionId, after: Cursor = 0) -> dict[str, object]:

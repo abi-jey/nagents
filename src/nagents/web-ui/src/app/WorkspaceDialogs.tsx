@@ -22,7 +22,7 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
   return <>
     {client.panel === "designer" && config && <Designer token={config.token} configureChannels={client.channels.show} close={closePanel} />}
     {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={client.busy || dictation.unfinished} close={closePanel} />}
-    {client.panel === "live" && config && <LiveDialog key={config.token} token={config.token} close={closeLive} />}
+    {client.panel === "live" && config && <LiveDialog key={config.token} token={config.token} sessionId={sessions.sessionId} close={closeLive} />}
     {client.settings.open && <SettingsDialog settings={client.settings} />}
     {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController}
       permanent={(item) => client.deletionController.showTrash(item)} openSession={openRestored}
