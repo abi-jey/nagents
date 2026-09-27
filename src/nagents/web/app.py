@@ -7,6 +7,7 @@ import secrets
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Annotated
@@ -118,10 +119,12 @@ class ProviderRevision(Input):
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-def _provider_profile(fields: dict[str, object]) -> ProviderProfile:
+def _provider_profile(fields: dict[str, object], *, previous_live: LiveProfile) -> ProviderProfile:
     if set(fields) - set(ProviderProfile.__dataclass_fields__) or "kind" not in fields:
         raise HTTPException(422, "Invalid provider connection fields")
-    live = fields.get("live", {})
+    # The connection editor does not submit Voice fields. Until the separate
+    # Voice importer has consumed v1 data, retain them on provider-only edits.
+    live = fields.get("live", asdict(previous_live))
     if not isinstance(live, dict) or set(live) - set(LiveProfile.__dataclass_fields__):
         raise HTTPException(422, "Invalid Live connection fields")
     try:
@@ -471,7 +474,8 @@ def create_app(
         with state.idle():
             if live.active_session_id:
                 raise HTTPException(409, "End the active Live call before editing providers.")
-            profile = _provider_profile(body.profile)
+            existing = state.harness.provider_store.load_scope(scope).providers.get(name)
+            profile = _provider_profile(body.profile, previous_live=existing.live if existing else LiveProfile())
             try:
                 await _join(asyncio.create_task(state.harness.save_provider(name, profile, body.revision, scope)))
             except ValueError:

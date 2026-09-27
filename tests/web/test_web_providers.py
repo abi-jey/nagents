@@ -108,6 +108,61 @@ def test_provider_crud_model_catalog_and_live_are_shared(
     asyncio.run(check())
 
 
+def test_connection_only_web_save_keeps_unimported_v1_live_data(tmp_path: Path) -> None:
+    scoped = ScopedProviderRegistryStore(tmp_path)
+    scoped.global_store.path.parent.mkdir(parents=True)
+    scoped.global_store.path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "revision": "0" * 64,
+                "active": "openai-codex",
+                "providers": {
+                    "openai-codex": {
+                        "kind": "openai",
+                        "auth": "codex",
+                        "api_key_env": "OPENAI_API_KEY",
+                        "model": "gpt-6-luna",
+                        "live": {
+                            "enabled": True,
+                            "backend_mode": "assistant",
+                            "model": "gpt-live-1",
+                            "backend_model": "gpt-5.6-luna",
+                            "voice": "marin",
+                        },
+                    }
+                },
+            }
+        )
+    )
+
+    async def check() -> None:
+        config = load_config(tmp_path)
+        config.demo = True
+        config.data_dir = tmp_path / "data"
+        async with client_app(tmp_path, config=config) as (app, client, headers, _):
+            before = (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()
+            result = await client.put(
+                "/api/provider-scopes/global/providers/openai-codex",
+                headers=headers,
+                json={
+                    "revision": before["revision"],
+                    "profile": {"kind": "openai", "auth": "codex", "api_key_env": "OPENAI_API_KEY"},
+                },
+            )
+            assert result.status_code == 200, result.text
+            saved = yaml.safe_load(scoped.global_store.path.read_text())
+            assert saved["version"] == 2
+            assert "model" not in saved["providers"]["openai-codex"]
+            assert "live" not in saved["providers"]["openai-codex"]
+            assert saved["legacy_live"]["openai-codex"]["backend_model"] == "gpt-5.6-luna"
+            connection = await app.state.live_settings.connection()
+            assert connection.values.enabled and connection.values.model == "gpt-live-1"
+            assert (await client.get("/api/settings", headers=headers)).json()["values"]["model"] == "gpt-6-luna"
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize(
     "profile",
     [
