@@ -3,8 +3,9 @@ import test from "node:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
-import { loadAsset, MediaBudget, type LocalDelivery } from "./deliveries.js";
+import { loadAsset, mediaBudget, MediaBudget, type LocalDelivery } from "./deliveries.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
+import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
 import { appendEvent, fromHistory } from "./transcript.js";
 import { applySnapshot } from "./liveTranscript.js";
 import type { Snapshot } from "../../types.js";
@@ -61,6 +62,48 @@ test("concurrent requests and many small retained previews share finite budgets"
   assert.throws(() => budget.reserve(1), /budget is full/);
   for (const item of [first, second, third]) item.release();
   budget.reserve(5).release();
+});
+
+test("saved image previews use the same bounded loader as delivery assets", async (t) => {
+  const held = Array.from({ length: 3 }, () => {
+    const reservation = mediaBudget.reserve(20 * 1024 * 1024);
+    reservation.loaded();
+    return reservation;
+  });
+  const fetch = t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    assert.equal(path, "/api/sessions/root/uploads/asset-one/preview");
+    assert.equal(new Headers(init.headers).get("X-Ngn-Token"), "token");
+    return new Response(new Uint8Array(3), { headers: { "Content-Type": "image/png" } });
+  });
+  const dom = new JSDOM("<div id='root'></div>");
+  const descriptors = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  const create = t.mock.method(URL, "createObjectURL", () => "blob:upload");
+  const revoke = t.mock.method(URL, "revokeObjectURL", () => {});
+  try {
+    await act(async () => root.render(createElement(MediaToken.Provider, { value: "token" },
+      createElement(UploadSession.Provider, { value: "root" }, createElement(UploadAttachment, {
+        upload: { upload_id: "asset-one", filename: "photo.png", media_type: "image/png", byte_length: 3 }, ready: true,
+      })))));
+    assert.match(container.textContent!, /Media budget is full/);
+    assert.equal(fetch.mock.callCount(), 0);
+    held.forEach((reservation) => reservation.release());
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    assert.equal(container.querySelector("img")?.getAttribute("src"), "blob:upload");
+    assert.equal(create.mock.callCount(), 1);
+    assert.equal(fetch.mock.callCount(), 1);
+    await act(async () => root.unmount());
+    assert.equal(revoke.mock.callCount(), 1);
+  } finally {
+    held.forEach((reservation) => reservation.release());
+    dom.window.close();
+    for (const key of ["window", "document", "IS_REACT_ACT_ENVIRONMENT"]) {
+      if (descriptors[key]) Object.defineProperty(globalThis, key, descriptors[key]);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });
 
 test("exact saved anchors and delivery IDs survive retry, identical text, replay and compaction", () => {

@@ -11,6 +11,7 @@ from urllib.parse import unquote
 
 from fastapi import HTTPException
 from fastapi import Request
+from fastapi import Response
 
 from nagents.channels.runtime import MAX_INLINE_ATTACHMENTS
 from nagents.channels.runtime import MAX_INLINE_ATTACHMENT_BYTES
@@ -175,6 +176,31 @@ def register_uploads(app: FastAPI, get: Callable[[], WebState]) -> None:
             return await state.channels.store._transaction(save)
         finally:
             state.uploads.loading -= 1
+
+    @app.get("/api/sessions/{session_id}/uploads/{upload_id}/preview")
+    async def preview(session_id: str, upload_id: str) -> Response:
+        """Only a committed message's image may be viewed in its own session."""
+
+        def read(db: sqlite3.Connection) -> tuple[str, bytes] | None:
+            get().channels.store.execution_root(db, session_id)
+            row = db.execute(
+                "SELECT u.media_type, u.data FROM ngn_web_uploads u "
+                "JOIN ngn_web_inbox i ON i.id = u.inbox_id AND i.session_id = u.session_id "
+                "WHERE u.session_id = ? AND u.upload_id = ? AND u.inbox_id != 0",
+                (session_id, upload_id),
+            ).fetchone()
+            if row is None or row[0] not in TYPES or not row[0].startswith("image/") or not isinstance(row[1], bytes):
+                return None
+            if not valid_media(row[0], row[1]):
+                return None
+            return row[0], row[1]
+
+        image = await get().channels.store._transaction(read)
+        if image is None:
+            raise HTTPException(404, "Image preview is unavailable.")
+        return Response(
+            image[1], media_type=image[0], headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        )
 
     @app.delete("/api/sessions/{session_id}/uploads/{upload_id}")
     async def remove(session_id: str, upload_id: str) -> dict[str, bool]:

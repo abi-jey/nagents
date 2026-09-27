@@ -14,6 +14,19 @@ Related pages: [installation and environment choices](ngn-installation.md),
 [complete configuration schema and recipes](ngn-configuration.md), and the new
 [local web client](ngn-web.md), which is not included in `v0.5.0`.
 
+## Shared provider connections
+
+Use `/provider` to create or edit named provider connections, activate one, or
+fetch its model IDs. The TUI and web UI share
+`$XDG_CONFIG_HOME/ngn/providers.yaml` (default
+`~/.config/ngn/providers.yaml`). Enter an environment-variable **name** such as
+`OPENAI_API_KEY` or `${OPENAI_API_KEY}`; ngn reads the value when it makes a
+request and does not save it in that file. OpenAI also supports ngn's ChatGPT
+device login or the library's local Codex discovery. Foundry can use the
+optional `azure-identity` SDK's DefaultAzureCredential chain. Live voice and
+backend settings belong to each connection. See the
+[configuration reference](ngn-configuration.md#shared-named-provider-connections).
+
 ## Install and launch
 
 From the repository root, retain the existing Poetry workflow:

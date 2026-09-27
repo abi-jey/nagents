@@ -30,13 +30,18 @@ export const mediaBudget = new MediaBudget();
 
 export async function loadAsset(token: string, delivery: LocalDelivery, asset: DeliveryAsset, signal: AbortSignal,
   budget = mediaBudget): Promise<{ url: string; release: () => void }> {
+  const path = ["sessions", delivery.session_id, "deliveries", delivery.delivery_id, "assets", asset.asset_id]
+    .map(encodeURIComponent).join("/");
+  return loadMedia(token, path, asset, signal, budget);
+}
+
+export async function loadMedia(token: string, path: string, asset: Pick<DeliveryAsset, "media_type" | "byte_length">,
+  signal: AbortSignal, budget = mediaBudget): Promise<{ url: string; release: () => void }> {
   if (!MEDIA_TYPES.has(asset.media_type)) throw new Error("This attachment type cannot be previewed.");
   const reservation = budget.reserve(asset.byte_length);
   let url = "";
   try {
     signal.throwIfAborted();
-    const path = ["sessions", delivery.session_id, "deliveries", delivery.delivery_id, "assets", asset.asset_id]
-      .map(encodeURIComponent).join("/");
     const response = await request(path, token, undefined, signal);
     if (response.headers.get("Content-Type") !== asset.media_type ||
         (response.headers.has("Content-Length") && Number(response.headers.get("Content-Length")) !== asset.byte_length)) {

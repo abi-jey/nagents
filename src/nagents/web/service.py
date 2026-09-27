@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 from contextlib import aclosing
 from contextlib import contextmanager
@@ -24,6 +25,8 @@ from nagents.cli import _json_default
 from nagents.compaction import estimate_tokens
 from nagents.context_stats import ContextComponent
 from nagents.events import ErrorEvent
+from nagents.events import ToolCallEvent
+from nagents.events import ToolResultEvent
 from nagents.harness.execution import bind_channel_send
 from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
@@ -62,6 +65,7 @@ if TYPE_CHECKING:
     from .wakeups import Wakeup
 
 APPROVAL_TIMEOUT = 300
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass
@@ -432,6 +436,12 @@ class WebState:
                 async with aclosing(source) as events:
                     async for event in events:
                         if isinstance(event, ErrorEvent):
+                            logger.warning(
+                                "Provider run error: session=%s run=%s recoverable=%s",
+                                run.session_id,
+                                run.id,
+                                event.recoverable,
+                            )
                             if not event.recoverable:
                                 run.outcome = "failed"
                             record = {
@@ -440,15 +450,37 @@ class WebState:
                                 "recoverable": event.recoverable,
                             }
                         else:
+                            if isinstance(event, ToolCallEvent):
+                                known = (
+                                    event.name
+                                    if event.name in self.running_harness.agent.tool_registry.names()
+                                    else "(unregistered)"
+                                )
+                                logger.info("Tool requested: session=%s run=%s tool=%s", run.session_id, run.id, known)
+                            elif isinstance(event, ToolResultEvent):
+                                known = (
+                                    event.name
+                                    if event.name in self.running_harness.agent.tool_registry.names()
+                                    else "(unregistered)"
+                                )
+                                logger.info(
+                                    "Tool completed: session=%s run=%s tool=%s failed=%s",
+                                    run.session_id,
+                                    run.id,
+                                    known,
+                                    bool(event.error),
+                                )
                             record = transcript.record(event)
                         await notices.observe(record, live=True)
                         await self.send(run, record)
         except asyncio.CancelledError:
             run.outcome = "cancelled"
+            logger.info("Run producer cancelled: session=%s run=%s", run.session_id, run.id)
             self.wakeups.cancel(run.chain)
             raise
         except Exception:
             run.outcome = "failed"
+            logger.warning("Run producer failed: session=%s run=%s", run.session_id, run.id)
             await self.send(run, {"event": "error", "message": "Run failed. Completed actions were not rolled back."})
         finally:
             if run.pending is not None and not run.pending.answer.done():
@@ -475,6 +507,13 @@ class WebState:
         if work.channel:
             run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
         self.active = run
+        logger.info(
+            "Queued run started: session=%s run=%s message=%s channel=%s",
+            work.session_id,
+            run.id,
+            work.message_id,
+            work.channel or "web",
+        )
         self.publish(run, {"event": "run_started", "message_id": work.message_id, "channel": work.channel})
         self.status()
 
@@ -565,6 +604,13 @@ class WebState:
         if run.finished:
             return
         run.finished = True
+        logger.info(
+            "Run finished: session=%s run=%s status=%s background=%s",
+            run.session_id,
+            run.id,
+            run.outcome,
+            run.background,
+        )
         self.channels.management.run_finished(run)
         self.publish(run, {"event": "run_finished", "status": run.outcome})
         if self.active is run:

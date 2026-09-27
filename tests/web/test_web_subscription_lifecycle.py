@@ -277,7 +277,7 @@ def test_hydration_departure_revokes_approval_before_db_cleanup_and_keeps_run(
         with app.socket() as socket:
             socket.send_json({"type": "subscribe", "session_id": app.main})
             socket.receive_json()
-            app.submit("privilege")
+            app.submit("approval")
             while True:
                 frame = socket.receive_json()
                 if frame.get("record", {}).get("event") == "approval":

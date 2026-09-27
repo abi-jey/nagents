@@ -10,21 +10,7 @@ export function settingsApi(token: string) {
   };
 }
 
-export function connectionChanged(previous: LiveSettingsValues, next: LiveSettingsValues): boolean {
-  const endpoint = (values: LiveSettingsValues) => {
-    if (!values.base_url && values.provider === "azure_openai_compatible_v1") return "";
-    try {
-      const url = new URL(values.base_url.trim() || "https://api.openai.com/v1");
-      let path = url.pathname.replace(/\/+$/, "");
-      if (values.provider === "azure_openai_compatible_v1" && !path.endsWith("/v1")) path += "/v1";
-      url.pathname = path;
-      return url.href.replace(/\/+$/, "");
-    } catch { return values.base_url; }
-  };
-  return previous.provider !== next.provider || endpoint(previous) !== endpoint(next);
-}
-
-export function settingsValidation(values: LiveSettingsValues, key: string): string {
+export function settingsValidation(values: LiveSettingsValues): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(values.model) || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(values.backend_model))
     return "Enter a voice and backend model ID (1–128 characters, without spaces).";
   if (values.provider === "azure_openai_compatible_v1" && !values.base_url.trim()) return "Enter the Azure API endpoint.";
@@ -35,15 +21,12 @@ export function settingsValidation(values: LiveSettingsValues, key: string): str
         return "Use an HTTPS API prefix without credentials or query parameters (loopback HTTP is supported).";
     } catch { return "Enter a valid API endpoint URL."; }
   }
-  if (key && !/^[\x21-\x7e]{1,4096}$/.test(key)) return "The API key must contain at most 4,096 printable characters, without spaces.";
   return "";
 }
 
 export interface LiveSettingsState {
   snapshot?: LiveSettingsSnapshot;
   values?: LiveSettingsValues;
-  apiKey: string;
-  clearKey: boolean;
   loading: boolean;
   saving: boolean;
   error: string;
@@ -51,7 +34,7 @@ export interface LiveSettingsState {
 }
 
 export class LiveSettingsController {
-  private state: LiveSettingsState = { apiKey: "", clearKey: false, loading: true, saving: false, error: "", needsRefresh: false };
+  private state: LiveSettingsState = { loading: true, saving: false, error: "", needsRefresh: false };
   private listeners = new Set<() => void>();
   private abort?: AbortController;
   private epoch = 0;
@@ -64,7 +47,7 @@ export class LiveSettingsController {
     this.listeners.forEach((listener) => listener());
   }
   private receive(snapshot: LiveSettingsSnapshot) {
-    this.update({ snapshot, values: { ...snapshot.values }, apiKey: "", clearKey: false, error: "", needsRefresh: false });
+    this.update({ snapshot, values: { ...snapshot.values }, error: "", needsRefresh: false });
   }
   async load(): Promise<void> {
     if (this.disposed || this.state.saving) return;
@@ -82,17 +65,15 @@ export class LiveSettingsController {
     if (!this.state.values || this.state.loading || this.state.saving) return;
     this.update({ values: { ...this.state.values, ...patch } });
   }
-  key(value: string) { if (!this.state.saving) this.update({ apiKey: value, clearKey: false }); }
-  clearKey(value: boolean) { if (!this.state.saving) this.update({ clearKey: value, ...(value ? { apiKey: "" } : {}) }); }
   async save(): Promise<LiveSettingsSnapshot | undefined> {
-    const { snapshot, values, apiKey, clearKey, saving, loading, needsRefresh } = this.state;
+    const { snapshot, values, saving, loading, needsRefresh } = this.state;
     if (this.disposed || !snapshot || !values || saving || loading || needsRefresh) return;
-    const error = settingsValidation(values, apiKey);
+    const error = settingsValidation(values);
     if (error) { this.update({ error }); return; }
     const epoch = ++this.epoch;
     this.update({ saving: true, error: "" });
     try {
-      const result = await this.api.save({ revision: snapshot.revision, values: { ...values }, api_key: apiKey, clear_api_key: clearKey });
+      const result = await this.api.save({ revision: snapshot.revision, values: { ...values } });
       if (epoch !== this.epoch) return;
       this.receive(result);
       return result;
@@ -103,5 +84,5 @@ export class LiveSettingsController {
       });
     } finally { if (epoch === this.epoch) this.update({ saving: false }); }
   }
-  dispose() { this.disposed = true; ++this.epoch; this.abort?.abort(); this.state = { ...this.state, apiKey: "" }; this.listeners.clear(); }
+  dispose() { this.disposed = true; ++this.epoch; this.abort?.abort(); this.listeners.clear(); }
 }

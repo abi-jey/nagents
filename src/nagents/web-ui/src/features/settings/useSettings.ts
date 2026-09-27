@@ -31,8 +31,6 @@ export function useSettings({
   const scopeRef = useRef<SettingsScope>("workspace");
   const [snapshot, setSnapshot] = useState<SettingsReply>();
   const [draft, setDraft] = useState<SettingsDraft>();
-  const [apiKey, setApiKey] = useState("");
-  const [clearKey, setClearKey] = useState(false);
   const [errors, setErrors] = useState<DraftErrors>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -45,8 +43,6 @@ export function useSettings({
   useEffect(() => () => reading.current?.abort(), []);
 
   const dirty =
-    apiKey !== "" ||
-    clearKey ||
     (!!snapshot &&
       !!draft &&
       Object.entries(createDraft(snapshot.values)).some(
@@ -57,8 +53,6 @@ export function useSettings({
   function receive(reply: SettingsReply) {
     setSnapshot(reply);
     setDraft(createDraft(reply.values));
-    setApiKey("");
-    setClearKey(false);
     setErrors({});
     setError("");
     setNeedsRefresh(false);
@@ -94,8 +88,6 @@ export function useSettings({
     scopeRef.current = next; setScope(next);
     setSnapshot(undefined);
     setDraft(undefined);
-    setApiKey("");
-    setClearKey(false);
     setErrors({});
     setError("");
     setNotice("");
@@ -148,7 +140,7 @@ export function useSettings({
         try {
           const reply = reset
             ? await resetSettings(token, snapshot.revision, scopeRef.current)
-            : await saveSettings(token, snapshot.revision, parsed.values, apiKey, clearKey, scopeRef.current);
+            : await saveSettings(token, snapshot.revision, parsed.values, scopeRef.current);
           receive(reply);
           if (scopeRef.current === "global") accept(await readSettings(token, new AbortController().signal));
           setNotice(
@@ -174,25 +166,11 @@ export function useSettings({
     }
   }
 
-  function updateKey(value: string) {
-    if (disabled) return;
-    setApiKey(value);
-    setNotice("");
-  }
-
-  function updateClearKey(value: boolean) {
-    if (disabled) return;
-    setClearKey(value);
-    setNotice("");
-  }
-
   return {
     token,
     open,
     snapshot,
     draft,
-    apiKey,
-    clearKey,
     errors,
     error,
     notice,
@@ -208,8 +186,6 @@ export function useSettings({
     close,
     refresh,
     update,
-    updateKey,
-    updateClearKey,
     save: () => write(),
     reset: () => write(true),
   };

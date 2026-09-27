@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 MAX_SETTINGS_BYTES = 16384
 MAX_API_KEY_BYTES = 4096
 PROVIDER_APIS: tuple[str, ...] = tuple(name for name in API_NAMES if name != "completions")
-PROVIDER_AUTHS: tuple[str, ...] = ("auto", "api-key", "chatgpt")
+PROVIDER_AUTHS: tuple[str, ...] = ("auto", "api-key", "chatgpt", "codex", "entra")
 COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
 DEFAULT_COMPACT_TOKENS = 200_000
 DEFAULT_COMPACT_MESSAGES = 100
@@ -259,8 +259,10 @@ class WebSettings:
         self.global_revision = "0" * 64
         self.global_persisted = False
         self.values = self.defaults
+        self.workspace_overrides: dict[str, object] = {}
         self.effective_mode = harness.mode
         self.revision = secrets.token_hex(32)
+        self.stored_revision = self.revision
         self.persisted = False
         # Write-only keys entered in the browser, keyed by provider name.
         self.keys: dict[str, str] = {}
@@ -278,8 +280,41 @@ class WebSettings:
         candidate.auth = values.auth
         candidate.api_key_env = values.api_key_env
         candidate.model = values.model
+        registry = self.harness.provider_store.load()
+        name = self.harness.config.profile(values.agent).provider or registry.active
+        if name:
+            profile = registry.providers[name]
+            candidate.provider_id = name
+            candidate.provider = profile.kind
+            candidate.model = profile.model
+            candidate.base_url = profile.base_url
+            candidate.api = profile.api
+            candidate.auth = profile.auth
+            candidate.api_key_env = profile.key_env
+            candidate.api_version = profile.api_version
         candidate.validate()
         return candidate
+
+    def _effective_values(self, values: SettingsValues) -> SettingsValues:
+        candidate = self.provider_config(values)
+        if not candidate.provider_id:
+            return values
+        return values.model_copy(
+            update={
+                "provider": candidate.provider,
+                "model": candidate.model,
+                "base_url": candidate.base_url,
+                "api": candidate.api,
+                "auth": candidate.auth,
+                "api_key_env": candidate.api_key_env,
+            }
+        )
+
+    def sync_provider(self) -> None:
+        """Project a shared provider selection into the existing web settings view."""
+        self.values = self._effective_values(self.values)
+        self.harness.config.model = self.values.model
+        self.harness.agent.provider.model = self.values.model
 
     def _install_key(self, env: str, secret: str) -> None:
         if not secret:
@@ -354,7 +389,12 @@ class WebSettings:
             "values": self.values.model_dump(),
             "defaults": self.defaults.model_dump(),
             "profiles": [
-                {"name": name, "mode": self.harness.mode_for_profile(name), "model": config.profile(name).model}
+                {
+                    "name": name,
+                    "mode": self.harness.mode_for_profile(name),
+                    "model": config.profile(name).model,
+                    **({"provider": config.profile(name).provider} if config.profile(name).provider else {}),
+                }
                 for name in config.profile_names
             ],
             "revision": self.revision,
@@ -365,12 +405,15 @@ class WebSettings:
             "apis": list(PROVIDER_APIS),
             "auths": list(PROVIDER_AUTHS),
             "connection": {
+                **({"provider_id": config.provider_id} if config.provider_id else {}),
                 "provider": config.provider,
                 "api": config.api,
                 "auth": config.auth,
                 "base_url": config.base_url,
                 "api_key_env": config.api_key_env,
-                "key_configured": config.provider in self.keys,
+                "key_configured": bool(os.environ.get(config.api_key_env))
+                if config.provider_id
+                else config.provider in self.keys,
                 "auth_status": self.harness.auth_status(),
             },
         }
@@ -434,7 +477,7 @@ class WebSettings:
                 version, payload, revision = row
                 if (
                     type(version) is not int
-                    or version not in {1, 2, 3, 4}
+                    or version not in {1, 2, 3, 4, 5}
                     or not isinstance(payload, str)
                     or not isinstance(revision, str)
                     or len(revision) != 64
@@ -460,8 +503,13 @@ class WebSettings:
                             "read_only": self.defaults.read_only,
                         }
                     )
-                else:
+                elif version == 4:
                     values = SettingsValues.model_validate_json(payload)
+                else:
+                    differences = json.loads(payload)
+                    if not isinstance(differences, dict) or set(differences) - set(SettingsValues.model_fields):
+                        raise ValueError("Invalid workspace overrides")
+                    values = SettingsValues.model_validate({**self.defaults.model_dump(), **differences})
                 # Older web defaults used these names for the same unrestricted
                 # profile. Explicit custom profiles keep their configured identity.
                 if (
@@ -472,8 +520,19 @@ class WebSettings:
                     values = values.model_copy(
                         update={"agent": "assistant", "read_only": values.read_only or values.agent == "reviewer"}
                     )
+                effective_defaults = self._effective_values(self.defaults)
+                self.workspace_overrides = (
+                    {
+                        key: value
+                        for key, value in values.model_dump().items()
+                        if value != getattr(effective_defaults, key)
+                    }
+                    if version < 5
+                    else differences
+                )
+                values = self._effective_values(values)
                 self.validate(values)
-                secret = keys.get(values.provider, "")
+                secret = keys.get(values.provider, "") if not self.provider_config(values).provider_id else ""
                 if secret:
                     self._install_key(values.api_key_env, secret)
                 with self.harness.operation("load web settings"):
@@ -482,13 +541,17 @@ class WebSettings:
                 self.values = values
                 self.effective_mode = self.harness.mode
                 self.revision = revision
+                self.stored_revision = revision
                 self.persisted = True
             elif self.global_persisted:
+                self.defaults = self._effective_values(self.defaults)
                 with self.harness.operation("load global defaults"):
                     await self.harness.reconfigure_provider(self.provider_config(self.defaults))
                     self.defaults.apply(self.harness)
                 self.values = self.defaults
                 self.effective_mode = self.harness.mode
+            if self.harness.config.provider_id:
+                self.sync_provider()
         except Exception:
             raise RuntimeError(
                 "Cannot load saved web settings. Stop ngn and have the administrator repair or remove "
@@ -579,7 +642,16 @@ class WebSettings:
                 )
             await db.commit()
         await self.load_global()
-        if not self.persisted:
+        if self.persisted:
+            inherited = SettingsValues.model_validate({**self.defaults.model_dump(), **self.workspace_overrides})
+            inherited = self._effective_values(inherited)
+            with self.harness.operation("apply inherited global defaults"):
+                await self.harness.reconfigure_provider(self.provider_config(inherited))
+                inherited.apply(self.harness)
+            self.values = inherited
+            self.effective_mode = self.harness.mode
+            self.revision = secrets.token_hex(32)
+        else:
             with self.harness.operation("apply global defaults"):
                 await self.harness.reconfigure_provider(self.provider_config(self.defaults))
                 self.defaults.apply(self.harness)
@@ -596,12 +668,18 @@ class WebSettings:
         clear_api_key: bool = False,
         reset: bool = False,
     ) -> None:
+        if self.harness.provider_store.load().active and (api_key or clear_api_key):
+            raise HTTPException(422, "Named connections use environment variables; no API keys are saved here.")
         if "submit_mode" not in values.model_fields_set:
             values = values.model_copy(update={"submit_mode": self.values.submit_mode})
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.values.read_only})
         try:
-            payload = self.validate(values)
+            values = self._effective_values(values)
+            self.validate(values)
+            base = self._effective_values(self.defaults).model_dump()
+            overrides = {key: value for key, value in values.model_dump().items() if base[key] != value}
+            payload = json.dumps(overrides, separators=(",", ":"))
         except ValueError:
             raise HTTPException(422, "Invalid settings or unavailable agent profile.") from None
         if revision != self.revision:
@@ -610,7 +688,9 @@ class WebSettings:
             with self.harness.operation("web settings"):
                 await _join(
                     asyncio.create_task(
-                        self._save(values, payload, api_key=api_key, clear_api_key=clear_api_key, reset=reset)
+                        self._save(
+                            values, payload, overrides, api_key=api_key, clear_api_key=clear_api_key, reset=reset
+                        )
                     )
                 )
         except RuntimeError:
@@ -620,6 +700,7 @@ class WebSettings:
         self,
         values: SettingsValues,
         payload: str,
+        overrides: dict[str, object],
         *,
         api_key: str,
         clear_api_key: bool,
@@ -634,15 +715,15 @@ class WebSettings:
                 await db.execute("BEGIN IMMEDIATE")
                 async with db.execute("SELECT revision FROM ngn_web_settings WHERE id = 1") as cursor:
                     row = await cursor.fetchone()
-                if (row[0] if row is not None else "") != (self.revision if self.persisted else ""):
+                if (row[0] if row is not None else "") != (self.stored_revision if self.persisted else ""):
                     raise HTTPException(409, "Stored settings changed. Reconnect to the current workspace owner.")
                 if reset:
                     await db.execute("DELETE FROM ngn_web_settings WHERE id = 1")
                     await db.execute("DELETE FROM ngn_web_provider_keys")
                 else:
                     await db.execute(
-                        "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, 4, ?, ?) "
-                        "ON CONFLICT(id) DO UPDATE SET version = 4, values_json = excluded.values_json, "
+                        "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, 5, ?, ?) "
+                        "ON CONFLICT(id) DO UPDATE SET version = 5, values_json = excluded.values_json, "
                         "revision = excluded.revision",
                         (payload, revision),
                     )
@@ -679,7 +760,7 @@ class WebSettings:
                     elif clear_api_key:
                         self.keys.pop(provider, None)
                     self._restore_key()
-                    secret = self.keys.get(provider, "")
+                    secret = self.keys.get(provider, "") if not self.provider_config(values).provider_id else ""
                     if secret:
                         self._install_key(values.api_key_env, secret)
                     values.apply(harness)
@@ -723,6 +804,8 @@ class WebSettings:
         # Publish without an await after commit. GETs see the previous
         # committed snapshot throughout the transaction, never a draft.
         self.values = values
+        self.workspace_overrides = {} if reset else overrides
         self.effective_mode = harness.mode
         self.revision = revision
+        self.stored_revision = revision
         self.persisted = not reset

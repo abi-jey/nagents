@@ -48,11 +48,17 @@ def test_upload_waits_for_explicit_send_and_native_history_is_metadata_only(
         headers = {**app.headers, "Content-Type": "image/png", "X-Ngn-Filename": "screenshot.png"}
         reply = app.client.post(path, headers=headers, content=PNG)
         assert reply.status_code == 200, reply.text
+        assert app.client.get(f"{path}/preview", headers=app.headers).status_code == 404
         assert not app.providers[0].requests
         assert app.history(app.main)["history"] == []
         body = {"session_id": app.main, "message_id": str(uuid.uuid4()), "prompt": prompt, "attachments": [id]}
         assert app.client.post("/api/messages", headers=app.headers, json=body).status_code == 200
         app.idle()
+        preview = app.client.get(f"{path}/preview", headers=app.headers)
+        assert preview.status_code == 200 and preview.content == PNG
+        assert preview.headers["content-type"] == "image/png"
+        assert preview.headers["cache-control"] == "no-store"
+        assert app.client.get(f"{path}/preview").status_code == 403
         assert len(app.providers[0].requests) == 1
         message = next(message for message in app.providers[0].requests[0] if message.role == "user")
         assert isinstance(message.content, list)

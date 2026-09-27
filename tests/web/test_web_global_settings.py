@@ -51,13 +51,35 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             current = (await client.get("/api/settings", headers=headers)).json()
             assert current["values"]["model"] == "project-model"
             assert current["defaults"]["model"] == "new-global-model"
+            assert current["values"]["provider"] == "openrouter"
+            inherited_limit = await client.post(
+                "/api/settings/global",
+                headers=headers,
+                json={"revision": changed.json()["revision"], "values": {**values, "max_output": 65536}},
+            )
+            assert inherited_limit.status_code == 200, inherited_limit.text
+            effective = (await client.get("/api/settings", headers=headers)).json()
+            assert effective["values"]["model"] == "project-model"
+            assert effective["values"]["max_output"] == 65536
+            assert effective["revision"] != current["revision"]
+            stale_workspace = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={"revision": current["revision"], "values": current["values"]},
+            )
+            assert stale_workspace.status_code == 409
+            current = effective
             reset = await client.post("/api/settings/reset", headers=headers, json={"revision": current["revision"]})
             assert reset.status_code == 200, reset.text
-            assert reset.json()["values"]["model"] == "new-global-model"
+            assert reset.json()["values"]["model"] == "global-model"
             denied = await client.post(
                 "/api/settings/global",
                 headers=headers,
-                json={"revision": changed.json()["revision"], "values": values, "api_key": "must-not-be-shared"},
+                json={
+                    "revision": inherited_limit.json()["revision"],
+                    "values": values,
+                    "api_key": "must-not-be-shared",
+                },
             )
             assert denied.status_code == 422
         async with client_app(second, config=HarnessConfig(second, data_dir=data, demo=True)) as (
@@ -68,7 +90,7 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
         ):
             inherited = (await client.get("/api/settings", headers=headers)).json()
             assert not inherited["persisted"]
-            assert inherited["values"]["model"] == "new-global-model"
+            assert inherited["values"]["model"] == "global-model"
             assert inherited["values"]["provider"] == "openrouter"
             assert inherited["values"]["api"] == "chat_completions"
             global_values = (await client.get("/api/settings/global", headers=headers)).json()

@@ -54,6 +54,7 @@ def test_builtin_metadata_and_frozen_command(harness: Harness) -> None:
         "compact",
         "agent",
         "model",
+        "provider",
         "login",
         "logout",
         "plugins",
@@ -67,7 +68,7 @@ def test_builtin_metadata_and_frozen_command(harness: Harness) -> None:
     assert all(
         command.source == "harness" and command.description and not command.name.startswith("/") for command in commands
     )
-    for name in ("agent", "model"):
+    for name in ("agent", "model", "provider"):
         command = registry.get(name)
         assert command is not None and command.argument_hint and not command.requires_arguments
     with pytest.raises(FrozenInstanceError):

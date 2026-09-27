@@ -41,7 +41,7 @@ def deliveries(app: Site, root: str) -> list[dict[str, object]]:
 
 
 def send(
-    app: Site, *, files: tuple[str, ...] = (), allow: bool = True, retry: bool = False, switch_to: str = ""
+    app: Site, *, files: tuple[str, ...] = (), retry: bool = False, switch_to: str = ""
 ) -> list[dict[str, object]]:
     requests = 0
 
@@ -76,25 +76,14 @@ def send(
             if not record:
                 continue
             records.append(record)
-            if record.get("event") == "approval":
-                if switch_to:
-                    assert (
-                        app.client.post(
-                            "/api/sessions/resume", headers=app.headers, json={"session_id": switch_to}
-                        ).status_code
-                        == 200
-                    )
-                response = app.client.post(
-                    "/api/approval",
-                    headers=app.headers,
-                    json={
-                        "run_id": record["run_id"],
-                        "approval_id": record["approval_id"],
-                        "call_id": record["id"],
-                        "decision": "allow" if allow else "deny",
-                    },
+            if switch_to and record.get("event") == "tool_call":
+                assert (
+                    app.client.post(
+                        "/api/sessions/resume", headers=app.headers, json={"session_id": switch_to}
+                    ).status_code
+                    == 200
                 )
-                assert response.status_code == 200, response.text
+                switch_to = ""
             if record.get("event") == "run_finished":
                 break
     app.idle()
@@ -171,13 +160,13 @@ def test_real_send_restart_assets_replay_and_auth(tmp_path: Path, monkeypatch: p
             assert app.client.get(path, headers=app.headers).status_code == 404
 
 
-@pytest.mark.parametrize("case", ["denied", "txt", "svg", "fake-png"])
+@pytest.mark.parametrize("case", ["txt", "svg", "fake-png"])
 def test_rejection_has_no_partial_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     name = {"txt": "note.txt", "svg": "active.svg", "fake-png": "fake.png"}.get(case, "")
     if name:
         (tmp_path / name).write_text("<svg onload='alert(1)'></svg>")
     with site(tmp_path, monkeypatch) as app:
-        send(app, files=(name,) if name else (), allow=case != "denied")
+        send(app, files=(name,) if name else ())
         assert deliveries(app, app.main) == []
         assert app.client.portal is not None
 
@@ -247,6 +236,6 @@ def test_owned_root_rejects_local_send_but_keeps_external_catalog(
         app.emit("/session main")
         app.idle()
         events = send(app)
-        assert len([event for event in events if event.get("event") == "approval"]) == 1
+        assert not any(event.get("event") == "approval" for event in events)
         assert not deliveries(app, app.main)
         assert not any(event.get("event") == "local_delivery" for event in events)

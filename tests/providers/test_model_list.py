@@ -18,6 +18,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.http import HTTPClient
 from nagents.http import HTTPLogger
+from nagents.provider import FoundryProvider
 from nagents.provider import PlaceholderProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
@@ -43,6 +44,23 @@ def test_default_openai_catalog_route() -> None:
                 assert await provider.get_model_list() == []
                 get.assert_awaited_once_with("https://api.openai.com/v1/models", {"Authorization": f"Bearer {KEY}"})
             assert provider.model == "selected" and provider.is_model_verified is None
+
+    asyncio.run(scenario())
+
+
+def test_foundry_v1_catalog_uses_same_auth_and_prefix_as_text() -> None:
+    async def scenario() -> None:
+        async def handle(request: web.Request) -> web.Response:
+            assert request.path == "/openai/v1/models"
+            assert request.headers["Authorization"] == f"Bearer {KEY}"
+            return web.json_response({"data": [{"id": "deployment-one"}]})
+
+        async with (
+            endpoint(handle) as url,
+            FoundryProvider(base_url=url + "/openai", model="selected", api_key=KEY) as provider,
+        ):
+            assert await provider.get_model_list() == ["deployment-one"]
+            assert provider.model == "selected"
 
     asyncio.run(scenario())
 
@@ -303,7 +321,6 @@ def test_verification_cache_force_and_prefix_matching(provider_type: ProviderTyp
         ProviderType.ANTHROPIC,
         ProviderType.GEMINI_NATIVE,
         ProviderType.AZURE_OPENAI_COMPATIBLE,
-        ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
     ],
 )
 def test_unsupported_native_catalog_does_not_change_verification(provider_type: ProviderType) -> None:

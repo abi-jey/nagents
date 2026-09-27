@@ -107,7 +107,7 @@ def test_same_session_hydration_preserves_pending_live_approval(
         with app.socket() as socket:
             socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
             socket.receive_json()
-            app.submit("privilege")
+            app.submit("approval")
             while True:
                 frame = socket.receive_json()
                 if frame.get("record", {}).get("event") == "approval":
@@ -134,7 +134,7 @@ def test_same_session_hydration_preserves_pending_live_approval(
             )
             assert response.status_code == 200
             app.idle()
-        assert len(app.channels[0].deliveries) == 1
+        assert not app.channels[0].deliveries
 
 
 def test_ordered_archive_includes_scheduler_lifecycle_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -43,6 +43,42 @@ the HTTP/WebSocket dependencies, but the applications are independent.
 
 ### Your Own Connection
 
+Open **Global settings → Provider connections** to add connections shared by all
+workspaces, or **Workspace settings → Provider connections** to add a connection
+just for this workspace or select a global connection. Add named OpenAI,
+Azure AI Foundry, Anthropic, Gemini, OpenRouter, Azure v1, LiteLLM or custom
+OpenAI-compatible connections. Select a provider type to see its supported API
+and authentication modes; enter a model ID or **Fetch models** for a saved
+connection. The same connections appear in the TUI's `/provider` menu. The
+global registry lives in `$XDG_CONFIG_HOME/ngn/providers.yaml` (normally
+`~/.config/ngn/providers.yaml`); the workspace registry lives under
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml`. Use an API key **environment-variable name**
+(`OPENAI_API_KEY` or `${OPENAI_API_KEY}`), never a literal key. The variable
+must be set in the `ngn serve` process environment. OpenAI can use ngn's
+ChatGPT device login or local Codex discovery; Foundry can use API keys or
+Microsoft Entra ID with the optional `azure-identity` package.
+
+The first named connection becomes active if no global default exists. A workspace
+can use a global connection or its own connection; **Use global default** removes
+the workspace selection. Choosing another switches chat's
+provider; trusted agent profiles may also bind to a named provider. The Live
+panel reads voice model, hosted backend model, voice and authentication from
+the active connection's Live section, with the same API prefix and environment
+reference. A ChatGPT subscription does not authorize Live: provide an OpenAI
+API-key variable for Live even if chat uses ChatGPT/Codex login. The **Main assistant**
+voice backend delegates reasoning to the selected workspace agent; **Separate hosted
+backend** uses a standalone model. No named-connection
+API key is stored in the web settings database. Provider configuration and model
+selection are edited only in **Provider connections**, not the workspace
+preferences form. Existing saved settings are not deleted when you add a
+connection; set its environment variable before making requests.
+
+`ngn serve` logs resolved trusted config paths, provider registry path and
+connection names/types, settings storage paths, session/run and tool lifecycle,
+Live connection changes, and model catalog requests/results. Prompt contents,
+tool arguments, keys, authorization headers and upstream response bodies are
+not logged by these operational messages.
+
 Model discovery uses the backend's **active provider**, not browser-supplied
 credentials or a browser-selected endpoint. It never changes authentication or
 billing mode. Keep an existing private deployment's ChatGPT/Codex login; enabling
@@ -313,8 +349,8 @@ processes/users with access to your loopback interface may access it. Do not exp
 the standalone server through a reverse proxy, public tunnel, port forward, or
 shared remote desktop. For administrator-managed **password-free Tailscale access**,
 see the [private deployment guide](ngn-web-deployment.md). That setup runs the
-same `ngn serve` process on one owner-approved workload, explicitly bound off
-loopback (`--host 0.0.0.0`), using HTTPS without Funnel or NodePort exposure,
+same `ngn serve` process on one owner-approved workload, bound to pod loopback
+behind a same-pod nginx proxy, using HTTPS without Funnel or NodePort exposure,
 and is not a general remote-access mode. Tailscale ACLs/grants and trusted cluster
 networking are the access boundary: everyone who can reach the Service shares
 the trusted-user workspace, sessions, and approvals, with no multi-user isolation.
@@ -380,6 +416,12 @@ contract below.
 | `GET bootstrap` | Non-secret workspace/model/profile/demo info, token, active run ID |
 | `GET settings` | Committed runtime values, startup defaults, profiles, revision, persistence and safe connection status; readable during a run |
 | `GET models` | Explicit fresh discovery from the active provider; `{models: string[], source: string}`; read-only, including during a run |
+| `GET provider-scopes/{scope}/providers` | Global or workspace list, type-specific choices, active ID, revision, YAML path and env availability (no secret values) |
+| `PUT provider-scopes/{scope}/providers/{name}` | `{revision, profile}` adds or updates a connection in the selected scope; idle only, rejects literal keys |
+| `POST provider-scopes/{scope}/providers/{name}/activate` | `{revision}` selects a global default or workspace connection; idle only |
+| `DELETE provider-scopes/{scope}/providers/{name}` | `{revision}` removes an unbound, inactive connection; idle only |
+| `POST providers/inherit` | `{revision}` clears the workspace selection, inheriting the global default |
+| `GET providers/{name}/models` | Fetches a catalog with that connection's current authentication, without activating it |
 | `POST settings` | `{revision, values}` validates and persists the complete allowlisted settings; idle only |
 | `POST settings/reset` | `{revision}` inherits current global defaults and deletes the workspace override; idle only |
 | `GET settings/global` | Global defaults and their independent revision |
@@ -745,6 +787,9 @@ The authenticated API is:
   are the same as other API writes; bytes are counted while streaming.
 - `DELETE /api/sessions/{root}/uploads/{upload_uuid}` removes an unsubmitted
   draft. An admitted attachment cannot be retracted with this endpoint.
+- `GET /api/sessions/{root}/uploads/{upload_uuid}/preview` returns an admitted
+  image to its authenticated session, with caching disabled. Staged files and
+  PDFs are not served from this endpoint.
 - `POST /api/messages` accepts `attachments`, an ordered array of those IDs,
   alongside `session_id`, `message_id`, and `prompt`. The prompt may be empty
   when attachments are present. Text and IDs are bound atomically to the message
@@ -757,8 +802,9 @@ uploads, three staged files per root, and 128 MiB per workspace. Session clear o
 deletion invalidates in-flight upload generations as well as deleting drafts.
 
 Accepted queued input survives restart and browser disconnection. Its bytes are
-retained in storage/model history; the web transcript shows metadata rather than
-putting image/PDF bytes into event frames. There is no public upload-byte URL.
+retained in storage/model history; the web transcript shows inline image previews
+and file metadata without putting image/PDF bytes into event frames. Preview bytes
+are returned only from the authenticated same-session endpoint above.
 Unsupported inputs are rejected rather than forwarded to external connectors.
 Audio/video understanding, upload-to-external-channel forwarding, and uploads in
 offline demo/custom persistence adapters are outside this input path. See
@@ -774,34 +820,22 @@ control to finish. Live captions and connection/error feedback belong to that ca
 
 #### Connection Settings
 
-1. Start **`ngn serve`**, then open **GPT-Live → Connection settings**.
-2. Enable Live and choose the provider, voice model, hosted backend model, voice,
-   and optional API base URL.
-3. Enter the provider's API key in the write-only key field and save.
-4. Connect when the panel reports that the connection is ready.
+1. Start **`ngn serve`**, then open **Workspace settings → Provider connections**.
+2. Add and activate an OpenAI or Foundry connection. Enable Live on that
+   connection and choose its voice model, hosted backend model and voice.
+3. Set the referenced API key environment variable in the server's environment
+   (or select Foundry Entra ID), then open **GPT-Live → Connection settings**.
+4. Adjust voice preferences if needed and connect when the panel reports ready.
 
-All Live setup is available in this form. Defaults are disabled, provider
-`openai`, voice model `gpt-live-1`, the library's `LiveConfig.backend_model`
-(`gpt-5.6-luna`), voice `marin`, and an empty base URL selecting
-`https://api.openai.com/v1`. Available voices are `marin` and `cedar`. Settings
-apply immediately to new calls and survive server restarts; no environment
-variable, YAML entry, or restart is needed to configure the connection.
-
-The enabled preference, provider, model, backend model, voice, and base URL are
-saved in this workspace's server-side session database. The key is stored in a
-separate private table in that database, so server backups must protect it as
-credential data. Responses expose only a **key configured** indicator. The key
-field stays blank after saving; leave it blank to retain the saved key for the
-same connection, enter a replacement to rotate it, or use the explicit clear-key
-control to remove it. Changing the provider or effective endpoint discards the
-previous key unless the same save includes a replacement, preventing an existing
-key from being forwarded to a different connection.
-
-Chat can use any configured provider, including ChatGPT/Codex login. Live uses
-the key saved in its own Connection settings and its own API billing. It does not
-borrow chat credentials, saved login tokens, or process environment keys. Entered
-keys are sent only to the same-origin backend; saved key values, provider
-authentication headers, and raw upstream errors are never returned by the API.
+Provider endpoint and authentication are edited in **Provider connections**.
+Defaults are disabled, voice model `gpt-live-1`, the library's
+`LiveConfig.backend_model` (`gpt-5.6-luna`), and voice `marin`. Available voices
+are `marin` and `cedar`. Voice settings survive server restarts and apply to new
+calls. The Live UI does not store API keys: the active provider's environment
+reference or Entra credential authorizes Live. ChatGPT subscription tokens never
+authorize Live; supply an OpenAI API key environment variable for voice even if
+chat uses ChatGPT login. Credential values, provider authentication headers and
+raw upstream errors are never returned by the API.
 
 For a compatible dedicated endpoint, choose `openai_compatible` and enter its API
 prefix, for example `https://voice.example.com/v1`. Azure v1 is supported through
@@ -811,8 +845,8 @@ GPT-Live WebRTC creation, sideband controls, and hosted Responses. Endpoint URLs
 require HTTPS, except loopback HTTP for development, and cannot embed credentials,
 query strings, fragments, or generation-route suffixes.
 
-Save without a key if you want to finish setup later. The panel explains missing
-setup in **Connection settings**. Demo mode also permits inspecting and saving
+Save without setting the environment variable if you want to finish setup later.
+The panel explains missing setup in **Connection settings**. Demo mode also permits inspecting and saving
 settings, but real calls require starting `ngn serve` without `--demo`. Readiness
 checks local configuration; provider access and network failures are reported when
 connecting. Settings saves conflict while a call is connecting, active, or closing.
@@ -1012,8 +1046,10 @@ Use **Global settings** in the sidebar for defaults shared by workspaces in this
 installation. Click the workspace folder, then **Workspace settings**, for
 overrides belonging only to that folder. Workspace overrides take priority;
 **Use global defaults** removes the workspace override and inherits the current
-global values. Profiles and entered API-key values remain workspace-specific.
-Global settings carry credential references, not copied key values.
+global values. New workspace saves store only fields that differ from inherited
+defaults, so other global fields continue to follow changes to those defaults.
+Trusted agent profiles remain workspace-specific. Provider connections carry
+environment-variable names rather than key values.
 
 **Message submission** selects what happens when another web message arrives in
 the same active conversation. **Queue** is the default: finish the current run,
@@ -1024,8 +1060,9 @@ not cancelled, and retrying an already accepted message never interrupts a run.
 Global defaults live in `data_dir/web-defaults.db`, shared by workspace databases
 under that data directory. `GET/POST /api/settings/global` and
 `POST /api/settings/global/reset` expose their own revision-checked scope. Saving
-global defaults applies to the current workspace when it has no saved override;
-other running workspace servers load those defaults on restart. Both scopes are
+global defaults updates inherited fields in the current workspace even when it
+has unrelated local overrides; other running workspace servers load those defaults
+on restart. Both scopes are
 web-only, and dictation still respects administrator-provided limits.
 
 Trash retention uses its [separate preferences API](#trash-api-contract); it is

@@ -288,7 +288,12 @@ class Provider:
         Catalog membership does not guarantee generation access or capabilities.
         Each call makes a fresh bounded request, with no redirects or raw logging.
         """
-        if self.provider_type not in {ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER, ProviderType.LITELLM}:
+        if self.provider_type not in {
+            ProviderType.OPENAI_COMPATIBLE,
+            ProviderType.OPENROUTER,
+            ProviderType.LITELLM,
+            ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
+        }:
             raise NotImplementedError(
                 "Model discovery is not implemented for this provider; enter a model ID manually."
             )
@@ -320,7 +325,7 @@ class Provider:
             # cookies, loggers, and the ordinary HTTPClient's redirect behavior.
             client = GatewayHTTPClient(timeout=self._model_list_timeout)
             async with client:
-                response = await client.get_json(f"{prefix.rstrip('/')}/models", headers)
+                response = await client.get_json(f"{self._api_prefix()}/models", headers)
         except Exception:
             raise ModelListError(
                 "Model discovery failed; check provider configuration, credentials, and availability."

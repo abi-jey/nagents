@@ -14,6 +14,20 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 
 ## Sign in from ngn
 
+Use `/provider` in the TUI or **Global/Workspace settings → Provider connections**
+in `ngn serve` to manage named connections shared across clients. Global ones
+are saved to `$XDG_CONFIG_HOME/ngn/providers.yaml`; workspace ones are saved to
+workspace-specific YAML under the same config root. Both use environment-variable **references**,
+not key values. OpenAI can select ngn ChatGPT login, local Codex discovery, or
+an API-key variable. Azure AI Foundry supports API-key variables and Microsoft
+Entra ID through the optional `azure-identity` package. Voice settings for a
+named connection use the same endpoint and credential reference. See
+[named provider configuration](ngn-configuration.md#shared-named-provider-connections).
+
+The historical `ngn login` command remains available for older single-login
+configurations and OpenAI device authorization; it is separate from the named
+provider registry.
+
 The terminal client selects a provider with `ngn login`: `chatgpt` (device
 login), `openrouter` (browser PKCE that yields a user-controlled API key),
 `openai`, `anthropic`, `gemini`, `custom` (any OpenAI-compatible endpoint), or
@@ -73,13 +87,13 @@ the published `v0.5.0` release does not include this method. See the
 async example using your own `OPENAI_API_KEY` environment variable.
 
 Discovery is explicit and fresh. It does not select a model, alter configuration,
-or generate a response. OpenAI-compatible, OpenRouter, and LiteLLM connections
+or generate a response. OpenAI-compatible, OpenRouter, LiteLLM, and Azure v1 connections
 query their configured API prefix plus `/models`, using their own API key. A
 custom service must implement the conventional `data` array with string `id`
 fields. Keep a manual model-ID input: unsupported discovery raises
 `NotImplementedError`, and missing credentials, upstream failures, or malformed
 catalogs raise `ModelListError`. An empty list means a valid empty catalog, not a
-fallback after a failure. Native Gemini, Anthropic, and Azure discovery is not
+fallback after a failure. Native Gemini, Anthropic, and versioned Azure discovery is not
 implemented by this method; their existing verification behavior is unchanged.
 
 Catalog IDs are not capability or entitlement guarantees. The generation service

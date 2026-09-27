@@ -100,9 +100,8 @@
 .live-settings-form input[type="checkbox"] { accent-color: #a8e6d4; width: 17px; height: 17px; flex-shrink: 0; cursor: pointer; }
 .live-settings-form .live-enabled { flex-direction: row; align-items: center; justify-content: space-between; border: 1px solid #a8e6d42b; background: #a8e6d409; padding: 12px; border-radius: 8px; }
 .live-enabled > span { display: grid; gap: 4px; }.live-enabled strong { font-size: 12px; font-weight: 500; }
-.live-settings-form .live-clear-key { flex-direction: row; align-items: center; gap: 8px; color: #c1cabe; }
 .live-settings-models { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.live-settings-feedback, .live-key-change { margin: 4px 0; padding: 10px 12px; border: 1px solid #d5a58a44; border-radius: 7px; color: #edc1b3; background: #e6a08e09; font-size: 11px; line-height: 1.7; }
+.live-settings-feedback { margin: 4px 0; padding: 10px 12px; border: 1px solid #d5a58a44; border-radius: 7px; color: #edc1b3; background: #e6a08e09; font-size: 11px; line-height: 1.7; }
 .live-settings-feedback { margin-top: 14px; }
 .live-settings-form > footer { display: flex; justify-content: flex-end; gap: 10px; padding-top: 18px; margin-top: 18px; border-top: 1px solid #ffffff10; }
 .live-settings-form > footer button { background: transparent; border-color: #667c6b; font-size: 12px; }

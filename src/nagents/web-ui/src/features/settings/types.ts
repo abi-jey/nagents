@@ -28,9 +28,11 @@ export type SettingsProfile = {
   name: string;
   mode: "build" | "reviewer";
   model: string;
+  provider?: string;
 };
 
 export type SettingsConnection = {
+  provider_id?: string;
   provider: string;
   api: string;
   auth: string;

@@ -49,7 +49,7 @@ export const executionLimits = [
 ] as const;
 
 export const providerApis = ["auto", "chat_completions", "responses", "messages"] as const;
-export const providerAuths = ["auto", "api-key", "chatgpt"] as const;
+export const providerAuths = ["auto", "api-key", "chatgpt", "codex", "entra"] as const;
 
 export const compactionTriggers = ["auto", "tokens", "messages", "off"] as const;
 
