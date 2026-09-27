@@ -54,18 +54,30 @@ def test_container_serve_starts_from_defaults_or_env_without_a_file(
 
 def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("NGN_MODEL", "environment-model")
     example = Path(__file__).resolve().parents[2] / "examples/k8s/ngn-container-config.yaml"
     documents = list(yaml.safe_load_all(example.read_text()))
     assert [document["kind"] for document in documents] == ["ConfigMap", "Deployment", "Service"]
     content = documents[0]["data"]["config.yaml"]
     projection = tmp_path / "..2026_09_27_18_46_12"
     projection.mkdir()
-    (projection / "config.yaml").write_text(content)
-    (tmp_path / "..data").symlink_to(projection.name)
-    (tmp_path / "config.yaml").symlink_to("..data/config.yaml")
-    config = load_config(tmp_path, tmp_path / "config.yaml")
-    assert config.config_paths == (projection / "config.yaml",)
-    assert config.diagnostics == (f"Loaded trusted configuration: {projection / 'config.yaml'}",)
+    projected_file = projection / "config.yaml"
+    projected_file.write_text(content)
+    data_link = tmp_path / "..data"
+    data_link.symlink_to(projection.name)
+    config_file = tmp_path / "config.yaml"
+    config_file.symlink_to("..data/config.yaml")
+    assert data_link.is_symlink() and data_link.samefile(projection)
+    assert config_file.is_symlink() and config_file.samefile(projected_file)
+    assert config_file.read_text() == content
+
+    config = load_config(tmp_path, config_file)
+    assert len(config.config_paths) == 1
+    assert config.config_paths[0].samefile(projected_file)
+    assert len(config.diagnostics) == 1
+    prefix = "Loaded trusted configuration: "
+    assert config.diagnostics[0].startswith(prefix)
+    assert Path(config.diagnostics[0][len(prefix) :]).samefile(projected_file)
     assert (config.provider, config.model, config.auth, config.api_key_env) == (
         "openai",
         "gpt-6-luna",
@@ -73,8 +85,11 @@ def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, mo
         "OPENAI_API_KEY",
     )
     with patch("nagents.web.serve") as serve:
-        assert main(["serve", "--workspace", str(tmp_path), "--config", str(tmp_path / "config.yaml")]) == 0
-        assert serve.call_args.args[0].config_paths == config.config_paths
+        assert main(["serve", "--workspace", str(tmp_path), "--config", str(config_file)]) == 0
+        served = serve.call_args.args[0]
+        assert len(served.config_paths) == 1
+        assert served.config_paths[0].samefile(projected_file)
+        assert (served.model, served.auth) == (config.model, config.auth)
 
 
 @pytest.mark.requires_posix
