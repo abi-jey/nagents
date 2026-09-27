@@ -34,6 +34,7 @@ PROVIDERS.update(
 )
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
+DEFAULT_HARNESS_MODEL = "gpt-6-luna"
 API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
 # These trusted-YAML keys existed before microphone dictation was removed.
@@ -67,7 +68,7 @@ class HarnessConfig:
     workspace: Path
     provider: str = "openai"
     provider_id: str = ""
-    model: str = "gpt-4.1"
+    model: str = DEFAULT_HARNESS_MODEL
     base_url: str = ""
     api_key_env: str = "OPENAI_API_KEY"
     agent: str = "assistant"
@@ -93,6 +94,8 @@ class HarnessConfig:
     max_subagent_depth: int = 2
     theme_background: str = "auto"
     skill_token_limit: int = 10000
+    # Distinguish a selected model from the built-in API default when switching to ChatGPT.
+    model_explicit: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
@@ -197,6 +200,7 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
                 provider_id=registry.active,
                 provider=profile.kind,
                 model=profile.model,
+                model_explicit=True,
                 base_url=profile.base_url,
                 api=profile.api,
                 auth=profile.auth,
@@ -216,6 +220,7 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
             config,
             provider=selection.provider,
             model=selection.model or config.model,
+            model_explicit=bool(selection.model) or config.model_explicit,
             base_url=selection.base_url,
             api=selection.api or config.api,
             auth=selection.auth or config.auth,
@@ -392,5 +397,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         config.api_version = selected.api_version
         if not model_overridden:
             config.model = selected.model
+        config.model_explicit = True
+    else:
+        config.model_explicit = config.model_explicit or model_overridden
     config.__post_init__()
     return config

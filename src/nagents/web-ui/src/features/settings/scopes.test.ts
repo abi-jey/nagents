@@ -46,7 +46,7 @@ const reply: SettingsReply = {
   connection: { provider: "openai", api: "auto", auth: "auto", base_url: "", api_key_env: "OPENAI_API_KEY", key_configured: false, auth_status: "configured" },
 };
 const connection = {
-  kind: "openai", model: "gpt-4.1", auth: "auto", api: "auto", base_url: "", api_key_env: "OPENAI_API_KEY",
+  kind: "openai", model: "gpt-6-luna", auth: "auto", api: "auto", base_url: "", api_key_env: "OPENAI_API_KEY",
   api_version: "", scope: "https://ai.azure.com/.default",
   live: { enabled: false, model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", backend_mode: "hosted" },
 };

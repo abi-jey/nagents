@@ -12,7 +12,7 @@ test("global and workspace provider editors use their scoped YAML and the mounte
   const container = dom.window.document.getElementById("root")!;
   const root = createRoot(container);
   const profile = {
-    kind: "openai", model: "gpt-4.1", auth: "codex", base_url: "", api: "auto", api_key_env: "OPENAI_API_KEY",
+    kind: "openai", model: "gpt-6-luna", auth: "codex", base_url: "", api: "auto", api_key_env: "OPENAI_API_KEY",
     api_version: "", scope: "https://ai.azure.com/.default",
     live: { enabled: false, model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", backend_mode: "hosted" },
   };
@@ -41,7 +41,7 @@ test("global and workspace provider editors use their scoped YAML and the mounte
   });
   const button = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent?.includes(text))!;
   try {
-    await act(async () => root.render(createElement(ProvidersPanel, { token: "token", blocked: false, initialModel: "gpt-4.1", scope: "global", applied: () => {}, onDraftChange: (value) => { dirty = value; } })));
+    await act(async () => root.render(createElement(ProvidersPanel, { token: "token", blocked: false, initialModel: "gpt-6-luna", scope: "global", applied: () => {}, onDraftChange: (value) => { dirty = value; } })));
     assert.match(container.textContent!, /Global connections are available/);
     assert.match(container.textContent!, /\.config\/ngn\/providers.yaml/);
     await act(async () => button("openai (active)").click());
@@ -53,7 +53,7 @@ test("global and workspace provider editors use their scoped YAML and the mounte
     assert.doesNotMatch(container.textContent!, /GPT-Live settings for this provider/);
     await act(async () => button("Save connection").click());
     assert.equal(dirty, false, "a saved connection no longer blocks scope switching");
-    await act(async () => root.render(createElement(ProvidersPanel, { token: "token", blocked: false, initialModel: "gpt-4.1", scope: "workspace", applied: () => {} })));
+    await act(async () => root.render(createElement(ProvidersPanel, { token: "token", blocked: false, initialModel: "gpt-6-luna", scope: "workspace", applied: () => {} })));
     await act(async () => button("openai (active)").click());
     assert.match(container.textContent!, /Edit this connection in Global settings/);
     assert.equal(container.querySelector<HTMLFieldSetElement>("fieldset.provider-fields")?.disabled, true);

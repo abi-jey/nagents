@@ -525,6 +525,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugins.append(f"{location}:{function}")
             overrides["plugins"] = tuple(plugins)
         config = replace(config, **overrides)
+        if "model" in overrides:
+            config.model_explicit = True
         if config.provider_id:
             from .harness.providers import ScopedProviderRegistryStore
 
@@ -540,6 +542,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 auth=profile.auth,
                 api_key_env=profile.key_env,
                 api_version=profile.api_version,
+                model_explicit=True,
             )
         if args.command == "serve":
             if getattr(args, "design", None):

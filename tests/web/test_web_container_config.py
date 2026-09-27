@@ -31,7 +31,11 @@ def test_container_serve_starts_from_defaults_or_env_without_a_file(
         assert main(["serve", "--workspace", str(tmp_path)]) == 0
         config = serve.call_args.args[0]
         assert config.config_paths == () and config.auth == "auto" and not config.demo
+        assert config.model == "gpt-6-luna"
         assert serve.call_args.kwargs["host"] == "127.0.0.1"  # The image opts into 0.0.0.0 explicitly.
+
+        assert main(["serve", "--workspace", str(tmp_path), "--model", "gpt-6-luna"]) == 0
+        assert serve.call_args.args[0].model_explicit
 
         monkeypatch.setenv("NGN_PROVIDER", "anthropic")
         monkeypatch.setenv("NGN_MODEL", "claude-example")
@@ -64,7 +68,7 @@ def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, mo
     assert config.diagnostics == (f"Loaded trusted configuration: {projection / 'config.yaml'}",)
     assert (config.provider, config.model, config.auth, config.api_key_env) == (
         "openai",
-        "gpt-4.1",
+        "gpt-6-luna",
         "api-key",
         "OPENAI_API_KEY",
     )
@@ -107,7 +111,7 @@ def test_env_key_marks_setup_configured_without_exposing_value(tmp_path: Path, m
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("NGN_PROVIDER", "openai")
-    monkeypatch.setenv("NGN_MODEL", "gpt-4.1")
+    monkeypatch.setenv("NGN_MODEL", "gpt-6-luna")
     monkeypatch.setenv("NGN_AUTH", "api-key")
     monkeypatch.setenv("NGN_API_KEY_ENV", "TEST_CONTAINER_KEY")
     monkeypatch.setenv("TEST_CONTAINER_KEY", "PRIVATE-CONTAINER-KEY")
@@ -119,7 +123,7 @@ def test_env_key_marks_setup_configured_without_exposing_value(tmp_path: Path, m
             assert bootstrap.json()["provider_setup"] == {"configured": True, "message": ""}
             settings = await client.get("/api/settings", headers=headers)
             assert settings.json()["connection"]["auth"] == "api-key"
-            assert settings.json()["values"]["model"] == "gpt-4.1"
+            assert settings.json()["values"]["model"] == "gpt-6-luna"
             assert "PRIVATE-CONTAINER-KEY" not in bootstrap.text + settings.text
 
     asyncio.run(check())

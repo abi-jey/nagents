@@ -171,7 +171,7 @@ ngn does not load `.env` automatically. If you intentionally keep provider
 credentials in a local environment file, uv can load it for the launched process:
 
 ```bash
-uv run --no-project --python .venv/bin/python --env-file .env ngn --provider openrouter --api-key-env OPENROUTER_API_KEY --model openai/gpt-4.1-mini
+uv run --no-project --python .venv/bin/python --env-file .env ngn --provider openrouter --api-key-env OPENROUTER_API_KEY --model openai/gpt-6-luna
 ```
 
 Use only a file you trust. Keep it out of version control and do not include its

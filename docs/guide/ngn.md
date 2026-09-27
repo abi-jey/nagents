@@ -65,7 +65,7 @@ Demo actions are explicitly labeled as previews, not completed real work.
 For a real model, set the provider key in your shell environment and launch:
 
 ```bash
-poetry run ngn --provider openai --auth api-key --model gpt-4.1
+poetry run ngn --provider openai --auth api-key --model gpt-6-luna
 poetry run ngn --provider anthropic --auth api-key --model YOUR_MODEL_ID --api-key-env ANTHROPIC_API_KEY
 poetry run ngn --workspace /path/to/project
 poetry run ngn --continue
@@ -418,7 +418,7 @@ ngn logout
 | --- | --- | --- |
 | `chatgpt` | `openai` | ChatGPT/Codex device login; subscription access, not general API access. |
 | `openrouter` | `openrouter` | Headless PKCE: open the printed link, approve ngn, and paste the single-use code shown by OpenRouter (valid for 10 minutes). ngn exchanges it for a user-controlled API key. |
-| `openai` | `openai` | OpenAI Platform API key with usage-based billing. Default model `gpt-4.1`. |
+| `openai` | `openai` | OpenAI Platform API key with usage-based billing. Default model `gpt-6-luna`. |
 | `anthropic` | `anthropic` | Anthropic API key; enter a model ID when prompted. |
 | `gemini` | `gemini` | Google AI Studio API key; enter a model ID when prompted. |
 | `custom` | `openai_compatible` | Your own gateway, Ollama, or another compatible service; requires a base URL and model. `--api` selects the HTTP contract, and `--provider` accepts any advanced provider name. |
@@ -478,10 +478,11 @@ use an OpenAI Platform API key instead; device login does not bypass account
 restrictions or turn a ChatGPT subscription into general API access.
 
 ChatGPT sign-in uses `https://chatgpt.com/backend-api/codex/responses`, not the
-ordinary API-key chat-completions endpoint. The initial default `gpt-4.1` is
-switched to `gpt-5.6-terra` for this route; use `/model` to select another model
-available to your account. The underlying `OpenAIProvider` lives in the library;
-interactive login, token refresh/storage, and route selection live in the harness.
+ordinary API-key chat-completions endpoint. The initial default `gpt-6-luna` is
+switched to `gpt-5.6-terra` for this route unless you selected a model explicitly;
+use `/model` to select another model available to your account. The underlying
+`OpenAIProvider` lives in the library; interactive login, token refresh/storage,
+and route selection live in the harness.
 
 The `auth` configuration field and `--auth` accept:
 
@@ -537,7 +538,7 @@ top-level `model`), and the configuration files that were actually loaded:
 
 ```text
 Provider: openai
-Model: gpt-4.1
+Model: gpt-6-luna
 Config: /home/you/.config/ngn/config.yaml
 ```
 
@@ -638,7 +639,7 @@ location need not be `.ngn/config.yaml`. Settings are top-level YAML with no
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: auto
 api_key_env: OPENAI_API_KEY

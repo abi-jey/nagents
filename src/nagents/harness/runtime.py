@@ -34,6 +34,7 @@ from nagents.types import TextContent
 
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
+from .config import DEFAULT_HARNESS_MODEL
 from .connection import build_provider
 from .credentials import ProviderLogin
 from .credentials import ProviderLoginStore
@@ -172,6 +173,7 @@ class Harness:
             config.api_key_env = selected.key_env
             config.api_version = selected.api_version
             config.model = selected.model
+            config.model_explicit = True
         self._built_provider_profile = self.providers.providers.get(config.provider_id)
         self._api_model = config.model
         self._initialized = False
@@ -212,6 +214,7 @@ class Harness:
         profile = config.profile(config.agent)
         if profile.model:
             self.config.model = profile.model
+            self.config.model_explicit = True
             self.agent.provider.model = profile.model
         self.refresh_instructions()
 
@@ -667,6 +670,7 @@ class Harness:
             self.config.agent = name
             if profile.model:
                 self.config.model = profile.model
+                self.config.model_explicit = True
                 self.agent.provider.model = profile.model
             self.refresh_instructions()
 
@@ -675,6 +679,7 @@ class Harness:
             if not model.strip():
                 raise ValueError("Model must not be empty")
             self.config.model = model
+            self.config.model_explicit = True
             self.agent.provider.model = model
 
     async def reconfigure_provider(self, config: "HarnessConfig") -> None:
@@ -715,6 +720,7 @@ class Harness:
         for name in identity:
             setattr(self.config, name, getattr(config, name))
         self.config.model = config.model
+        self.config.model_explicit = True
         self.agent.provider.model = config.model
 
     async def _select_provider(self, name: str) -> None:
@@ -843,7 +849,7 @@ class Harness:
     async def _use_chatgpt(self) -> None:
         if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
             self._api_model = self.agent.provider.model
-        if self.config.model == "gpt-4.1":
+        if self.config.model == DEFAULT_HARNESS_MODEL and not self.config.model_explicit:
             self.config.model = DEFAULT_CODEX_MODEL
         replacement = OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
         try:

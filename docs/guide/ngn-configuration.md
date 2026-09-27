@@ -12,7 +12,7 @@ mapping. Named agent profiles are the only nested mapping:
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -206,7 +206,7 @@ or authentication-route selection. String choices are case-sensitive.
 | --- | --- | --- | --- |
 | `provider` | string | `"openai"` | A provider name or alias from the table below. |
 | `provider_id` | string | `""` | Optional named connection from `providers.yaml`; its endpoint, auth and key reference take precedence over flat provider fields. |
-| `model` | string | `"gpt-4.1"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
+| `model` | string | `"gpt-6-luna"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
 | `api` | string | `"auto"` | `"auto"`, `"chat_completions"`, `"responses"`, `"messages"`, or `"completions"`. Selects the request protocol, not the authentication method. |
 | `base_url` | string | `""` | Empty selects the provider default. Otherwise an HTTP(S) API-prefix URL with a hostname, no whitespace, user/password, query parameters, or fragment. Do not include a generation-route suffix. Required explicitly for LiteLLM and Azure. |
 | `api_key_env` | string | `"OPENAI_API_KEY"` | Environment-variable name matching `[A-Za-z_][A-Za-z0-9_]*`, never a literal key. Changing provider does not automatically change this default. |
@@ -456,7 +456,7 @@ in these files, URLs, or command arguments.
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -470,17 +470,17 @@ That route can select a different account-supported default model.
 
 ```yaml
 provider: openrouter
-model: openai/gpt-4.1-mini
+model: openai/gpt-6-luna
 api: chat_completions
 auth: api-key
 api_key_env: OPENROUTER_API_KEY
 ```
 
 The default endpoint is `https://openrouter.ai/api/v1`; no `base_url` override is
-needed. Set the referenced key in your launcher environment. This model was used
-for a live ngn read-tool/response smoke test; choose another model if preferred,
-but check that it supports tools. An explicit environment-file launch through uv
-is shown in the [installation guide](ngn-installation.md#explicit-environment-files).
+needed. Set the referenced key in your launcher environment. Choose a model your
+OpenRouter account exposes and check that it supports tools. An explicit
+environment-file launch through uv is shown in the
+[installation guide](ngn-installation.md#explicit-environment-files).
 
 ### Anthropic
 

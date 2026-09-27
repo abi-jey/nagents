@@ -23,6 +23,7 @@ import aiohttp
 from nagents.provider import Provider
 from nagents.provider.openai import USER_AGENT
 
+from .config import DEFAULT_HARNESS_MODEL
 from .config import PROVIDERS
 from .credentials import ProviderLoginError
 
@@ -84,7 +85,7 @@ LOGIN_METHODS: tuple[LoginMethod, ...] = (
         "OpenAI Platform API key",
         "openai",
         "OPENAI_API_KEY",
-        "gpt-4.1",
+        DEFAULT_HARNESS_MODEL,
         "Usage-based OpenAI API billing, separate from a ChatGPT subscription.",
     ),
     LoginMethod(

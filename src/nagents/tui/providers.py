@@ -17,6 +17,7 @@ from textual.widgets import Input
 from textual.widgets import Select
 from textual.widgets import Static
 
+from nagents.harness.config import DEFAULT_HARNESS_MODEL
 from nagents.harness.providers import KINDS
 from nagents.harness.providers import LiveProfile
 from nagents.harness.providers import ProviderProfile
@@ -33,7 +34,7 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
         super().__init__()
         self.connection_name = name
         self.profile = profile or ProviderProfile(
-            kind="openai", model="gpt-4.1", auth="auto", live=LiveProfile(backend_mode="assistant")
+            kind="openai", model=DEFAULT_HARNESS_MODEL, auth="auto", live=LiveProfile(backend_mode="assistant")
         )
 
     def compose(self) -> ComposeResult:

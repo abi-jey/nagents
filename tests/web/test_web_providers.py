@@ -35,7 +35,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 assert before["active"] == "" and before["providers"] == {}
                 profile = {
                     "kind": "openai",
-                    "model": "gpt-4.1",
+                    "model": "gpt-6-luna",
                     "auth": "api-key",
                     "api": "responses",
                     "api_key_env": "${TEST_PROVIDER_KEY}",
@@ -97,7 +97,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
 @pytest.mark.parametrize(
     "profile",
     [
-        ProviderProfile(kind="openai", model="gpt-4.1", auth="codex"),
+        ProviderProfile(kind="openai", model="gpt-6-luna", auth="codex"),
         ProviderProfile(
             kind="foundry",
             model="deployment",
@@ -130,7 +130,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             store = ScopedProviderRegistryStore(tmp_path)
             global_before = (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()
-            profile = {"kind": "openai", "model": "gpt-4.1", "auth": "codex"}
+            profile = {"kind": "openai", "model": "gpt-6-luna", "auth": "codex"}
             added = await client.put(
                 "/api/provider-scopes/global/providers/personal",
                 headers=headers,

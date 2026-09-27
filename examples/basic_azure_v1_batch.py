@@ -9,7 +9,7 @@ REQUIREMENTS:
    - Standard deployments (GlobalStandard) do NOT support batch processing
    - Go to Azure OpenAI Studio > Deployments > Create new > Select "Global-Batch" type
 2. The deployment name must be used as the model name
-3. Models available for Global-Batch: gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, o3-mini, o4-mini, gpt-5, gpt-5.1
+3. Check Azure's current Global-Batch model availability for your region before deploying.
 
 Error "invalid_deployment_type" means you need to create a Global-Batch deployment.
 """

@@ -47,7 +47,7 @@ then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY

@@ -124,7 +124,7 @@ async def main() -> None:
     async with Provider(
         provider_type=ProviderType.OPENAI_COMPATIBLE,
         api_key=os.environ["OPENAI_API_KEY"],  # Your own OpenAI Platform API key.
-        model="gpt-4.1",
+        model="gpt-6-luna",
     ) as provider:
         try:
             model_ids = await provider.get_model_list()
@@ -132,7 +132,7 @@ async def main() -> None:
             print("Catalog unavailable; keep or enter your model ID manually.")
         else:
             print(model_ids)
-        # provider.model remains "gpt-4.1" in either case.
+        # provider.model remains "gpt-6-luna" in either case.
 
 
 asyncio.run(main())

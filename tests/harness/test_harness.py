@@ -114,13 +114,13 @@ def test_config_ignores_entire_untrusted_project_and_does_not_import(config: Har
     with pytest.warns(UserWarning, match="Ignoring untrusted project"):
         loaded = load_config(config.workspace)
     assert loaded.provider == "openai"
-    assert loaded.model == "gpt-4.1"
+    assert loaded.model == "gpt-6-luna"
     assert loaded.api_key_env == "OPENAI_API_KEY"
     assert not loaded.base_url and not loaded.plugins
     assert loaded.diagnostics and not marker.exists()
     (project / "config.yaml").write_text("not: [valid\n")
     with pytest.warns(UserWarning):
-        assert load_config(config.workspace).model == "gpt-4.1"
+        assert load_config(config.workspace).model == "gpt-6-luna"
 
 
 def test_config_precedence_origins_profiles_and_xdg(

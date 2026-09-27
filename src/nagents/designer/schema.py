@@ -233,7 +233,7 @@ secrets:
 providers:
   primary:
     type: openai
-    model: gpt-4.1
+    model: gpt-6-luna
     secret: primary_key
 agents:
   assistant:

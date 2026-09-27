@@ -106,12 +106,49 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             await harness.logout()
             assert not fake.saved
             assert harness.config.auth == "api-key"
-            assert harness.config.model == "gpt-4.1"
+            assert harness.config.model == "gpt-6-luna"
             assert isinstance(harness.agent.provider, HarnessProvider)
             assert harness.login_store.selection() is None
         finally:
             await harness.close()
         assert fake.closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
+@pytest.mark.parametrize(
+    "source,model",
+    [("environment", "gpt-6-luna"), ("file", "gpt-6-luna"), ("selection", "gpt-6-luna"), ("legacy", "gpt-4.1")],
+)
+def test_chatgpt_preserves_explicit_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, model: str
+) -> None:
+    fake = FakeAuth(saved=True)
+    monkeypatch.setattr(runtime, "OpenAIAuth", lambda: fake)
+    if source == "environment":
+        monkeypatch.setenv("NGN_MODEL", model)
+        config = load_config(tmp_path)
+    elif source == "file":
+        path = tmp_path / "config.yaml"
+        path.write_text(f"model: {model}\n")
+        config = load_config(tmp_path, path)
+    else:
+        config = HarnessConfig(workspace=tmp_path, model=model)
+
+    async def scenario() -> None:
+        harness = Harness(config)
+        try:
+            if source == "selection":
+                await harness.set_model(model)
+            await harness.initialize()
+            assert harness.config.model == model
+            assert isinstance(harness.agent.provider, OpenAIProvider)
+            assert harness.agent.provider.model == model
+            await harness.logout()
+            assert harness.config.model == model
+        finally:
+            await harness.close()
 
     asyncio.run(scenario())
 
@@ -256,7 +293,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
     monkeypatch.setenv("XDG_DATA_HOME", "")
     monkeypatch.chdir(project)
     config = load_config(project)
-    assert config.model == "gpt-4.1"
+    assert config.model == "gpt-6-luna"
     assert config.data_dir == home / ".local/share/ngn"
     harness = Harness(HarnessConfig(workspace=home, data_dir=tmp_path / "separate-state", demo=True))
     with pytest.raises(PermissionError, match="OAuth credential"):

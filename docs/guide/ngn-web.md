@@ -89,7 +89,7 @@ For your own installation, choose your own connection deliberately:
 
 - **OpenAI Platform API key:** set `OPENAI_API_KEY` securely in the backend
   environment using your own key, then run `ngn serve --provider openai --auth
-  api-key --model gpt-4.1`. Platform API usage and billing are separate from a
+  api-key --model gpt-6-luna`. Platform API usage and billing are separate from a
   ChatGPT subscription. Never put key values into browser settings, URLs, or Git.
 - **ChatGPT/Codex login:** run `ngn login --device-auth`, approve only the code you
   requested, and use `ngn login --status` to check the saved login. Then run

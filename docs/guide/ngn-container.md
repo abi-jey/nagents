@@ -20,7 +20,7 @@ The deployment selects the projected file explicitly:
 ngn serve --host 0.0.0.0 --workspace /workspace --config /etc/ngn/config.yaml
 ```
 
-The ConfigMap example chooses OpenAI `auth: api-key`, `model: gpt-4.1`, and
+The ConfigMap example chooses OpenAI `auth: api-key`, `model: gpt-6-luna`, and
 `api_key_env: OPENAI_API_KEY`. The Secret reference sets that **environment
 variable in the ngn container**; a browser's environment cannot supply it.
 Replace the example image tag with a digest of an image built from the updated
@@ -35,7 +35,7 @@ env:
   - name: NGN_PROVIDER
     value: openai
   - name: NGN_MODEL
-    value: gpt-4.1
+    value: gpt-6-luna
   - name: NGN_AUTH
     value: api-key
   - name: NGN_API_KEY_ENV

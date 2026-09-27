@@ -11,7 +11,7 @@ export function Resources({ design, change }: { design: Design; change: (value: 
     <label>Maximum delegation depth<input type="number" min="0" max="8" value={design.defaults.max_subagent_depth} onChange={(e) => change({ ...design, defaults: { ...design.defaults, max_subagent_depth: Number(e.target.value) } })} /></label>
     <label>New resource ID<input value={name} onChange={(e) => setName(e.target.value)} /></label>
     <div className="designer-tabs">
-      <button disabled={!valid || !!design.providers[name]} onClick={() => { change({ ...design, providers: { ...design.providers, [name]: { type: "openai", model: "gpt-4.1", base_url: "", api: "auto", api_version: "", secret: secrets[0] || "" } } }); setName(""); }}>Add provider</button>
+      <button disabled={!valid || !!design.providers[name]} onClick={() => { change({ ...design, providers: { ...design.providers, [name]: { type: "openai", model: "gpt-6-luna", base_url: "", api: "auto", api_version: "", secret: secrets[0] || "" } } }); setName(""); }}>Add provider</button>
       <button disabled={!valid || !!design.secrets[name]} onClick={() => { change({ ...design, secrets: { ...design.secrets, [name]: { source: "env", name: "OPENAI_API_KEY" } } }); setName(""); }}>Add secret reference</button>
       <button disabled={!valid || !!design.mcp_servers[name]} onClick={() => { change({ ...design, mcp_servers: { ...design.mcp_servers, [name]: { transport: "stdio", command: "", args: [], env: {}, secrets: {} } } }); setName(""); }}>Add MCP server</button>
     </div>

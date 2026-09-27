@@ -32,7 +32,7 @@ from nagents.web.voice_preferences import VoiceOverrides
 
 
 def sample(**changes: object) -> ProviderProfile:
-    profile = ProviderProfile(kind="openai", model="gpt-4.1", auth="api-key", api_key_env="${TEST_NGN_KEY}")
+    profile = ProviderProfile(kind="openai", model="gpt-6-luna", auth="api-key", api_key_env="${TEST_NGN_KEY}")
     return replace(profile, **changes)  # type: ignore[arg-type]
 
 
