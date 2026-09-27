@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from contextlib import suppress
 from contextvars import ContextVar
 from pathlib import Path
+from types import MethodType
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -44,6 +45,7 @@ from nagents.types import JsonSchema
 from nagents.types import JsonSchemaProperty
 from nagents.types import JsonValue
 from nagents.types import ToolCall
+from nagents.types import ToolDefinition
 
 from .execution import _execution_for
 from .execution import _mask_delivery_authority
@@ -137,6 +139,44 @@ class HarnessExecutor(ToolExecutor):
         with _mask_delivery_authority():
             return await self._execute_guarded(tool_call, bridge)
 
+    def _host_channel_send(self, tool: ToolDefinition | None, call: ToolCall, bridge: "ExecutionBridge | None") -> bool:
+        """Only the host's original, bound send tool bypasses custom-tool approval."""
+        if (
+            call.name != "channel_send"
+            or bridge is None
+            or not bridge.live()
+            or tool is None
+            or tool is not self.harness._delivery_definition
+            or self.harness._delivery_binding is None
+            or self.harness._delivery_binding.func is not tool.func
+            or self.harness._delivery_binding.parameters != tool.parameters
+            or not isinstance(tool.func, MethodType)
+        ):
+            return False
+        from nagents.channels.dispatcher import ChannelDispatcher
+        from nagents.web.channel_host import ChannelHost
+
+        function = tool.func
+        owner = function.__self__
+        if type(owner) is ChannelHost:
+            run = owner.state.active
+            return (
+                function.__func__ is ChannelHost.channel_send
+                and owner.state.running_harness is self.harness
+                and owner.dispatcher is not None
+                and any(saved is tool for saved in owner.tools)
+                and run is not None
+                and not run.background
+                and not run.source
+                and (not run.server_owned or owner.state.bus.listening(run.session_id))
+            )
+        return (
+            type(owner) is ChannelDispatcher
+            and function.__func__ is ChannelDispatcher.channel_send
+            and call.arguments.get("channel") == "builtin.tui"
+            and call.arguments.get("destination") == self.harness.session_id
+        )
+
     async def _execute_guarded(self, tool_call: ToolCall, bridge: "ExecutionBridge | None") -> ToolResultEvent:
         started = time.monotonic()
         call = copy.deepcopy(tool_call)
@@ -164,13 +204,14 @@ class HarnessExecutor(ToolExecutor):
             if not builtin:
                 function = tool.func if tool is not None else None
                 parameters = copy.deepcopy(tool.parameters) if tool is not None else {}
-                await self.harness.approve(
-                    call.name,
-                    call.arguments,
-                    "Custom tool: trusted code with full local access.",
-                    json.dumps(call.arguments, indent=2, ensure_ascii=True),
-                    call.id,
-                )
+                if not self._host_channel_send(tool, call, bridge):
+                    await self.harness.approve(
+                        call.name,
+                        call.arguments,
+                        "Custom tool: trusted code with full local access.",
+                        json.dumps(call.arguments, indent=2, ensure_ascii=True),
+                        call.id,
+                    )
                 if self.harness.config.demo or self.harness.mode == "reviewer":
                     raise PermissionError("Active profile no longer allows custom tools")
                 # Approval applies to the validated definition, not a replacement registered while waiting.

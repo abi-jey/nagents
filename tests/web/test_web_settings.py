@@ -134,7 +134,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 )
                 assert body["providers"] == sorted(body["providers"]) and "openai" in body["providers"]
                 assert body["apis"] == ["auto", "chat_completions", "responses", "messages"]
-                assert body["auths"] == ["auto", "api-key", "chatgpt"]
+                assert body["auths"] == ["auto", "api-key", "chatgpt", "codex", "entra"]
                 assert body["persisted"] is False and body["effective_mode"] == "build"
                 assert body["profiles"] == [
                     {"name": "assistant", "mode": "build", "model": ""},
@@ -987,11 +987,23 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
                     async with aiosqlite.connect(db_path) as db:
                         assert list(
                             await db.execute_fetchall("SELECT version, values_json, revision FROM ngn_web_settings")
-                        ) == [(4, SettingsValues.model_validate(values).model_dump_json(), saved["revision"])]
+                        ) == [
+                            (
+                                5,
+                                json.dumps(
+                                    {key: value for key, value in values.items() if value != loaded["defaults"][key]},
+                                    separators=(",", ":"),
+                                ),
+                                saved["revision"],
+                            )
+                        ]
 
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
-            assert loaded["values"] == saved["values"] and loaded["revision"] == saved["revision"]
+            # The enabled flag matched the previous inherited default, so the
+            # restarted workspace follows the new (disabled) default instead.
+            assert loaded["values"] == {**saved["values"], "dictation_enabled": False}
+            assert loaded["revision"] == saved["revision"]
             assert loaded["defaults"] == initial["defaults"]
             assert loaded["dictation"]["admin_enabled"] is False
             assert loaded["dictation"]["enabled"] is False and loaded["dictation"]["max_seconds"] == 120
@@ -1047,7 +1059,8 @@ def test_dictation_saved_preferences_respect_restarted_admin_config(
         )
         async with client_app(tmp_path, config=trusted) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
-            assert loaded["values"] == saved["values"] and loaded["revision"] == saved["revision"]
+            assert loaded["values"] == {**saved["values"], "dictation_enabled": trusted.dictation_enabled}
+            assert loaded["revision"] == saved["revision"]
             assert (
                 loaded["dictation"]["enabled"] == loaded["dictation"]["available"] == (restriction == "lower-ceiling")
             )
@@ -1350,7 +1363,7 @@ def test_settings_corrupt_saved_row_fails_closed(tmp_path: Path, corruption: str
         elif corruption == "coercion":
             values["max_output"] = "2048"
         elif corruption == "version":
-            saved_version = 5
+            saved_version = 6
         elif corruption == "revision":
             revision = "SECRET-invalid-revision"
         elif corruption == "wrong-schema":

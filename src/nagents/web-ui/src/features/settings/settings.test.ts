@@ -38,6 +38,13 @@ test("settings drafts round-trip exact API keys and numeric values", () => {
   assert.deepEqual(parsed, { ok: true, values });
 });
 
+test("named Codex and Entra authentication survive a settings save", () => {
+  for (const auth of ["codex", "entra"]) {
+    const named = settingsValues({ auth });
+    assert.deepEqual(parseDraft(createDraft(named), reply.profiles), { ok: true, values: named });
+  }
+});
+
 test("compaction criteria round-trip and reject unsupported triggers or limits", () => {
   const parsed = parseDraft(
     { ...createDraft(values), compact_trigger: "tokens", compact_tokens: " 50000 ", compact_messages: "7" },
@@ -184,8 +191,6 @@ test("save sends all exact values and the opaque revision, without a cancellable
     assert.deepEqual(JSON.parse(String(init.body)), {
       revision: reply.revision,
       values,
-      api_key: "",
-      clear_api_key: false,
     });
     assert.equal(init.signal, undefined);
     return Response.json({ ...reply, persisted: true, revision: "new-opaque-revision" });
@@ -193,21 +198,6 @@ test("save sends all exact values and the opaque revision, without a cancellable
   const saved = await saveSettings("mock-token", reply.revision, values);
   assert.equal(saved.revision, "new-opaque-revision");
   assert.equal(saved.persisted, true);
-  assert.equal(fetchMock.mock.callCount(), 1);
-});
-
-test("a submitted provider key and clear flag travel write-only in the save body", async (t) => {
-  const fetchMock = t.mock.method(globalThis, "fetch", async (input: string, init: RequestInit) => {
-    assert.equal(input, "/api/settings");
-    assert.deepEqual(JSON.parse(String(init.body)), {
-      revision: reply.revision,
-      values,
-      api_key: "write-only-draft-key",
-      clear_api_key: true,
-    });
-    return Response.json(reply);
-  });
-  await saveSettings("mock-token", reply.revision, values, "write-only-draft-key", true);
   assert.equal(fetchMock.mock.callCount(), 1);
 });
 

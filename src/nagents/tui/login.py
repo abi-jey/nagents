@@ -41,14 +41,15 @@ class LoginMethodModal(ModalScreen[str]):
                 yield Static(
                     "ChatGPT / Codex\nUse eligible ChatGPT subscription access for Codex. "
                     "This is not OAuth access to the general OpenAI API.\n\n"
-                    "OpenRouter\nSign in once in your browser; ngn stores a user-controlled API key.\n\n"
+                    "OpenRouter\nConfigure an OpenRouter API key environment variable in /provider.\n\n"
                     "API key / other provider\nUsage-based provider billing, separate from ChatGPT. "
-                    "Keys are stored in ngn's private credential store and never shown in the conversation. "
-                    "To reference an environment variable instead, run ngn login in a terminal.",
+                    "Use named provider connections in /provider with environment variable references; no new key is stored. "
+                    "The legacy ngn login CLI stores keys in ngn's private credential store. "
+                    "Keys are never shown in the conversation.",
                     markup=False,
                 )
             yield Button("ChatGPT / Codex device login", id="login-chatgpt")
-            yield Button("OpenRouter browser sign-in", id="login-openrouter")
+            yield Button("OpenRouter provider", id="login-openrouter")
             yield Button("API key / other provider", id="login-api-key")
             yield Button("Cancel", id="login-choice-cancel")
 

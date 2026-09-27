@@ -209,34 +209,17 @@ def test_unsafe_success_never_enters_model_tool_history_or_ws(tmp_path: Path, mo
     with site(tmp_path, monkeypatch) as app:
         created = install(app, monkeypatch, "send-result")
         app.configure(secrets={"token": TOKEN})
-        observed: list[dict[str, object]] = []
         with app.socket() as socket:
             socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
-            observed.append(socket.receive_json())
+            assert socket.receive_json()["type"] == "snapshot"
             app.submit("privilege")
-            while True:
-                frame = socket.receive_json()
-                observed.append(frame)
-                if frame.get("record", {}).get("event") == "approval":
-                    break
-            approval = frame["record"]
-            response = app.client.post(
-                "/api/approval",
-                headers=app.headers,
-                json={
-                    "run_id": approval["run_id"],
-                    "approval_id": approval["approval_id"],
-                    "call_id": approval["id"],
-                    "decision": "allow",
-                },
-            )
-            assert response.status_code == 200
-            while True:
-                frame = socket.receive_json()
-                observed.append(frame)
-                if frame.get("record", {}).get("event") == "run_finished":
-                    break
-        app.idle()
+            app.idle()
+        observed = [frame for frame, _ in app.state.bus.ring]
+        assert not any(
+            isinstance(record, dict) and record.get("event") == "approval"
+            for frame in observed
+            if (record := frame.get("record")) is not None
+        )
         assert len(created[0].deliveries) == 1
         assert TOKEN not in json.dumps(observed) + json.dumps(app.history(app.main)) + repr(app.providers[0].requests)
         tool = next(

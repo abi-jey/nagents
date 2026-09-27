@@ -4,6 +4,7 @@ import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
+import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import {
   groupTranscript,
@@ -152,7 +153,7 @@ export function TranscriptItems({
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
             <MessageContent text={entry.text} />
-            {entry.uploads?.map((upload) => <p key={upload.upload_id} className="record-note">Attachment: {upload.filename} · {upload.media_type} · {Math.ceil(upload.byte_length / 1024)} KiB</p>)}
+             {entry.uploads?.map((upload) => <UploadAttachment key={upload.upload_id} upload={upload} ready={!entry.queued} />)}
             {entry.channel && <ChannelAttachments parts={entry.parts} />}
             {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}
               open={disclosures.get(`source:${entry.id}`) ?? false} onToggle={(event) => toggle(`source:${entry.id}`, event.currentTarget.open)}>
@@ -384,6 +385,7 @@ export function Conversation({
           </section>
         )}
         <MediaToken.Provider value={token} key={sessionId}>
+        <UploadSession.Provider value={sessionId}>
         {!!earlier.length && <section aria-label="Deliveries from earlier context">
           <h3>Deliveries from earlier context</h3>
           <TranscriptItems items={earlier} names={names} disclosures={disclosures} toggle={toggle} />
@@ -394,6 +396,7 @@ export function Conversation({
           disclosures={disclosures}
           toggle={toggle}
         />
+        </UploadSession.Provider>
         </MediaToken.Provider>
       </div>
     </div>

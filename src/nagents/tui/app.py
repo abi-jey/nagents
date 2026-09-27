@@ -60,6 +60,7 @@ from .login import DeviceLoginModal
 from .login import LoginMethodModal
 from .login import OpenRouterLoginModal
 from .login import ProviderKeyModal
+from .providers import ProviderEditor
 from .screens import ApprovalModal
 from .screens import ChoiceModal
 from .screens import DetailModal
@@ -93,6 +94,7 @@ if TYPE_CHECKING:
     from nagents.harness.auth import DeviceAuthorization
     from nagents.harness.commands import Command
     from nagents.harness.provider_login import LoginMethod
+    from nagents.harness.providers import ProviderProfile
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 
@@ -1239,11 +1241,22 @@ class NagentsApp(App[None]):
             self._launch(self._sessions, "Loading sessions...")
         elif name == "/login":
             self.push_screen(LoginMethodModal(), self._chosen_login)
+        elif name == "/provider":
+            self._providers(argument)
         elif name == "/logout":
             self._launch(self._logout, "Signing out...")
         elif name == "/agent" and not argument:
             profiles = [
-                (name, name + ("  /  read-only" if self.harness.config.profile(name).mode == "reviewer" else ""))
+                (
+                    name,
+                    name
+                    + ("  /  read-only" if self.harness.config.profile(name).mode == "reviewer" else "")
+                    + (
+                        f"  /  {self.harness.config.profile(name).provider}"
+                        if self.harness.config.profile(name).provider
+                        else ""
+                    ),
+                )
                 for name in self.harness.config.profile_names
             ]
             self.push_screen(
@@ -1274,12 +1287,151 @@ class NagentsApp(App[None]):
         if method == "chatgpt":
             self._launch(self._login, "Starting ChatGPT/Codex device login...")
         elif method == "openrouter":
-            self._launch(self._login_openrouter, "Starting OpenRouter sign-in...")
+            if hasattr(self.harness, "provider_store"):
+                from nagents.harness.providers import ProviderProfile
+
+                self.push_screen(
+                    ProviderEditor(profile=ProviderProfile(kind="openrouter", model="openrouter/auto")),
+                    self._save_provider,
+                )
+            else:
+                self._launch(self._login_openrouter, "Starting OpenRouter sign-in...")
         elif method == "api-key":
-            choices = [
-                (entry.token, entry.label) for entry in provider_login.methods() if not entry.device and not entry.pkce
-            ]
-            self.push_screen(ChoiceModal("SIGN IN / PROVIDER", choices), self._chosen_provider)
+            if hasattr(self.harness, "provider_store"):
+                self._providers("")
+            else:
+                # Older external Harness adapters can still provide the
+                # original sign-in implementation without named connections.
+                choices = [
+                    (entry.token, entry.label)
+                    for entry in provider_login.methods()
+                    if not entry.device and not entry.pkce
+                ]
+                self.push_screen(ChoiceModal("SIGN IN / PROVIDER", choices), self._chosen_provider)
+
+    def _providers(self, name: str) -> None:
+        registry = self.harness.provider_store.load()
+        if name:
+            if name not in registry.providers:
+                self._status(f"Unknown provider connection {name!r}", error=True)
+                return
+            self._provider_action(name)
+            return
+        local = self.harness.provider_store.load_scope("workspace")
+        choices = [("__add__", "+ Add workspace connection"), ("__add_global__", "+ Add global connection")]
+        if local.active and self.harness.provider_store.load_scope("global").active:
+            choices.append(("__inherit__", "Use global default in this workspace"))
+        choices.extend(
+            (
+                key,
+                f"{key}  [{'workspace' if key in local.providers else 'global'}]  /  {profile.kind} / {profile.model}"
+                + ("  [active]" if key == registry.active else ""),
+            )
+            for key, profile in registry.providers.items()
+        )
+        self.push_screen(
+            ChoiceModal("PROVIDER CONNECTIONS", choices),
+            lambda selected: (
+                self._add_provider("workspace")
+                if selected == "__add__"
+                else self._add_provider("global")
+                if selected == "__add_global__"
+                else self._launch(self._inherit_provider, "Using global default...")
+                if selected == "__inherit__"
+                else self._provider_action(selected)
+                if selected
+                else None
+            ),
+        )
+
+    def _add_provider(self, scope: str = "workspace") -> None:
+        self.push_screen(ProviderEditor(), lambda result: self._save_provider(result, scope))
+
+    def _provider_action(self, name: str) -> None:
+        scope = "workspace" if name in self.harness.provider_store.load_scope("workspace").providers else "global"
+        self.push_screen(
+            ChoiceModal(
+                f"PROVIDER / {name}",
+                [
+                    ("edit", "Edit connection and Live settings"),
+                    ("activate", "Use in this workspace"),
+                    *([("global", "Set as global default")] if scope == "global" else []),
+                    ("models", "Fetch model IDs"),
+                    ("delete", "Delete connection"),
+                ],
+            ),
+            lambda action: self._provider_choice(name, action),
+        )
+
+    def _provider_choice(self, name: str, action: str | None) -> None:
+        scope = "workspace" if name in self.harness.provider_store.load_scope("workspace").providers else "global"
+        if action == "edit":
+            registry = self.harness.provider_store.load()
+            profile = registry.providers.get(name)
+            if profile is not None:
+                self.push_screen(ProviderEditor(name, profile), lambda result: self._save_provider(result, scope))
+        elif action == "activate":
+            self._launch(lambda: self._activate_provider(name, "workspace"), "Selecting provider...")
+        elif action == "global":
+            self._launch(lambda: self._activate_provider(name, "global"), "Selecting global provider...")
+        elif action == "models":
+            self._launch(lambda: self._provider_models(name), "Fetching models...")
+        elif action == "delete":
+            self._launch(lambda: self._delete_provider(name, scope), "Deleting provider...")
+
+    def _save_provider(self, result: tuple[str, object] | None, scope: str = "workspace") -> None:
+        from nagents.harness.providers import ProviderProfile
+
+        if not result:
+            return
+        name, profile = result
+        if isinstance(profile, ProviderProfile):
+            self._launch(lambda: self._persist_provider(name, profile, scope), "Saving provider...")
+
+    async def _persist_provider(self, name: str, profile: ProviderProfile, scope: str = "workspace") -> None:
+        registry = self.harness.provider_store.load_scope(scope)
+        await self.harness.save_provider(name, profile, registry.revision, scope)
+        await self._notice(
+            f"Saved {name} in {scope} YAML. Environment variable: ${profile.key_env} (if API key authentication)."
+        )
+
+    async def _activate_provider(self, name: str, scope: str = "workspace") -> None:
+        registry = self.harness.provider_store.load_scope(scope)
+        await self.harness.activate_provider(name, registry.revision, scope)
+        await self._notice(f"Using provider connection {name} in {scope} settings.")
+
+    async def _inherit_provider(self) -> None:
+        registry = self.harness.provider_store.load_scope("workspace")
+        await self.harness.inherit_provider(registry.revision)
+        await self._notice("Following the global default in this workspace.")
+
+    async def _delete_provider(self, name: str, scope: str = "workspace") -> None:
+        registry = self.harness.provider_store.load_scope(scope)
+        await self.harness.delete_provider(name, registry.revision, scope)
+        await self._notice(f"Deleted provider connection {name}.")
+
+    async def _provider_models(self, name: str) -> None:
+        models = await self.harness.provider_models(name)
+        if not models:
+            await self._notice("The provider returned no models; enter a model ID manually in Edit.")
+            return
+        self.push_screen(
+            ChoiceModal(f"MODELS / {name}", [(model, model) for model in models]),
+            lambda selected: self._choose_provider_model(name, selected),
+        )
+
+    def _choose_provider_model(self, name: str, model: str | None) -> None:
+        from dataclasses import replace
+
+        if not model:
+            return
+        registry = self.harness.provider_store.load()
+        profile = registry.providers.get(name)
+        if profile is not None:
+            scope = "workspace" if name in self.harness.provider_store.load_scope("workspace").providers else "global"
+            self.push_screen(
+                ProviderEditor(name, replace(profile, model=model)), lambda result: self._save_provider(result, scope)
+            )
 
     def _chosen_provider(self, token: str | None) -> None:
         if not token:

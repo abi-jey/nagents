@@ -159,9 +159,6 @@
 .settings-model-controls button {
   flex: 0 0 auto;
 }
-.settings-model-catalog {
-  margin-top: 14px;
-}
 .settings-model-results {
   max-height: 180px;
   overflow-y: auto;
@@ -238,6 +235,58 @@
 .settings-connection dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+.provider-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.provider-fields:disabled {
+  opacity: .7;
+}
+.provider-fields > label,
+.provider-fields > details label {
+  display: block;
+  margin: 12px 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.provider-fields > label input,
+.provider-fields > label select,
+.provider-fields > details label input:not([type="checkbox"]),
+.provider-fields > details label select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-control);
+  border-radius: 4px;
+  color: var(--text-reading);
+  background: var(--surface-output);
+  font: inherit;
+}
+.provider-editor label small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+.provider-editor .settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.provider-editor input:focus-visible,
+.provider-editor select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.provider-editor .settings-model-controls {
+  margin: 12px 0;
 }
 .settings-reset {
   margin-top: 10px;

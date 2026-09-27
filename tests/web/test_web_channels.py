@@ -330,34 +330,21 @@ def test_config_secrets_atomic_revisions_and_error_redaction(tmp_path: Path, mon
         assert response.status_code == 200 and response.json()["connections"] == []
 
 
-def test_outbound_requires_matching_live_approval_subscriber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_outbound_send_needs_no_approval_subscriber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with site(tmp_path, monkeypatch) as app:
         app.configure()
-        app.submit("privilege")
-        app.idle()
-        assert not app.channels[0].deliveries
         with app.socket() as socket:
             socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
             assert socket.receive_json()["type"] == "snapshot"
             app.submit("privilege")
-            while True:
-                frame = socket.receive_json()
-                if frame.get("record", {}).get("event") == "approval":
-                    break
-            approval = frame["record"]
-            result = app.client.post(
-                "/api/approval",
-                headers=app.headers,
-                json={
-                    "run_id": approval["run_id"],
-                    "approval_id": approval["approval_id"],
-                    "call_id": approval["id"],
-                    "decision": "allow",
-                },
-            )
-            assert result.status_code == 200
             app.idle()
         assert len(app.channels[0].deliveries) == 1 and app.channels[0].deliveries[0].text == "approved outbound"
+        assert app.state.active is None
+        assert not any(
+            isinstance(record, dict) and record.get("event") == "approval"
+            for frame, _ in app.state.bus.ring
+            if (record := frame.get("record")) is not None
+        )
 
 
 def test_disconnect_denies_pending_approval_without_cancelling_run(
@@ -368,7 +355,7 @@ def test_disconnect_denies_pending_approval_without_cancelling_run(
         with app.socket() as socket:
             socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
             socket.receive_json()
-            app.submit("privilege")
+            app.submit("approval")
             while True:
                 frame = socket.receive_json()
                 if frame.get("record", {}).get("event") == "approval":

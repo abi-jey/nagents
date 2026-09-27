@@ -56,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--workspace", "-C", type=Path, help="Working directory (default: current directory)")
     common.add_argument("--config", type=Path, help="Explicit, trusted YAML configuration")
     common.add_argument("--provider", help="Provider name, for example openai, anthropic, or gemini")
+    common.add_argument("--provider-id", help="Named connection from ~/.config/ngn/providers.yaml")
     common.add_argument("--model", "-m", help="Provider model ID")
     common.add_argument("--base-url", help="Provider API endpoint")
     common.add_argument("--api", choices=API_NAMES, help="Provider HTTP API (default: provider-specific auto)")
@@ -494,6 +495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             name: getattr(args, name)
             for name in (
                 "provider",
+                "provider_id",
                 "model",
                 "base_url",
                 "api_key_env",
@@ -516,6 +518,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if hasattr(args, name)
         }
+        if "provider_id" not in overrides and {"provider", "base_url", "api", "auth", "api_key_env"} & overrides.keys():
+            overrides["provider_id"] = ""
+        if "provider" in overrides and not overrides.get("provider_id"):
+            from .harness.providers import KINDS
+
+            selected_kind = str(overrides["provider"])
+            for field, default in (
+                ("auth", "api-key"),
+                ("base_url", ""),
+                ("api", "auto"),
+                ("api_key_env", KINDS[selected_kind].env if selected_kind in KINDS else "OPENAI_API_KEY"),
+            ):
+                overrides.setdefault(field, default)
         if hasattr(args, "plugin"):
             plugins = list(config.plugins)
             for entry in args.plugin:
@@ -527,6 +542,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugins.append(f"{location}:{function}")
             overrides["plugins"] = tuple(plugins)
         config = replace(config, **overrides)
+        if config.provider_id:
+            from .harness.providers import ScopedProviderRegistryStore
+
+            profile = ScopedProviderRegistryStore(config.workspace).load().providers.get(config.provider_id)
+            if profile is None:
+                raise ValueError(f"Unknown provider connection {config.provider_id!r}")
+            config = replace(
+                config,
+                provider=profile.kind,
+                model=overrides.get("model", profile.model),
+                base_url=profile.base_url,
+                api=profile.api,
+                auth=profile.auth,
+                api_key_env=profile.key_env,
+                api_version=profile.api_version,
+            )
         if args.command == "serve":
             if getattr(args, "design", None):
                 raise ValueError(

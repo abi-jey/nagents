@@ -1,5 +1,5 @@
 """
-homelab_agent v2 - Direct HTTP-based LLM integration.
+nagents - Direct HTTP-based LLM integration.
 
 This module provides a clean, dependency-free implementation for
 communicating with LLM providers directly via HTTP. It supports:
@@ -19,7 +19,7 @@ Key features:
 - Persistent batch jobs that survive agent restarts
 
 Example:
-    from homelab_agent.v2 import Provider, ProviderType, Agent, SessionManager
+    from nagents import Provider, ProviderType, Agent, SessionManager
     from pathlib import Path
 
     # Create provider

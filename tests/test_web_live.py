@@ -488,7 +488,7 @@ def test_unavailable_setup_and_demo_remain_configurable(
             revision = await configure(client, headers, key="")
             info = (await client.get("/api/live", headers=headers)).json()
             assert not info["available"] and not info["key_configured"]
-            assert ("demo" if demo else "Connection settings") in info["reason"]
+            assert ("demo" if demo else "Provider connections") in info["reason"]
             refused = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
             assert refused.status_code == 503
             revision = await configure(client, headers)

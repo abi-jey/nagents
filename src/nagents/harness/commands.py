@@ -59,6 +59,7 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("compact", "Compact the current conversation"),
     Command("agent", "Show or switch the agent profile", argument_hint="[name]"),
     Command("model", "Show or switch the model", argument_hint="[model]"),
+    Command("provider", "Manage shared provider connections", argument_hint="[name]"),
     Command("login", "Sign in to a provider: ChatGPT, OpenRouter, or an API key"),
     Command("logout", "Remove ngn's saved ChatGPT and provider logins"),
     Command("plugins", "Show configured and loaded plugins"),

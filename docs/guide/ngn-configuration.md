@@ -47,7 +47,7 @@ poetry run ngn --config examples/harness/config.yaml --demo
 The order is **lowest to highest priority**:
 
 1. Built-in defaults.
-2. A saved provider login (`ngn login`): provider, model, endpoint, API, authentication, and key reference only.
+2. The active named connection in `$XDG_CONFIG_HOME/ngn/providers.yaml`, when present; otherwise a legacy saved provider login (`ngn login`).
 3. `NGN_*` environment defaults.
 4. Global/user YAML.
 5. Trusted project YAML.
@@ -73,11 +73,78 @@ Profile model selection happens at runtime after loading the top-level
 configuration; see [profiles](#agent-profiles) before combining a profile-specific
 `model` with `--model`.
 
+### Shared named provider connections
+
+`ngn` and `ngn serve` share `$XDG_CONFIG_HOME/ngn/providers.yaml` (default
+`~/.config/ngn/providers.yaml`) for global connections. Use **Global settings →
+Provider connections** to edit them and choose the default. **Workspace settings →
+Provider connections** manages connections and a selection for this workspace;
+its YAML lives at `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml`.
+The workspace list includes global connections, which can be selected without
+changing the global default. **Use global default** clears a workspace selection.
+The TUI `/provider` menu also offers both scopes. You can edit either YAML while
+ngn is stopped. A revision prevents an older UI from overwriting another
+process's edits. A separate connection can be selected for a trusted agent profile using
+`profiles.NAME.provider: CONNECTION_NAME`.
+
+The file contains only routing, model, Live preferences and **environment
+variable names**. Use `api_key_env: OPENAI_API_KEY` or
+`api_key_env: ${OPENAI_API_KEY}`; ngn resolves the variable when it makes a
+request. It never writes the key value to this file. Set environment variables
+in the environment of the **ngn process** (including the `ngn serve` process),
+not in the browser. For Microsoft Entra ID, `auth: entra` uses the optional
+`azure-identity` package's `DefaultAzureCredential` chain; its SDK credential
+owns token caching and refresh. OpenAI supports `auth: chatgpt` for ngn's device
+login and `auth: codex` for the library's local Codex discovery (`CODEX_HOME` or
+`~/.codex`). These existing OAuth/Codex files are not copied into the provider
+registry. `auth: auto` prefers an existing ngn ChatGPT login or local Codex
+configuration before an OpenAI API-key environment variable. `auth: auto` is
+available only for OpenAI; `auth: codex` uses only local Codex discovery. OpenAI
+uses a fixed API host; use `openai_compatible` for custom endpoints. GPT-Live with a
+ChatGPT subscription requires a separate OpenAI API key in the configured
+environment variable; subscription tokens are never used as voice API keys.
+
+Example:
+
+```yaml
+version: 1
+revision: "0000000000000000000000000000000000000000000000000000000000000000"
+active: work
+providers:
+  work:
+    kind: foundry
+    model: my-responses-deployment
+    base_url: https://resource.openai.azure.com/openai/v1
+    api: responses
+    auth: entra
+    live:
+      enabled: true
+      model: my-live-deployment
+      backend_model: my-responses-deployment
+      voice: marin
+      backend_mode: hosted
+```
+
+The UI generates a fresh revision on save. Workspace YAML uses the same schema:
+its `active` may reference a global connection, and an empty `active` inherits
+the global default. Other provider types (`openai`,
+`openai_compatible`, `openrouter`, `anthropic`, `gemini`, `litellm`, both Azure
+routes) have their own authentication/API/endpoint requirements; the UI shows
+the allowed fields for the selected type. A provider catalog is a best-effort
+list of model IDs, not a guarantee of access. Providers without a catalog or a
+compatible `/models` endpoint require manual model entry. Saving a named
+connection does not perform network authentication.
+
+Create a named connection in the web UI or TUI and set its environment variable;
+the provider editor does not offer an API-key-value field.
+
 ## File locations and trust
 
 | Item | Location or selection | Behavior |
 | --- | --- | --- |
 | Global/user YAML | `$XDG_CONFIG_HOME/ngn/config.yaml`; defaults to `~/.config/ngn/config.yaml` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
+| Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.yaml`; defaults to `~/.config/ngn/providers.yaml` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
+| Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml` | Workspace-only connections and selection; inherits global connections and default. |
 | Project YAML | `<workspace>/.ngn/config.yaml` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
 | Explicit YAML | `--config /any/path/settings.yaml` | Any filename/location is accepted. Selecting the file explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
@@ -132,6 +199,7 @@ or authentication-route selection. String choices are case-sensitive.
 | Field | YAML type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
 | `provider` | string | `"openai"` | A provider name or alias from the table below. |
+| `provider_id` | string | `""` | Optional named connection from `providers.yaml`; its endpoint, auth and key reference take precedence over flat provider fields. |
 | `model` | string | `"gpt-4.1"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
 | `api` | string | `"auto"` | `"auto"`, `"chat_completions"`, `"responses"`, `"messages"`, or `"completions"`. Selects the request protocol, not the authentication method. |
 | `base_url` | string | `""` | Empty selects the provider default. Otherwise an HTTP(S) API-prefix URL with a hostname, no whitespace, user/password, query parameters, or fragment. Do not include a generation-route suffix. Required explicitly for LiteLLM and Azure. |
@@ -147,6 +215,7 @@ or authentication-route selection. String choices are case-sensitive.
 | `gemini_native` | `gemini`, `google` | `https://generativelanguage.googleapis.com/v1beta`; native Gemini protocol with `api: auto`. |
 | `azure_openai_compatible` | `azure` | Explicit Azure resource endpoint and nonempty `api_version` required. |
 | `azure_openai_compatible_v1` | None | Explicit Azure endpoint required; use the endpoint form expected by that route, rather than assuming the versioned Azure configuration is interchangeable. |
+| `foundry` | None | Azure AI Foundry OpenAI-compatible v1; explicit API prefix; API key or Microsoft Entra ID. |
 | `litellm` | None | Explicit `base_url` required. This is a connection to your gateway, not an embedded proxy or a LiteLLM SDK dependency. |
 
 `api: auto` retains provider-specific routing: Chat Completions for
@@ -311,6 +380,7 @@ string fields:
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
 | `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
+| `provider` | `""` | Optional named connection ID in `providers.yaml`. Empty follows the active connection. The profile's `model`, if set, overrides the connection's model. |
 
 ```yaml
 agent: audit

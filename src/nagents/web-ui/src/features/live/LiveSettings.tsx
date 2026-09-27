@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Icon } from "../../components/Icon.js";
-import { connectionChanged, LiveSettingsController, settingsApi } from "./settings.js";
+import { LiveSettingsController, settingsApi } from "./settings.js";
 import type { LiveSettingsSnapshot } from "./types.js";
 
-export const providerLabel = (name: string) => ({ openai: "OpenAI", openai_compatible: "OpenAI-compatible", azure_openai_compatible_v1: "Azure OpenAI" })[name] || name;
+export const providerLabel = (name: string) => ({ openai: "OpenAI", openai_compatible: "OpenAI-compatible", azure_openai_compatible_v1: "Azure OpenAI", foundry: "Azure AI Foundry" })[name] || name;
 
 export function LiveSettings({ token, assistant, blocked, saved, back }: {
   token: string; assistant?: { provider: string; model: string; agent: string };
@@ -12,10 +12,9 @@ export function LiveSettings({ token, assistant, blocked, saved, back }: {
   const [controller] = useState(() => new LiveSettingsController(settingsApi(token)));
   const heading = useRef<HTMLHeadingElement>(null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  const { values, snapshot, apiKey, clearKey, loading, saving, error, needsRefresh } = state;
+  const { values, snapshot, loading, saving, error, needsRefresh } = state;
   const disabled = blocked || loading || saving;
-  const changed = !!(snapshot && values && connectionChanged(snapshot.values, values));
-  const hasSavedKey = !!snapshot?.key_configured && !changed && !clearKey;
+  const configured = snapshot?.source === "providers";
   useEffect(() => {
     void controller.load(); heading.current?.focus();
     return () => controller.dispose();
@@ -28,23 +27,20 @@ export function LiveSettings({ token, assistant, blocked, saved, back }: {
   return <section className="live-settings-panel" aria-labelledby="live-settings-title">
     <header><div><Icon name="settings" size={17} /><h3 id="live-settings-title" ref={heading} tabIndex={-1}>Connection settings</h3></div><button type="button" disabled={saving} onClick={back} aria-label="Back to conversation" title="Back to conversation"><Icon name="close" size={16} /></button></header>
     <form className="live-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <p className="live-settings-description">Set up your voice connection here. Changes are saved for this workspace and apply to the next conversation.</p>
+      <p className="live-settings-description">Voice uses your active provider connection. Changes to voice preferences apply to the next conversation.</p>
       {loading && <p role="status">Loading connection settings…</p>}
-      {values && snapshot && <fieldset disabled={disabled}>
-        <label className="live-enabled"><span><strong>Enable GPT-Live</strong><small>Ready when you choose to connect.</small></span><input type="checkbox" role="switch" checked={values.enabled} onChange={(event) => controller.edit({ enabled: event.target.checked })} /></label>
+      {!loading && snapshot && !configured && <p role="status" className="live-settings-feedback">Add a provider in Global or Workspace settings → Provider connections to configure GPT-Live.</p>}
+      {values && snapshot && configured && <fieldset disabled={disabled || snapshot.live_supported === false}>
+        {snapshot.live_supported === false ? <p>Selected provider {snapshot.profile_name} does not support GPT-Live. Choose OpenAI or Foundry in Provider connections.</p> : <label className="live-enabled"><span><strong>Enable GPT-Live</strong><small>Ready when you choose to connect.</small></span><input type="checkbox" role="switch" checked={values.enabled} onChange={(event) => controller.edit({ enabled: event.target.checked })} /></label>}
         <label>Reasoning backend<select value={values.backend_mode} onChange={(event) => controller.edit({ backend_mode: event.target.value as "assistant" | "hosted" })}><option value="assistant">Main assistant (selected chat provider)</option><option value="hosted">Hosted Responses (separate assistant)</option></select></label>
         {values.backend_mode === "assistant" && <p className="live-backend-note">{assistant ? `${assistant.agent} · ${assistant.provider}: ${assistant.model}.` : "Uses the main assistant selected in workspace settings."} Voice requests join the selected chat's history and use its tools and approval rules. Change its provider and model in normal workspace settings.</p>}
-        <label>Provider<select value={values.provider} onChange={(event) => controller.edit({ provider: event.target.value })}>{snapshot.providers.map((provider) => <option key={provider} value={provider}>{providerLabel(provider)}</option>)}</select></label>
-        <label>API endpoint<input type="url" autoComplete="off" value={values.base_url} placeholder={values.provider === "azure_openai_compatible_v1" ? "https://your-resource.openai.azure.com/openai/v1" : "https://api.openai.com/v1"} maxLength={2048} onChange={(event) => controller.edit({ base_url: event.target.value })} /><small>{values.provider === "azure_openai_compatible_v1" ? "Your Azure v1 API prefix." : "Leave blank for the standard OpenAI endpoint."}</small></label>
-        <label>API key<input type="password" autoComplete="new-password" spellCheck={false} value={apiKey} placeholder={hasSavedKey ? "Saved key · leave blank to keep" : "Enter your API key"} maxLength={4096} onChange={(event) => controller.key(event.target.value)} aria-describedby="live-key-help" /><small id="live-key-help">{hasSavedKey ? "A key is saved on the server. Its value is never returned to this form." : "Stored on the server. No environment variables needed."}</small></label>
-        {snapshot.key_configured && <label className="live-clear-key"><input type="checkbox" checked={clearKey} onChange={(event) => controller.clearKey(event.target.checked)} />Remove the saved API key</label>}
-        {changed && snapshot.key_configured && <p className="live-key-change">This is a different provider or endpoint. Enter its key; the previous connection's key will be removed when you save.</p>}
-        <div className="live-settings-models"><label>Voice model<input value={values.model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ model: event.target.value })} /></label>{values.backend_mode === "hosted" && <label>Hosted backend model<input value={values.backend_model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ backend_model: event.target.value })} /></label>}</div>
+        <p role="status">Using <strong>{snapshot.profile_name}</strong> ({providerLabel(values.provider)}) from {snapshot.connection_scope === "workspace" ? "Workspace" : "Global"} settings. Change its endpoint and authentication in that scope’s Provider connections. {snapshot.auth === "entra" ? "Microsoft Entra ID resolves through DefaultAzureCredential." : `Live uses $${snapshot.api_key_env || "OPENAI_API_KEY"} in the server environment.`} {snapshot.key_configured ? "Credentials are available." : "Set the variable before connecting."}</p>
+        <div className="live-settings-models"><label>Voice model<input value={values.model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ model: event.target.value })} /></label>{values.backend_mode === "hosted" && <label>Backend model<input value={values.backend_model} autoComplete="off" spellCheck={false} maxLength={128} onChange={(event) => controller.edit({ backend_model: event.target.value })} /></label>}</div>
         <label>Default voice<select value={values.voice} onChange={(event) => controller.edit({ voice: event.target.value })}>{snapshot.voices.map((voice) => <option key={voice} value={voice}>{voice.charAt(0).toUpperCase() + voice.slice(1)}</option>)}</select></label>
       </fieldset>}
       {blocked && <p className="live-settings-feedback" role="status">End the active conversation before changing its connection settings.</p>}
       {error && <p className="live-settings-feedback" role="alert">{error}</p>}
-      <footer><button type="button" disabled={saving || loading} onClick={() => void controller.load()}>{needsRefresh ? "Reload saved settings" : "Reload"}</button><button type="submit" className="live-save" disabled={disabled || !values || needsRefresh}>{saving ? "Saving…" : "Save connection"}</button></footer>
+      <footer><button type="button" disabled={saving || loading} onClick={() => void controller.load()}>{needsRefresh ? "Reload saved settings" : "Reload"}</button>{configured && <button type="submit" className="live-save" disabled={disabled || !values || needsRefresh || snapshot?.live_supported === false}>{saving ? "Saving…" : "Save voice settings"}</button>}</footer>
     </form>
   </section>;
 }

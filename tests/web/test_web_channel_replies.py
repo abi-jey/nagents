@@ -513,7 +513,9 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
         sent = app.channels[0].deliveries[-1]
         assert (sent.destination, sent.thread_id, sent.reply_to) == ("chat-a", "chosen-thread", "chosen-reply")
         assert app.bindings()["chat-a"] == attached
-        assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
+        assert [record["tool"] for record in automatic_events(app)] == (
+            ["channel_list", "channel_send"] if mode == "queued" else ["channel_list"]
+        )
         assert all(record["session_id"] == root for record in automatic_events(app))
 
 

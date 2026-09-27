@@ -36,13 +36,17 @@ export interface LiveSettingsSnapshot {
   key_configured: boolean;
   providers: string[];
   voices: string[];
+  source?: "providers";
+  profile_name?: string;
+  connection_scope?: "global" | "workspace";
+  api_key_env?: string;
+  auth?: string;
+  live_supported?: boolean;
 }
 
 export interface LiveSettingsInput {
   revision: string;
   values: LiveSettingsValues;
-  api_key: string;
-  clear_api_key: boolean;
 }
 
 export interface LiveEvent {

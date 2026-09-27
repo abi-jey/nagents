@@ -1,8 +1,8 @@
 """Strict, secret-free YAML configuration.
 
 Precedence: built-ins < NGN_* environment defaults < user YAML < trusted
-project YAML < explicit YAML. Mapping keys other than ``profiles`` are errors.
-Profiles accept ``mode`` (build/reviewer), ``instructions``, and ``model``.
+project YAML < explicit YAML. Unknown mapping keys are errors.
+Profiles accept ``mode`` (build/reviewer), ``instructions``, ``model`` and ``provider``.
 Python extensions are executable trusted code, not sandboxed plugins.
 """
 
@@ -22,6 +22,7 @@ from nagents.provider import ProviderType
 
 from .credentials import ProviderLoginStore
 from .private_store import ProtectedStoreError
+from .providers import ScopedProviderRegistryStore
 
 PROVIDERS = {provider.value: provider for provider in ProviderType}
 PROVIDERS.update(
@@ -29,6 +30,7 @@ PROVIDERS.update(
     gemini=ProviderType.GEMINI_NATIVE,
     google=ProviderType.GEMINI_NATIVE,
     azure=ProviderType.AZURE_OPENAI_COMPATIBLE,
+    foundry=ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
 )
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
@@ -45,12 +47,14 @@ class AgentProfile:
     mode: str = "build"
     instructions: str = ""
     model: str = ""
+    provider: str = ""
 
 
 @dataclass
 class HarnessConfig:
     workspace: Path
     provider: str = "openai"
+    provider_id: str = ""
     model: str = "gpt-4.1"
     base_url: str = ""
     api_key_env: str = "OPENAI_API_KEY"
@@ -113,14 +117,18 @@ class HarnessConfig:
             raise ValueError(f"api must be one of: {', '.join(API_NAMES)}")
         if self.provider == "litellm" and not self.base_url:
             raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
-        if self.auth not in {"auto", "api-key", "chatgpt"}:
-            raise ValueError("auth must be auto, api-key, or chatgpt")
+        if self.auth not in {"auto", "api-key", "chatgpt", "codex", "entra"}:
+            raise ValueError("auth must be auto, api-key, chatgpt, codex, or entra")
+        if self.auth == "entra" and self.provider not in {"foundry", "azure_openai_compatible_v1"}:
+            raise ValueError("Entra authentication requires Foundry or Azure v1")
         if self.auth == "chatgpt" and (
             self.provider not in {"openai", "openai_compatible"} or self.base_url or self.api != "auto"
         ):
             raise ValueError(
                 "ChatGPT login requires the default OpenAI provider endpoint, without base_url or api overrides"
             )
+        if self.auth == "codex" and (self.provider != "openai" or self.base_url or self.api != "auto"):
+            raise ValueError("Local Codex discovery requires the default OpenAI endpoint and API")
         if not self.model.strip():
             raise ValueError("model must not be empty")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
@@ -140,6 +148,8 @@ class HarnessConfig:
                 raise ValueError("The built-in assistant profile cannot be overridden")
             if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or profile.mode not in {"build", "reviewer"}:
                 raise ValueError(f"Invalid profile {name!r}: mode must be build or reviewer")
+            if profile.provider and not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", profile.provider):
+                raise ValueError(f"Invalid provider connection for profile {name!r}")
         self.profile(self.agent)
         if not 0 < self.shell_timeout <= 600:
             raise ValueError("shell_timeout must be > 0 and <= 600 seconds")
@@ -191,6 +201,23 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
     Only secret-free routing fields are read here. The API key remains in the
     protected store and is resolved lazily by the provider at request time.
     """
+    registry = ScopedProviderRegistryStore(config.workspace).load()
+    if registry.active:
+        profile = registry.providers[registry.active]
+        return (
+            replace(
+                config,
+                provider_id=registry.active,
+                provider=profile.kind,
+                model=profile.model,
+                base_url=profile.base_url,
+                api=profile.api,
+                auth=profile.auth,
+                api_key_env=profile.key_env,
+                api_version=profile.api_version,
+            ),
+            f"Applied provider connection: {registry.active}",
+        )
     try:
         selection = ProviderLoginStore().selection()
     except ProtectedStoreError:
@@ -215,7 +242,9 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
 def load_config(workspace: Path, config_path: Path | None = None, *, trust_project: bool = False) -> HarnessConfig:
     """Load trusted config only; never import plugins or read credential values."""
     config, login_note = _login_defaults(HarnessConfig(workspace=workspace, trust_project=trust_project))
+    model_overridden = os.environ.get("NGN_MODEL") is not None
     strings = {
+        "provider_id",
         "provider",
         "model",
         "base_url",
@@ -247,6 +276,11 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         env_value = os.environ.get(f"NGN_{key.upper()}")
         if env_value is None:
             continue
+        if (
+            key in {"provider", "base_url", "api", "auth", "api_key_env", "api_version"}
+            and os.environ.get("NGN_PROVIDER_ID") is None
+        ):
+            config.provider_id = ""
         if key in booleans:
             if env_value.lower() not in {"true", "false", "1", "0"}:
                 raise ValueError(f"NGN_{key.upper()} must be true/false or 1/0")
@@ -295,7 +329,18 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             raise ValueError(
                 f"Unknown configuration fields in {path}: {', '.join(sorted(unknown))}; use api_key_env, never api_key"
             )
+        if "provider_id" not in values and values.keys() & {
+            "provider",
+            "base_url",
+            "api",
+            "auth",
+            "api_key_env",
+            "api_version",
+        }:
+            config.provider_id = ""
         for key, value in values.items():
+            if key == "model":
+                model_overridden = True
             if key in strings | {"data_dir"}:
                 if not isinstance(value, str):
                     raise ValueError(f"{path}: {key} must be a string")
@@ -332,7 +377,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 if not isinstance(value, dict):
                     raise ValueError(f"{path}: profiles must be a mapping")
                 for name, profile in value.items():
-                    if not isinstance(profile, dict) or profile.keys() - {"mode", "instructions", "model"}:
+                    if not isinstance(profile, dict) or profile.keys() - {"mode", "instructions", "model", "provider"}:
                         raise ValueError(f"{path}: invalid profile {name!r}")
                     if not all(isinstance(item, str) for item in profile.values()):
                         raise ValueError(f"{path}: profile values must be strings")
@@ -350,5 +395,18 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
+    if config.provider_id:
+        registry = ScopedProviderRegistryStore(config.workspace).load()
+        if config.provider_id not in registry.providers:
+            raise ValueError(f"Unknown provider connection {config.provider_id!r}")
+        selected = registry.providers[config.provider_id]
+        config.provider = selected.kind
+        config.base_url = selected.base_url
+        config.api = selected.api
+        config.auth = selected.auth
+        config.api_key_env = selected.key_env
+        config.api_version = selected.api_version
+        if not model_overridden:
+            config.model = selected.model
     config.__post_init__()
     return config

@@ -113,8 +113,10 @@ connector uploads JPEG/PNG as photos (`sendPhoto`) and everything else as
 documents (`sendDocument`), using the text as the caption when it fits Telegram's
 1024-unit limit and sending a separate message otherwise. A connector that does
 not implement outbound files raises a sanitized `ChannelError`, so a model never
-believes an attachment was delivered when it was not. Attachments are explicit,
-approval-covered tool arguments; nothing is read or uploaded silently.
+believes an attachment was delivered when it was not. Attachments are explicit
+tool arguments; nothing is read or uploaded silently. First-party interactive
+`channel_send` calls use the configured channel without an extra approval prompt;
+other custom tools and channel actions still follow normal approval rules.
 
 These use the normal Agent tool registry/executor and plugin hooks. Existing
 tool names are not overwritten. Listener-owned tools and its request-local
@@ -186,8 +188,9 @@ Binding validates and snapshots the descriptor. Rebuild the dispatcher when
 capabilities change; modifying a returned catalog does not change dispatch.
 Declared send restrictions are checked before calling the connector, including
 actual file sizes. A rejected mixed text/file send delivers neither part.
-Receive/render declarations do not become send permissions. Tool approval,
-profiles, destination ownership and provider limits remain independent.
+Receive/render declarations do not become send permissions. Profiles, destination
+ownership and provider limits remain independent of the interactive host-managed
+send behavior.
 
 ### Host-managed dispatch
 
@@ -337,8 +340,10 @@ After admission, bytes are retained for queued execution and normal model histor
 draft removal cannot retract an accepted message. Trash discards staged drafts
 and retains admitted history for restore. Permanent deletion or session clearing
 removes the stored uploads. Browser history and event streams expose filename/type/
-size metadata rather than attachment bytes, and there is no direct upload-media
-serving endpoint. Attached content and filenames are untrusted user input, and
+size metadata rather than attachment bytes. The authenticated, same-session
+`GET /api/sessions/{root}/uploads/{id}/preview` serves only admitted images for
+inline browser previews; drafts and PDFs cannot be read through it. Attached
+content and filenames are untrusted user input, and
 uploading never authorizes forwarding files to an external connector.
 
 ### Durable local delivery foundation

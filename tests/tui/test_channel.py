@@ -10,6 +10,7 @@ import pytest
 from textual.widgets import Static
 
 from nagents.channels.local_delivery import discard_notification
+from nagents.channels.types import ChannelDelivery
 from nagents.channels.types import ChannelError
 from nagents.channels.types import ChannelFile
 from nagents.channels.types import ChannelSend
@@ -25,7 +26,6 @@ from nagents.session import SessionManager
 from nagents.tui import NagentsApp
 from nagents.tui.channel import TuiChannelHost
 from nagents.tui.delivery import DeliveryWidget
-from nagents.tui.screens import ApprovalModal
 from nagents.tui.widgets import ToolCard
 from nagents.tui.widgets import Turn
 from nagents.types import Message
@@ -260,7 +260,7 @@ def test_delivery_arrival_and_compaction_preserve_inspected_card(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
-        awaiting_approval = asyncio.Event()
+        sending = asyncio.Event()
         release = asyncio.Event()
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
@@ -273,18 +273,22 @@ def test_delivery_arrival_and_compaction_preserve_inspected_card(
             else:
                 yield TextDoneEvent(text="final")
 
-        async def delayed_approval(request: ApprovalRequest) -> bool:
-            awaiting_approval.set()
-            await asyncio.wait_for(release.wait(), HANG_GUARD)
-            return True
-
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
         app = NagentsApp(harness)
         async with app.run_test() as pilot:
             await idle(app, pilot)
-            harness.approval_handler = delayed_approval
+            host = app._channel_host
+            assert host is not None
+            original = host.channel.send
+
+            async def delayed_send(message: ChannelSend) -> ChannelDelivery:
+                sending.set()
+                await asyncio.wait_for(release.wait(), HANG_GUARD)
+                return await original(message)
+
+            monkeypatch.setattr(host.channel, "send", delayed_send)
             await send(app, pilot, "deliver")
-            await asyncio.wait_for(awaiting_approval.wait(), HANG_GUARD)
+            await asyncio.wait_for(sending.wait(), HANG_GUARD)
             async with asyncio.timeout(HANG_GUARD):
                 while not app.query(ToolCard):
                     await pilot.pause(0.01)
@@ -349,14 +353,14 @@ def test_files_rejected_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     asyncio.run(scenario())
 
 
-def test_denial_focus_and_no_journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_valid_delivery_needs_no_approval_and_keeps_focus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
                 yield ToolCallEvent(
                     id="send",
                     name="channel_send",
-                    arguments={"channel": "builtin.tui", "destination": harness.session_id, "text": "denied"},
+                    arguments={"channel": "builtin.tui", "destination": harness.session_id, "text": "delivered"},
                 )
             else:
                 yield TextDoneEvent(text="done")
@@ -369,15 +373,12 @@ def test_denial_focus_and_no_journal(tmp_path: Path, monkeypatch: pytest.MonkeyP
             conversation = app.query_one("#conversation")
             assert app.focused is conversation
             app._launch(lambda: app._send("send"), "Working")
-            async with asyncio.timeout(HANG_GUARD):
-                while not isinstance(app.screen, ApprovalModal):
-                    await pilot.pause(0.01)
-            await pilot.press("escape")
             await idle(app, pilot)
             assert app.focused is conversation
-            assert not app.query(DeliveryWidget)
+            assert app.query_one(ToolCard).has_class("complete")
+            assert len(app.query(DeliveryWidget)) == 1
             assert app._channel_host is not None
-            assert not (await app._channel_host.journal.history(harness.session_id)).current
+            assert len((await app._channel_host.journal.history(harness.session_id)).current) == 1
 
     asyncio.run(scenario())
 

@@ -1,5 +1,6 @@
 """GPT-Live voice configuration and same-origin HTTP routes."""
 
+import logging
 from collections.abc import Awaitable
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from nagents.agent import Agent
+from nagents.harness.connection import build_live_provider
 from nagents.live import LiveConfig
 from nagents.provider import FoundryProvider
 from nagents.provider import Provider
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
     from .live_settings import LiveSettings
     from .service import WebState
 
+logger = logging.getLogger("uvicorn.error")
 SessionId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
 Cursor = Annotated[int, Query(ge=0, le=2**53 - 1)]
 
@@ -49,6 +52,13 @@ class SessionInput(BaseModel):
 def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
     """Local readiness only: never probe the provider, read a login, or create an agent."""
     values = connection.values
+    if connection.profile is not None and connection.profile.kind not in {
+        "openai",
+        "openai_compatible",
+        "foundry",
+        "azure_openai_compatible_v1",
+    }:
+        return "The active provider does not support GPT-Live. Select an OpenAI or Foundry connection."
     if demo:
         return "GPT-Live is unavailable in offline demo mode. Restart ngn serve without --demo."
     if not values.enabled:
@@ -56,7 +66,12 @@ def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
     if values.provider == "azure_openai_compatible_v1" and not values.base_url:
         return "The Azure v1 Live provider requires an API base URL. Open Connection settings to set it."
     if not connection.key_configured:
-        return "Add a Live API key in Connection settings. ChatGPT/Codex login does not authorize Live."
+        if connection.profile is not None:
+            return (
+                f"Set ${connection.profile.key_env} in the ngn serve environment, then restart the server. "
+                "ChatGPT/Codex login does not authorize Live."
+            )
+        return "Open Global or Workspace settings → Provider connections to configure Live credentials."
     return ""
 
 
@@ -113,7 +128,9 @@ def create_agent(
     )
     key = connection.api_key.get_secret_value()
     provider: Provider
-    if values.provider == "azure_openai_compatible_v1":
+    if connection.profile is not None:
+        provider = build_live_provider(connection.profile, options, key)
+    elif values.provider in {"azure_openai_compatible_v1", "foundry"}:
         provider = FoundryProvider(
             base_url=values.base_url,
             model=values.model,
@@ -169,7 +186,14 @@ def register(
 
     @app.post("/api/live/settings")
     async def save_settings(body: LiveSettingsInput) -> dict[str, object]:
-        return await settings().change(body)
+        result = await settings().change(body)
+        logger.info(
+            "Live settings saved: provider=%s source=%s enabled=%s",
+            body.values.provider,
+            result.get("source", "legacy"),
+            body.values.enabled,
+        )
+        return result
 
     @app.post("/api/live/sessions", status_code=201)
     async def create(body: SessionInput) -> dict[str, object]:
@@ -182,6 +206,12 @@ def register(
                 reason = unavailable_reason(connection, demo=current.demo)
                 if reason:
                     raise HTTPException(503, reason)
+                logger.info(
+                    "Live connection requested: provider=%s profile=%s voice=%s",
+                    connection.values.provider,
+                    connection.profile_name or "(legacy)",
+                    body.voice or connection.values.voice,
+                )
                 if connection.values.backend_mode == "assistant":
                     if not body.session_id:
                         raise HTTPException(422, "Select an assistant conversation before connecting GPT-Live.")
@@ -195,7 +225,9 @@ def register(
                             409,
                             "This chat uses a pinned designed agent. Select a main assistant chat for voice.",
                         )
-                return await service().create_stream(body.voice)
+                result = await service().create_stream(body.voice)
+                logger.info("Live connection created: session=%s", result.get("session_id", ""))
+                return result
 
     @app.websocket("/api/live/sessions/{session_id}/audio")
     async def audio(socket: WebSocket, session_id: SessionId) -> None:
@@ -207,4 +239,6 @@ def register(
 
     @app.post("/api/live/sessions/{session_id}/close")
     async def close(session_id: SessionId) -> dict[str, object]:
-        return await service().close(session_id)
+        result = await service().close(session_id)
+        logger.info("Live connection closed: session=%s", session_id)
+        return result

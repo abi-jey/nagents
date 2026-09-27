@@ -34,6 +34,7 @@ from nagents.types import TextContent
 
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
+from .connection import build_provider
 from .credentials import ProviderLogin
 from .credentials import ProviderLoginStore
 from .execution import ExecutionBridge
@@ -45,6 +46,9 @@ from .execution import observe_host_event
 from .execution import publish_anchor
 from .provider import DemoCompaction
 from .provider import HarnessProvider
+from .providers import ProviderProfile
+from .providers import ProviderRegistry
+from .providers import ScopedProviderRegistryStore
 from .skills import HarnessSkillDiscoverer
 from .subagents import SubagentManager
 from .tool_config import HarnessToolRegistry
@@ -153,6 +157,22 @@ class Harness:
         self.loaded_plugins: list[str] = []
         self.openai_auth = OpenAIAuth()
         self.login_store = ProviderLoginStore()
+        self.provider_store = ScopedProviderRegistryStore(self.workspace)
+        self.providers = self.provider_store.load()
+        initial_profile = config.profile(config.agent)
+        if initial_profile.provider:
+            selected = self.providers.providers.get(initial_profile.provider)
+            if selected is None:
+                raise ValueError(f"Unknown provider connection {initial_profile.provider!r} for agent {config.agent!r}")
+            config.provider_id = initial_profile.provider
+            config.provider = selected.kind
+            config.base_url = selected.base_url
+            config.api = selected.api
+            config.auth = selected.auth
+            config.api_key_env = selected.key_env
+            config.api_version = selected.api_version
+            config.model = selected.model
+        self._built_provider_profile = self.providers.providers.get(config.provider_id)
         self._api_model = config.model
         self._initialized = False
         self._session_created = False
@@ -166,7 +186,13 @@ class Harness:
         self.tools = CodingTools(self)
         self.tool_settings = WorkspaceTools(self.workspace)
         self.agent = Agent(
-            provider=HarnessProvider(config, self.login_store),
+            provider=(
+                build_provider(
+                    replace(self.providers.providers[config.provider_id], model=config.model), config, self.openai_auth
+                )
+                if config.provider_id and not config.demo
+                else HarnessProvider(config, self.login_store if not config.provider_id else None)
+            ),
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
             streaming=True,
             max_tool_rounds=config.max_tool_rounds,
@@ -307,6 +333,7 @@ class Harness:
                     self.refresh_instructions()
                     if (
                         not self.config.demo
+                        and not self.config.provider_id
                         and self.config.provider in {"openai", "openai_compatible"}
                         and not self.config.base_url
                         and self.config.api == "auto"
@@ -633,6 +660,10 @@ class Harness:
     async def set_agent(self, name: str) -> None:
         with self.operation("set agent"):
             profile = self.config.profile(name)
+            if profile.provider:
+                await self._select_provider(profile.provider)
+            elif self.config.provider_id and self.config.provider_id != self.providers.active and self.providers.active:
+                await self._select_provider(self.providers.active)
             self.config.agent = name
             if profile.model:
                 self.config.model = profile.model
@@ -657,11 +688,20 @@ class Harness:
         config.validate()
         if config.demo is not self.config.demo:
             raise ValueError("Provider overrides cannot change demo mode")
-        identity = ("provider", "base_url", "api", "auth", "api_key_env")
+        identity = ("provider_id", "provider", "base_url", "api", "auth", "api_key_env", "api_version")
         changing = any(getattr(config, name) != getattr(self.config, name) for name in identity)
+        if config.provider_id and self._built_provider_profile is not None:
+            current = self.provider_store.load().providers.get(config.provider_id)
+            changing = changing or (current is not None and current.scope != self._built_provider_profile.scope)
         if changing:
             replacement: Provider
-            if config.auth == "chatgpt":
+            if config.provider_id:
+                registry = self.provider_store.load()
+                profile = registry.providers.get(config.provider_id)
+                if profile is None:
+                    raise ValueError("Named provider connection was removed; reload settings")
+                replacement = build_provider(replace(profile, model=config.model), config, self.openai_auth)
+            elif config.auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
                     self._api_model = self.agent.provider.model
                 replacement = OpenAIProvider(self.openai_auth.credentials, model=config.model)
@@ -671,10 +711,134 @@ class Harness:
                 await self.agent.close()
             finally:
                 self.agent.provider = replacement
+            self._built_provider_profile = profile if config.provider_id else None
         for name in identity:
             setattr(self.config, name, getattr(config, name))
         self.config.model = config.model
         self.agent.provider.model = config.model
+
+    async def _select_provider(self, name: str) -> None:
+        registry = self.provider_store.load()
+        profile = registry.providers.get(name)
+        if profile is None:
+            raise ValueError(f"Unknown provider connection {name!r}")
+        candidate = replace(
+            self.config,
+            provider_id=name,
+            provider=profile.kind,
+            model=profile.model,
+            base_url=profile.base_url,
+            api=profile.api,
+            auth=profile.auth,
+            api_key_env=profile.key_env,
+            api_version=profile.api_version,
+        )
+        await self.reconfigure_provider(candidate)
+        self.providers = registry
+
+    async def activate_provider(self, name: str, revision: str, scope: str = "workspace") -> ProviderRegistry:
+        with self.operation("select provider"):
+            current = self.provider_store.load_scope(scope)
+            if current.revision != revision or name not in self.provider_store.load().providers:
+                raise ValueError("Provider configuration changed; reload before selecting")
+            if scope == "global" and name not in current.providers:
+                raise ValueError("Select global connections in global settings")
+            if not self.config.profile(self.config.agent).provider and (
+                scope == "workspace" or not self.provider_store.load_scope("workspace").active
+            ):
+                await self._select_provider(name)
+            saved = self.provider_store.save_scope(
+                ProviderRegistry(active=name, providers=current.providers), expected=revision, scope=scope
+            )
+            self.providers = self.provider_store.load()
+            return saved
+
+    async def inherit_provider(self, revision: str) -> ProviderRegistry:
+        """Drop the workspace selection and follow the global active connection."""
+        with self.operation("inherit provider"):
+            current = self.provider_store.load_scope("workspace")
+            if revision != current.revision:
+                raise ValueError("Provider configuration changed; reload before selecting")
+            global_active = self.provider_store.load_scope("global").active
+            if not global_active:
+                raise ValueError("No global provider default is configured")
+            if not self.config.profile(self.config.agent).provider:
+                await self._select_provider(global_active)
+            saved = self.provider_store.save_scope(
+                ProviderRegistry(providers=current.providers), expected=revision, scope="workspace"
+            )
+            self.providers = self.provider_store.load()
+            return saved
+
+    async def save_provider(
+        self, name: str, profile: ProviderProfile, revision: str, scope: str = "workspace"
+    ) -> ProviderRegistry:
+        from .providers import NAME
+
+        with self.operation("save provider"):
+            current = self.provider_store.load_scope(scope)
+            if current.revision != revision:
+                raise ValueError("Provider configuration changed; reload before saving")
+            if not NAME.fullmatch(name):
+                raise ValueError("Invalid provider connection name")
+            other_scope = "global" if scope == "workspace" else "workspace"
+            if name not in current.providers and name in self.provider_store.load_scope(other_scope).providers:
+                raise ValueError("Connection name already exists in the other scope")
+            profile.validate()
+            entries = {**current.providers, name: profile}
+            active = current.active or (name if not self.provider_store.load().active else "")
+            saved = self.provider_store.save_scope(
+                ProviderRegistry(active=active, providers=entries), expected=revision, scope=scope
+            )
+            self.providers = self.provider_store.load()
+            agent_provider = self.config.profile(self.config.agent).provider
+            if (
+                agent_provider == name or (not agent_provider and self.providers.active == name)
+            ) and self.providers.providers[name] == profile:
+                await self._select_provider(name)
+            return saved
+
+    async def delete_provider(self, name: str, revision: str, scope: str = "workspace") -> ProviderRegistry:
+        with self.operation("delete provider"):
+            current = self.provider_store.load_scope(scope)
+            if current.revision != revision or name not in current.providers:
+                raise ValueError("Provider configuration changed; reload before deleting")
+            if (
+                name == current.active
+                or name == self.provider_store.load().active
+                or any(profile.provider == name for profile in self.config.profiles.values())
+            ):
+                raise ValueError("Select another connection and remove agent bindings before deleting this provider")
+            entries = {key: profile for key, profile in current.providers.items() if key != name}
+            saved = self.provider_store.save_scope(
+                ProviderRegistry(active=current.active, providers=entries), expected=revision, scope=scope
+            )
+            self.providers = self.provider_store.load()
+            return saved
+
+    async def provider_models(self, name: str) -> list[str]:
+        registry = self.provider_store.load()
+        profile = registry.providers.get(name)
+        if profile is None:
+            raise ValueError(f"Unknown provider connection {name!r}")
+        candidate = replace(
+            self.config,
+            provider_id=name,
+            provider=profile.kind,
+            model=profile.model,
+            base_url=profile.base_url,
+            api=profile.api,
+            auth=profile.auth,
+            api_key_env=profile.key_env,
+            api_version=profile.api_version,
+        )
+        provider = build_provider(profile, candidate, self.openai_auth)
+        try:
+            if isinstance(provider, HarnessProvider):
+                provider.credentials()
+            return await provider.get_model_list()
+        finally:
+            await provider.close()
 
     async def _use_chatgpt(self) -> None:
         if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
@@ -761,6 +925,20 @@ class Harness:
                 raise ValueError("Logout is disabled in offline demo; your saved credentials were not touched.")
             self.openai_auth.logout()
             self.login_store.remove()
+            if self.config.provider_id:
+                profile = self.provider_store.load().providers[self.config.provider_id]
+                self.config.auth = profile.auth
+                if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
+                    replacement = (
+                        build_provider(profile, self.config, self.openai_auth)
+                        if profile.auth != "chatgpt"
+                        else OpenAIProvider(self.openai_auth.credentials, model=profile.model)
+                    )
+                    try:
+                        await self.agent.close()
+                    finally:
+                        self.agent.provider = replacement
+                return
             self.config.auth = "api-key"
             if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
                 self.config.model = self._api_model
@@ -773,6 +951,19 @@ class Harness:
     def auth_status(self) -> str:
         if self.config.demo:
             return "Offline demo; authentication is disabled"
+        if self.config.provider_id:
+            profile = self.provider_store.load().providers[self.config.provider_id]
+            if profile.auth == "entra":
+                return "Microsoft Entra ID via DefaultAzureCredential (token resolved at request time)"
+            if profile.auth == "codex" or (
+                profile.auth == "auto"
+                and isinstance(self.agent.provider, OpenAIProvider)
+                and self.agent.provider.uses_chatgpt_auth
+                and not self.openai_auth.logged_in()
+            ):
+                return "Local Codex authentication (resolved from CODEX_HOME or ~/.codex)"
+            if profile.auth == "api-key":
+                return f"API key from ${profile.key_env} (value never displayed)"
         if (
             isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth
         ) or self.config.auth == "chatgpt":
@@ -812,7 +1003,7 @@ class Harness:
                 f"Authentication: {self.auth_status()}",
                 f"Theme: {self.config.theme}; background: {self.config.theme_background}; animations: {self.config.animations}",
                 f"Composer: submit_mode={self.config.submit_mode}; tab_action={self.config.tab_action}",
-                f"Agent: {self.config.agent} ({self.mode}); profiles: build, agent, reviewer{''.join(', ' + name for name in self.config.profiles)}",
+                f"Agent: {self.config.agent} ({self.mode}); profiles: {', '.join(self.config.profile_names)}",
                 f"Subagents: max depth {self.config.max_subagent_depth} (root=0); shared 3 concurrent / 8 executions per run",
                 f"Dictation: {'enabled (explicit start only)' if self.config.dictation_enabled else 'disabled'}; "
                 f"model: {self.config.dictation_model}; endpoint: {self.config.dictation_base_url}; "
@@ -828,7 +1019,8 @@ class Harness:
                 *self.tools.skill_diagnostics,
                 f"Instructions: {', '.join(self.instructions) or 'none'}",
                 f"Session database: {self.agent.session.db_path}",
-                "Policy: read-only reviewer; build edits/custom tools require approval; shell always asks and is NOT SANDBOXED.",
+                "Policy: read-only reviewer; build edits and other custom tools require approval; "
+                "host-managed interactive channel_send does not; shell always asks and is NOT SANDBOXED.",
                 "File tools: bounded UTF-8, no symlinks/credentials/.git; create parents with an explicitly approved shell command.",
                 *self.diagnostics,
             ]

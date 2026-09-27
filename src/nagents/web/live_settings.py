@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 import re
 import secrets
 import sqlite3
@@ -10,6 +12,7 @@ from contextlib import asynccontextmanager
 from contextlib import closing
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -27,6 +30,11 @@ from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 
+from nagents.harness.connection import live_auth_available
+from nagents.harness.providers import LiveProfile
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live import LiveConfig
 from nagents.provider.auth import validate_prefix
 
@@ -41,6 +49,7 @@ if TYPE_CHECKING:
 
 LIVE_VOICES = ("marin", "cedar")
 LIVE_PROVIDERS = ("openai", "openai_compatible", "azure_openai_compatible_v1")
+NAMED_LIVE_PROVIDERS = (*LIVE_PROVIDERS, "foundry")
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 MAX_SETTINGS_BYTES = 8192
 MAX_KEY_BYTES = 4096
@@ -54,7 +63,7 @@ class LiveValues(BaseModel):
 
     enabled: bool
     backend_mode: Literal["assistant", "hosted"] = "assistant"
-    provider: Literal["openai", "openai_compatible", "azure_openai_compatible_v1"]
+    provider: Literal["openai", "openai_compatible", "azure_openai_compatible_v1", "foundry"]
     model: ModelId
     backend_model: ModelId
     voice: Literal["marin", "cedar"]
@@ -130,19 +139,33 @@ class LiveConnection:
     values: LiveValues
     revision: str
     api_key: SecretStr = field(repr=False)
+    profile: ProviderProfile | None = field(default=None, repr=False)
+    profile_name: str = ""
+    credential_available: bool = False
+    connection_scope: str = ""
 
     @property
     def key_configured(self) -> bool:
-        return bool(self.api_key.get_secret_value())
+        return bool(self.api_key.get_secret_value()) or self.credential_available
 
     def snapshot(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "values": self.values.model_dump(),
             "revision": self.revision,
             "key_configured": self.key_configured,
             "providers": list(LIVE_PROVIDERS),
             "voices": list(LIVE_VOICES),
         }
+        if self.profile is not None:
+            result.update(
+                source="providers",
+                profile_name=self.profile_name,
+                api_key_env=self.profile.key_env,
+                auth=self.profile.auth,
+                live_supported=self.profile.kind in NAMED_LIVE_PROVIDERS,
+                connection_scope=self.connection_scope,
+            )
+        return result
 
 
 def _public_values(values: LiveValues, *keys: SecretStr) -> None:
@@ -162,7 +185,14 @@ class LiveSettings:
     Reads can continue while a call uses that captured configuration.
     """
 
-    def __init__(self, db_path: Path, *, demo: bool, active: Callable[[], str]) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        demo: bool,
+        active: Callable[[], str],
+        providers: ScopedProviderRegistryStore | None = None,
+    ) -> None:
         self.db_path = db_path
         self.demo = demo
         self.active = active
@@ -171,7 +201,50 @@ class LiveSettings:
         self._loaded = False
         self._tasks: set[asyncio.Task[object]] = set()
         self._admission: ContextVar[LiveConnection] = ContextVar("live_connection")
+        self.providers = providers or ScopedProviderRegistryStore(db_path.parent)
         self._session: ContextVar[str] = ContextVar("live_chat_session")
+
+    def _named(self) -> LiveConnection | None:
+        registry = self.providers.load()
+        if not registry.active:
+            return None
+        profile = registry.providers[registry.active]
+        local = self.providers.load_scope("workspace")
+        global_registry = self.providers.load_scope("global")
+        scope = "workspace" if registry.active in local.providers else "global"
+        revision = hashlib.sha256(
+            f"{registry.active}:{scope}:{global_registry.revision}:{local.revision}".encode()
+        ).hexdigest()
+        if profile.kind not in NAMED_LIVE_PROVIDERS:
+            return LiveConnection(
+                LiveValues.defaults().model_copy(update={"enabled": False}),
+                revision,
+                SecretStr(""),
+                profile=profile,
+                profile_name=registry.active,
+                connection_scope=scope,
+            )
+        live = profile.live
+        values = LiveValues.model_validate(
+            {
+                "enabled": live.enabled,
+                "backend_mode": live.backend_mode,
+                "provider": profile.kind,
+                "model": live.model,
+                "backend_model": live.backend_model,
+                "voice": live.voice,
+                "base_url": profile.base_url,
+            }
+        )
+        return LiveConnection(
+            values,
+            revision,
+            SecretStr(os.environ.get(profile.key_env, "")),
+            profile=profile,
+            profile_name=registry.active,
+            credential_available=live_auth_available(profile),
+            connection_scope=scope,
+        )
 
     async def _owned(self, operation: Coroutine[object, object, T]) -> T:
         task = asyncio.create_task(operation)
@@ -237,6 +310,10 @@ class LiveSettings:
         if self._closed:
             raise HTTPException(503, "Live connection settings are unavailable.")
 
+        if self._named() is not None:
+            self._loaded = True
+            return
+
         async def initialize() -> None:
             def create(db: sqlite3.Connection) -> None:
                 db.execute(
@@ -271,6 +348,9 @@ class LiveSettings:
 
     async def connection(self) -> LiveConnection:
         self._ready()
+        named = self._named()
+        if named is not None:
+            return named
 
         async def read() -> LiveConnection:
             try:
@@ -297,6 +377,39 @@ class LiveSettings:
             self._busy = False
 
     async def change(self, body: LiveSettingsInput) -> dict[str, object]:
+        if self._named() is not None:
+            with self._idle():
+                if body.api_key.get_secret_value() or body.clear_api_key:
+                    raise HTTPException(422, "Named provider connections use environment variables, not saved keys.")
+                selected = self.providers.load()
+                name = selected.active
+                scope = "workspace" if name in self.providers.load_scope("workspace").providers else "global"
+                registry = self.providers.load_scope(scope)
+                profile = registry.providers[name]
+                current = self._named()
+                if current is None or current.revision != body.revision:
+                    raise HTTPException(409, "Provider connection changed. Reload settings before saving.")
+                if body.values.provider != profile.kind or body.values.base_url != profile.base_url:
+                    raise HTTPException(422, "Edit provider type and API endpoint in Provider settings.")
+                live = LiveProfile(
+                    enabled=body.values.enabled,
+                    model=body.values.model,
+                    backend_model=body.values.backend_model,
+                    voice=body.values.voice,
+                    backend_mode=body.values.backend_mode,
+                )
+                updated = ProviderProfile(**{**asdict(profile), "live": live})
+                updated.validate()
+                await self._owned(
+                    asyncio.to_thread(
+                        self.providers.save_scope,
+                        ProviderRegistry(active=registry.active, providers={**registry.providers, name: updated}),
+                        expected=registry.revision,
+                        scope=scope,
+                    )
+                )
+                return (await self.connection()).snapshot()
+
         def save(db: sqlite3.Connection) -> LiveConnection:
             current = self._read(db)
             if current.revision != body.revision:

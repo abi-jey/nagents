@@ -1,0 +1,391 @@
+"""Named ngn provider connections shared by terminal and web clients.
+
+Only routing and environment-variable *names* are persisted. OAuth caches and
+Codex's own configuration are discovered at runtime and are not copied here.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import secrets
+import stat
+import tempfile
+from dataclasses import asdict
+from dataclasses import dataclass
+from dataclasses import field
+from pathlib import Path
+
+import yaml
+
+from nagents.provider.auth import validate_prefix
+
+NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
+ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+REVISION = re.compile(r"[0-9a-f]{64}\Z")
+MAX_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True)
+class ProviderKind:
+    label: str
+    auth: tuple[str, ...]
+    apis: tuple[str, ...]
+    env: str
+    endpoint_required: bool = False
+    version_required: bool = False
+    live: bool = False
+
+
+KINDS: dict[str, ProviderKind] = {
+    "openai": ProviderKind(
+        "OpenAI",
+        ("auto", "api-key", "chatgpt", "codex"),
+        ("auto", "responses", "chat_completions"),
+        "OPENAI_API_KEY",
+        live=True,
+    ),
+    "openai_compatible": ProviderKind(
+        "OpenAI-compatible",
+        ("api-key",),
+        ("auto", "responses", "chat_completions", "messages"),
+        "OPENAI_API_KEY",
+        endpoint_required=True,
+        live=True,
+    ),
+    "foundry": ProviderKind(
+        "Azure AI Foundry",
+        ("entra", "api-key"),
+        ("responses", "chat_completions"),
+        "FOUNDRY_API_KEY",
+        endpoint_required=True,
+        live=True,
+    ),
+    "azure_openai_compatible_v1": ProviderKind(
+        "Azure OpenAI v1",
+        ("entra", "api-key"),
+        ("auto", "responses", "chat_completions"),
+        "AZURE_OPENAI_API_KEY",
+        endpoint_required=True,
+        live=True,
+    ),
+    "azure_openai_compatible": ProviderKind(
+        "Azure OpenAI (versioned)",
+        ("api-key",),
+        ("auto", "chat_completions"),
+        "AZURE_OPENAI_API_KEY",
+        endpoint_required=True,
+        version_required=True,
+    ),
+    "openrouter": ProviderKind(
+        "OpenRouter", ("api-key",), ("auto", "chat_completions", "responses"), "OPENROUTER_API_KEY"
+    ),
+    "anthropic": ProviderKind("Anthropic", ("api-key",), ("auto", "messages"), "ANTHROPIC_API_KEY"),
+    "gemini": ProviderKind("Gemini", ("api-key",), ("auto",), "GEMINI_API_KEY"),
+    "litellm": ProviderKind(
+        "LiteLLM",
+        ("api-key",),
+        ("auto", "chat_completions", "responses", "messages"),
+        "LITELLM_API_KEY",
+        endpoint_required=True,
+    ),
+}
+
+
+def env_name(value: str) -> str:
+    """Accept NAME or ${NAME}; reject literal keys and other interpolation."""
+    if value.startswith("${") and value.endswith("}"):
+        value = value[2:-1]
+    if not ENV.fullmatch(value):
+        raise ValueError("Use an environment variable name or ${NAME}, never a literal API key")
+    return value
+
+
+@dataclass(frozen=True)
+class LiveProfile:
+    enabled: bool = False
+    model: str = "gpt-live-1"
+    backend_model: str = "gpt-5.6-luna"
+    voice: str = "marin"
+    backend_mode: str = "hosted"
+
+    def validate(self) -> None:
+        if not isinstance(self.voice, str) or not isinstance(self.backend_mode, str):
+            raise ValueError("Invalid Live voice or backend mode")
+        if (
+            type(self.enabled) is not bool
+            or self.voice not in {"marin", "cedar"}
+            or self.backend_mode not in {"hosted", "assistant"}
+        ):
+            raise ValueError("Invalid Live settings")
+        for model in (self.model, self.backend_model):
+            if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}", model):
+                raise ValueError("Invalid Live model ID")
+
+
+@dataclass(frozen=True)
+class ProviderProfile:
+    kind: str
+    model: str
+    auth: str = "api-key"
+    base_url: str = ""
+    api: str = "auto"
+    api_key_env: str = ""
+    api_version: str = ""
+    scope: str = "https://ai.azure.com/.default"
+    live: LiveProfile = field(default_factory=LiveProfile)
+
+    def validate(self) -> None:
+        if any(
+            not isinstance(getattr(self, name), str)
+            for name in ("kind", "model", "auth", "base_url", "api", "api_key_env", "api_version", "scope")
+        ) or not isinstance(self.live, LiveProfile):
+            raise ValueError("Provider fields must be strings and Live settings must be a mapping")
+        spec = KINDS.get(self.kind)
+        if spec is None or self.auth not in spec.auth or self.api not in spec.apis:
+            raise ValueError("Unsupported provider, authentication mode, or API")
+        if (
+            not isinstance(self.model, str)
+            or not self.model.strip()
+            or len(self.model) > 200
+            or not self.model.isprintable()
+        ):
+            raise ValueError("Invalid model ID")
+        if spec.endpoint_required and not self.base_url:
+            raise ValueError("This provider requires an API prefix URL")
+        if self.kind == "openai" and self.base_url:
+            raise ValueError("OpenAI uses its fixed API host; choose OpenAI-compatible for a custom endpoint")
+        if self.base_url:
+            validate_prefix(self.base_url)
+            if len(self.base_url) > 2048:
+                raise ValueError("API prefix is too long")
+        if spec.version_required and not self.api_version:
+            raise ValueError("This Azure route requires an API version")
+        if self.api_version and not spec.version_required:
+            raise ValueError("This provider does not use an API version")
+        if self.api_version and (len(self.api_version) > 100 or not re.fullmatch(r"[A-Za-z0-9_.-]+", self.api_version)):
+            raise ValueError("Invalid API version")
+        if self.kind not in {"foundry", "azure_openai_compatible_v1"} and self.scope != "https://ai.azure.com/.default":
+            raise ValueError("Only Foundry accepts a token scope")
+        if not self.scope or len(self.scope) > 256 or any(char.isspace() for char in self.scope):
+            raise ValueError("Invalid token scope")
+        if self.auth in {"api-key", "auto"} or (self.kind == "openai" and self.auth in {"chatgpt", "codex"}):
+            env_name(self.api_key_env or spec.env)
+        elif self.api_key_env:
+            raise ValueError("This authentication mode does not use an API key")
+        if self.auth in {"chatgpt", "codex"} and (self.base_url or self.api != "auto"):
+            raise ValueError("ChatGPT/Codex requires the default endpoint and API")
+        self.live.validate()
+        if not spec.live and self.live != LiveProfile():
+            raise ValueError("This provider does not support GPT-Live")
+
+    @property
+    def key_env(self) -> str:
+        return env_name(self.api_key_env or KINDS[self.kind].env)
+
+
+@dataclass(frozen=True)
+class ProviderRegistry:
+    revision: str = "0" * 64
+    active: str = ""
+    providers: dict[str, ProviderProfile] = field(default_factory=dict)
+
+    def validate(self, *, allow_external_active: bool = False) -> None:
+        if (
+            not isinstance(self.revision, str)
+            or not isinstance(self.active, str)
+            or not isinstance(self.providers, dict)
+        ):
+            raise ValueError("Invalid provider registry fields")
+        if not REVISION.fullmatch(self.revision) or (
+            self.active and self.active not in self.providers and not allow_external_active
+        ):
+            raise ValueError("Invalid provider registry selection")
+        if len(self.providers) > 64:
+            raise ValueError("Too many provider connections")
+        for name, profile in self.providers.items():
+            if not isinstance(name, str) or not NAME.fullmatch(name):
+                raise ValueError("Provider connection names must be lowercase letters, digits, '-' or '_'")
+            if not isinstance(profile, ProviderProfile):
+                raise ValueError("Invalid provider connection")
+            profile.validate()
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "revision": self.revision,
+            "active": self.active,
+            "providers": {
+                name: {**asdict(profile), "key_configured": bool(os.environ.get(profile.key_env))}
+                for name, profile in self.providers.items()
+            },
+            "kinds": {name: asdict(spec) for name, spec in KINDS.items()},
+        }
+
+
+class ProviderRegistryStore:
+    """Revisioned, atomic YAML file shared by ngn serve, ngn, and ngn run."""
+
+    def __init__(self, path: Path | None = None, *, allow_external_active: bool = False) -> None:
+        home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        if not home.is_absolute():
+            raise ValueError("XDG_CONFIG_HOME must be an absolute path")
+        self.path = path or home / "ngn" / "providers.yaml"
+        self.allow_external_active = allow_external_active
+
+    def load(self) -> ProviderRegistry:
+        try:
+            info = self.path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+                raise ValueError("Provider configuration must be a regular, bounded file")
+            raw = self.path.read_bytes()
+            if len(raw) > MAX_BYTES:
+                raise ValueError("Provider configuration is too large")
+            document: object = yaml.safe_load(raw)
+            if (
+                not isinstance(document, dict)
+                or set(document) != {"version", "revision", "active", "providers"}
+                or type(document["version"]) is not int
+                or document["version"] != 1
+            ):
+                raise ValueError("Invalid provider configuration format")
+            entries = document["providers"]
+            if not isinstance(entries, dict) or len(entries) > 64:
+                raise ValueError("Invalid provider entries")
+            profiles: dict[str, ProviderProfile] = {}
+            for name, value in entries.items():
+                if (
+                    not isinstance(name, str)
+                    or not isinstance(value, dict)
+                    or set(value) - set(ProviderProfile.__dataclass_fields__)
+                ):
+                    raise ValueError("Invalid provider entry")
+                live = value.get("live", {})
+                if not isinstance(live, dict) or set(live) - set(LiveProfile.__dataclass_fields__):
+                    raise ValueError("Invalid Live entry")
+                profiles[name] = ProviderProfile(**{**value, "live": LiveProfile(**live)})
+            registry = ProviderRegistry(document["revision"], document["active"], profiles)
+            registry.validate(allow_external_active=self.allow_external_active)
+            return registry
+        except FileNotFoundError:
+            return ProviderRegistry()
+        except (yaml.YAMLError, TypeError, UnicodeError, OSError):
+            raise ValueError("Provider configuration is unreadable or invalid") from None
+
+    def save(self, registry: ProviderRegistry, *, expected: str) -> ProviderRegistry:
+        """Reject stale revisions before atomically replacing the file."""
+        import fcntl
+
+        registry.validate(allow_external_active=self.allow_external_active)
+        if not REVISION.fullmatch(expected):
+            raise ValueError("Invalid provider registry revision")
+        directory = self.path.parent
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = directory / ".providers.lock"
+        if lock.is_symlink():
+            raise ValueError("Provider configuration lock must not be a symlink")
+        with lock.open("a+b") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            if self.load().revision != expected:
+                raise ValueError("Provider configuration changed; reload before saving")
+            next_registry = ProviderRegistry(secrets.token_hex(32), registry.active, registry.providers)
+            payload = yaml.safe_dump(
+                {
+                    "version": 1,
+                    "revision": next_registry.revision,
+                    "active": next_registry.active,
+                    "providers": {name: asdict(profile) for name, profile in next_registry.providers.items()},
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+            if len(payload) > MAX_BYTES:
+                raise ValueError("Provider configuration is too large")
+            descriptor, temporary = tempfile.mkstemp(prefix=".providers-", dir=directory)
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    os.fchmod(output.fileno(), 0o600)
+                    output.write(payload)
+                    output.flush()
+                    os.fsync(output.fileno())
+                # load() rejects symlinks and oversized old destinations.
+                self.load()
+                os.replace(temporary, self.path)
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+            return next_registry
+
+
+class ScopedProviderRegistryStore:
+    """Global connections plus a workspace-local YAML overlay and selection.
+
+    Workspace files live under the user's configuration directory rather than
+    inside an untrusted project. Both UIs and the terminal resolve the same two
+    files for a workspace. Local names cannot shadow global names through the UI.
+    """
+
+    def __init__(self, workspace: Path) -> None:
+        self.global_store = ProviderRegistryStore()
+        identifier = hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest()[:32]
+        self.workspace_store = ProviderRegistryStore(
+            self.global_store.path.parent / "workspaces" / identifier / "providers.yaml",
+            allow_external_active=True,
+        )
+
+    @property
+    def path(self) -> Path:
+        return self.global_store.path
+
+    def store(self, scope: str) -> ProviderRegistryStore:
+        if scope == "global":
+            return self.global_store
+        if scope == "workspace":
+            return self.workspace_store
+        raise ValueError("Provider scope must be global or workspace")
+
+    def load_scope(self, scope: str) -> ProviderRegistry:
+        return self.store(scope).load()
+
+    def load(self) -> ProviderRegistry:
+        global_registry = self.global_store.load()
+        local_registry = self.workspace_store.load()
+        providers = {**global_registry.providers, **local_registry.providers}
+        active = local_registry.active or global_registry.active
+        if active and active not in providers:
+            raise ValueError(f"Workspace selects missing provider connection {active!r}")
+        return ProviderRegistry(local_registry.revision, active, providers)
+
+    def snapshot(self, scope: str) -> dict[str, object]:
+        global_registry = self.global_store.load()
+        if scope == "global":
+            return {
+                **global_registry.snapshot(),
+                "scope": scope,
+                "path": str(self.global_store.path),
+            }
+        local_registry = self.workspace_store.load()
+        combined = self.load()
+        return {
+            **combined.snapshot(),
+            "scope": scope,
+            "path": str(self.workspace_store.path),
+            "global_active": global_registry.active,
+            "inherited_active": not bool(local_registry.active),
+            "origins": {
+                name: "workspace" if name in local_registry.providers else "global" for name in combined.providers
+            },
+        }
+
+    def save_scope(self, registry: ProviderRegistry, *, expected: str, scope: str) -> ProviderRegistry:
+        if (
+            scope == "workspace"
+            and registry.active
+            and registry.active not in registry.providers
+            and registry.active not in self.global_store.load().providers
+        ):
+            raise ValueError("Selected connection does not exist in this workspace or globally")
+        return self.store(scope).save(registry, expected=expected)
