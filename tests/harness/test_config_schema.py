@@ -215,31 +215,6 @@ def test_cli_overrides(tmp_path: Path) -> None:
     assert config.api == "responses" and config.max_subagent_depth == 0
 
 
-def test_historic_dictation_yaml_and_env_are_ignored_but_unknown_keys_fail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        "model: retained-model\n"
-        "dictation_enabled: true\ndictation_model: 42\ndictation_base_url: file:///unsafe\n"
-        "dictation_api_key_env: literal-secret\ndictation_language: invalid\ndictation_max_seconds: -1\n"
-    )
-    monkeypatch.setenv("NGN_DICTATION_ENABLED", "true")
-    monkeypatch.setenv("NGN_DICTATION_MAX_SECONDS", "not-an-integer")
-    config = load_config(tmp_path, path)
-    assert config.model == "retained-model"
-    assert not any(key.startswith("dictation_") for key in vars(config))
-    path.write_text(path.read_text() + "unknown_preference: true\n")
-    with pytest.raises(ValueError, match="unknown_preference"):
-        load_config(tmp_path, path)
-
-
-@pytest.mark.parametrize("flag", ["--dictation", "--no-dictation", "--dictation-model"])
-def test_removed_cli_flags_fail(flag: str) -> None:
-    with pytest.raises(SystemExit):
-        _parser().parse_args([flag, "run", "hello"])
-
-
 def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

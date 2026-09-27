@@ -47,7 +47,6 @@ test("settings route provider configuration through the shared connection manage
   assert.match(html, /data-settings-scope="global" aria-pressed="false"/);
   assert.match(html, /Inherited from Global/);
   assert.match(html, /Save workspace settings/);
-  assert.doesNotMatch(html, /dictation|transcription model/i);
   assert.doesNotMatch(html, /Legacy provider override|id="settings-provider-key"|id="settings-provider"|id="settings-model"|type="password"/);
   const global = renderToStaticMarkup(createElement(SettingsDialog, { settings: { ...settings, scope: "global" } }));
   assert.match(global, /data-settings-scope="global" aria-pressed="true"/);

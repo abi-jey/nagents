@@ -42,16 +42,6 @@ COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
 DEFAULT_COMPACT_TOKENS = 200_000
 DEFAULT_COMPACT_MESSAGES = 100
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-_LEGACY_DICTATION_KEYS = frozenset(
-    {
-        "dictation_enabled",
-        "dictation_model",
-        "dictation_base_url",
-        "dictation_api_key_env",
-        "dictation_language",
-        "dictation_max_seconds",
-    }
-)
 _GLOBAL_SETTINGS_TABLE = (
     "CREATE TABLE IF NOT EXISTS ngn_web_global_settings (id INTEGER PRIMARY KEY CHECK(id = 1), "
     "version INTEGER NOT NULL, values_json TEXT NOT NULL, revision TEXT NOT NULL)"
@@ -108,13 +98,6 @@ class _SettingsValuesV1(BaseModel):
                 raise ValueError("Model must not contain control characters")
             return value.strip()
         return value
-
-
-def _without_legacy_dictation(values: object) -> dict[str, object]:
-    """Discard only historic persisted keys, retaining strict validation of all others."""
-    if not isinstance(values, dict):
-        raise ValueError("Invalid saved settings")
-    return {key: value for key, value in values.items() if key not in _LEGACY_DICTATION_KEYS}
 
 
 class SettingsValues(_SettingsValuesV1):
@@ -440,10 +423,10 @@ class WebSettings:
                     # startup defaults. Reject malformed/extra fields first.
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **legacy.model_dump()})
                 elif version == 2:
-                    legacy = _SettingsValuesV1.model_validate(_without_legacy_dictation(json.loads(payload)))
+                    legacy = _SettingsValuesV1.model_validate_json(payload)
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **legacy.model_dump()})
                 elif version == 3:
-                    legacy_values = _without_legacy_dictation(json.loads(payload))
+                    legacy_values = json.loads(payload)
                     if not isinstance(legacy_values, dict) or {"submit_mode", "read_only"} & legacy_values.keys():
                         raise ValueError("Invalid version-3 settings")
                     values = SettingsValues.model_validate(
@@ -454,10 +437,10 @@ class WebSettings:
                         }
                     )
                 elif version == 4:
-                    values = SettingsValues.model_validate(_without_legacy_dictation(json.loads(payload)))
+                    values = SettingsValues.model_validate_json(payload)
                 else:
-                    differences = _without_legacy_dictation(json.loads(payload))
-                    if set(differences) - set(SettingsValues.model_fields):
+                    differences = json.loads(payload)
+                    if not isinstance(differences, dict) or set(differences) - set(SettingsValues.model_fields):
                         raise ValueError("Invalid workspace overrides")
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **differences})
                 # Older web defaults used these names for the same unrestricted
@@ -534,8 +517,8 @@ class WebSettings:
             or not re.fullmatch(r"[0-9a-f]{64}", revision)
         ):
             raise ValueError("Invalid global settings")
-        values = _without_legacy_dictation(json.loads(payload))
-        if set(values) - (set(SettingsValues.model_fields) - {"agent"}):
+        values = json.loads(payload)
+        if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
             raise ValueError("Invalid global settings fields")
         self.defaults = SettingsValues.model_validate({**self.startup_defaults.model_dump(), **values})
         self.validate(self.defaults)

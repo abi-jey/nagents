@@ -37,18 +37,6 @@ THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
 DEFAULT_HARNESS_MODEL = "gpt-6-luna"
 API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
-# These trusted-YAML keys existed before microphone dictation was removed.
-# Discard only these exact names; unknown settings remain errors.
-_LEGACY_DICTATION_KEYS = frozenset(
-    {
-        "dictation_enabled",
-        "dictation_model",
-        "dictation_base_url",
-        "dictation_api_key_env",
-        "dictation_language",
-        "dictation_max_seconds",
-    }
-)
 
 
 def _data_dir() -> Path:
@@ -311,7 +299,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             values = {}
         if not isinstance(values, dict):
             raise ValueError(f"{path}: the configuration must be a mapping of top-level settings")
-        unknown = values.keys() - allowed - _LEGACY_DICTATION_KEYS
+        unknown = values.keys() - allowed
         if unknown:
             raise ValueError(
                 f"Unknown configuration fields in {path}: {', '.join(sorted(unknown))}; use api_key_env, never api_key"
@@ -326,8 +314,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         }:
             config.provider_id = ""
         for key, value in values.items():
-            if key in _LEGACY_DICTATION_KEYS:
-                continue
             if key == "model":
                 model_overridden = True
             if key in strings | {"data_dir"}:

@@ -1104,10 +1104,8 @@ CLI/TUI do not load this web-only override.
 
 Existing version-1 through version-4 rows are validated against their original
 schemas, retain supported preferences, and receive newer fields from trusted
-defaults. Version-5 rows store workspace differences. Historic dictation keys in
-saved rows and global defaults are ignored during loading; unknown fields remain
-invalid. New saves write version 5 without the removed fields. Existing chat
-preferences and revision checks are retained.
+defaults. Version-5 rows store workspace differences. Unknown fields remain
+invalid. Existing chat preferences and revision checks are retained.
 
 Legacy built-in selections migrate to `assistant`. An old read-only selection
 remains read-only through the workspace restriction, rather than gaining write

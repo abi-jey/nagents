@@ -39,12 +39,6 @@ LEGACY_FIELDS = (
     "max_tool_rounds",
     "max_subagent_depth",
 )
-HISTORIC_DICTATION = {
-    "dictation_enabled": True,
-    "dictation_model": "legacy-model",
-    "dictation_language": "en",
-    "dictation_max_seconds": 90,
-}
 PROVIDER_FIELDS = ("provider", "base_url", "api", "auth", "api_key_env")
 COMPACTION_FIELDS = ("compact_trigger", "compact_tokens", "compact_messages")
 SUBMIT_FIELDS = ("submit_mode",)
@@ -56,13 +50,13 @@ def legacy_values(version: int, values: dict[str, object]) -> dict[str, object]:
     if version == 1:
         return {key: values[key] for key in LEGACY_FIELDS}
     if version == 2:
-        return {key: values[key] for key in LEGACY_FIELDS} | HISTORIC_DICTATION
+        return {key: values[key] for key in LEGACY_FIELDS}
     if version == 3:
         # Version 3 predates submit_mode and read_only, persisted from version 4.
         return {
             key: values[key] for key in SettingsValues.model_fields if key not in (*SUBMIT_FIELDS, *READ_ONLY_FIELDS)
-        } | HISTORIC_DICTATION
-    return {key: values[key] for key in SettingsValues.model_fields} | HISTORIC_DICTATION
+        }
+    return {key: values[key] for key in SettingsValues.model_fields}
 
 
 def assert_runtime(harness: Harness, values: dict[str, object]) -> None:
@@ -203,73 +197,6 @@ def test_settings_legacy_rows_inherit_trusted_submit_mode(tmp_path: Path, versio
             loaded = (await client.get("/api/settings", headers=headers)).json()
             assert loaded["values"]["submit_mode"] == "interrupt"
             assert harnesses[0].config.submit_mode == "interrupt"
-
-    asyncio.run(check())
-
-
-@pytest.mark.parametrize("version", [2, 3, 4, 5])
-def test_historic_dictation_saved_rows_load_without_exposing_fields(tmp_path: Path, version: int) -> None:
-    async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
-            initial = (await client.get("/api/settings", headers=headers)).json()
-            db_path = harnesses[0].agent.session.db_path
-        values = (
-            legacy_values(version, initial["values"]) if version != 5 else {"max_tool_rounds": 7, **HISTORIC_DICTATION}
-        )
-        values.update(dictation_base_url="file:///old", dictation_api_key_env="legacy-secret")
-        values["max_tool_rounds"] = 7
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute(
-                "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, ?, ?, ?)",
-                (version, json.dumps(values), "a" * 64),
-            )
-            await db.commit()
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
-            loaded = (await client.get("/api/settings", headers=headers)).json()
-            assert loaded["values"]["max_tool_rounds"] == harnesses[0].agent.max_tool_rounds == 7
-            assert loaded["revision"] == "a" * 64
-            assert "dictation" not in json.dumps(loaded)
-            assert "dictation" not in json.dumps((await client.get("/api/settings/global", headers=headers)).json())
-            assert "dictation" not in (await client.get("/api/bootstrap")).json()
-            saved = await client.post(
-                "/api/settings",
-                headers=headers,
-                json={"revision": loaded["revision"], "values": loaded["values"]},
-            )
-            assert saved.status_code == 200
-            async with (
-                aiosqlite.connect(db_path) as db,
-                db.execute("SELECT version, values_json FROM ngn_web_settings") as cursor,
-            ):
-                row = await cursor.fetchone()
-                assert row is not None
-                assert row[0] == 5 and "dictation" not in row[1]
-
-    asyncio.run(check())
-
-
-def test_removed_dictation_route_and_settings_fields(tmp_path: Path) -> None:
-    async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, _):
-            before = (await client.get("/api/settings", headers=headers)).json()
-            for path in ("/api/settings", "/api/settings/global"):
-                for field in (*HISTORIC_DICTATION, "dictation_base_url", "dictation_api_key_env"):
-                    response = await client.post(
-                        path,
-                        headers=headers,
-                        json={
-                            "revision": before["revision"] if path == "/api/settings" else "0" * 64,
-                            "values": {**before["values"], field: "ignored"},
-                        },
-                    )
-                    assert response.status_code == 422
-            assert (await client.post("/api/dictation/transcribe", headers=headers, json={})).status_code == 404
-            assert (
-                await client.post(
-                    "/api/dictation/transcribe", headers={**headers, "Content-Type": "audio/wav"}, content=b"audio"
-                )
-            ).status_code == 415
-            assert (await client.get("/api/settings", headers=headers)).json() == before
 
     asyncio.run(check())
 
@@ -849,7 +776,7 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
             ):
                 row = await cursor.fetchone()
                 assert row is not None
-                assert row[0] == 5 and "dictation" not in row[1]
+                assert row[0] == 5
 
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
