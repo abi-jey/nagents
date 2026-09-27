@@ -24,10 +24,10 @@ test("settings route provider configuration through the shared connection manage
   };
   const unexpected = () => assert.fail("Rendering cannot mutate settings");
   const settings: ReturnType<typeof useSettings> = {
-    token: "test-token", open: true, snapshot, draft: createDraft(values), errors: {}, error: "", notice: "",
-    needsRefresh: false, loading: false, pending: false, dirty: false,
+    token: "test-token", open: true, snapshot, draft: createDraft(values), errors: {}, error: "", readError: "", notice: "",
+    needsRefresh: false, changedElsewhere: false, loading: false, pending: false, dirty: false,
     disabled: false, blocked: false, scope: "workspace", showGlobal: unexpected,
-    show: unexpected, close: unexpected, refresh: async () => unexpected(), update: unexpected,
+    show: unexpected, close: unexpected, refresh: async () => unexpected(), reload: async () => unexpected(), update: unexpected,
     save: async () => unexpected(), reset: async () => unexpected(),
   };
   const html = renderToStaticMarkup(createElement(SettingsDialog, { settings }));

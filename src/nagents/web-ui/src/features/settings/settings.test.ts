@@ -214,7 +214,7 @@ test("reset sends only the expected revision and trusts the returned startup def
 });
 
 for (const detail of ["Settings changed in another connection.", "A run is active."]) {
-  test(`409 is not retried and requires an explicit refresh: ${detail}`, async (t) => {
+  test(`409 is not retried and requires an explicit reload: ${detail}`, async (t) => {
     const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ detail }, { status: 409 }));
     await assert.rejects(saveSettings("mock-token", reply.revision, values), (cause: unknown) => {
       assert.ok(cause instanceof RequestError);
@@ -231,7 +231,7 @@ for (const detail of ["Settings changed in another connection.", "A run is activ
   });
 }
 
-test("a lost or server-failed write has an uncertain outcome and must be refreshed", () => {
+test("a lost or server-failed write has an uncertain outcome and must be reloaded", () => {
   for (const cause of [new TypeError("Failed to fetch"), new SyntaxError("Invalid JSON"), new RequestError("Server failed", 500)]) {
     const failure = settingsFailure(cause, true);
     assert.equal(failure.needsRefresh, true);

@@ -104,18 +104,13 @@ export function SettingsDialog({
       >
         <div className="settings-body" aria-busy={loading || pending}>
           <div ref={feedback} tabIndex={-1} className="settings-feedback">
-            <div className="settings-status" role="status">
-              {loading
-                ? "Loading current settings..."
-                : pending
+            {(loading || pending || settings.notice) && (
+              <div className="settings-status" role="status">
+                {loading ? "Loading current settings..." : pending
                   ? "Applying settings. Please wait before closing."
-                  : settings.notice ||
-                    (snapshot
-                      ? snapshot.persisted
-                        ? (global ? "Saved global defaults are active." : "Saved workspace overrides are active.")
-                        : "Using inherited defaults. No saved overrides."
-                      : "Settings have not loaded.")}
-            </div>
+                  : settings.notice}
+              </div>
+            )}
             {settings.blocked && !pending && (
               <p className="settings-notice" role="status">
                 Settings are read-only while work is active. Wait for it to
@@ -127,27 +122,38 @@ export function SettingsDialog({
                 {settings.error}
               </p>
             )}
+            {settings.readError && (
+              <p className="settings-error error-text" role="alert">
+                {settings.readError}
+              </p>
+            )}
             {Object.values(errors).some(Boolean) && (
               <p className="error-text" role="alert">
                 Check the highlighted fields before saving.
               </p>
             )}
           </div>
-          <div className="settings-refresh">
-            <button
-              type="button"
-              disabled={disabled || !!confirmation}
-              onClick={() => {
-                if (settings.dirty) setConfirmation("refresh");
-                else void settings.refresh();
-              }}
-            >
-              Refresh settings
-            </button>
-            {settings.needsRefresh && (
-              <span>Refresh is required before saving or resetting.</span>
-            )}
-          </div>
+          {(settings.needsRefresh || (!snapshot && settings.error)) && (
+            <div className="settings-refresh">
+              <button
+                type="button"
+                disabled={disabled || !!confirmation}
+                onClick={() => {
+                  if (settings.dirty) setConfirmation("refresh");
+                  else void settings.reload();
+                }}
+              >
+                {settings.needsRefresh ? "Reload saved settings" : "Retry loading settings"}
+              </button>
+              {settings.needsRefresh && (
+                <span role={settings.changedElsewhere ? "alert" : "status"}>
+                  {settings.changedElsewhere
+                    ? "Saved settings changed while you were editing. Your draft is kept. Reload before saving or resetting."
+                    : "Reload to check saved settings before saving or resetting. Your draft is kept."}
+                </span>
+              )}
+            </div>
+          )}
           {confirmation && (
             <section
               className="settings-confirmation"
@@ -160,12 +166,12 @@ export function SettingsDialog({
               >
                 {confirmation === "reset"
                   ? (global ? "Restore startup defaults?" : "Use global defaults?")
-                  : "Discard draft and refresh?"}
+                  : "Discard draft and reload?"}
               </h3>
               <p>
                 {confirmation === "reset"
                   ? (global ? "This removes saved global defaults. Workspace overrides are kept." : "This removes saved workspace overrides and discards your draft. Global defaults apply to your next run or recording.")
-                  : "This replaces your unsaved draft with the latest server settings. It does not change any saved settings or retry your save."}
+                  : "This replaces your unsaved draft with the latest saved settings. It does not change saved settings or retry your save."}
               </p>
               {confirmation === "reset" && snapshot && (
                 <p>
@@ -182,13 +188,13 @@ export function SettingsDialog({
                   }
                   onClick={async () => {
                     if (confirmation === "reset") await settings.reset();
-                    else await settings.refresh();
+                    else await settings.reload();
                     finishConfirmation();
                   }}
                 >
                   {confirmation === "reset"
                     ? "Remove overrides and reset"
-                    : "Discard draft and refresh"}
+                    : "Discard draft and reload"}
                 </button>
                 <button
                   type="button"
