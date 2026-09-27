@@ -26,8 +26,9 @@ function defaultProfile(kind: string, specs: Record<string, Kind>, model = ""): 
   };
 }
 
-export function ProvidersPanel({ token, blocked, initialModel, applied, scope }: {
+export function ProvidersPanel({ token, blocked, initialModel, applied, scope, openGlobal, onDraftChange, onBusyChange }: {
   token: string; blocked: boolean; initialModel: string; applied: () => void; scope: SettingsScope;
+  openGlobal?: () => void; onDraftChange?: (dirty: boolean) => void; onBusyChange?: (busy: boolean) => void;
 }) {
   const [registry, setRegistry] = useState<Registry>();
   const [name, setName] = useState("");
@@ -49,13 +50,21 @@ export function ProvidersPanel({ token, blocked, initialModel, applied, scope }:
     setRegistry(undefined); setDraft(undefined); setName("");
     void refresh().catch(() => setError("Could not load provider connections."));
   }, [token, scope]);
+  const inherited = scope === "workspace" && registry?.origins?.[name] === "global";
+  const connectionDirty = !!registry && !!draft && !inherited &&
+    (!editing || JSON.stringify(draft) !== JSON.stringify(registry.providers[name]));
+  useEffect(() => { onDraftChange?.(connectionDirty); }, [connectionDirty, onDraftChange]);
+  useEffect(() => () => onDraftChange?.(false), [onDraftChange]);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
+  useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
 
-  async function action(run: () => Promise<Registry>, message: string) {
+  async function action(run: () => Promise<Registry>, message: string, saved = false) {
     if (busy || blocked) return;
     setBusy(true); setError(""); setNotice("");
     try {
       const next = await run();
       setRegistry(next);
+      if (saved) { setDraft(next.providers[name]); setEditing(true); }
       setNotice(message);
       if (next.active !== registry?.active || (editing && next.active === name)) applied();
     } catch (cause) {
@@ -68,7 +77,6 @@ export function ProvidersPanel({ token, blocked, initialModel, applied, scope }:
   const editLive = (change: Partial<Live>) => setDraft(current => current && { ...current, live: { ...current.live, ...change } });
   const shown = models.filter(id => id.toLowerCase().includes(query.trim().toLowerCase()));
   const route = `${endpoint}/${encodeURIComponent(name)}`;
-  const inherited = scope === "workspace" && registry.origins?.[name] === "global";
   const locallySaved = scope === "global" || registry.origins?.[name] === "workspace";
   return <section className="settings-group" aria-label="Provider connections">
     <h3>Provider connections</h3>
@@ -92,7 +100,8 @@ export function ProvidersPanel({ token, blocked, initialModel, applied, scope }:
     </ul>
     {draft && spec && <div className="settings-connection provider-editor">
       <h4>{editing ? `${inherited ? "Global connection" : "Edit"} ${name}` : `Add a ${scope} connection`}</h4>
-      {inherited && <p>Edit this connection in Global settings. You can select it for this workspace here.</p>}
+      {inherited && <><p>Edit this connection in Global settings. You can select it for this workspace here.</p>
+        {openGlobal && <button type="button" disabled={busy || blocked} onClick={openGlobal}>Switch to Global settings</button>}</>}
       <fieldset className="provider-fields" disabled={inherited || busy || blocked}>
       <label>Connection name <input value={name} disabled={editing} autoComplete="off" pattern="[a-z][a-z0-9_-]{0,63}" onChange={event => setName(event.target.value)} /></label>
       <label>Provider type <select value={draft.kind} onChange={event => edit(defaultProfile(event.target.value, registry.kinds, draft.model))}>
@@ -119,7 +128,7 @@ export function ProvidersPanel({ token, blocked, initialModel, applied, scope }:
       </details>}
       </fieldset>
       <div className="settings-model-controls">
-        {!inherited && <button type="button" disabled={busy || blocked || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: draft }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`)}>Save connection</button>}
+        {!inherited && <button type="button" disabled={busy || blocked || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: draft }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
           <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active)} onClick={() => void action(async () => (await (await request(`${route}/activate`, token, { revision: registry.revision })).json()) as Registry, `Using ${name} ${scope === "global" ? "globally" : "in this workspace"}.`)}>Make active</button>
           {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as Registry, `Deleted ${name}.`)}>Delete</button>}

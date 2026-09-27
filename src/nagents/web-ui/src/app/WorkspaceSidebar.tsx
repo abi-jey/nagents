@@ -34,7 +34,7 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
       notice={!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController}
         openSession={(id) => void select(id)} blocked={client.busy || (dictation.unfinished && dictation.state.phase !== "review")}
         openDisabled={dictation.unfinished} />}
-      settings={client.settings.show} globalSettings={client.settings.showGlobal} settingsDisabled={!available.settings}
+      settings={client.settings.show} settingsDisabled={!available.settings}
       tools={client.showTools} toolsDisabled={!available.tools}
       designer={() => { close(); client.showDesigner(); }} designerDisabled={!available.designer}
       channels={client.channels.show} channelsDisabled={!available.channels} demo={!!sessions.config?.demo}

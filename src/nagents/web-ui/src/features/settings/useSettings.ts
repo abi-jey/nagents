@@ -5,15 +5,15 @@ import {
   selectProfile,
   type DraftErrors,
   type SettingsDraft,
-} from "./draft";
+} from "./draft.js";
 import {
   readSettings,
   resetSettings,
   saveSettings,
   settingsFailure,
-} from "./transport";
-import type { SettingsReply } from "./types";
-import type { SettingsScope } from "./transport";
+} from "./transport.js";
+import type { SettingsReply } from "./types.js";
+import type { SettingsScope } from "./transport.js";
 
 export function useSettings({
   token,
@@ -85,7 +85,10 @@ export function useSettings({
 
   function openScope(next: SettingsScope) {
     if (blocked || !token || writing.current) return;
-    scopeRef.current = next; setScope(next);
+    if (open && scopeRef.current === next) return;
+    reading.current?.abort();
+    scopeRef.current = next;
+    setScope(next);
     setSnapshot(undefined);
     setDraft(undefined);
     setErrors({});
@@ -182,7 +185,7 @@ export function useSettings({
     blocked,
     scope,
     show: () => openScope("workspace"),
-    showGlobal: () => openScope("global"),
+    switchScope: (next: SettingsScope) => { if (open) openScope(next); },
     close,
     refresh,
     update,

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { executionLimits, compactionLimits } from "./draft.js";
+import { createDraft, executionLimits, compactionLimits } from "./draft.js";
 import { DictationSettings } from "./DictationSettings.js";
 import { ProvidersPanel } from "./ProvidersPanel.js";
 import type { useSettings } from "./useSettings";
+import type { SettingsScope } from "./transport.js";
+import type { SettingsDraft } from "./draft.js";
 import { revealAncestors } from "../../components/disclosures.js";
 
 export function SettingsDialog({
@@ -12,11 +14,42 @@ export function SettingsDialog({
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const feedback = useRef<HTMLDivElement>(null);
   const confirmationHeading = useRef<HTMLHeadingElement>(null);
-  const [confirmation, setConfirmation] = useState<"" | "refresh" | "reset">("");
+  const restoreFocus = useRef<"" | "heading" | SettingsScope>("");
+  const [confirmation, setConfirmation] = useState<"" | "refresh" | "reset" | SettingsScope>("");
+  const [connectionDirty, setConnectionDirty] = useState(false);
+  const [connectionBusy, setConnectionBusy] = useState(false);
   const { snapshot, draft, errors, disabled, pending, loading } = settings;
   const global = settings.scope === "global";
+  const globalDraft = snapshot && createDraft(snapshot.defaults);
+  const savedDraft = snapshot && createDraft(snapshot.values);
+
+  function origin(key: keyof SettingsDraft) {
+    if (global || !snapshot || !draft || !globalDraft || !savedDraft) return null;
+    const inherited = draft[key] === globalDraft[key];
+    const changed = draft[key] !== savedDraft[key];
+    const value = snapshot.defaults[key];
+    return <span className="settings-origin">
+      {inherited ? (changed ? "Will inherit Global after saving" : "Inherited from Global")
+        : (changed ? "Unsaved workspace override" : "Workspace override")}
+      {!inherited && <> · Global default: {typeof value === "boolean" ? (value ? "On" : "Off") : value}</>}
+    </span>;
+  }
+
+  function focusScope(scope: SettingsScope) {
+    dialog.current?.querySelector<HTMLButtonElement>(`[data-settings-scope="${scope}"]`)?.focus();
+  }
+
+  function selectScope(next: SettingsScope) {
+    if (next === settings.scope || pending || connectionBusy || settings.blocked || confirmation) return;
+    if (settings.dirty || connectionDirty) setConfirmation(next);
+    else {
+      settings.switchScope(next);
+      if (body.current) body.current.scrollTop = 0;
+    }
+  }
 
   useEffect(() => {
     const element = dialog.current;
@@ -32,6 +65,11 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (confirmation) confirmationHeading.current?.focus();
+    else if (restoreFocus.current) {
+      if (restoreFocus.current === "heading") heading.current?.focus();
+      else focusScope(restoreFocus.current);
+      restoreFocus.current = "";
+    }
   }, [confirmation]);
 
   useEffect(() => {
@@ -39,8 +77,8 @@ export function SettingsDialog({
   }, [settings.error, settings.notice]);
 
   function finishConfirmation() {
+    restoreFocus.current = confirmation === "workspace" || confirmation === "global" ? settings.scope : "heading";
     setConfirmation("");
-    heading.current?.focus();
   }
 
   return (
@@ -51,7 +89,8 @@ export function SettingsDialog({
       aria-describedby="settings-description"
       onCancel={(event) => {
         event.preventDefault();
-        settings.close();
+        if (confirmation) finishConfirmation();
+        else if (!connectionBusy) settings.close();
       }}
       onKeyDown={(event) => {
         if (event.key !== "Tab") return;
@@ -81,10 +120,22 @@ export function SettingsDialog({
     >
       <header className="settings-heading">
         <h2 id="settings-title" ref={heading} tabIndex={-1}>
-          {global ? "Global settings" : "Workspace settings"}
+          Settings
         </h2>
+        <div className="settings-scopes" role="group" aria-label="Settings scope">
+          {(["workspace", "global"] as const).map((scope) => (
+            <button key={scope} type="button" data-settings-scope={scope}
+              aria-pressed={settings.scope === scope} aria-controls="settings-scope-content"
+              disabled={pending || connectionBusy || settings.blocked || !!confirmation}
+              onClick={() => selectScope(scope)}>
+              {scope === "workspace" ? "Workspace" : "Global"}
+            </button>
+          ))}
+        </div>
         <p id="settings-description">
-          {global ? "Provider connections and defaults shared across workspaces. Workspace selections and overrides take priority." : "Connections and settings for this workspace. Fields you do not override follow global defaults as they change."}
+          {global
+            ? "Global defaults and provider connections are shared across workspaces. Workspace overrides take priority. Change a value here to update the default for workspaces that inherit it."
+            : "Workspace settings and provider connections. Values marked Inherited from Global follow global defaults as they change. Edit a value and save to override it only here; Use global defaults removes saved workspace overrides."}
         </p>
       </header>
       <form
@@ -102,7 +153,7 @@ export function SettingsDialog({
           });
         }}
       >
-        <div className="settings-body" aria-busy={loading || pending}>
+        <div id="settings-scope-content" ref={body} className="settings-body" aria-busy={loading || pending}>
           <div ref={feedback} tabIndex={-1} className="settings-feedback">
             <div className="settings-status" role="status">
               {loading
@@ -113,7 +164,7 @@ export function SettingsDialog({
                     (snapshot
                       ? snapshot.persisted
                         ? (global ? "Saved global defaults are active." : "Saved workspace overrides are active.")
-                        : "Using inherited defaults. No saved overrides."
+                        : (global ? "Using startup defaults. No saved global defaults." : "Using global defaults. No saved workspace overrides.")
                       : "Settings have not loaded.")}
             </div>
             {settings.blocked && !pending && (
@@ -160,12 +211,14 @@ export function SettingsDialog({
               >
                 {confirmation === "reset"
                   ? (global ? "Restore startup defaults?" : "Use global defaults?")
-                  : "Discard draft and refresh?"}
+                  : confirmation === "refresh" ? "Discard draft and refresh?" : `Discard changes and switch to ${confirmation === "global" ? "Global" : "Workspace"}?`}
               </h3>
               <p>
                 {confirmation === "reset"
                   ? (global ? "This removes saved global defaults. Workspace overrides are kept." : "This removes saved workspace overrides and discards your draft. Global defaults apply to your next run or recording.")
-                  : "This replaces your unsaved draft with the latest server settings. It does not change any saved settings or retry your save."}
+                  : confirmation === "refresh"
+                    ? "This replaces your unsaved settings draft with the latest server settings. It does not change any saved settings or retry your save."
+                    : "Switching scopes discards unsaved settings and connection edits in this scope. Saved settings and connections are kept."}
               </p>
               {confirmation === "reset" && snapshot && (
                 <p>
@@ -177,39 +230,48 @@ export function SettingsDialog({
                 <button
                   type="button"
                   disabled={
-                    disabled ||
+                    disabled || connectionBusy ||
                     (confirmation === "reset" && settings.needsRefresh)
                   }
                   onClick={async () => {
                     if (confirmation === "reset") await settings.reset();
-                    else await settings.refresh();
+                    else if (confirmation === "refresh") await settings.refresh();
+                    else {
+                      const next = confirmation;
+                      settings.switchScope(next);
+                      setConnectionDirty(false);
+                      if (body.current) body.current.scrollTop = 0;
+                      restoreFocus.current = next;
+                      setConfirmation("");
+                      return;
+                    }
                     finishConfirmation();
                   }}
                 >
                   {confirmation === "reset"
                     ? "Remove overrides and reset"
-                    : "Discard draft and refresh"}
+                    : confirmation === "refresh" ? "Discard draft and refresh" : "Discard and switch"}
                 </button>
                 <button
                   type="button"
                   disabled={pending}
                   onClick={finishConfirmation}
                 >
-                  Keep draft
+                  Keep editing
                 </button>
               </div>
             </section>
           )}
           {snapshot && draft && (
             <>
-               <ProvidersPanel token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} initialModel={draft.model} applied={() => void settings.refresh()} />
+              <ProvidersPanel token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} initialModel={draft.model} applied={() => void settings.refresh()} openGlobal={() => selectScope("global")} onDraftChange={setConnectionDirty} onBusyChange={setConnectionBusy} />
               <fieldset
                 className="settings-group"
                 disabled={disabled || !!confirmation}
               >
                 <legend>Agent profile and permissions</legend>
-                <label className="settings-checkbox"><input id="settings-read_only" type="checkbox" checked={draft.read_only || !!snapshot.read_only_locked} disabled={disabled || !!confirmation || !!snapshot.read_only_locked} onChange={(event) => settings.update("read_only", event.target.checked)} />Read-only workspace</label>
-                <p>{snapshot.read_only_locked ? "Read-only operation is required by the startup configuration." : "Limit agents to inspection: file changes, shell, and custom tools remain blocked."}</p>
+                <label className="settings-checkbox"><input id="settings-read_only" type="checkbox" aria-describedby="settings-read_only-help" checked={draft.read_only || !!snapshot.read_only_locked} disabled={disabled || !!confirmation || !!snapshot.read_only_locked} onChange={(event) => settings.update("read_only", event.target.checked)} />Read-only workspace</label>
+                <p id="settings-read_only-help">{snapshot.read_only_locked ? "Read-only operation is required by the startup configuration." : "Limit agents to inspection: file changes, shell, and custom tools remain blocked."}{!snapshot.read_only_locked && origin("read_only")}</p>
                 <div className="settings-field">
                   <label htmlFor="settings-agent">Agent profile</label>
                   <select
@@ -258,7 +320,7 @@ export function SettingsDialog({
                     <option value="queue">Queue · finish current work first (default)</option>
                     <option value="interrupt">Interrupt · stop current work, then continue</option>
                   </select>
-                  <p id="settings-submit-help">New web messages are always saved to the queue. Interrupt also cancels the active run in this same conversation and waits for cleanup before processing queued messages.</p>
+                  <p id="settings-submit-help">New web messages are always saved to the queue. Interrupt also cancels the active run in this same conversation and waits for cleanup before processing queued messages.{origin("submit_mode")}</p>
                   {errors.submit_mode && <p className="error-text">{errors.submit_mode}</p>}
                 </div>
               </fieldset>
@@ -285,7 +347,7 @@ export function SettingsDialog({
                           />
                           <span aria-hidden="true">{limit.unit}</span>
                         </div>
-                        <p id={`settings-${limit.key}-help`}>{limit.help}</p>
+                        <p id={`settings-${limit.key}-help`}>{limit.help}{origin(limit.key)}</p>
                         {errors[limit.key] && (
                           <p id={`settings-${limit.key}-error`} className="error-text">{errors[limit.key]}</p>
                         )}
@@ -317,6 +379,7 @@ export function SettingsDialog({
                       Token and message thresholds apply before the next model
                       call; off disables automatic compaction. Manual compaction
                       stays available.
+                      {origin("compact_trigger")}
                     </p>
                     {errors.compact_trigger && (
                       <p id="settings-compact_trigger-error" className="error-text">
@@ -342,7 +405,7 @@ export function SettingsDialog({
                         />
                         <span aria-hidden="true">{limit.unit}</span>
                       </div>
-                      <p id={`settings-${limit.key}-help`}>{limit.help}</p>
+                      <p id={`settings-${limit.key}-help`}>{limit.help}{origin(limit.key)}</p>
                       {errors[limit.key] && (
                         <p id={`settings-${limit.key}-error`} className="error-text">
                           {errors[limit.key]}
@@ -370,18 +433,18 @@ export function SettingsDialog({
           )}
         </div>
         <footer className="settings-actions">
-          <span>{settings.dirty ? "Unsaved changes" : "No unsaved changes"}</span>
-          <button type="button" disabled={pending} onClick={settings.close}>
-            {settings.dirty ? "Discard changes" : "Cancel"}
+          <span>{settings.dirty ? `Unsaved ${settings.scope} settings` : connectionDirty ? "Unsaved connection edits" : "No unsaved changes"}</span>
+          <button type="button" disabled={pending || connectionBusy} onClick={settings.close}>
+            {settings.dirty || connectionDirty ? "Discard changes" : "Cancel"}
           </button>
           <button
             className="primary"
             type="submit"
             disabled={
-              disabled || settings.needsRefresh || !settings.dirty || !!confirmation
+              disabled || connectionBusy || settings.needsRefresh || !settings.dirty || !!confirmation
             }
           >
-            {pending ? "Applying..." : "Save"}
+            {pending ? "Applying..." : `Save ${settings.scope} settings`}
           </button>
         </footer>
       </form>
