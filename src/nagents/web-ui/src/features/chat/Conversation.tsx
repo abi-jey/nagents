@@ -6,6 +6,7 @@ import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
+import type { Bootstrap } from "../../types.js";
 import {
   groupTranscript,
   type Entry,
@@ -172,6 +173,7 @@ export function Conversation({
   entries,
   sessionId,
   demo,
+  providerSetup,
   canSubmit,
   submit,
   token = "",
@@ -179,6 +181,7 @@ export function Conversation({
   entries: Entry[];
   sessionId: string;
   demo: boolean;
+  providerSetup?: Bootstrap["provider_setup"];
   canSubmit: boolean;
   submit: (prompt: string) => void;
   token?: string;
@@ -362,6 +365,9 @@ export function Conversation({
           )}
         </div>
         {!entries.length && <p className="usage-tip"><span>Tip</span>{usageTip}</p>}
+        {providerSetup && !providerSetup.configured && <section className="welcome" aria-label="Provider setup">
+          <p className="demo-note" role="status">{providerSetup.message}</p>
+        </section>}
         {!entries.length && demo && (
           <section className="welcome">
             <p className="demo-note">
