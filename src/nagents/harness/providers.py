@@ -7,24 +7,67 @@ Codex's own configuration are discovered at runtime and are not copied here.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import os
 import re
 import secrets
 import stat
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+from typing import TYPE_CHECKING
+from typing import Protocol
+from typing import cast
 
 import yaml
 
 from nagents.provider.auth import validate_prefix
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from typing import BinaryIO
+
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 REVISION = re.compile(r"[0-9a-f]{64}\Z")
 MAX_BYTES = 64 * 1024
+
+
+class _WindowsLock(Protocol):
+    LK_LOCK: int
+    LK_UNLCK: int
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
+
+
+@contextmanager
+def _exclusive_lock(stream: BinaryIO) -> Iterator[None]:
+    """Lock the same sentinel byte on Windows, or the whole file on POSIX."""
+    if os.name == "nt":
+        windows = cast("_WindowsLock", importlib.import_module("msvcrt"))
+
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\0")
+            stream.flush()
+        stream.seek(0)
+        windows.locking(stream.fileno(), windows.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            windows.locking(stream.fileno(), windows.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -274,8 +317,6 @@ class ProviderRegistryStore:
 
     def save(self, registry: ProviderRegistry, *, expected: str) -> ProviderRegistry:
         """Reject stale revisions before atomically replacing the file."""
-        import fcntl
-
         registry.validate(allow_external_active=self.allow_external_active)
         if not REVISION.fullmatch(expected):
             raise ValueError("Invalid provider registry revision")
@@ -284,8 +325,7 @@ class ProviderRegistryStore:
         lock = directory / ".providers.lock"
         if lock.is_symlink():
             raise ValueError("Provider configuration lock must not be a symlink")
-        with lock.open("a+b") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
+        with lock.open("a+b") as stream, _exclusive_lock(stream):
             if self.load().revision != expected:
                 raise ValueError("Provider configuration changed; reload before saving")
             next_registry = ProviderRegistry(secrets.token_hex(32), registry.active, registry.providers)
@@ -303,18 +343,20 @@ class ProviderRegistryStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".providers-", dir=directory)
             try:
                 with os.fdopen(descriptor, "wb") as output:
-                    os.fchmod(output.fileno(), 0o600)
+                    if os.name != "nt":
+                        os.fchmod(output.fileno(), 0o600)
                     output.write(payload)
                     output.flush()
                     os.fsync(output.fileno())
                 # load() rejects symlinks and oversized old destinations.
                 self.load()
                 os.replace(temporary, self.path)
-                directory_fd = os.open(directory, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                if os.name != "nt":
+                    directory_fd = os.open(directory, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
             finally:
                 Path(temporary).unlink(missing_ok=True)
             return next_registry

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +52,30 @@ def test_registry_is_shared_revisioned_and_contains_no_secret(tmp_path: Path, mo
         expected=selected.revision,
     )
     assert ProviderRegistryStore().load() == second
+
+
+def test_concurrent_provider_saves_reject_stale_revision(tmp_path: Path) -> None:
+    store = ProviderRegistryStore(tmp_path / "providers.yaml")
+    barrier = Barrier(2)
+
+    def save(model: str) -> str:
+        barrier.wait()
+        try:
+            result = store.save(
+                ProviderRegistry(active="chosen", providers={"chosen": sample(model=model)}),
+                expected="0" * 64,
+            )
+        except ValueError as error:
+            return str(error)
+        return result.revision
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(save, "first")
+        second = pool.submit(save, "second")
+        outcomes = [first.result(), second.result()]
+    assert sum(value == store.load().revision for value in outcomes) == 1
+    assert sum("changed" in value for value in outcomes) == 1
+    assert store.load().providers["chosen"].model in {"first", "second"}
 
 
 def test_provider_id_override_resolves_its_model_unless_explicitly_overridden(
