@@ -39,6 +39,8 @@ from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
 from .history import WebHistory
+from .provider_setup import provider_error
+from .provider_setup import provider_setup
 from .replay import RunReplay
 from .subscriptions import EventBus
 from .trash import SessionTrash
@@ -421,6 +423,16 @@ class WebState:
         try:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
+            setup = provider_setup(self.running_harness)
+            if not setup["configured"]:
+                run.outcome = "failed"
+                logger.warning(
+                    "Provider run blocked: session=%s run=%s reason=missing_credentials", run.session_id, run.id
+                )
+                record: dict[str, object] = {"event": "error", "message": setup["message"], "recoverable": False}
+                await notices.observe(record, live=True)
+                await self.send(run, record)
+                return
             if run.background:
                 if not isinstance(prompt, str):
                     raise ValueError("Background wake prompts must be text")
@@ -439,17 +451,19 @@ class WebState:
                         if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
                             run.final_text = event.final_text
                         if isinstance(event, ErrorEvent):
+                            reason, message = provider_error(event)
                             logger.warning(
-                                "Provider run error: session=%s run=%s recoverable=%s",
+                                "Provider run error: session=%s run=%s reason=%s recoverable=%s",
                                 run.session_id,
                                 run.id,
+                                reason,
                                 event.recoverable,
                             )
                             if not event.recoverable:
                                 run.outcome = "failed"
                             record = {
                                 "event": "error",
-                                "message": "The provider run failed. Check local provider configuration before trying again.",
+                                "message": message,
                                 "recoverable": event.recoverable,
                             }
                         else:

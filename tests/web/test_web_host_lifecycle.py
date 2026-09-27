@@ -69,6 +69,7 @@ async def application(
         return instance
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-scripted-provider-key")
     assets = path / "static"
     (assets / "assets").mkdir(parents=True, exist_ok=True)
     config = HarnessConfig(workspace=path, data_dir=path / "data", auth="api-key")

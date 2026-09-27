@@ -48,6 +48,7 @@ from .live import register as register_live
 from .live_bridge import MainAgentBridge
 from .live_runtime import LiveService
 from .live_settings import LiveSettings
+from .provider_setup import provider_setup
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
@@ -323,6 +324,7 @@ def create_app(
             "model": state.settings.values.model,
             "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
+            "provider_setup": provider_setup(state.harness),
             "active_run_id": state.active.id if state.active is not None else "",
             "active_session_id": state.active.session_id if state.active is not None else "",
             "active_run_background": state.active.background if state.active is not None else False,

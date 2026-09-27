@@ -233,6 +233,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
         return fake
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-scripted-provider-key")
     assets = tmp_path / "static"
     (assets / "assets").mkdir(parents=True, exist_ok=True)
     (assets / "index.html").write_text("fixture")

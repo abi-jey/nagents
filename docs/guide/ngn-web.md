@@ -32,7 +32,8 @@ you can identify the build in use.
 
 Open **http://127.0.0.1:8765**. Use the exact host and port you started; `localhost`
 and `127.0.0.1` are intentionally different origins. `--port 9876` selects another
-port. The only accepted hosts are `127.0.0.1`, `::1`, and `localhost`.
+port. Loopback is the CLI default; an explicit `--host 0.0.0.0` binds off loopback
+for a trusted, access-controlled deployment.
 
 Common Harness options work before or after `serve`, including `--provider`,
 `--model`, `--agent`, `--config`, `--continue`, and `--resume`. API keys and saved
@@ -139,9 +140,10 @@ Wheels and deployed containers serve the same verified bundle, built during
 packaging. They do not install npm dependencies or rebuild at startup. A missing
 or damaged packaged bundle produces a reinstall error. Matching UI builds still
 require matching source revisions; pulling a checkout does not update an already
-deployed image. Docker defaults to the same `ngn serve` command without `--dev`,
-listening on loopback port 8765. Use the [private deployment guide](ngn-web-deployment.md)
-for its same-pod proxy setup. There is no separate Vite origin/proxy required.
+deployed image. The runtime image starts `ngn serve --host 0.0.0.0` without `--dev`;
+see [container configuration](ngn-container.md) for no-file startup, credentials,
+and a public Kubernetes example. See the [private deployment guide](ngn-web-deployment.md)
+for its access-controlled deployment. There is no separate Vite origin/proxy required.
 
 ## Try It Offline
 
@@ -348,8 +350,8 @@ processes/users with access to your loopback interface may access it. Do not exp
 the standalone server through a reverse proxy, public tunnel, port forward, or
 shared remote desktop. For administrator-managed **password-free Tailscale access**,
 see the [private deployment guide](ngn-web-deployment.md). That setup runs the
-same `ngn serve` process on one owner-approved workload, bound to pod loopback
-behind a same-pod nginx proxy, using HTTPS without Funnel or NodePort exposure,
+same `ngn serve` process on one owner-approved workload, bound directly to the
+in-cluster Service, using HTTPS at the ingress without Funnel or NodePort exposure,
 and is not a general remote-access mode. Tailscale ACLs/grants and trusted cluster
 networking are the access boundary: everyone who can reach the Service shares
 the trusted-user workspace, sessions, and approvals, with no multi-user isolation.
