@@ -137,6 +137,7 @@ export function useSettings({
 
   function openScope(next: SettingsScope) {
     if (blocked || !token || writing.current) return;
+    if (openRef.current && scopeRef.current === next) return;
     reading.current?.abort();
     reading.current = null;
     openRef.current = true;
@@ -253,6 +254,7 @@ export function useSettings({
     scope,
     show: () => openScope("workspace"),
     showGlobal: () => openScope("global"),
+    switchScope: (next: SettingsScope) => { if (openRef.current) openScope(next); },
     close,
     refresh: () => load("applied"),
     reload: () => load("reload"),

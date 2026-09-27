@@ -26,7 +26,7 @@ test("settings route provider configuration through the shared connection manage
   const settings: ReturnType<typeof useSettings> = {
     token: "test-token", open: true, snapshot, draft: createDraft(values), errors: {}, error: "", readError: "", notice: "",
     needsRefresh: false, changedElsewhere: false, loading: false, pending: false, dirty: false,
-    disabled: false, blocked: false, scope: "workspace", showGlobal: unexpected,
+    disabled: false, blocked: false, scope: "workspace", showGlobal: unexpected, switchScope: unexpected,
     show: unexpected, close: unexpected, refresh: async () => unexpected(), reload: async () => unexpected(), update: unexpected,
     save: async () => unexpected(), reset: async () => unexpected(),
   };
@@ -46,9 +46,16 @@ test("settings route provider configuration through the shared connection manage
   for (const constraint of ["600 seconds", "300 seconds", "two lowercase", "10,000,000 tokens", "1 to 10,000 messages"])
     assert.ok(html.toLowerCase().includes(constraint.toLowerCase()), constraint);
   assert.match(html, /Provider connections/);
+  assert.match(html, /aria-label="Settings scope"/);
+  assert.match(html, /data-settings-scope="workspace" aria-pressed="true"/);
+  assert.match(html, /data-settings-scope="global" aria-pressed="false"/);
+  assert.match(html, /Inherited from Global/);
+  assert.match(html, /Save workspace settings/);
   assert.doesNotMatch(html, /Legacy provider override|id="settings-provider-key"|id="settings-provider"|id="settings-model"|type="password"/);
   const global = renderToStaticMarkup(createElement(SettingsDialog, { settings: { ...settings, scope: "global" } }));
-  assert.match(global, /Global settings/);
+  assert.match(global, /data-settings-scope="global" aria-pressed="true"/);
+  assert.match(global, /Global defaults and provider connections are shared/);
+  assert.match(global, /Save global settings/);
   assert.match(global, /Provider connections/);
   assert.doesNotMatch(global, /Legacy provider override|id="settings-provider-key"|id="global-model"/);
   assert.match(global, /id="settings-agent"[^>]*disabled/);

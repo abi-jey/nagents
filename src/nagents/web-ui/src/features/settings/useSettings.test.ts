@@ -80,10 +80,20 @@ test("polls both settings scopes only while open, updates clean drafts without l
     assert.equal(requests[4].path, "/api/settings/global");
     await respond(4, reply("global-2", "global-update"));
     assert.equal(settings.draft?.model, "global-update");
+    await tick();
+    assert.equal(requests[5].path, "/api/settings/global");
+    await act(async () => settings.switchScope("workspace"));
+    assert.equal(requests[5].signal.aborted, true, "switching aborts an in-flight poll");
+    assert.equal(requests[6].path, "/api/settings");
+    await respond(6, reply("workspace-3"));
+    await respond(5, reply("late-global", "stale"));
+    assert.equal(settings.scope, "workspace");
+    assert.equal(settings.snapshot?.revision, "workspace-3");
+    assert.equal(settings.draft?.model, "original");
     await act(async () => root.unmount());
     mounted = false;
     await tick();
-    assert.equal(requests.length, 5, "unmount removes the polling timer");
+    assert.equal(requests.length, 7, "unmount removes the polling timer");
   } finally {
     if (mounted) await act(async () => root.unmount());
     t.mock.timers.reset();

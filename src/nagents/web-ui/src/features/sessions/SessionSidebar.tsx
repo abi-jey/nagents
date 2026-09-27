@@ -4,8 +4,8 @@ import type { Session } from "../../types";
 import type { ReactNode } from "react";
 import { SessionMenu } from "./SessionMenu.js";
 
-function WorkspaceDialog({ workspace, name, demo, count, close, settings, settingsDisabled }: {
-  workspace: string; name: string; demo: boolean; count: number; close: () => void; settings: () => void; settingsDisabled: boolean;
+function WorkspaceDialog({ workspace, name, demo, count, close }: {
+  workspace: string; name: string; demo: boolean; count: number; close: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -27,7 +27,6 @@ function WorkspaceDialog({ workspace, name, demo, count, close, settings, settin
       <dt>Mode</dt><dd>{demo ? "Offline demo" : "Live provider"}</dd>
       <dt>Saved sessions</dt><dd>{count}</dd>
     </dl>
-    <footer><button type="button" disabled={settingsDisabled} onClick={() => { close(); settings(); }}><Icon name="settings" size={14} /> Workspace settings</button></footer>
   </dialog>;
 }
 
@@ -46,7 +45,6 @@ export function SessionSidebar({
   trashDisabled,
   notice,
   settings,
-  globalSettings = settings,
   settingsDisabled,
   tools = () => {},
   toolsDisabled = settingsDisabled,
@@ -71,7 +69,6 @@ export function SessionSidebar({
   trashDisabled: boolean;
   notice?: ReactNode;
   settings: () => void;
-  globalSettings?: () => void;
   tools?: () => void;
   toolsDisabled?: boolean;
   designer?: () => void;
@@ -185,8 +182,8 @@ export function SessionSidebar({
           <button className="sidebar-utility trash-trigger" title="Trash" aria-label="Trash" disabled={trashDisabled} onClick={trash} aria-haspopup="dialog">
             <Icon name="trash" /><span>Trash</span><Icon name="chevron" size={13} />
           </button>
-          <button className="sidebar-utility settings-trigger" title="Global settings" aria-label="Global settings" disabled={settingsDisabled} onClick={globalSettings} aria-haspopup="dialog">
-            <Icon name="settings" /><span>Global settings</span><Icon name="chevron" size={13} />
+          <button className="sidebar-utility settings-trigger" title="Settings" aria-label="Settings" disabled={settingsDisabled} onClick={settings} aria-haspopup="dialog">
+            <Icon name="settings" /><span>Settings</span><Icon name="chevron" size={13} />
           </button>
           <button className="sidebar-utility channels-trigger" title="Channels" aria-label="Channels" disabled={channelsDisabled} onClick={channels} aria-haspopup="dialog">
             <Icon name="channels" /><span>Channels</span><Icon name="chevron" size={13} />
@@ -208,7 +205,7 @@ export function SessionSidebar({
         </div>
       </div>
     </aside>
-    {workspaceOpen && <WorkspaceDialog workspace={workspace} name={workspaceName} demo={demo} count={sessions.length} close={() => setWorkspaceOpen(false)} settings={settings} settingsDisabled={settingsDisabled} />}
+    {workspaceOpen && <WorkspaceDialog workspace={workspace} name={workspaceName} demo={demo} count={sessions.length} close={() => setWorkspaceOpen(false)} />}
     </>
   );
 }
