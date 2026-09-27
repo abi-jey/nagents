@@ -53,7 +53,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 coupled = await client.put(
                     "/api/provider-scopes/workspace/providers/work",
                     headers=headers,
-                    json={"revision": before["revision"], "profile": {**profile, "model": "gpt-4.1"}},
+                    json={"revision": before["revision"], "profile": {**profile, "model": "gpt-6-luna"}},
                 )
                 assert coupled.status_code == 422
                 result = await client.put(

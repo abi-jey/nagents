@@ -197,11 +197,11 @@ def test_harness_provider_prefers_environment_key_over_stored_key(
 @pytest.mark.requires_posix
 def test_harness_login_api_persists_and_logout_removes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path))
+        harness = Harness(HarnessConfig(workspace=tmp_path, model="gpt-6-luna"))
         try:
             await harness.initialize()
             await harness.login_api(login())
-            assert harness.config.provider == "openrouter" and harness.config.model == "gpt-4.1"
+            assert harness.config.provider == "openrouter" and harness.config.model == "gpt-6-luna"
             assert isinstance(harness.agent.provider, HarnessProvider)
             harness.agent.provider.credentials()
             assert harness.agent.provider.api_key == SECRET

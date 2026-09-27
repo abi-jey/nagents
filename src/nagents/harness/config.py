@@ -245,8 +245,10 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
 
 def load_config(workspace: Path, config_path: Path | None = None, *, trust_project: bool = False) -> HarnessConfig:
     """Load trusted config only; never import plugins or read credential values."""
-    config, login_note = _login_defaults(HarnessConfig(workspace=workspace, trust_project=trust_project))
-    global_model = ScopedProviderRegistryStore(config.workspace).model_store("global").load() or "gpt-4.1"
+    defaults = HarnessConfig(workspace=workspace, trust_project=trust_project)
+    fallback_model = defaults.model
+    config, login_note = _login_defaults(defaults)
+    global_model = ScopedProviderRegistryStore(config.workspace).model_store("global").load() or fallback_model
     if os.environ.get("NGN_MODEL") is None:
         config.model = ScopedProviderRegistryStore(config.workspace).model() or config.model
     strings = {
