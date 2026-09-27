@@ -4,7 +4,6 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { SessionSidebar } from "../sessions/SessionSidebar.js";
-import { dictationConfig } from "../dictation/testFixtures.js";
 import { SettingsDialog } from "./SettingsDialog.js";
 import { settingsValues } from "./testFixtures.js";
 import type { SettingsReply } from "./types.js";
@@ -45,7 +44,6 @@ const reply: SettingsReply = {
   profiles: [{ name: "assistant", mode: "build", model: "" }], effective_mode: "build",
   providers: ["openai"], apis: ["auto", "responses"], auths: ["auto", "api-key"],
   connection: { provider: "openai", api: "auto", auth: "auto", base_url: "", api_key_env: "OPENAI_API_KEY", key_configured: false, auth_status: "configured" },
-  dictation: dictationConfig,
 };
 const connection = {
   kind: "openai", model: "gpt-4.1", auth: "auto", api: "auto", base_url: "", api_key_env: "OPENAI_API_KEY",

@@ -10,11 +10,7 @@ function validBootstrap(value: unknown): value is Bootstrap {
       !["workspace", "provider", "model", "agent", "active_run_id"].every((key) => typeof value[key] === "string") ||
       typeof value.demo !== "boolean" || (value.active_session_id !== undefined && typeof value.active_session_id !== "string") ||
       (value.active_run_background !== undefined && typeof value.active_run_background !== "boolean")) return false;
-  const config = value.dictation;
-  return object(config) && ["enabled", "available", "admin_enabled"].every((key) => typeof config[key] === "boolean") &&
-    ["status", "api_key_env", "revision"].every((key) => typeof config[key] === "string") &&
-    ["max_seconds", "max_bytes"].every((key) => typeof config[key] === "number" && Number.isFinite(config[key])) &&
-    config.sample_rate === 16000 && config.channels === 1 && config.sample_width === 2 && config.content_type === "audio/wav";
+  return true;
 }
 
 // Bootstrap remains the existing same-origin, unauthenticated credential source.

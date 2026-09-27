@@ -78,12 +78,6 @@ mapping, or access to a paid provider account.
   `/private/tmp` are not interchangeable for absolute guarded-tool paths; a custom
   `XDG_DATA_HOME` must use physical, non-symlinked ancestors. The ordinary defaults
   under `/Users/...` avoid these system aliases.
-- Dictation requires microphone permission for the application launching ngn,
-  such as Terminal, iTerm, or an IDE. Check **System Settings > Privacy & Security
-  > Microphone** and the selected audio input device. The macOS `sounddevice`
-  wheel normally includes PortAudio; if it cannot load PortAudio, install the
-  library with `brew install portaudio` and use a Python/library architecture
-  matching your Mac.
 - A shell command or trusted plugin can still be OS-specific. ngn does not
   translate Linux utilities into macOS equivalents. The guarded shell uses
   `/bin/sh`, not the user's interactive zsh configuration.
@@ -231,19 +225,19 @@ not found, and use `uv tool uninstall nagents` to remove that tool installation.
 Tool environments are separate from the repository's Poetry or `.venv`
 environment; they are not needed just to run from the checkout.
 
-## Optional microphone support
+## Optional microphone support for Realtime voice
 
-Dictation is opt-in and uses the `voice` extra (`sounddevice>=0.5.6`) for microphone
-capture. In the local uv environment:
+Realtime speech-to-speech examples use the `voice` extra (`sounddevice>=0.5.6`)
+for microphone capture. In the local uv environment:
 
 ```bash
-uv pip install --python .venv/bin/python -e '.[tui,voice]'
+uv pip install --python .venv/bin/python -e '.[voice]'
 ```
 
 With Poetry, select the same extras, retaining `-E dev` if desired:
 
 ```bash
-poetry install -E tui -E voice
+poetry install -E voice
 ```
 
 `sounddevice` requires a working audio input device and PortAudio support on the
@@ -251,11 +245,6 @@ host. On systems where PortAudio is not supplied with the Python package,
 install the appropriate system library. Grant microphone access through the
 operating system if needed. Headless containers and SSH sessions often have no
 usable local microphone; the ordinary text interface needs none of this.
-
-Installing the extra does not enable recording. Configure
-`dictation_enabled = true` and the separate transcription API-key reference as
-described in [Dictation](ngn.md#dictation). A ChatGPT subscription/login does not
-pay for or authorize the transcription API.
 
 ## Verify the installation
 

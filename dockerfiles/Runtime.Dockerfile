@@ -37,8 +37,10 @@ RUN pip install hatchling && pip install --no-build-isolation ".[server,web]" &&
 
 RUN groupadd -g ${DOCKER_GID} docker-host && \
     useradd -m -u 1000 -G docker-host agent && \
+    install -d -o agent -g agent /home/agent/workspace && \
     chown -R agent:agent /opt/playwright-browsers
 USER agent
+WORKDIR /home/agent/workspace
 
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
@@ -50,7 +52,7 @@ ENV NAGENTS_SERVER_MEMORY=512m
 RUN docker pull python:3.12-slim || true
 
 EXPOSE 8765
-CMD ["ngn", "serve"]
+CMD ["ngn", "serve", "--host", "0.0.0.0"]
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -fsS --max-time 4 -o /dev/null http://127.0.0.1:8765/api/bootstrap || exit 1

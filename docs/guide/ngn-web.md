@@ -32,7 +32,8 @@ you can identify the build in use.
 
 Open **http://127.0.0.1:8765**. Use the exact host and port you started; `localhost`
 and `127.0.0.1` are intentionally different origins. `--port 9876` selects another
-port. The only accepted hosts are `127.0.0.1`, `::1`, and `localhost`.
+port. Loopback is the CLI default; an explicit `--host 0.0.0.0` binds off loopback
+for a trusted, access-controlled deployment.
 
 Common Harness options work before or after `serve`, including `--provider`,
 `--model`, `--agent`, `--config`, `--continue`, and `--resume`. API keys and saved
@@ -43,8 +44,8 @@ the HTTP/WebSocket dependencies, but the applications are independent.
 
 ### Your Own Connection
 
-Open **Global settings → Provider connections** to add connections shared by all
-workspaces, or **Workspace settings → Provider connections** to add a connection
+Open **Settings → Global → Provider connections** to add connections shared by all
+workspaces, or **Settings → Workspace → Provider connections** to add a connection
 just for this workspace or select a global connection. Add named OpenAI,
 Azure AI Foundry, Anthropic, Gemini, OpenRouter, Azure v1, LiteLLM or custom
 OpenAI-compatible connections. Select a provider type to see its supported API
@@ -61,10 +62,10 @@ Microsoft Entra ID with the optional `azure-identity` package.
 The first named connection becomes active if no global default exists. A workspace
 can use a global connection or its own connection; **Use global default** removes
 the workspace selection. Choosing another switches chat's
-provider; trusted agent profiles may also bind to a named provider. The Live
-panel reads voice model, hosted backend model, voice and authentication from
-the active connection's Live section, with the same API prefix and environment
-reference. A ChatGPT subscription does not authorize Live: provide an OpenAI
+provider; trusted agent profiles may also bind to a named provider. Voice
+models, backend mode and voice are separate Global/Workspace preferences in
+**GPT-Live → Voice settings**; the active provider connection supplies its API
+prefix and authentication. A ChatGPT subscription does not authorize Live: provide an OpenAI
 API-key variable for Live even if chat uses ChatGPT/Codex login. The **Main assistant**
 voice backend delegates reasoning to the selected workspace agent; **Separate hosted
 backend** uses a standalone model. No named-connection
@@ -139,9 +140,10 @@ Wheels and deployed containers serve the same verified bundle, built during
 packaging. They do not install npm dependencies or rebuild at startup. A missing
 or damaged packaged bundle produces a reinstall error. Matching UI builds still
 require matching source revisions; pulling a checkout does not update an already
-deployed image. Docker defaults to the same `ngn serve` command without `--dev`,
-listening on loopback port 8765. Use the [private deployment guide](ngn-web-deployment.md)
-for its same-pod proxy setup. There is no separate Vite origin/proxy required.
+deployed image. The runtime image starts `ngn serve --host 0.0.0.0` without `--dev`;
+see [container configuration](ngn-container.md) for no-file startup, credentials,
+and a public Kubernetes example. See the [private deployment guide](ngn-web-deployment.md)
+for its access-controlled deployment. There is no separate Vite origin/proxy required.
 
 ## Try It Offline
 
@@ -164,7 +166,7 @@ still stored locally in the Harness data directory.
 ### Workspace Navigation
 
 The sidebar keeps **New session** above an independently scrolling session list.
-**Global settings**, **Channels**, **Tools**, **Agent Designer**, **Trash**, and the workspace information overlay stay
+**Settings**, **Channels**, **Tools**, **Agent Designer**, **Trash**, and the workspace information overlay stay
 in the bottom section, so they remain reachable with a long conversation history. On narrow
 screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
 it and returns focus to the navigation toggle. Dialogs opened from the drawer
@@ -217,7 +219,7 @@ remain part of the saved conversation available for restoration.
 Trash retains sessions for **30 days by default**. The Trash panel's retention
 control accepts an integer from **1 through 365 days** and saves a workspace-wide
 policy that survives server restarts. This preference has its own API/revision,
-separate from the model, provider, tool, and dictation Settings values.
+separate from the model, provider, and tool Settings values.
 
 Each deletion freezes a `purge_at` deadline using the policy in effect when it is
 accepted. Changing retention affects **future deletions only**; it does not shorten
@@ -339,8 +341,7 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   Tab stays within the dialog, Escape denies, and closing restores focus. Finishing
   a stream does not steal focus or scroll a reader away from earlier messages.
 - Image/PDF [attachment drafts](#image-and-pdf-attachments) use authenticated,
-  session-scoped uploads and explicit submission. The separate
-  [dictation upload](#microphone-dictation) produces editable text. Arbitrary file
+  session-scoped uploads and explicit submission. Arbitrary file
   HTTP access, a CORS wildcard, and a direct shell endpoint are not provided.
   Unknown routes remain 404.
 
@@ -349,8 +350,8 @@ processes/users with access to your loopback interface may access it. Do not exp
 the standalone server through a reverse proxy, public tunnel, port forward, or
 shared remote desktop. For administrator-managed **password-free Tailscale access**,
 see the [private deployment guide](ngn-web-deployment.md). That setup runs the
-same `ngn serve` process on one owner-approved workload, bound to pod loopback
-behind a same-pod nginx proxy, using HTTPS without Funnel or NodePort exposure,
+same `ngn serve` process on one owner-approved workload, bound directly to the
+in-cluster Service, using HTTPS at the ingress without Funnel or NodePort exposure,
 and is not a general remote-access mode. Tailscale ACLs/grants and trusted cluster
 networking are the access boundary: everyone who can reach the Service shares
 the trusted-user workspace, sessions, and approvals, with no multi-user isolation.
@@ -366,7 +367,6 @@ HTTP requests enforce the exact Host and Origin, reject cross-site fetches, and
 require a random per-process token on API reads and mutations (except the
 same-origin bootstrap). Mutations require an Origin header. Ordinary mutations
 require JSON and remain limited to 64 KiB; prompts are limited to 32,000 characters.
-Only the exact dictation route accepts bounded WAV audio instead of JSON.
 The token is held in browser
 memory, never a URL or local storage. Responses are non-cacheable, frame embedding
 is blocked, and no third-party scripts/fonts are loaded.
@@ -408,8 +408,7 @@ truncation notice, when applicable, is evidence and must remain visible in the t
 All paths are under `/api`. API clients first GET `bootstrap`, then send its token
 in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 `Origin: http://127.0.0.1:8765` (matching the configured authority) and
-`Content-Type: application/json`, except for the explicit WAV transcription
-contract below.
+`Content-Type: application/json`, except for dedicated attachment uploads.
 
 | Method / Path | Purpose |
 | --- | --- |
@@ -447,7 +446,6 @@ contract below.
 | `POST run` | Compatibility API: `{session_id, prompt}` starts a request-owned NDJSON response |
 | `POST cancel` | `{run_id}` cancels/joins exactly that active run |
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
-| `POST dictation/transcribe` | Bounded raw `audio/wav` recording; returns `{text}` without starting a chat run |
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
@@ -821,7 +819,7 @@ control to finish. Live captions and connection/error feedback belong to that ca
 
 #### Voice Settings
 
-1. Start **`ngn serve`**, then open **Workspace settings → Provider connections**.
+1. Start **`ngn serve`**, then open **Settings → Workspace → Provider connections**.
 2. Add and activate an OpenAI or Foundry connection. Its identity, endpoint and
    authentication are shared with other provider requests.
 3. Set the referenced API key environment variable in the server's environment
@@ -892,8 +890,7 @@ it has no workspace tools, chat history or main-agent context. In both modes,
 voice captions are bounded process-local observations, and audio is not saved
 to chat history. The session requests `store: false`; this does not override
 the provider's general data policy. Restarting the server discards local
-voice-session records. Microphone dictation below remains the separate
-workflow for inserting an editable draft into chat.
+voice-session records.
 
 Only one voice call may be active per `ngn serve` instance, shared by its tabs.
 End it manually before starting another. Successful snapshot polling renews the
@@ -962,94 +959,12 @@ Pass the last cursor as `after`, an integer in `0..9007199254740991`. This is th
 only allowed Live query parameter; duplicate cursors and tokens in URLs are
 rejected. Polling returns bounded retained observations, not a durable replay log.
 
-### Microphone Dictation
-
-Use the microphone control in the composer to record on **your browser's device**.
-The mic shares the Send toolbar; recording and review controls appear only when
-needed. The composer's **?** disclosure contains keyboard and microphone help.
-Stop to transcribe, review or edit the returned text, and choose **Insert into
-draft**. The existing draft is preserved; insertion appends to the latest draft,
-including text typed while transcription was running. Only the normal **Send**
-action sends that text to the coding model. Recording, transcription, and draft
-insertion never start a chat run automatically.
-
-Microphone access requires HTTPS or loopback, browser permission, and Web Audio /
-AudioWorklet support. Permission is requested only after an explicit mic action.
-The browser creates 16 kHz, mono, PCM16 WAV audio; no container microphone, host
-audio-device mount, `voice` extra, PortAudio, or FFmpeg installation is needed.
-If the browser cannot record, ordinary text input remains usable.
-
-Recording has a configured duration cap. Reaching it stops capture and waits for
-an explicit transcription action. Cancel/discard stops capture and releases its
-tracks; navigating away or changing the connection also invalidates pending work.
-Microphone cancellation and **Stop run** are separate controls. Cancelled or late
-responses never replace a new session's draft. Transcription uploads are not
-automatically retried: cancellation cannot recall audio already received by the
-transcription provider.
-
-#### Connection And Configuration
-
-Transcription uses a **separate OpenAI Platform API key**, not the Codex login or
-chat-provider credentials as a fallback. The chat connection can remain Codex.
-The default transcription model is `gpt-4o-mini-transcribe`. Model selection here
-is independent of chat-model discovery and requires a compatible file-transcription
-model supporting JSON output and, when supplied, the singular `language` parameter.
-
-Inject the transcription key into the backend's environment using your secret
-management tooling, then select its variable name without putting the key in
-YAML, browser settings, URLs, or the image:
-
-```bash
-ngn serve --dictation \
-  --dictation-api-key-env NGN_TRANSCRIPTION_API_KEY \
-  --dictation-model gpt-4o-mini-transcribe \
-  --dictation-max-seconds 120
-```
-
-This assumes `NGN_TRANSCRIPTION_API_KEY` has already been supplied to the process.
-The existing `NGN_DICTATION_*` defaults and trusted YAML options also work with
-`serve`. The backend endpoint defaults to `https://api.openai.com/v1`; endpoint
-and API-key-variable selection remain administrator-managed. See the
-[deployment guide](ngn-web-deployment.md#transcription-credentials) for a runtime
-Kubernetes Secret reference.
-
-The **Dictation** section in Settings controls the enabled preference, model,
-language, and recording duration. These preferences persist with workspace
-settings. They cannot override an administrator's disabled service or maximum
-duration. Missing credentials and demo mode are reported clearly without opening
-the microphone or making a provider request. No provider credential is returned
-to the browser.
-
 The **Context compaction** section in Settings selects the automatic trigger:
 the provider default, a token window, a message count, or off. The choice is a
 persisted workspace override applied to the shared Harness on the next run. A
 `messages` threshold counts stored conversation messages; a `tokens` window
 compacts near 70% of the given context size. Manual `Harness.compact()` (and the
 channel `/compact` command) always remain available.
-
-#### Upload Contract
-
-`POST /api/dictation/transcribe` accepts only a raw `audio/wav` body and also
-requires `X-Ngn-Session` for the selected root conversation (or a root with a
-verified live editor subscription) and
-`X-Ngn-Settings-Revision` for the recording's captured settings revision. Stale
-session/settings requests conflict rather than silently using a different
-conversation or transcription configuration. A recovered WebSocket editor can
-retain its root after server restart without changing the legacy shared selection.
-
-One admitted upload/transcription owns the operation slot. Competing uploads,
-settings saves, and session mutations conflict; queued runs and due wakeups wait
-for the slot to become idle. Admission occurs before buffering the recording.
-The backend counts actual received bytes, validates PCM format and duration,
-and rebuilds WAV data without ancillary metadata before the provider upload.
-The limit is `effective_seconds * 32000 + 4096` bytes, with at most 300 seconds.
-Ordinary JSON endpoints retain their separate 64 KiB limit.
-
-Audio is handled in bounded memory, not written as a workspace file or added to
-conversation history. Provider requests have bounded time and response sizes,
-use only the configured transcription credential, and do not follow redirects
-or retry automatically. Returned text remains an unsent draft. Oversized draft
-insertion is rejected with both texts retained rather than silently truncated.
 
 ### Runtime Settings
 
@@ -1086,9 +1001,12 @@ Agent Designer.
 
 #### Global and Workspace Preferences
 
-Use **Global settings** in the sidebar for defaults shared by workspaces in this
-installation. Click the workspace folder, then **Workspace settings**, for
-overrides belonging only to that folder. Workspace overrides take priority;
+Open **Settings** in the sidebar and switch between **Global** defaults shared by
+workspaces and **Workspace** overrides belonging only to that folder. Switching
+scope with unsaved settings or connection edits asks for confirmation. While open,
+Settings checks for changes every four seconds without replacing an edited draft;
+a reload option appears when a conflicting change or uncertain save needs review.
+Workspace overrides take priority;
 **Use global defaults** removes the workspace override and inherits the current
 global values. New workspace saves store only fields that differ from inherited
 defaults, so other global fields continue to follow changes to those defaults.
@@ -1106,11 +1024,10 @@ under that data directory. `GET/POST /api/settings/global` and
 `POST /api/settings/global/reset` expose their own revision-checked scope. Saving
 global defaults updates inherited fields in the current workspace even when it
 has unrelated local overrides; other running workspace servers load those defaults
-on restart. Both scopes are
-web-only, and dictation still respects administrator-provided limits.
+on restart. Both scopes are web-only.
 
 Trash retention uses its [separate preferences API](#trash-api-contract); it is
-not an additional field in the model/tool/dictation settings below.
+not an additional field in the model/tool settings below.
 
 Settings responses contain `scope`, `values`, `defaults`, `profiles` (`name`, `mode`, `model`),
 an opaque `revision`, `persisted`, `effective_mode` (`build` or `reviewer`),
@@ -1133,10 +1050,6 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `max_file_bytes` | Integer, 1,024 through 4,194,304 bytes |
 | `max_tool_rounds` | Integer, 1 through 1,000 |
 | `max_subagent_depth` | Integer, 0 through 8; root depth is 0 |
-| `dictation_enabled` | Boolean preference; effective only when the administrator permits dictation |
-| `dictation_model` | Trimmed, nonblank compatible transcription model ID, at most 200 printable characters |
-| `dictation_language` | Empty for automatic detection, or a two-letter lowercase language code |
-| `dictation_max_seconds` | Integer, 1 through 300; effective recording duration is capped by the administrator's startup limit |
 | `compact_trigger` | One of `auto` (provider default), `tokens`, `messages`, or `off` |
 | `compact_tokens` | Integer, 1,024 through 10,000,000; the total context window used when `compact_trigger` is `tokens` |
 | `compact_messages` | Integer, 1 through 10,000; the conversation length used when `compact_trigger` is `messages` |
@@ -1189,11 +1102,12 @@ workspace override is applied. Reset deletes the workspace rows and inherits
 current global defaults. The
 CLI/TUI do not load this web-only override.
 
-Existing version-1, version-2, and version-3 rows are validated against their original
-schemas, retain their saved preferences, and receive the provider fields from
-trusted defaults for newer fields. New saves write version 4, including message
-submission policy. Existing chat preferences and revision checks are retained;
-arbitrary unknown fields or versions are not accepted as a migration shortcut.
+Existing version-1 through version-4 rows are validated against their original
+schemas, retain supported preferences, and receive newer fields from trusted
+defaults. Version-5 rows store workspace differences. Historic dictation keys in
+saved rows and global defaults are ignored during loading; unknown fields remain
+invalid. New saves write version 5 without the removed fields. Existing chat
+preferences and revision checks are retained.
 
 Legacy built-in selections migrate to `assistant`. An old read-only selection
 remains read-only through the workspace restriction, rather than gaining write
@@ -1202,11 +1116,6 @@ or shell access. Explicit custom profiles retain their configured identity.
 After a version-3 save, an older image cannot load that row. Roll back with a
 compatible image or use administrator-reviewed settings-row recovery; preserve
 the session database and credential store.
-
-Bootstrap and settings responses also include a non-secret `dictation` capability
-projection: effective `enabled`/`available`, `admin_enabled`, safe `status`, the
-API-key variable name, effective duration/byte limits, PCM format, and the current
-settings `revision`. The credential value and writable routing are never included.
 
 A save joins its local SQLite transaction even if its HTTP request is cancelled;
 on failure, live config, model, round limit and instructions are restored. If the

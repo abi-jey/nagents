@@ -51,7 +51,7 @@ This is a delivery integration, not a claim that every UI interaction becomes a
 | Browser ingress | `src/nagents/web/app.py`, `routing.py`, `service.py`: queued `/api/messages` enters a durable, deduplicated inbox and survives browser disconnection. The legacy streaming response cancels unfinished work on disconnect. |
 | Approval enforcement | `src/nagents/harness/tools.py`: the executor checks schemas, profiles, approval and callable identity. |
 | Browser media presentation | `src/nagents/web-ui/src/features/chat/ChannelMessage.tsx`: images have markup, documents/audio have labels; there is no video player. |
-| Browser input | `Composer.tsx` and `/api/messages`: text submission; no chat upload/paste path. Dictation produces editable text rather than an audio attachment. |
+| Browser input | `Composer.tsx` and `/api/messages`: text and supported attachment submission. |
 
 Current outbound `channel_send` already reads workspace-relative files, rejects
 symlink/path escapes and limits a send to **3 files, 20 MiB per file, 30 MiB total**.
@@ -173,7 +173,7 @@ approval. Current reviewer/demo policies reject these custom tools; even
 | Agent audio/video file → interface | Unsupported | Supported storage and player; degraded to download if the browser cannot decode it |
 | Human pasted/uploaded image → agent | Unsupported | Unsupported initially; follow-up |
 | Human uploaded PDF → agent | Unsupported | Unsupported initially; follow-up, subject to provider support |
-| Human audio/video attachment → model | Unsupported | Unsupported in this proposal; dictation remains text input |
+| Human audio/video attachment → model | Unsupported | Unsupported in this proposal |
 | Generic file delivery | Unsupported | Unsupported initially; do not silently serve arbitrary content as active media |
 | Historic media viewed in text-only UI | Degraded to filename/type/channel note | Supported for retained assets |
 | Tool approval | Existing terminal modal | Existing browser dialog |

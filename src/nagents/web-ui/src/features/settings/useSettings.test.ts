@@ -3,7 +3,6 @@ import test from "node:test";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
-import { dictationConfig } from "../dictation/testFixtures.js";
 import { SettingsDialog } from "./SettingsDialog.js";
 import { settingsValues } from "./testFixtures.js";
 import type { SettingsReply } from "./types.js";
@@ -16,7 +15,6 @@ function reply(revision: string, model = "original"): SettingsReply {
     profiles: [{ name: "assistant", mode: "build", model: "" }],
     effective_mode: "build", providers: ["mock"], apis: ["auto"], auths: ["auto"],
     connection: { provider: "mock", api: "auto", auth: "auto", base_url: "", api_key_env: "MOCK_API_KEY", key_configured: false, auth_status: "configured" },
-    dictation: dictationConfig,
   };
 }
 

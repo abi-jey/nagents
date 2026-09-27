@@ -2,8 +2,6 @@ type ClientActivity = {
   ready: boolean;
   operating: boolean;
   running: boolean;
-  dictating: boolean;
-  reviewing: boolean;
   modal: boolean;
   approval: boolean;
   uploadsReady: boolean;
@@ -12,7 +10,7 @@ type ClientActivity = {
 /** Keep button affordances and command admission on the same rules. */
 export function availability(state: ClientActivity) {
   const free = state.ready && !state.operating && !state.modal && !state.approval;
-  const navigate = free && !state.dictating;
+  const navigate = free;
   return {
     submit: navigate && state.uploadsReady,
     navigate,
@@ -22,6 +20,6 @@ export function availability(state: ClientActivity) {
     tools: navigate,
     designer: navigate && !state.running,
     live: navigate && !state.running,
-    trash: free && (!state.dictating || state.reviewing),
+    trash: free,
   };
 }

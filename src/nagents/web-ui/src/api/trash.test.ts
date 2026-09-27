@@ -10,7 +10,7 @@ import { TrashDialog } from "../features/sessions/TrashDialog.js";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog.js";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.js";
 import { handleMenuKey, menuKey, menuPosition, SessionMenu } from "../features/sessions/SessionMenu.js";
-import { deferred } from "../features/dictation/testFixtures.js";
+import { deferred } from "./testFixtures.js";
 import type { Snapshot } from "../types.js";
 
 const session = { id: "ngn-soft", title: "Soft deleted conversation", updated_at: "2030-01-01" };

@@ -1,4 +1,3 @@
-import type { DictationConfig } from "../dictation/types.js";
 
 export type SettingsValues = {
   model: string;
@@ -13,10 +12,6 @@ export type SettingsValues = {
   max_file_bytes: number;
   max_tool_rounds: number;
   max_subagent_depth: number;
-  dictation_enabled: boolean;
-  dictation_model: string;
-  dictation_language: string;
-  dictation_max_seconds: number;
   compact_trigger: string;
   compact_tokens: number;
   compact_messages: number;
@@ -54,5 +49,4 @@ export type SettingsReply = {
   apis: string[];
   auths: string[];
   connection: SettingsConnection;
-  dictation: DictationConfig;
 };

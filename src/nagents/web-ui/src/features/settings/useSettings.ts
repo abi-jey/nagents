@@ -213,8 +213,8 @@ export function useSettings({
           setNotice(
             scopeRef.current === "global"
               ? "Global defaults saved. New workspaces inherit these defaults; saved workspace overrides take priority."
-              : reset ? "Workspace overrides removed. Inherited defaults apply to your next run or recording."
-              : "Workspace settings saved. Applies to your next run or recording.",
+              : reset ? "Workspace overrides removed. Inherited defaults apply to your next run."
+              : "Workspace settings saved. Applies to your next run.",
           );
         } catch (cause) {
           const failure = settingsFailure(cause, true);

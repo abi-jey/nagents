@@ -1,0 +1,98 @@
+# Minimal single-owner example. Replace the image with a digest built from this
+# revision before deployment. The ConfigMap contains routing only, never keys.
+# See ../../docs/guide/ngn-container.md for setup and an env-only alternative.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngn-container-example
+data:
+  config.yaml: |
+    provider: openai
+    model: gpt-4.1
+    auth: api-key
+    api: auto
+    api_key_env: OPENAI_API_KEY
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngn-container-example
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ngn-container-example
+  template:
+    metadata:
+      labels:
+        app: ngn-container-example
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: ngn
+          image: ghcr.io/abi-jey/nagents/agent-server:latest
+          command: ["ngn"]
+          args: ["serve", "--host", "0.0.0.0", "--workspace", "/workspace", "--config", "/etc/ngn/config.yaml"]
+          env:
+            - name: XDG_DATA_HOME
+              value: /data
+            - name: XDG_CONFIG_HOME
+              value: /data/config
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ngn-provider-example
+                  key: OPENAI_API_KEY
+                  optional: true # Without a key the UI starts, but chat cannot run.
+          ports:
+            - name: http
+              containerPort: 8765
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet:
+              path: /api/bootstrap
+              port: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ngn
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: ngn-container-example
+        - name: data
+          emptyDir: {} # Replace with persistent storage to retain sessions/logins.
+        - name: workspace
+          emptyDir: {} # Replace with your scoped writable workspace.
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngn-container-example
+spec:
+  type: ClusterIP
+  selector:
+    app: ngn-container-example
+  ports:
+    - name: http
+      port: 8765
+      targetPort: http

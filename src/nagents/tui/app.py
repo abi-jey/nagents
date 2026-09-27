@@ -55,7 +55,6 @@ from .channel import TuiChannelHost
 from .clipboard import copy_native
 from .commands import SlashMenu
 from .delivery import DeliveryWidget
-from .dictation import DictationModal
 from .login import DeviceLoginModal
 from .login import LoginMethodModal
 from .login import OpenRouterLoginModal
@@ -110,7 +109,6 @@ Esc                   Cancel work; deny an approval
 Ctrl+P                Commands
 Ctrl+N / Ctrl+L       New session / saved sessions
 Ctrl+T                Agent tree / conversations
-Ctrl+G                Dictation (opt-in; editable draft)
 Mouse text selection  Copy automatically on release
 Ctrl+C                Copy selection; otherwise cancel / exit
 Ctrl+Shift+C           Copy selection without cancelling
@@ -134,7 +132,6 @@ class NagentsApp(App[None]):
         Binding("ctrl+n", "new_session", "New", priority=True),
         Binding("ctrl+l", "sessions", "Sessions", priority=True),
         Binding("ctrl+t", "tasks", "Agents", priority=True),
-        Binding("ctrl+g", "dictation", "Dictation", priority=True),
         Binding("f6", "focus_pane", "Message / conversation", priority=True),
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("ctrl+c", "interrupt", "Cancel / exit", priority=True),
@@ -1010,9 +1007,7 @@ class NagentsApp(App[None]):
                     self.query_one(Composer).focus(scroll_visible=False)
 
     def action_cancel(self) -> None:
-        if isinstance(self.screen, DictationModal):
-            self.screen.run_worker(self.screen.action_cancel_dictation())
-        elif isinstance(self.screen, TaskScreen):
+        if isinstance(self.screen, TaskScreen):
             self.screen.action_close()
         elif isinstance(self.screen, DeviceLoginModal):
             self.screen.action_cancel_login()
@@ -1032,9 +1027,6 @@ class NagentsApp(App[None]):
 
     def action_interrupt(self) -> None:
         if self._copy_selection():
-            return
-        if isinstance(self.screen, DictationModal):
-            self.screen.run_worker(self.screen.action_cancel_dictation())
             return
         if isinstance(self.screen, DeviceLoginModal):
             self.screen.action_cancel_login()
@@ -1060,9 +1052,6 @@ class NagentsApp(App[None]):
         self._shutting_down = True
         self._queued_prompts.clear()
         try:
-            for screen in reversed(self.screen_stack):
-                if isinstance(screen, DictationModal):
-                    await screen.close()
             if self.screen_stack and isinstance(self.screen, DeviceLoginModal):
                 self.screen.clear_code()
             if self._active is not None:
@@ -1162,36 +1151,6 @@ class NagentsApp(App[None]):
         except (ValueError, RuntimeError, PermissionError) as exc:
             self._status(f"Follow-up not sent; draft kept. {exc}", error=True)
 
-    def action_dictation(self) -> None:
-        if isinstance(self.screen, ModalScreen) or self._shutting_down:
-            return
-        self._hide_completions()
-        if self.busy:
-            self._status("Finish or stop current work before recording. Your draft is kept.")
-        elif self.harness.config.demo:
-            self._status("Dictation is disabled in offline demo; no microphone or transcription request was started.")
-        elif not self.harness.config.dictation_enabled:
-            self.push_screen(
-                DetailModal(
-                    "DICTATION / OPT-IN",
-                    "Enable with --dictation or dictation_enabled = true in trusted YAML.\n\n"
-                    "Install the voice extra and provide a separate transcription API key. "
-                    "Ctrl+G or /dictate opens explicit recording controls; audio is never captured automatically. "
-                    "The resulting text is an editable draft, never an automatically submitted message.",
-                )
-            )
-        else:
-            self.push_screen(DictationModal(self.harness.config), self._dictation_result)
-
-    def _dictation_result(self, text: str | None) -> None:
-        if self._shutting_down:
-            return
-        composer = self.query_one(Composer)
-        if text:
-            composer.insert(text)
-            self._status("Dictation inserted into your draft. Review it, then Enter sends.")
-        composer.focus()
-
     def command(self, text: str) -> None:
         self._hide_completions()
         parts = text.split(maxsplit=1)
@@ -1215,8 +1174,6 @@ class NagentsApp(App[None]):
                 self._status(str(exc), error=True)
         elif name == "/tasks":
             self._show_tasks()
-        elif name == "/dictate":
-            self.action_dictation()
         elif name == "/queue":
             if argument == "clear":
                 self._queued_prompts.clear()

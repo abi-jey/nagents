@@ -7,7 +7,7 @@ import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog.js
 import { LiveSessions } from "../features/chat/liveTranscript.js";
 import { MessageQueue } from "./messages.js";
 import { subscribeEvents, type EventSocket } from "./subscription.js";
-import { deferred } from "../features/dictation/testFixtures.js";
+import { deferred } from "./testFixtures.js";
 import type { Snapshot } from "../types.js";
 
 const target = { id: "ngn-selected", title: "Selected conversation", updated_at: "2026-01-01" };
@@ -142,7 +142,6 @@ function deletionView() {
     sessions: [target.id, "ngn-sidebar"],
     draft: "Keep my unsent draft",
     history: ["Current conversation"],
-    review: "Edited dictation review",
     subscription: "original subscription",
     requests: [] as string[],
     forgotten: [] as { id: string; discardDraft: boolean }[],
@@ -158,7 +157,6 @@ function deletionView() {
       state.selection = { id: next.session_id, revision: state.selection.revision + 1 };
       state.sessions = next.sessions.map((session) => session.id);
       state.history = next.history.map((message) => message.content);
-      state.review = "";
     },
     pause: () => { state.pauses++; state.subscription = "paused"; },
     reconnect: () => { state.reconnects++; state.subscription = "replacement subscription"; },
@@ -177,7 +175,6 @@ test("deleting another sidebar root ignores a different server selection and pre
   f.view.remove = (id) => deleteSession("synthetic", id, true);
   const removing = deleteSessionFromView("ngn-sidebar", f.view, true);
   assert.equal(f.state.draft, "Keep my unsent draft");
-  assert.equal(f.state.review, "Edited dictation review");
   assert.equal(f.state.subscription, "original subscription");
   response.resolve(Response.json({
     ...snapshot, deleted_session_id: "ngn-sidebar", session_id: "ngn-third-tab",
@@ -189,7 +186,6 @@ test("deleting another sidebar root ignores a different server selection and pre
   assert.deepEqual(f.state.selection, { id: target.id, revision: 1 });
   assert.deepEqual(f.state.history, ["Current conversation"]);
   assert.equal(f.state.draft, "Keep my unsent draft");
-  assert.equal(f.state.review, "Edited dictation review");
   assert.equal(f.state.subscription, "original subscription");
   assert.equal(f.state.pauses, 0); assert.equal(f.state.reconnects, 0);
   assert.deepEqual(f.state.sessions, [target.id]);
@@ -212,7 +208,7 @@ test("confirmed current-root deletion clears its draft and loads the surviving r
 });
 
 for (const id of [target.id, "ngn-sidebar"]) {
-  test(`failed deletion of ${id} keeps selection, history, draft, review and session membership`, async () => {
+  test(`failed deletion of ${id} keeps selection, history, draft and session membership`, async () => {
     const f = deletionView();
     const removing = deleteSessionFromView(id, f.view);
     f.pending.reject(new Error("Finish retained descendant tasks first"));
@@ -220,7 +216,6 @@ for (const id of [target.id, "ngn-sidebar"]) {
     assert.deepEqual(f.state.selection, { id: target.id, revision: 1 });
     assert.deepEqual(f.state.history, ["Current conversation"]);
     assert.equal(f.state.draft, "Keep my unsent draft");
-    assert.equal(f.state.review, "Edited dictation review");
     assert.deepEqual(f.state.sessions, [target.id, "ngn-sidebar"]);
     assert.deepEqual(f.state.forgotten, []);
     assert.equal(f.state.pauses, id === target.id ? 1 : 0);
@@ -236,11 +231,11 @@ for (const id of [target.id, "ngn-sidebar"]) {
       f.state.selection = { id: selectedAgain ? target.id : "ngn-newer", revision: 3 };
       f.state.sessions.push("ngn-newer");
       f.state.draft = "Newer draft"; f.state.history = ["Newer history"];
-      f.state.review = "Newer dictation review"; f.state.subscription = "newer subscription";
+      f.state.subscription = "newer subscription";
       f.pending.resolve(snapshot); await removing;
       assert.deepEqual(f.state.selection, { id: selectedAgain ? target.id : "ngn-newer", revision: 3 });
       assert.deepEqual(f.state.history, ["Newer history"]);
-      assert.equal(f.state.draft, "Newer draft"); assert.equal(f.state.review, "Newer dictation review");
+      assert.equal(f.state.draft, "Newer draft");
       assert.equal(f.state.subscription, "newer subscription"); assert.equal(f.state.reconnects, 0);
       assert.ok(f.state.sessions.includes("ngn-newer"));
       assert.deepEqual(f.state.forgotten, [{ id, discardDraft: false }]);

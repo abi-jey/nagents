@@ -14,7 +14,7 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 
 ## Sign in from ngn
 
-Use `/provider` in the TUI or **Global/Workspace settings → Provider connections**
+Use `/provider` in the TUI or **Settings → Global/Workspace → Provider connections**
 in `ngn serve` to manage named connections shared across clients. Global ones
 are saved to `$XDG_CONFIG_HOME/ngn/providers.yaml`; workspace ones are saved to
 workspace-specific YAML under the same config root. Both use environment-variable **references**,

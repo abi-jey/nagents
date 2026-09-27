@@ -151,9 +151,6 @@
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
-.dictation-settings > .settings-field {
-  margin-top: 0;
-}
 .settings-field .settings-checkbox {
   display: flex;
   gap: 8px;
@@ -358,17 +355,6 @@
   .settings-model-results button {
     min-height: 44px;
   }
-}
-.settings-dictation-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-}
-.settings-dictation-fields .settings-field {
-  margin: 0;
-}
-.settings-dictation-fields .settings-field:first-child {
-  grid-column: 1 / -1;
 }
 .settings-disclosure {
   border-top: 1px solid var(--border-group);

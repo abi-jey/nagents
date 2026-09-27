@@ -48,6 +48,7 @@ from .live import register as register_live
 from .live_bridge import MainAgentBridge
 from .live_runtime import LiveService
 from .live_settings import LiveSettings
+from .provider_setup import provider_setup
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
@@ -265,13 +266,10 @@ def create_app(
                         try:
                             await state.wakeups.close()
                         finally:
-                            try:
-                                await state.dictation.close()
-                            finally:
-                                harness.agent.plugins[:] = [
-                                    plugin for plugin in harness.agent.plugins if plugin is not state.history.identity
-                                ]
-                                await harness.close()
+                            harness.agent.plugins[:] = [
+                                plugin for plugin in harness.agent.plugins if plugin is not state.history.identity
+                            ]
+                            await harness.close()
 
             async def close_resources() -> None:
                 try:
@@ -326,7 +324,7 @@ def create_app(
             "model": state.settings.values.model,
             "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
-            "dictation": state.settings.dictation_snapshot(),
+            "provider_setup": provider_setup(state.harness),
             "active_run_id": state.active.id if state.active is not None else "",
             "active_session_id": state.active.session_id if state.active is not None else "",
             "active_run_background": state.active.background if state.active is not None else False,
@@ -686,23 +684,6 @@ def create_app(
             active.task = asyncio.create_task(state.produce_session(active, body.prompt), name=f"ngn-web-{active.id}")
             logger.info("Run started: session=%s run=%s chars=%d", body.session_id, active.id, len(body.prompt))
         return RunResponse(state, active)
-
-    @app.post("/api/dictation/transcribe")
-    async def transcribe(request: Request) -> dict[str, str]:
-        with state.idle():
-            sessions = request.headers.getlist("x-ngn-session")
-            # A recovered WebSocket editor can retain its verified root while
-            # the legacy shared selection changes (for example after restart).
-            # Transcription returns a draft only; it never changes that selection.
-            if len(sessions) != 1 or (
-                sessions[0] != state.selected_session_id and not state.bus.listening(sessions[0])
-            ):
-                raise HTTPException(409, "The selected session changed. Reconnect before recording again.")
-            if request.headers.getlist("x-ngn-settings-revision") != [state.settings.revision]:
-                raise HTTPException(409, "Settings changed. Reload settings before recording again.")
-            await state.channels.store._transaction(lambda db: RoutingStore.root(db, sessions[0]))
-            config = state.settings.dictation_config()
-            return await state.dictation.transcribe(request, config)
 
     @app.post("/api/cancel")
     async def cancel(body: RunInput) -> dict[str, str]:

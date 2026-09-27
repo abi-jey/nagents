@@ -14,7 +14,7 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
   collapsed: boolean;
   toggleCollapsed: () => void;
 }) {
-  const { sessions, available, dictation } = client;
+  const { sessions, available } = client;
   async function moveToTrash(session: typeof sessions.sessions[number]) {
     const previous = document.activeElement;
     if (await client.softDelete(session)) requestAnimationFrame(() => {
@@ -32,8 +32,7 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
       canDelete={(id) => !client.deletion.target && client.canDeleteSession(id)}
       trash={client.trashController.show} trashDisabled={!available.trash}
       notice={!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController}
-        openSession={(id) => void select(id)} blocked={client.busy || (dictation.unfinished && dictation.state.phase !== "review")}
-        openDisabled={dictation.unfinished} />}
+        openSession={(id) => void select(id)} blocked={client.busy} openDisabled={false} />}
       settings={client.settings.show} settingsDisabled={!available.settings}
       tools={client.showTools} toolsDisabled={!available.tools}
       designer={() => { close(); client.showDesigner(); }} designerDisabled={!available.designer}
