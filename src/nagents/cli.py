@@ -542,6 +542,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugins.append(f"{location}:{function}")
             overrides["plugins"] = tuple(plugins)
         config = replace(config, **overrides)
+        if "model" in overrides:
+            config.global_model_default = config.model
         if config.provider_id:
             from .harness.providers import ScopedProviderRegistryStore
 
@@ -551,7 +553,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             config = replace(
                 config,
                 provider=profile.kind,
-                model=overrides.get("model", profile.model),
                 base_url=profile.base_url,
                 api=profile.api,
                 auth=profile.auth,

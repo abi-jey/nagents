@@ -119,7 +119,7 @@ class ProviderRevision(Input):
 
 
 def _provider_profile(fields: dict[str, object]) -> ProviderProfile:
-    if set(fields) - set(ProviderProfile.__dataclass_fields__) or "kind" not in fields or "model" not in fields:
+    if set(fields) - set(ProviderProfile.__dataclass_fields__) or "kind" not in fields:
         raise HTTPException(422, "Invalid provider connection fields")
     live = fields.get("live", {})
     if not isinstance(live, dict) or set(live) - set(LiveProfile.__dataclass_fields__):
@@ -134,7 +134,6 @@ def _provider_profile(fields: dict[str, object]) -> ProviderProfile:
 
         profile = ProviderProfile(
             kind=text("kind"),
-            model=text("model"),
             auth=text("auth", "api-key"),
             base_url=text("base_url"),
             api=text("api", "auto"),
@@ -323,7 +322,7 @@ def create_app(
             "token": token,
             "workspace": str(state.harness.workspace),
             "provider": state.harness.config.provider,
-            "model": state.settings.values.model,
+            "model": state.harness.agent.provider.model,
             "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
             "dictation": state.settings.dictation_snapshot(),

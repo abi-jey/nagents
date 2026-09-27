@@ -201,7 +201,7 @@ def test_harness_login_api_persists_and_logout_removes(tmp_path: Path, monkeypat
         try:
             await harness.initialize()
             await harness.login_api(login())
-            assert harness.config.provider == "openrouter" and harness.config.model == "openrouter/auto"
+            assert harness.config.provider == "openrouter" and harness.config.model == "gpt-4.1"
             assert isinstance(harness.agent.provider, HarnessProvider)
             harness.agent.provider.credentials()
             assert harness.agent.provider.api_key == SECRET

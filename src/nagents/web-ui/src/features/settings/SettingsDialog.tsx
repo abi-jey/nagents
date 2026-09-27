@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { executionLimits, compactionLimits } from "./draft.js";
 import { DictationSettings } from "./DictationSettings.js";
+import { ModelSelector } from "./ModelSelector.js";
 import { ProvidersPanel } from "./ProvidersPanel.js";
 import type { useSettings } from "./useSettings";
 import { revealAncestors } from "../../components/disclosures.js";
@@ -202,7 +203,7 @@ export function SettingsDialog({
           )}
           {snapshot && draft && (
             <>
-               <ProvidersPanel token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} initialModel={draft.model} applied={() => void settings.refresh()} />
+               <ProvidersPanel token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} applied={() => void settings.refresh()} />
               <fieldset
                 className="settings-group"
                 disabled={disabled || !!confirmation}
@@ -235,14 +236,16 @@ export function SettingsDialog({
                       </option>
                     ))}
                   </select>
-                   <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Choose a connection and model above. Trusted agent profiles may set their own model."}</p>
+                   <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Trusted agent profiles may set their own model or connection."}</p>
                   {errors.agent && (
                     <p id="settings-agent-error" className="error-text">
                       {errors.agent}
                     </p>
                   )}
                 </div>
-                {!global && <p>Choose the connection and its model in Provider connections above.</p>}
+                 <ModelSelector token={settings.token} scope={settings.scope} model={draft.model}
+                   error={errors.model} disabled={disabled || !!confirmation}
+                   update={model => settings.update("model", model)} />
               </fieldset>
               <DictationSettings
                 config={snapshot.dictation}

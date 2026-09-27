@@ -48,8 +48,10 @@ workspaces, or **Workspace settings → Provider connections** to add a connecti
 just for this workspace or select a global connection. Add named OpenAI,
 Azure AI Foundry, Anthropic, Gemini, OpenRouter, Azure v1, LiteLLM or custom
 OpenAI-compatible connections. Select a provider type to see its supported API
-and authentication modes; enter a model ID or **Fetch models** for a saved
-connection. The same connections appear in the TUI's `/provider` menu. The
+and authentication modes; the list displays each connection's credential source
+and effective endpoint without showing secrets. Choose a chat model in **Agent
+profile and permissions**, where you can enter an ID or browse the active
+connection's model catalog. The same connections appear in the TUI's `/provider` menu. The
 global registry lives in `$XDG_CONFIG_HOME/ngn/providers.yaml` (normally
 `~/.config/ngn/providers.yaml`); the workspace registry lives under
 `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml`. Use an API key **environment-variable name**
@@ -68,9 +70,9 @@ reference. A ChatGPT subscription does not authorize Live: provide an OpenAI
 API-key variable for Live even if chat uses ChatGPT/Codex login. The **Main assistant**
 voice backend delegates reasoning to the selected workspace agent; **Separate hosted
 backend** uses a standalone model. No named-connection
-API key is stored in the web settings database. Provider configuration and model
-selection are edited only in **Provider connections**, not the workspace
-preferences form. Existing saved settings are not deleted when you add a
+API key is stored in the web settings database. Provider connections never store
+a chat model; global/workspace model preferences are shared by web and terminal.
+Existing saved settings are not deleted when you add a
 connection; set its environment variable before making requests.
 
 `ngn serve` logs resolved trusted config paths, provider registry path and

@@ -33,7 +33,7 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
         super().__init__()
         self.connection_name = name
         self.profile = profile or ProviderProfile(
-            kind="openai", model="gpt-4.1", auth="auto", live=LiveProfile(backend_mode="assistant")
+            kind="openai", auth="auto", live=LiveProfile(backend_mode="assistant")
         )
 
     def compose(self) -> ComposeResult:
@@ -51,8 +51,9 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 yield Select([(kind.label, name) for name, kind in KINDS.items()], value=value.kind, id="provider-kind")
                 yield Static("Authentication", markup=False)
                 yield Select([(mode, mode) for mode in KINDS[value.kind].auth], value=value.auth, id="provider-auth")
-                yield Static("Model ID", markup=False)
-                yield Input(value.model, id="provider-model")
+                yield Static("Chat model: /model (workspace preference, independent of connection)", markup=False)
+                yield Static(f"Credential source: {value.credential_source}", markup=False)
+                yield Static(f"Effective endpoint: {value.effective_endpoint}", markup=False)
                 yield Static("HTTP API", markup=False)
                 yield Select([(api, api) for api in KINDS[value.kind].apis], value=value.api, id="provider-api")
                 yield Static("API prefix URL", id="provider-url-help", markup=False)
@@ -152,7 +153,6 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 kind=kind,
                 auth=auth,
                 api=api,
-                model=input_value("provider-model"),
                 base_url=input_value("provider-url"),
                 api_key_env=input_value("provider-env") if auth in {"auto", "api-key"} or kind == "openai" else "",
                 api_version=input_value("provider-version"),

@@ -46,7 +46,8 @@ test("settings route provider configuration through the shared connection manage
   for (const constraint of ["600 seconds", "300 seconds", "two lowercase", "10,000,000 tokens", "1 to 10,000 messages"])
     assert.ok(html.toLowerCase().includes(constraint.toLowerCase()), constraint);
   assert.match(html, /Provider connections/);
-  assert.doesNotMatch(html, /Legacy provider override|id="settings-provider-key"|id="settings-provider"|id="settings-model"|type="password"/);
+  assert.match(html, /id="settings-model"/);
+  assert.doesNotMatch(html, /Legacy provider override|id="settings-provider-key"|id="settings-provider"|type="password"/);
   const global = renderToStaticMarkup(createElement(SettingsDialog, { settings: { ...settings, scope: "global" } }));
   assert.match(global, /Global settings/);
   assert.match(global, /Provider connections/);

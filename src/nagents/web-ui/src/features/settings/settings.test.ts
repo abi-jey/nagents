@@ -85,11 +85,11 @@ test("model IDs reject blanks, excess length, and control characters even at the
   }
 });
 
-test("profiles come from the server and only nonempty profile models preset the draft", () => {
+test("profiles come from the server without changing the independent chat model draft", () => {
   const draft = createDraft(values);
   const selected = selectProfile(draft, "review", reply.profiles);
   assert.equal(selected.agent, "review");
-  assert.equal(selected.model, "review-model");
+  assert.equal(selected.model, draft.model);
   assert.equal(draft.agent, "assistant");
   const overridden = { ...selected, model: "explicit-model" };
   const parsed = parseDraft(overridden, reply.profiles);
