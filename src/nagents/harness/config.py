@@ -36,6 +36,18 @@ PROVIDERS.update(
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
 API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
+# These trusted-YAML keys existed before microphone dictation was removed.
+# Discard only these exact names; unknown settings remain errors.
+_LEGACY_DICTATION_KEYS = frozenset(
+    {
+        "dictation_enabled",
+        "dictation_model",
+        "dictation_base_url",
+        "dictation_api_key_env",
+        "dictation_language",
+        "dictation_max_seconds",
+    }
+)
 
 
 def _data_dir() -> Path:
@@ -80,12 +92,6 @@ class HarnessConfig:
     api: str = "auto"
     max_subagent_depth: int = 2
     theme_background: str = "auto"
-    dictation_enabled: bool = False
-    dictation_model: str = "gpt-4o-mini-transcribe"
-    dictation_base_url: str = "https://api.openai.com/v1"
-    dictation_api_key_env: str = "OPENAI_API_KEY"
-    dictation_language: str = ""
-    dictation_max_seconds: int = 120
     skill_token_limit: int = 10000
 
     def __post_init__(self) -> None:
@@ -163,25 +169,6 @@ class HarnessConfig:
             raise ValueError("max_tool_rounds must be between 1 and 1000")
         if type(self.max_subagent_depth) is not int or not 0 <= self.max_subagent_depth <= 8:
             raise ValueError("max_subagent_depth must be an integer between 0 and 8 (root depth is 0)")
-        if type(self.dictation_enabled) is not bool:
-            raise ValueError("dictation_enabled must be a boolean")
-        if not self.dictation_model.strip():
-            raise ValueError("dictation_model must not be empty")
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.dictation_api_key_env):
-            raise ValueError("dictation_api_key_env must be an environment variable name, not a literal secret")
-        url = urlsplit(self.dictation_base_url)
-        if (
-            url.scheme not in {"http", "https"}
-            or not url.hostname
-            or any(char.isspace() or ord(char) < 32 for char in self.dictation_base_url)
-        ):
-            raise ValueError("dictation_base_url must be an HTTP(S) URL")
-        if url.username or url.password or url.query or url.fragment:
-            raise ValueError("dictation_base_url must not contain credentials, query parameters, or fragments")
-        if self.dictation_language and not re.fullmatch(r"[a-z]{2}", self.dictation_language):
-            raise ValueError("dictation_language must be empty (auto-detect) or a two-letter lowercase language code")
-        if type(self.dictation_max_seconds) is not int or not 1 <= self.dictation_max_seconds <= 300:
-            raise ValueError("dictation_max_seconds must be an integer between 1 and 300")
 
     def profile(self, name: str) -> AgentProfile:
         if name == "assistant":
@@ -257,10 +244,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "tab_action",
         "api",
         "theme_background",
-        "dictation_model",
-        "dictation_base_url",
-        "dictation_api_key_env",
-        "dictation_language",
     }
     integers = {
         "max_output",
@@ -268,9 +251,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "skill_token_limit",
         "max_tool_rounds",
         "max_subagent_depth",
-        "dictation_max_seconds",
     }
-    booleans = {"demo", "animations", "dictation_enabled", "read_only"}
+    booleans = {"demo", "animations", "read_only"}
     allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles"}
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
@@ -324,7 +306,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             values = {}
         if not isinstance(values, dict):
             raise ValueError(f"{path}: the configuration must be a mapping of top-level settings")
-        unknown = values.keys() - allowed
+        unknown = values.keys() - allowed - _LEGACY_DICTATION_KEYS
         if unknown:
             raise ValueError(
                 f"Unknown configuration fields in {path}: {', '.join(sorted(unknown))}; use api_key_env, never api_key"
@@ -339,6 +321,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         }:
             config.provider_id = ""
         for key, value in values.items():
+            if key in _LEGACY_DICTATION_KEYS:
+                continue
             if key == "model":
                 model_overridden = True
             if key in strings | {"data_dir"}:

@@ -1,5 +1,4 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { insertDraft } from "../dictation/draft";
 import { request, RequestError } from "../../api/client";
 import { text } from "../../api/events";
 import { MessageQueue, queueMessage, queuedMessageFailure } from "../../api/messages";
@@ -35,19 +34,6 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const approval = useApproval(token);
   const needsApprovalSync = useRef(true);
 
-  function insertDictation(value: string): string {
-    let error = "";
-    setPrompt((current) => {
-      const result = insertDraft(current, value, sessionId);
-      if (result.ok) {
-        error = queuedMessageFailure(result.prompt, sessionId);
-        return error ? current : result.prompt;
-      }
-      error = result.error;
-      return current;
-    });
-    return error;
-  }
   const receiveFrame = useEffectEvent((frame: EventFrame) => {
     receive(frame);
     if ((frame.type !== "snapshot" && frame.type !== "event") || frame.session_id !== selected.current) return;
@@ -147,7 +133,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     finally { cancelling.current = false; setStopping(false); }
   }
   return {
-    entries: view.entries, prompt, setPrompt, insertDictation, runId: view.activeRun?.id || "", connected,
+    entries: view.entries, prompt, setPrompt, runId: view.activeRun?.id || "", connected,
     submitting, stopping,
     contextRevision,
     backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,

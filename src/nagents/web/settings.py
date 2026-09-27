@@ -27,10 +27,6 @@ from nagents.compactor import Messages
 from nagents.compactor import Tokens
 from nagents.harness.config import API_NAMES
 from nagents.harness.config import PROVIDERS
-from nagents.harness.dictation import BYTES_PER_SECOND
-from nagents.harness.dictation import SAMPLE_RATE
-from nagents.harness.dictation import DictationError
-from nagents.harness.dictation import VoiceDictation
 
 from ._async import join_owned as _join
 
@@ -46,6 +42,16 @@ COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
 DEFAULT_COMPACT_TOKENS = 200_000
 DEFAULT_COMPACT_MESSAGES = 100
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_LEGACY_DICTATION_KEYS = frozenset(
+    {
+        "dictation_enabled",
+        "dictation_model",
+        "dictation_base_url",
+        "dictation_api_key_env",
+        "dictation_language",
+        "dictation_max_seconds",
+    }
+)
 _GLOBAL_SETTINGS_TABLE = (
     "CREATE TABLE IF NOT EXISTS ngn_web_global_settings (id INTEGER PRIMARY KEY CHECK(id = 1), "
     "version INTEGER NOT NULL, values_json TEXT NOT NULL, revision TEXT NOT NULL)"
@@ -104,21 +110,14 @@ class _SettingsValuesV1(BaseModel):
         return value
 
 
-class _SettingsValuesV2(_SettingsValuesV1):
-    """Workspace preferences before provider overrides existed."""
-
-    dictation_enabled: bool
-    dictation_model: str = Field(min_length=1, max_length=200)
-    dictation_language: str = Field(pattern=r"^(?:[a-z]{2})?$")
-    dictation_max_seconds: int = Field(ge=1, le=300)
-
-    @field_validator("dictation_model", mode="before")
-    @classmethod
-    def dictation_model_id(cls, value: object) -> object:
-        return cls.model_id(value)
+def _without_legacy_dictation(values: object) -> dict[str, object]:
+    """Discard only historic persisted keys, retaining strict validation of all others."""
+    if not isinstance(values, dict):
+        raise ValueError("Invalid saved settings")
+    return {key: value for key, value in values.items() if key not in _LEGACY_DICTATION_KEYS}
 
 
-class SettingsValues(_SettingsValuesV2):
+class SettingsValues(_SettingsValuesV1):
     """Current persisted schema, including allowlisted provider overrides."""
 
     provider: str = Field(min_length=1, max_length=40)
@@ -188,10 +187,6 @@ class SettingsValues(_SettingsValuesV2):
             max_file_bytes=config.max_file_bytes,
             max_tool_rounds=config.max_tool_rounds,
             max_subagent_depth=config.max_subagent_depth,
-            dictation_enabled=config.dictation_enabled,
-            dictation_model=config.dictation_model,
-            dictation_language=config.dictation_language,
-            dictation_max_seconds=config.dictation_max_seconds,
             provider=config.provider,
             base_url=config.base_url,
             api=config.api,
@@ -250,8 +245,7 @@ class WebSettings:
         self.harness = harness
         # Construct only after initialize(), including initial Codex resolution.
         # Each restart captures the current trusted configuration anew; saved
-        # overrides never mutate the administrator's opt-in, ceiling or storage.
-        self._dictation_admin = copy.deepcopy(harness.config)
+        # overrides never mutate the administrator's ceiling or storage.
         self._provider_admin = copy.deepcopy(harness.config)
         self.defaults = SettingsValues.current(harness)
         self.startup_defaults = self.defaults
@@ -338,49 +332,6 @@ class WebSettings:
         self._env_backup.pop(env, None)
         self._env_present.discard(env)
 
-    def dictation_config(self) -> "HarnessConfig":
-        """Detached service configuration using only committed web preferences."""
-        config = copy.deepcopy(self._dictation_admin)
-        values = self.values
-        config.dictation_enabled = config.dictation_enabled and values.dictation_enabled and not config.demo
-        config.dictation_model = values.dictation_model
-        config.dictation_language = values.dictation_language
-        config.dictation_max_seconds = min(values.dictation_max_seconds, config.dictation_max_seconds)
-        return config
-
-    def dictation_snapshot(self) -> dict[str, object]:
-        """Safe local readiness projection; no device probing or provider I/O."""
-        config = self.dictation_config()
-        available = False
-        if not self._dictation_admin.dictation_enabled:
-            status = "Dictation is disabled by the administrator. Ask them to enable dictation and restart ngn."
-        elif config.demo:
-            status = "Dictation is unavailable in demo mode. Restart without --demo."
-        elif not config.dictation_enabled:
-            status = "Dictation is disabled in web settings. Enable it and save settings to use voice input."
-        else:
-            try:
-                VoiceDictation(config).check_ready()
-            except DictationError as error:
-                status = str(error)
-            else:
-                available = True
-                status = "Dictation is ready. Transcription uses a separate API key and API billing."
-        return {
-            "enabled": config.dictation_enabled,
-            "available": available,
-            "admin_enabled": self._dictation_admin.dictation_enabled,
-            "status": status,
-            "api_key_env": config.dictation_api_key_env,
-            "max_seconds": config.dictation_max_seconds,
-            "max_bytes": config.dictation_max_seconds * BYTES_PER_SECOND + 4096,
-            "sample_rate": SAMPLE_RATE,
-            "channels": 1,
-            "sample_width": 2,
-            "content_type": "audio/wav",
-            "revision": self.revision,
-        }
-
     def snapshot(self) -> dict[str, object]:
         config = self.harness.config
         return {
@@ -400,7 +351,6 @@ class WebSettings:
             "revision": self.revision,
             "persisted": self.persisted,
             "effective_mode": self.effective_mode,
-            "dictation": self.dictation_snapshot(),
             "providers": sorted(PROVIDERS),
             "apis": list(PROVIDER_APIS),
             "auths": list(PROVIDER_AUTHS),
@@ -490,10 +440,10 @@ class WebSettings:
                     # startup defaults. Reject malformed/extra fields first.
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **legacy.model_dump()})
                 elif version == 2:
-                    legacy = _SettingsValuesV2.model_validate_json(payload)
+                    legacy = _SettingsValuesV1.model_validate(_without_legacy_dictation(json.loads(payload)))
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **legacy.model_dump()})
                 elif version == 3:
-                    legacy_values = json.loads(payload)
+                    legacy_values = _without_legacy_dictation(json.loads(payload))
                     if not isinstance(legacy_values, dict) or {"submit_mode", "read_only"} & legacy_values.keys():
                         raise ValueError("Invalid version-3 settings")
                     values = SettingsValues.model_validate(
@@ -504,10 +454,10 @@ class WebSettings:
                         }
                     )
                 elif version == 4:
-                    values = SettingsValues.model_validate_json(payload)
+                    values = SettingsValues.model_validate(_without_legacy_dictation(json.loads(payload)))
                 else:
-                    differences = json.loads(payload)
-                    if not isinstance(differences, dict) or set(differences) - set(SettingsValues.model_fields):
+                    differences = _without_legacy_dictation(json.loads(payload))
+                    if set(differences) - set(SettingsValues.model_fields):
                         raise ValueError("Invalid workspace overrides")
                     values = SettingsValues.model_validate({**self.defaults.model_dump(), **differences})
                 # Older web defaults used these names for the same unrestricted
@@ -584,8 +534,8 @@ class WebSettings:
             or not re.fullmatch(r"[0-9a-f]{64}", revision)
         ):
             raise ValueError("Invalid global settings")
-        values = json.loads(payload)
-        if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
+        values = _without_legacy_dictation(json.loads(payload))
+        if set(values) - (set(SettingsValues.model_fields) - {"agent"}):
             raise ValueError("Invalid global settings fields")
         self.defaults = SettingsValues.model_validate({**self.startup_defaults.model_dump(), **values})
         self.validate(self.defaults)

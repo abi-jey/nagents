@@ -4,7 +4,6 @@ import { RequestError } from "../../api/client.js";
 import { createDraft, parseDraft, selectProfile } from "./draft.js";
 import { readSettings, resetSettings, saveSettings, settingsFailure } from "./transport.js";
 import type { SettingsReply, SettingsValues } from "./types.js";
-import { dictationConfig } from "../dictation/testFixtures.js";
 import { settingsValues } from "./testFixtures.js";
 
 const values: SettingsValues = settingsValues({ provider: "mock", api: "responses", api_key_env: "MOCK_API_KEY" });
@@ -30,7 +29,6 @@ const reply: SettingsReply = {
     key_configured: false,
     auth_status: "configured",
   },
-  dictation: dictationConfig,
 };
 
 test("settings drafts round-trip exact API keys and numeric values", () => {

@@ -1,7 +1,10 @@
 """Global defaults are shared; workspace overrides and credentials stay local."""
 
 import asyncio
+import json
 from pathlib import Path
+
+import aiosqlite
 
 from nagents.harness.config import HarnessConfig
 from tests.support.web import client_app
@@ -128,6 +131,52 @@ def test_global_settings_preserve_submit_mode_when_omitted(tmp_path: Path) -> No
             )
             assert again.status_code == 200, again.text
             assert again.json()["values"]["submit_mode"] == "interrupt"
+
+    asyncio.run(scenario())
+
+
+def test_historic_global_defaults_ignore_removed_dictation_fields(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True)
+        async with client_app(tmp_path, config=config) as (_, client, headers, _):
+            initial = (await client.get("/api/settings/global", headers=headers)).json()
+            saved = await client.post(
+                "/api/settings/global",
+                headers=headers,
+                json={"revision": initial["revision"], "values": {**initial["values"], "max_output": 2048}},
+            )
+            assert saved.status_code == 200
+            revision = saved.json()["revision"]
+        async with aiosqlite.connect(config.data_dir / "web-defaults.db") as db:
+            values = {
+                "max_output": 2048,
+                "dictation_enabled": True,
+                "dictation_model": "old-transcriber",
+                "dictation_language": "de",
+                "dictation_max_seconds": 50,
+                "dictation_base_url": "file:///old",
+                "dictation_api_key_env": "old-secret",
+            }
+            await db.execute("UPDATE ngn_web_global_settings SET values_json = ?", (json.dumps(values),))
+            await db.commit()
+        async with client_app(tmp_path, config=config) as (_, client, headers, _):
+            loaded = (await client.get("/api/settings/global", headers=headers)).json()
+            assert loaded["values"]["max_output"] == 2048 and loaded["revision"] == revision
+            assert "dictation" not in json.dumps(loaded)
+            assert (await client.get("/api/settings", headers=headers)).json()["values"]["max_output"] == 2048
+            updated = await client.post(
+                "/api/settings/global",
+                headers=headers,
+                json={"revision": revision, "values": loaded["values"]},
+            )
+            assert updated.status_code == 200
+            async with (
+                aiosqlite.connect(config.data_dir / "web-defaults.db") as db,
+                db.execute("SELECT values_json FROM ngn_web_global_settings") as cursor,
+            ):
+                row = await cursor.fetchone()
+                assert row is not None
+                assert "dictation" not in row[0]
 
     asyncio.run(scenario())
 

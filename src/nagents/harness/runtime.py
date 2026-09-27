@@ -1005,9 +1005,6 @@ class Harness:
                 f"Composer: submit_mode={self.config.submit_mode}; tab_action={self.config.tab_action}",
                 f"Agent: {self.config.agent} ({self.mode}); profiles: {', '.join(self.config.profile_names)}",
                 f"Subagents: max depth {self.config.max_subagent_depth} (root=0); shared 3 concurrent / 8 executions per run",
-                f"Dictation: {'enabled (explicit start only)' if self.config.dictation_enabled else 'disabled'}; "
-                f"model: {self.config.dictation_model}; endpoint: {self.config.dictation_base_url}; "
-                f"key reference: ${self.config.dictation_api_key_env}",
                 f"Project configuration trusted: {self.config.trust_project}",
                 f"Config files: {', '.join(str(path) for path in self.config.config_paths) or 'built-in defaults'}",
                 f"Tools: {', '.join(self.agent.tool_registry.names())}",

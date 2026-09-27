@@ -121,13 +121,11 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 | `/context` | Inspect effective context and configuration. |
 | `/plugins` | Inspect configured and loaded Python extensions. |
 | `/tasks` | Open the agent tree, inspect conversations, and send follow-ups. |
-| `/dictate` | Open opt-in recording controls and return an editable draft. |
 | `/queue [resume\|clear]` | Inspect, resume, or explicitly discard queued input. |
 | `/login`, `/logout` | Manage ngn's local OpenAI device login. |
 | `/quit` | Close the client and clean up managed work. |
 
-Dictation's opt-in command is described [below](#dictation); `/help` is the source
-of truth for commands available in the particular source build you installed.
+`/help` is the source of truth for commands available in the particular source build you installed.
 
 Shift+Enter inserts a newline. Ctrl+J and Alt+Enter remain fallbacks for terminals
 that do not transmit Shift+Enter distinctly. Pasted multiline text is never
@@ -269,60 +267,6 @@ remains. Theme selection also accepts YAML `theme` and `NGN_THEME`; background
 selection has the `NGN_THEME_BACKGROUND` environment default. YAML overrides
 `NGN_*` environment defaults. These are color/motion presets, not a graphical
 Bot avatar or a separate team-view implementation.
-
-## Dictation
-
-Microphone dictation is **off by default**. It is short-recording transcription
-into the composer, not realtime speech-to-speech and not an always-listening
-assistant. Install the optional `voice` extra alongside `tui` for `sounddevice`
-capture, then explicitly enable it in trusted, flat YAML:
-
-```yaml
-dictation_enabled: true
-dictation_model: gpt-4o-mini-transcribe
-dictation_base_url: https://api.openai.com/v1
-dictation_api_key_env: OPENAI_API_KEY
-dictation_language: ""
-dictation_max_seconds: 120
-```
-
-Set the referenced API key outside YAML. The transcription settings are separate
-from `provider`, `model`, `base_url`, and `api_key_env` for the conversation.
-For example, a conversation can use Anthropic, LiteLLM, or ChatGPT device login
-while dictation uses a separately configured transcription API.
-
-Use `/dictate` or **Ctrl+G**. `--dictation` enables the feature for one launch,
-and `--no-dictation` explicitly disables it. Opening the modal does not activate
-the microphone. **Start recording** starts capture; **Stop & transcribe** stops
-capture and uploads once. At the duration limit, capture stops without uploading
-and waits for an explicit **Transcribe** action. Edit the preview, then choose
-**Use text** to insert it at the main composer's cursor. Escape or Ctrl+C cancels
-the modal and waits for cleanup; exiting ngn also closes its recorder and client.
-Finish or stop an active coding run before opening recording controls.
-
-Transcribed text is an **editable preview**. Review and correct it before
-explicitly submitting it as a prompt; recording does not automatically send a
-chat message. `dictation_max_seconds` bounds recording to `1..300` seconds,
-default `120`. Empty `dictation_language` leaves language detection to the
-service; otherwise use exactly two lowercase letters, such as `"en"`, supported
-by the transcription service.
-
-Audio is sent to the configured transcription service when transcription is
-requested. Its account billing, retention, and privacy policies apply. Use a
-trusted endpoint and do not record sensitive material without permission. A
-ChatGPT subscription or ngn device-login token **does not authorize or pay for**
-the separate transcription API; provide a paid API key with access to that
-service. A compatible custom endpoint must support the transcription API; a
-working chat route does not guarantee audio support.
-
-See [microphone installation](ngn-installation.md#optional-microphone-support)
-for PortAudio/device requirements, and the
-[dictation schema](ngn-configuration.md#dictation) for all defaults and environment
-references. Demo mode is intended to remain offline; do not treat it as a live
-transcription test. `/dictate` is disabled in demo mode, even when dictation is
-enabled in configuration. Captured WAV data stays in bounded memory, not local
-audio files. Uploads have a 60-second timeout, no redirects, and no automatic
-retries. Cancellation cannot recall audio already received by the endpoint.
 
 ## Native background subagents
 
@@ -649,12 +593,6 @@ after the subcommand; prefer supplying each option only once.
 | `--theme NAME` | Select `terminal`, `graphite`, `ocean`, or `ember`. |
 | `--theme-background auto\|terminal\|theme` | Choose preset-default, terminal-native, or preset background behavior. |
 | `--no-animations` | Disable the busy indicator's motion, animated scrolling, and cursor blinking; brief button feedback remains. |
-| `--dictation`, `--no-dictation` | Explicitly enable or disable the opt-in microphone feature. Never starts recording automatically. |
-| `--dictation-model ID` | Select the separate transcription model. |
-| `--dictation-base-url URL` | Set the transcription API base. |
-| `--dictation-api-key-env NAME` | Name the environment variable containing the transcription key. |
-| `--dictation-language CODE` | Empty for detection, or exactly two lowercase ASCII letters. |
-| `--dictation-max-seconds N` | Integer `1..300`; default `120`. |
 | `--submit-mode queue\|interrupt` | Control prompts submitted while work is active. |
 | `--tab-action agent\|complete\|focus` | Select composer Tab behavior. |
 | `--plugin REFERENCE` | Explicitly trust and append a Python extension; repeatable. |

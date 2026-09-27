@@ -66,7 +66,6 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("context", "Show effective configuration and context"),
     Command("quit", "Close the client"),
     Command("tasks", "Inspect agent tree, conversations, and follow-ups"),
-    Command("dictate", "Record an opt-in voice draft; never submits automatically"),
     Command("queue", "Inspect, resume, or clear queued prompts", argument_hint="[resume|clear]"),
 )
 BUILTIN_ALIASES = {"resume": "sessions"}

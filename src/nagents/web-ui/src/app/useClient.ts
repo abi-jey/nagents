@@ -2,9 +2,7 @@ import { useEffect, useState } from "react";
 import { useChatRun } from "../features/chat/useChatRun";
 import { useSessions } from "../features/sessions/useSessions";
 import { useSettings } from "../features/settings/useSettings";
-import { useDictation } from "../features/dictation/useDictation";
-import { promptFailure } from "../features/dictation/draft";
-import { recordingSupport } from "../features/dictation/browser";
+import { queuedMessageFailure } from "../api/messages";
 import { useChannels } from "../features/channels/useChannels";
 import { useContextStats } from "../features/context/useContext";
 import { useSessionActions } from "../features/sessions/useSessionActions";
@@ -25,21 +23,15 @@ export function useClient() {
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools" | "designer" | "live">("none");
   const busy = operating || !!chat.runId || sessions.globalBusy;
-  const dictation = useDictation(
-    sessions.config?.token || "",
-    sessions.sessionId,
-    busy || !!sessions.externalRun || !!chat.approval.pending || sessions.activityOnly,
-  );
 
   // The UI rejects competing operations immediately, matching the backend's 409 policy.
   async function operate(action: () => Promise<void>): Promise<boolean> {
-    if (dictation.controller.active) return false;
     return operations.operate(action);
   }
 
   const settings = useSettings({
     token: sessions.config?.token || "",
-    blocked: busy || !!sessions.externalRun || !!chat.approval.pending || dictation.unfinished,
+    blocked: busy || !!sessions.externalRun || !!chat.approval.pending,
     operate: (action) => busy ? Promise.resolve(false) : operate(action),
     accept: sessions.acceptSettings,
   });
@@ -53,7 +45,7 @@ export function useClient() {
     { active: !!chat.runId, revision: chat.contextRevision, enabled: !sessions.activityOnly,
       configuration },
   );
-  const membership = useSessionActions({ sessions, chat, dictation, operations, busy,
+  const membership = useSessionActions({ sessions, chat, operations, busy,
     blocked: channels.open || settings.open || panel !== "none" || !!chat.approval.pending });
 
   function access() {
@@ -61,8 +53,6 @@ export function useClient() {
       ready: !!token && !!sessions.sessionId,
       operating: operations.occupied(),
       running: !!chat.runId || sessions.globalBusy,
-      dictating: dictation.unfinished,
-      reviewing: dictation.state.phase === "review",
       modal: channels.open || settings.open || !!membership.deletion.target ||
         membership.trashController.getSnapshot().open || panel !== "none",
       approval: !!chat.approval.pending,
@@ -71,7 +61,6 @@ export function useClient() {
   }
 
   async function connect() {
-    dictation.controller.cancel("");
     await operate(async () => {
       chat.pause();
       chat.setStatus("Connecting to local harness");
@@ -110,11 +99,12 @@ export function useClient() {
     if (
       !access().submit ||
       sessions.activityOnly ||
-      dictation.controller.active ||
       (!value.trim() && !uploadState.items.length)
     )
       return;
-    const failure = promptFailure(value, sessions.sessionId);
+    const failure = value.length > 32000
+      ? "The draft exceeds 32,000 characters. Shorten it before sending; it is kept."
+      : queuedMessageFailure(value, sessions.sessionId, uploadState.items.map((item) => item.id));
     if (failure) {
       setError(failure);
       return;
@@ -140,20 +130,6 @@ export function useClient() {
     }
   }
 
-  function startDictation() {
-    if (!access().create || busy || sessions.externalRun || sessions.activityOnly || !sessions.config?.dictation ||
-        !sessions.sessionId || recordingSupport()) return;
-    void dictation.controller.start({
-      token: sessions.config.token,
-      sessionId: sessions.sessionId,
-      config: sessions.config.dictation,
-    });
-  }
-
-  function insertDictation() {
-    return dictation.controller.insert(chat.insertDictation);
-  }
-
   return {
     ...membership,
     available: access(),
@@ -170,9 +146,6 @@ export function useClient() {
     uploadState,
     settings,
     channels,
-    dictation,
-    startDictation,
-    insertDictation,
     busy,
     operating,
     error,

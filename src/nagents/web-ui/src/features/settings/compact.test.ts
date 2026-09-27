@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { dictationConfig } from "../dictation/testFixtures.js";
 import { createDraft } from "./draft.js";
 import { SettingsDialog } from "./SettingsDialog.js";
 import type { SettingsReply } from "./types.js";
@@ -10,7 +9,7 @@ import type { useSettings } from "./useSettings.js";
 import { settingsValues } from "./testFixtures.js";
 
 test("settings route provider configuration through the shared connection manager", () => {
-  const values = settingsValues({ model: "chat-model", provider: "openrouter", auth: "api-key", api_key_env: "OPENROUTER_API_KEY", dictation_enabled: true, compact_trigger: "tokens", compact_tokens: 120000, compact_messages: 80 });
+  const values = settingsValues({ model: "chat-model", provider: "openrouter", auth: "api-key", api_key_env: "OPENROUTER_API_KEY", compact_trigger: "tokens", compact_tokens: 120000, compact_messages: 80 });
   const snapshot: SettingsReply = {
     values, defaults: values, profiles: [{ name: "assistant", mode: "build", model: "" }],
     revision: "opaque", persisted: false, effective_mode: "build",
@@ -20,7 +19,6 @@ test("settings route provider configuration through the shared connection manage
       provider: "openrouter", api: "auto", auth: "api-key", base_url: "",
       api_key_env: "OPENROUTER_API_KEY", key_configured: true, auth_status: "configured",
     },
-    dictation: dictationConfig,
   };
   const unexpected = () => assert.fail("Rendering cannot mutate settings");
   const settings: ReturnType<typeof useSettings> = {
@@ -31,10 +29,8 @@ test("settings route provider configuration through the shared connection manage
     save: async () => unexpected(), reset: async () => unexpected(),
   };
   const html = renderToStaticMarkup(createElement(SettingsDialog, { settings }));
-  assert.ok(html.indexOf("<legend>Dictation</legend>") < html.indexOf("<summary>Execution limits</summary>"));
   assert.match(html, /<details class="settings-disclosure"><summary>Execution limits<\/summary>/);
   assert.match(html, /<details class="settings-disclosure"><summary>Settings defaults<\/summary>[\s\S]*Use global defaults[\s\S]*<\/details>/);
-  assert.match(html, /<details class="settings-help settings-connection"><summary>Dictation details/);
   assert.match(html, /<details class="settings-disclosure"><summary>Context compaction<\/summary>/);
   assert.match(html, /id="settings-compact_trigger"[\s\S]*?<option value="off">Off<\/option>/);
   assert.match(html, /id="settings-compact_tokens"[^>]*inputmode="numeric"/i);
@@ -43,9 +39,10 @@ test("settings route provider configuration through the shared connection manage
   assert.ok(html.indexOf("<summary>Context compaction</summary>") < html.indexOf("<summary>Settings defaults</summary>"));
   for (const key of Object.keys(values).filter((key) => !["provider", "model", "api", "auth", "api_key_env", "base_url"].includes(key)))
     assert.ok(html.includes(`id="settings-${key}"`), key);
-  for (const constraint of ["600 seconds", "300 seconds", "two lowercase", "10,000,000 tokens", "1 to 10,000 messages"])
+  for (const constraint of ["600 seconds", "10,000,000 tokens", "1 to 10,000 messages"])
     assert.ok(html.toLowerCase().includes(constraint.toLowerCase()), constraint);
   assert.match(html, /Provider connections/);
+  assert.doesNotMatch(html, /dictation|transcription model/i);
   assert.doesNotMatch(html, /Legacy provider override|id="settings-provider-key"|id="settings-provider"|id="settings-model"|type="password"/);
   const global = renderToStaticMarkup(createElement(SettingsDialog, { settings: { ...settings, scope: "global" } }));
   assert.match(global, /Global settings/);

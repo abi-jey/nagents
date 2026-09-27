@@ -25,12 +25,6 @@ animations: true
 submit_mode: queue  # queue or interrupt.
 tab_action: agent  # agent, complete, or focus.
 
-dictation_enabled: false  # Enabling still requires an explicit recording action.
-dictation_model: gpt-4o-mini-transcribe
-dictation_base_url: https://api.openai.com/v1
-dictation_api_key_env: OPENAI_API_KEY
-dictation_language: ""  # Auto-detect, or a two-letter lowercase code.
-dictation_max_seconds: 120
 
 # Omit data_dir to use $XDG_DATA_HOME/ngn or ~/.local/share/ngn.
 # A relative data_dir or .py plugin path is relative to this YAML file.

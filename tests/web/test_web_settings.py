@@ -1,7 +1,6 @@
 """Workspace settings API, transactional persistence and portable runtime coverage."""
 
 import asyncio
-import builtins
 import json
 import os
 import sqlite3
@@ -19,14 +18,11 @@ from nagents.compactor import Tokens
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
-from nagents.harness.dictation import VoiceDictation
 from nagents.harness.provider import HarnessProvider
-from nagents.provider import OpenAIProvider
 from nagents.types import Message
 from nagents.types import ToolCall
 from nagents.web.app import create_app
 from nagents.web.settings import SettingsValues
-from nagents.web.settings import WebSettings
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
 from tests.support.web import ControlledHarness
@@ -43,7 +39,12 @@ LEGACY_FIELDS = (
     "max_tool_rounds",
     "max_subagent_depth",
 )
-DICTATION_FIELDS = ("dictation_enabled", "dictation_model", "dictation_language", "dictation_max_seconds")
+HISTORIC_DICTATION = {
+    "dictation_enabled": True,
+    "dictation_model": "legacy-model",
+    "dictation_language": "en",
+    "dictation_max_seconds": 90,
+}
 PROVIDER_FIELDS = ("provider", "base_url", "api", "auth", "api_key_env")
 COMPACTION_FIELDS = ("compact_trigger", "compact_tokens", "compact_messages")
 SUBMIT_FIELDS = ("submit_mode",)
@@ -55,13 +56,13 @@ def legacy_values(version: int, values: dict[str, object]) -> dict[str, object]:
     if version == 1:
         return {key: values[key] for key in LEGACY_FIELDS}
     if version == 2:
-        return {key: values[key] for key in (*LEGACY_FIELDS, *DICTATION_FIELDS)}
+        return {key: values[key] for key in LEGACY_FIELDS} | HISTORIC_DICTATION
     if version == 3:
         # Version 3 predates submit_mode and read_only, persisted from version 4.
         return {
             key: values[key] for key in SettingsValues.model_fields if key not in (*SUBMIT_FIELDS, *READ_ONLY_FIELDS)
-        }
-    return {key: values[key] for key in SettingsValues.model_fields}
+        } | HISTORIC_DICTATION
+    return {key: values[key] for key in SettingsValues.model_fields} | HISTORIC_DICTATION
 
 
 def assert_runtime(harness: Harness, values: dict[str, object]) -> None:
@@ -113,7 +114,6 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "persisted",
                     "effective_mode",
                     "connection",
-                    "dictation",
                     "providers",
                     "apis",
                     "auths",
@@ -125,7 +125,6 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     == set(SettingsValues.model_fields)
                     == {
                         *LEGACY_FIELDS,
-                        *DICTATION_FIELDS,
                         *PROVIDER_FIELDS,
                         *COMPACTION_FIELDS,
                         *SUBMIT_FIELDS,
@@ -208,6 +207,73 @@ def test_settings_legacy_rows_inherit_trusted_submit_mode(tmp_path: Path, versio
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("version", [2, 3, 4, 5])
+def test_historic_dictation_saved_rows_load_without_exposing_fields(tmp_path: Path, version: int) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path) as (_, client, headers, harnesses):
+            initial = (await client.get("/api/settings", headers=headers)).json()
+            db_path = harnesses[0].agent.session.db_path
+        values = (
+            legacy_values(version, initial["values"]) if version != 5 else {"max_tool_rounds": 7, **HISTORIC_DICTATION}
+        )
+        values.update(dictation_base_url="file:///old", dictation_api_key_env="legacy-secret")
+        values["max_tool_rounds"] = 7
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                "INSERT INTO ngn_web_settings (id, version, values_json, revision) VALUES (1, ?, ?, ?)",
+                (version, json.dumps(values), "a" * 64),
+            )
+            await db.commit()
+        async with client_app(tmp_path) as (_, client, headers, harnesses):
+            loaded = (await client.get("/api/settings", headers=headers)).json()
+            assert loaded["values"]["max_tool_rounds"] == harnesses[0].agent.max_tool_rounds == 7
+            assert loaded["revision"] == "a" * 64
+            assert "dictation" not in json.dumps(loaded)
+            assert "dictation" not in json.dumps((await client.get("/api/settings/global", headers=headers)).json())
+            assert "dictation" not in (await client.get("/api/bootstrap")).json()
+            saved = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={"revision": loaded["revision"], "values": loaded["values"]},
+            )
+            assert saved.status_code == 200
+            async with (
+                aiosqlite.connect(db_path) as db,
+                db.execute("SELECT version, values_json FROM ngn_web_settings") as cursor,
+            ):
+                row = await cursor.fetchone()
+                assert row is not None
+                assert row[0] == 5 and "dictation" not in row[1]
+
+    asyncio.run(check())
+
+
+def test_removed_dictation_route_and_settings_fields(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path) as (_, client, headers, _):
+            before = (await client.get("/api/settings", headers=headers)).json()
+            for path in ("/api/settings", "/api/settings/global"):
+                for field in (*HISTORIC_DICTATION, "dictation_base_url", "dictation_api_key_env"):
+                    response = await client.post(
+                        path,
+                        headers=headers,
+                        json={
+                            "revision": before["revision"] if path == "/api/settings" else "0" * 64,
+                            "values": {**before["values"], field: "ignored"},
+                        },
+                    )
+                    assert response.status_code == 422
+            assert (await client.post("/api/dictation/transcribe", headers=headers, json={})).status_code == 404
+            assert (
+                await client.post(
+                    "/api/dictation/transcribe", headers={**headers, "Content-Type": "audio/wav"}, content=b"audio"
+                )
+            ).status_code == 415
+            assert (await client.get("/api/settings", headers=headers)).json() == before
+
+    asyncio.run(check())
+
+
 def test_catalog_read_preserves_saved_row_and_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_CATALOG_KEY", "fake-api-key")
 
@@ -238,171 +304,8 @@ def test_catalog_read_preserves_saved_row_and_revision(tmp_path: Path, monkeypat
     asyncio.run(check())
 
 
-@pytest.mark.parametrize(
-    "mode", ["ready", "admin-disabled", "preference-disabled", "demo", "missing-key", "invalid-key", "invalid-endpoint"]
-)
-def test_dictation_projection_is_local_safe_and_separate_from_codex(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
-) -> None:
-    monkeypatch.setenv("TEST_CHAT_KEY", "SECRET-chat-key")
-    monkeypatch.setenv("TEST_VOICE_KEY", "SECRET-voice-key")
-    if mode == "missing-key":
-        monkeypatch.delenv("TEST_VOICE_KEY")
-    elif mode == "invalid-key":
-        monkeypatch.setenv("TEST_VOICE_KEY", "SECRET-invalid\nkey")
-
-    async def check() -> None:
-        config = replace(
-            configuration(tmp_path),
-            demo=mode == "demo",
-            auth="chatgpt",
-            api_key_env="TEST_CHAT_KEY",
-            dictation_enabled=mode != "admin-disabled",
-            dictation_api_key_env="TEST_VOICE_KEY",
-            dictation_base_url=(
-                "https://example.invalid:bad/private-endpoint"
-                if mode == "invalid-endpoint"
-                else "https://api.openai.com/v1"
-            ),
-        )
-        with (
-            patch("builtins.__import__", wraps=builtins.__import__) as imports,
-            patch("aiohttp.ClientSession", side_effect=AssertionError("No network resources")),
-            patch.object(VoiceDictation, "capture", side_effect=AssertionError("No microphone")),
-            patch.object(VoiceDictation, "transcribe", side_effect=AssertionError("No transcription")),
-        ):
-            async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
-                harness = harnesses[0]
-                provider = harness.agent.provider
-                if not config.demo:
-                    assert isinstance(provider, OpenAIProvider)
-                before = (await client.get("/api/settings", headers=headers)).json()
-                values = {
-                    **before["values"],
-                    "dictation_enabled": mode != "preference-disabled",
-                    "dictation_model": "  selected-transcriber  ",
-                    "dictation_language": "en",
-                    "dictation_max_seconds": 300,
-                }
-                saved = await client.post(
-                    "/api/settings", json={"revision": before["revision"], "values": values}, headers=headers
-                )
-                assert saved.status_code == 200
-                body = saved.json()
-                projection = body["dictation"]
-                assert projection == {
-                    "enabled": mode not in {"admin-disabled", "preference-disabled", "demo"},
-                    "available": mode == "ready",
-                    "admin_enabled": config.dictation_enabled,
-                    "status": projection["status"],
-                    "api_key_env": "TEST_VOICE_KEY",
-                    "max_seconds": 120,
-                    "max_bytes": 120 * 32000 + 4096,
-                    "sample_rate": 16000,
-                    "channels": 1,
-                    "sample_width": 2,
-                    "content_type": "audio/wav",
-                    "revision": body["revision"],
-                }
-                expected_status = {
-                    "ready": "ready",
-                    "admin-disabled": "administrator",
-                    "preference-disabled": "web settings",
-                    "demo": "demo mode",
-                    "missing-key": "Set TEST_VOICE_KEY",
-                    "invalid-key": "Set TEST_VOICE_KEY",
-                    "invalid-endpoint": "Set dictation_base_url",
-                }
-                assert expected_status[mode] in projection["status"]
-                assert body["values"]["dictation_model"] == "selected-transcriber"
-                assert body["connection"] == before["connection"]
-                assert harness.agent.provider is provider
-                assert provider.model == before["values"]["model"]
-                assert {key: getattr(harness.config, key) for key in DICTATION_FIELDS} == {
-                    key: getattr(config, key) for key in DICTATION_FIELDS
-                }
-                assert "SECRET" not in saved.text and "private-endpoint" not in saved.text
-                assert "https://" not in saved.text
-                # Voice setup problems also leave unrelated chat settings writable.
-                response = await client.post(
-                    "/api/settings",
-                    json={"revision": body["revision"], "values": {**body["values"], "max_tool_rounds": 5}},
-                    headers=headers,
-                )
-                assert response.status_code == 200 and harness.agent.max_tool_rounds == 5
-            assert all(call.args[0].split(".")[0] != "sounddevice" for call in imports.call_args_list)
-
-    asyncio.run(check())
-
-
-def test_dictation_config_is_detached_and_preserves_startup_admin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("TEST_VOICE_KEY", "synthetic-voice-key")
-
-    async def check() -> None:
-        config = replace(
-            configuration(tmp_path),
-            demo=False,
-            auth="api-key",
-            api_key_env="TEST_CHAT_KEY",
-            dictation_enabled=True,
-            dictation_api_key_env="TEST_VOICE_KEY",
-            dictation_base_url="https://example.invalid/trusted-transcription",
-            dictation_max_seconds=60,
-        )
-        harness = ControlledHarness(config)
-        try:
-            await harness.initialize()
-            settings = WebSettings(harness)
-            await settings.load()
-            values = SettingsValues.model_validate(
-                {
-                    **settings.values.model_dump(),
-                    "dictation_model": "preferred-transcriber",
-                    "dictation_language": "de",
-                    "dictation_max_seconds": 1,
-                }
-            )
-            await settings.change(settings.revision, values)
-            detached = settings.dictation_config()
-            assert isinstance(detached, HarnessConfig) and detached is not config
-            assert detached.dictation_enabled and not detached.demo
-            assert detached.dictation_model == "preferred-transcriber" and detached.dictation_language == "de"
-            assert detached.dictation_max_seconds == 1
-            assert detached.dictation_base_url == "https://example.invalid/trusted-transcription"
-            assert detached.dictation_api_key_env == "TEST_VOICE_KEY"
-            before = settings.dictation_snapshot()
-            assert before["available"] is True and before["max_bytes"] == 32000 + 4096
-            # Neither a consumer's snapshot nor mutable live chat config can alter
-            # the captured admin inputs, including nested configuration objects.
-            detached.profiles["audit"].instructions = "mutated snapshot"
-            detached.dictation_enabled = False
-            detached.dictation_max_seconds = 300
-            detached.dictation_base_url = "https://snapshot.invalid/v1"
-            detached.dictation_api_key_env = "SNAPSHOT_KEY"
-            detached.demo = True
-            config.dictation_enabled = False
-            config.dictation_max_seconds = 300
-            config.dictation_base_url = "https://live.invalid/v1"
-            config.dictation_api_key_env = "LIVE_KEY"
-            config.demo = True
-            fresh = settings.dictation_config()
-            assert fresh.dictation_enabled and not fresh.demo
-            assert fresh.dictation_base_url == "https://example.invalid/trusted-transcription"
-            assert fresh.dictation_api_key_env == "TEST_VOICE_KEY"
-            assert fresh.profiles["audit"].instructions == "Trusted review rules"
-            assert config.profiles["audit"].instructions == "Trusted review rules"
-            assert settings.dictation_snapshot() == before
-            assert settings.snapshot()["dictation"] == before
-        finally:
-            await harness.close()
-
-    asyncio.run(check())
-
-
-@pytest.mark.parametrize("field", [*LEGACY_FIELDS, *DICTATION_FIELDS])
-def test_settings_require_all_eleven_fields(tmp_path: Path, field: str) -> None:
+@pytest.mark.parametrize("field", LEGACY_FIELDS)
+def test_settings_require_all_legacy_fields(tmp_path: Path, field: str) -> None:
     async def check() -> None:
         async with client_app(tmp_path) as (_, client, headers, _):
             before = (await client.get("/api/settings", headers=headers)).json()
@@ -522,30 +425,6 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
         ("max_subagent_depth", 9),
         ("max_subagent_depth", False),
         ("max_subagent_depth", 2.0),
-        ("dictation_enabled", 1),
-        ("dictation_enabled", "true"),
-        ("dictation_enabled", None),
-        ("dictation_model", ""),
-        ("dictation_model", "   "),
-        ("dictation_model", "x" * 201),
-        ("dictation_model", "bad\x00model"),
-        ("dictation_model", "bad\nmodel"),
-        ("dictation_model", "bad\x7fmodel"),
-        ("dictation_model", "bad\u202emodel"),
-        ("dictation_model", 12),
-        ("dictation_language", "EN"),
-        ("dictation_language", "english"),
-        ("dictation_language", "en-US"),
-        ("dictation_language", "en\n"),
-        ("dictation_language", " en "),
-        ("dictation_language", " "),
-        ("dictation_language", "éé"),
-        ("dictation_language", True),
-        ("dictation_max_seconds", 0),
-        ("dictation_max_seconds", 301),
-        ("dictation_max_seconds", True),
-        ("dictation_max_seconds", 120.0),
-        ("dictation_max_seconds", "120"),
         ("compact_trigger", "sometimes"),
         ("compact_trigger", "AUTO"),
         ("compact_trigger", ""),
@@ -569,9 +448,6 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
                 "auth",
                 "api_key",
                 "api_key_env",
-                "dictation_base_url",
-                "dictation_api_key_env",
-                "dictation_api_key",
                 "plugins",
                 "workspace",
                 "data_dir",
@@ -945,73 +821,43 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
             )
             await db.commit()
 
-        for language, limit in (("en", 90), ("fr", 30)):
-            trusted = replace(
-                config,
-                dictation_enabled=True,
-                dictation_model="trusted-transcriber",
-                dictation_language=language,
-                dictation_max_seconds=limit,
+        async with client_app(tmp_path, config=replace(config, model="new-trusted-default")) as (
+            _,
+            client,
+            headers,
+            harnesses,
+        ):
+            loaded = (await client.get("/api/settings", headers=headers)).json()
+            values = {**initial["values"], **legacy}
+            assert loaded["values"] == values
+            assert loaded["defaults"]["model"] == "new-trusted-default"
+            assert loaded["persisted"] is True and loaded["revision"] == revision
+            assert_runtime(harnesses[0], values)
+            async with aiosqlite.connect(db_path) as db:
+                assert list(await db.execute_fetchall("SELECT * FROM ngn_web_settings")) == [(1, 1, payload, revision)]
+            resumed = await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
+            assert resumed.json()["history"][0]["content"] == "legacy history"
+            saved_response = await client.post(
+                "/api/settings", json={"revision": revision, "values": values}, headers=headers
             )
-            async with client_app(tmp_path, config=trusted) as (_, client, headers, harnesses):
-                loaded = (await client.get("/api/settings", headers=headers)).json()
-                values = {
-                    **initial["values"],
-                    **legacy,
-                    "dictation_enabled": True,
-                    "dictation_model": "trusted-transcriber",
-                    "dictation_language": language,
-                    "dictation_max_seconds": limit,
-                }
-                assert loaded["values"] == values
-                assert loaded["persisted"] is True and loaded["revision"] == revision
-                assert loaded["dictation"]["revision"] == revision
-                assert_runtime(harnesses[0], values)
-                assert (await client.get("/api/settings", headers=headers)).json() == loaded
-                async with aiosqlite.connect(db_path) as db:
-                    assert list(await db.execute_fetchall("SELECT * FROM ngn_web_settings")) == [
-                        (1, 1, payload, revision)
-                    ]
-                resumed = await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
-                assert resumed.json()["history"][0]["content"] == "legacy history"
-                if language == "fr":
-                    values.update(
-                        dictation_model="saved-transcriber", dictation_language="de", dictation_max_seconds=300
-                    )
-                    response = await client.post(
-                        "/api/settings", json={"revision": revision, "values": values}, headers=headers
-                    )
-                    assert response.status_code == 200
-                    saved = response.json()
-                    assert saved["revision"] != revision and saved["values"] == values
-                    async with aiosqlite.connect(db_path) as db:
-                        assert list(
-                            await db.execute_fetchall("SELECT version, values_json, revision FROM ngn_web_settings")
-                        ) == [
-                            (
-                                5,
-                                json.dumps(
-                                    {key: value for key, value in values.items() if value != loaded["defaults"][key]},
-                                    separators=(",", ":"),
-                                ),
-                                saved["revision"],
-                            )
-                        ]
+            assert saved_response.status_code == 200
+            saved = saved_response.json()
+            assert saved["revision"] != revision and saved["values"] == values
+            async with (
+                aiosqlite.connect(db_path) as db,
+                db.execute("SELECT version, values_json FROM ngn_web_settings") as cursor,
+            ):
+                row = await cursor.fetchone()
+                assert row is not None
+                assert row[0] == 5 and "dictation" not in row[1]
 
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
-            # The enabled flag matched the previous inherited default, so the
-            # restarted workspace follows the new (disabled) default instead.
-            assert loaded["values"] == {**saved["values"], "dictation_enabled": False}
+            assert loaded["values"] == saved["values"]
             assert loaded["revision"] == saved["revision"]
-            assert loaded["defaults"] == initial["defaults"]
-            assert loaded["dictation"]["admin_enabled"] is False
-            assert loaded["dictation"]["enabled"] is False and loaded["dictation"]["max_seconds"] == 120
             reset = await client.post("/api/settings/reset", json={"revision": loaded["revision"]}, headers=headers)
             assert reset.status_code == 200
             assert reset.json()["values"] == initial["defaults"] and reset.json()["persisted"] is False
-            assert reset.json()["revision"] != loaded["revision"]
-            assert reset.json()["dictation"]["revision"] == reset.json()["revision"]
             assert_runtime(harnesses[0], initial["defaults"])
             resumed = await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
             assert resumed.json()["history"][0]["content"] == "legacy history"
@@ -1022,69 +868,8 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("restriction", ["disabled", "lower-ceiling", "demo"])
-def test_dictation_saved_preferences_respect_restarted_admin_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restriction: str
-) -> None:
-    monkeypatch.setenv("TEST_VOICE_KEY", "synthetic-voice-key")
-
-    async def check() -> None:
-        config = replace(
-            configuration(tmp_path),
-            demo=False,
-            auth="api-key",
-            api_key_env="TEST_CHAT_KEY",
-            dictation_enabled=True,
-            dictation_api_key_env="TEST_VOICE_KEY",
-        )
-        async with client_app(tmp_path, config=config) as (_, client, headers, _):
-            before = (await client.get("/api/settings", headers=headers)).json()
-            response = await client.post(
-                "/api/settings",
-                json={
-                    "revision": before["revision"],
-                    "values": {**before["values"], "dictation_language": "de", "dictation_max_seconds": 300},
-                },
-                headers=headers,
-            )
-            assert response.status_code == 200
-            saved = response.json()
-            assert saved["dictation"]["available"] is True and saved["dictation"]["max_seconds"] == 120
-
-        trusted = replace(
-            config,
-            demo=restriction == "demo",
-            dictation_enabled=restriction != "disabled",
-            dictation_max_seconds=15,
-        )
-        async with client_app(tmp_path, config=trusted) as (_, client, headers, harnesses):
-            loaded = (await client.get("/api/settings", headers=headers)).json()
-            assert loaded["values"] == {**saved["values"], "dictation_enabled": trusted.dictation_enabled}
-            assert loaded["revision"] == saved["revision"]
-            assert (
-                loaded["dictation"]["enabled"] == loaded["dictation"]["available"] == (restriction == "lower-ceiling")
-            )
-            assert loaded["dictation"]["admin_enabled"] == trusted.dictation_enabled
-            assert loaded["dictation"]["max_seconds"] == 15 and loaded["dictation"]["max_bytes"] == 15 * 32000 + 4096
-            response = await client.post(
-                "/api/settings",
-                json={"revision": loaded["revision"], "values": {**loaded["values"], "model": "other-chat-model"}},
-                headers=headers,
-            )
-            assert response.status_code == 200 and harnesses[0].agent.provider.model == "other-chat-model"
-            assert harnesses[0].config.dictation_enabled == trusted.dictation_enabled
-            assert harnesses[0].config.dictation_max_seconds == 15
-            reset = await client.post(
-                "/api/settings/reset", json={"revision": response.json()["revision"]}, headers=headers
-            )
-            assert reset.status_code == 200 and reset.json()["values"] == loaded["defaults"]
-            assert reset.json()["dictation"]["max_seconds"] == 15
-
-    asyncio.run(check())
-
-
 @pytest.mark.parametrize("version", [1, 2, 3, 4])
-def test_settings_stored_revision_conflict_preserves_dictation_preferences(tmp_path: Path, version: int) -> None:
+def test_settings_stored_revision_conflict_preserves_preferences(tmp_path: Path, version: int) -> None:
     async def check() -> None:
         async with client_app(tmp_path) as (_, client, headers, harnesses):
             initial = (await client.get("/api/settings", headers=headers)).json()
@@ -1105,12 +890,7 @@ def test_settings_stored_revision_conflict_preserves_dictation_preferences(tmp_p
             for path in ("/api/settings", "/api/settings/reset"):
                 body = {"revision": before["revision"]}
                 if path == "/api/settings":
-                    body["values"] = {
-                        **before["values"],
-                        "dictation_enabled": True,
-                        "dictation_language": "de",
-                        "dictation_max_seconds": 30,
-                    }
+                    body["values"] = {**before["values"], "max_tool_rounds": 3}
                 response = await client.post(path, json=body, headers=headers)
                 assert response.status_code == 409
                 assert (await client.get("/api/settings", headers=headers)).json() == before
@@ -1166,10 +946,6 @@ def test_settings_failures_restore_live_and_persisted_values(tmp_path: Path, fai
                     "values": {
                         **initial["values"],
                         "model": "old-saved-model",
-                        "dictation_enabled": True,
-                        "dictation_model": "old-transcriber",
-                        "dictation_language": "de",
-                        "dictation_max_seconds": 60,
                     },
                 },
                 headers=headers,
@@ -1194,10 +970,6 @@ def test_settings_failures_restore_live_and_persisted_values(tmp_path: Path, fai
                     "agent": "audit",
                     "max_tool_rounds": 2,
                     "max_subagent_depth": 0,
-                    "dictation_enabled": False,
-                    "dictation_model": "candidate-transcriber",
-                    "dictation_language": "fr",
-                    "dictation_max_seconds": 30,
                 }
             path = "/api/settings/reset" if reset else "/api/settings"
             if failure == "commit":
@@ -1219,9 +991,6 @@ def test_settings_failures_restore_live_and_persisted_values(tmp_path: Path, fai
             assert isinstance(response.json()["detail"], str)
             assert (await client.get("/api/settings", headers=headers)).json() == before
             assert_runtime(harness, before["values"])
-            assert {key: getattr(harness.config, key) for key in DICTATION_FIELDS} == {
-                key: initial["defaults"][key] for key in DICTATION_FIELDS
-            }
             assert harness.agent.max_tool_rounds == before["values"]["max_tool_rounds"]
             assert harness.agent.system_prompt == prompt
             async with aiosqlite.connect(db_path) as db, db.execute("SELECT * FROM ngn_web_settings") as cursor:
@@ -1247,10 +1016,6 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
                         "values": {
                             **before["values"],
                             "model": "previous-model",
-                            "dictation_enabled": True,
-                            "dictation_model": "previous-transcriber",
-                            "dictation_language": "de",
-                            "dictation_max_seconds": 60,
                         },
                     },
                     headers=headers,
@@ -1262,10 +1027,6 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
                 "model": "committed-model",
                 "agent": "assistant",
                 "max_tool_rounds": 2,
-                "dictation_enabled": True,
-                "dictation_model": "committed-transcriber",
-                "dictation_language": "fr",
-                "dictation_max_seconds": 30,
             }
             body = {"revision": before["revision"]}
             if reset:
@@ -1315,11 +1076,6 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
             assert after["values"] == (before["values"] if fail_commit else values)
             assert after["persisted"] == (before["persisted"] if fail_commit else not reset)
             assert_runtime(harness, after["values"])
-            assert after["dictation"]["revision"] == after["revision"]
-            assert after["dictation"]["max_seconds"] == after["values"]["dictation_max_seconds"]
-            assert {key: getattr(harness.config, key) for key in DICTATION_FIELDS} == {
-                key: before["defaults"][key] for key in DICTATION_FIELDS
-            }
             assert harness.agent.max_tool_rounds == after["values"]["max_tool_rounds"]
             assert (await client.post("/api/sessions/new", json={}, headers=headers)).status_code == 200
         async with client_app(tmp_path) as (_, client, headers, _):
@@ -1367,12 +1123,7 @@ def test_settings_corrupt_saved_row_fails_closed(tmp_path: Path, corruption: str
         elif corruption == "revision":
             revision = "SECRET-invalid-revision"
         elif corruption == "wrong-schema":
-            if version == 1:
-                values["dictation_enabled"] = True
-            elif version == 2:
-                del values["dictation_model"]
-            else:
-                values["unknown_preference"] = True
+            values["unknown_preference"] = True
         payload = json.dumps(values)
         if corruption == "json":
             payload = "{SECRET-invalid-json"

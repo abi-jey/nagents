@@ -38,7 +38,6 @@ from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
-from .dictation import WebDictation
 from .history import WebHistory
 from .replay import RunReplay
 from .subscriptions import EventBus
@@ -176,7 +175,6 @@ class WebState:
         self.session_revision = 0
         self.active: Run | None = None
         self.mutating = False
-        self.dictation = WebDictation()
         self.bus = EventBus()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
         # Preserve explicit custom persistence adapters. Their unlinked rows still

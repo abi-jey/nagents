@@ -68,8 +68,7 @@ the [ngn usage guide](docs/guide/ngn.md).
 - Process-local asynchronous subagent trees, bounded delegation, task inspection,
   and explicit follow-ups with inherited permission ceilings. This is not a
   distributed orchestration system or A2A protocol implementation.
-- API-key providers and separate ChatGPT/Codex subscription authentication, plus
-  opt-in microphone dictation that produces an editable draft, not a sent prompt.
+- API-key providers and separate ChatGPT/Codex subscription authentication.
 - A local React/Vite web client launched by `ngn serve`, backed by the same
   harness rather than the legacy API server. It adds workspace session navigation,
   web-side settings and channel management, and read-only context inspection. This

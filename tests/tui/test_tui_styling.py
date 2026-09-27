@@ -16,7 +16,6 @@ from textual.widgets import TextArea
 from nagents.harness.auth import DeviceAuthorization
 from nagents.harness.subagents import TaskInfo
 from nagents.harness.types import ApprovalRequest
-from nagents.tui.dictation import DictationModal
 from nagents.tui.login import DEVICE_URL
 from nagents.tui.login import DeviceLoginModal
 from nagents.tui.login import LoginMethodModal
@@ -32,7 +31,6 @@ from tests.support.tui import contrast_ratio
 from tests.support.tui import idle
 from tests.support.tui import make_app
 from tests.support.tui import send
-from tests.tui.test_tui_dictation import FakeVoice
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -220,19 +218,15 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
                 backend.task_history,
                 parents=lambda: {},
             )
-            dictation = DictationModal(backend.config, service=FakeVoice(backend.config))
             for modal, dialog_id, editor_id, buttons in (
                 (task, "#task-dialog", "#task-followup", ("#task-close", "#task-send")),
-                (dictation, "#dictation-dialog", "#dictation-preview", ("#dictation-primary", "#dictation-cancel")),
             ):
                 await app.push_screen(modal)
-                if modal is dictation:
-                    modal.add_class("preview")
                 await pilot.pause()
                 assert modal.query_one(dialog_id).styles.border_top[1] == border
                 editor = modal.query_one(editor_id, TextArea)
                 assert editor.styles.border_top[1] == border
-                editor.load_text("An editable follow-up or transcript.")
+                editor.load_text("An editable follow-up.")
                 editor.focus()
                 editor.action_select_all()
                 await pilot.pause()
@@ -243,8 +237,6 @@ def test_surfaces_focus_and_modal_layouts(tmp_path: Path, name: str, background:
                     style = editor.get_component_rich_style(component)
                     assert_readable(style, native=native)
                     assert bool(style.reverse) is native
-                if modal is dictation:
-                    await dictation.close()
                 await modal.dismiss()
 
     asyncio.run(scenario())

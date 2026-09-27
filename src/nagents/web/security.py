@@ -129,17 +129,6 @@ class LocalOnly:
                 # MIME, actual byte counts, concurrency and a read deadline.
                 await self.app(scope, receive, secure_send)
                 return
-            if path == "/api/dictation/transcribe":
-                if [value.lower() for value in headers.getlist("content-type")] != ["audio/wav"]:
-                    await reject(415, "Use audio/wav for the recording upload.")
-                    return
-                if headers.getlist("content-encoding"):
-                    await reject(415, "Content-Encoding is not supported for recordings.")
-                    return
-                # The route acquires the idle slot before reading, then counts
-                # actual bytes under its captured configuration and a deadline.
-                await self.app(scope, receive, secure_send)
-                return
             if headers.get("content-type", "").lower() not in {"application/json", "application/json; charset=utf-8"}:
                 await reject(415, "Use application/json.")
                 return

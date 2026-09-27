@@ -64,9 +64,6 @@ data:
     auth: chatgpt
     api: auto
     data_dir: /state/sessions
-    # Chat still uses the Codex default; transcription has a separate API key.
-    dictation_enabled: true
-    dictation_api_key_env: NGN_TRANSCRIPTION_API_KEY
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -144,14 +141,6 @@ spec:
               value: /state/config
             - name: NGN_CHANNEL_PLUGIN_PATH
               value: /state/channel-plugins
-            # Optional at startup: Settings reports a missing transcription key.
-            # This variable is not used for the Codex chat connection.
-            - name: NGN_TRANSCRIPTION_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: ngn-web-transcription
-                  key: api-key
-                  optional: true
           securityContext:
             runAsUser: 0
             runAsGroup: 0

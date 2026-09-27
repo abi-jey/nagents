@@ -1,4 +1,3 @@
-import type { DictationConfig } from "./features/dictation/types";
 import type { LocalDelivery } from "./features/chat/deliveries.js";
 import type { UploadMetadata } from "./features/chat/uploads.js";
 
@@ -9,7 +8,6 @@ export type Bootstrap = {
   model: string;
   agent: string;
   demo: boolean;
-  dictation: DictationConfig;
   active_run_id: string;
   active_session_id?: string;
   active_run_background?: boolean;

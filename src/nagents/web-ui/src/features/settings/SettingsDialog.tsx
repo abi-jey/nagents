@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { executionLimits, compactionLimits } from "./draft.js";
-import { DictationSettings } from "./DictationSettings.js";
 import { ProvidersPanel } from "./ProvidersPanel.js";
 import type { useSettings } from "./useSettings";
 import { revealAncestors } from "../../components/disclosures.js";
@@ -164,7 +163,7 @@ export function SettingsDialog({
               </h3>
               <p>
                 {confirmation === "reset"
-                  ? (global ? "This removes saved global defaults. Workspace overrides are kept." : "This removes saved workspace overrides and discards your draft. Global defaults apply to your next run or recording.")
+                   ? (global ? "This removes saved global defaults. Workspace overrides are kept." : "This removes saved workspace overrides and discards your draft. Global defaults apply to your next run.")
                   : "This replaces your unsaved draft with the latest server settings. It does not change any saved settings or retry your save."}
               </p>
               {confirmation === "reset" && snapshot && (
@@ -244,13 +243,6 @@ export function SettingsDialog({
                 </div>
                 {!global && <p>Choose the connection and its model in Provider connections above.</p>}
               </fieldset>
-              <DictationSettings
-                config={snapshot.dictation}
-                draft={draft}
-                errors={errors}
-                disabled={disabled || !!confirmation}
-                update={settings.update}
-              />
               <fieldset className="settings-group" disabled={disabled || !!confirmation}>
                 <legend>Message submission</legend>
                 <div className="settings-field"><label htmlFor="settings-submit_mode">When this conversation is working</label>

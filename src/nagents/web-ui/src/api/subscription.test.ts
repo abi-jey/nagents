@@ -4,7 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { CREDENTIAL_TIMEOUT, HANDSHAKE_TIMEOUT, parseFrame, subscribeEvents, type EventFrame, type EventSocket, type Position, type SubscriptionOptions } from "./subscription.js";
 import { readBootstrap } from "./bootstrap.js";
 import { queueMessage } from "./messages.js";
-import { deferred, dictationConfig } from "../features/dictation/testFixtures.js";
+import { deferred } from "./testFixtures.js";
 import type { Bootstrap } from "../types.js";
 
 const snapshot = (cursor = 1, epoch = "epoch-a", session_id = "root") => ({
@@ -100,7 +100,7 @@ test("empty reconnect replay requests one WS snapshot without starting an HTTP p
 
 function bootstrap(token = "private-process-token"): Bootstrap {
   return { token, workspace: "/mock/workspace", provider: "mock", agent: "main", model: "mock-model", demo: true,
-    active_run_id: "", active_session_id: "different-server-selection", dictation: { ...dictationConfig } };
+    active_run_id: "", active_session_id: "different-server-selection" };
 }
 
 test("failed old-token handshake refreshes bootstrap before the next socket and subsequent HTTP admission", async (context) => {

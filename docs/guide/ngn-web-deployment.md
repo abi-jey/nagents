@@ -100,8 +100,7 @@ Tailnet browser, HTTPS, access governed by Tailscale ACLs/grants
 - The application still enforces: a random per-process `X-Ngn-Token` on API reads
   and mutations (except the token-free same-origin `GET /api/bootstrap`),
   `Sec-Fetch-Site` same-origin checks, query-parameter rejection, path-traversal
-  rejection, security headers, and a 64 KiB request-body cap. The dictation route
-  has its own format, deadline, and byte limits. Access logging stays off because
+  rejection, security headers, and a 64 KiB request-body cap. Access logging stays off because
   URLs may contain accidental secrets.
 - Only `/api/events` accepts a WebSocket upgrade. `Sec-WebSocket-Protocol` passes
   through unchanged; ngn validates the process token before accepting a subscription.
@@ -171,15 +170,14 @@ open browser while the server remains running, but are not durable cron jobs.
 
 Config is secret-free: `provider = "openai"`, `auth = "chatgpt"`, `api = "auto"`,
 `data_dir = "/state/sessions"`. Omitting `model` lets the Harness replace its normal
-default with its Codex default. Chat credentials and routing stay separate from
-the optional transcription Secret described below. The pinned amd64 application image includes the React assets and
+default with its Codex default. The pinned amd64 application image includes the React assets and
 Codex client; the container `command` selects `serve` with the exact
 host/port/workspace/config flags. New images default to `ngn serve` without
 development mode. The image is pinned by digest.
 
 The web runtime settings API stores its versioned `ngn_web_settings` row in the
 existing workspace SQLite database under `/state/sessions` on this same PVC.
-Model, profile, dictation preferences, and bounded tool/runtime limits therefore survive pod/image
+Model, profile, and bounded tool/runtime limits therefore survive pod/image
 replacement while the PVC and resolved workspace path remain unchanged. No writable
 ConfigMap mount, new volume, credential copy, or image-layer write is needed.
 Startup captures trusted configuration defaults after initial Codex model resolution,
@@ -190,48 +188,6 @@ Malformed/unsupported saved settings or a removed saved profile fail web startup
 closed. Stop the application and have the administrator repair or remove only the
 settings row, never delete the session database or auth store as a workaround.
 See [runtime settings](ngn-web.md#runtime-settings) for the API and conflict rules.
-
-### Transcription Credentials
-
-The browser microphone supplies text input through a separately authenticated
-transcription request. The template permits dictation with
-`dictation_enabled = true` and selects `NGN_TRANSCRIPTION_API_KEY` as its API-key
-environment variable. It references only the `api-key` entry in the optional
-`ngn-web-transcription` Secret. With no Secret/key, the web app still starts and
-Settings reports that transcription is unavailable. Enabling the service never
-starts recording automatically.
-
-To use your own OpenAI Platform key, create the runtime Secret from a private file
-containing only the key, without a trailing newline:
-
-```bash
-kubectl --context <your-context> -n nagents create secret generic ngn-web-transcription \
-  --from-file=api-key=/private/path/openai-api-key
-```
-
-If an appropriate Secret already exists, update the `secretKeyRef` name/key in
-your **private rendered manifest** for `NGN_TRANSCRIPTION_API_KEY` instead. The
-application needs only that entry; nothing else in the pod receives it.
-Do not put the key in this template, ConfigMap, Docker build arguments, image,
-frontend bundle, or public documentation. Environment-variable credentials are
-read at process startup, so adding or rotating this Secret requires a safe pod
-restart after checking active runs and pending wakeups.
-
-Chat can remain on its existing Codex login. The transcription client does not
-forward that OAuth credential to the file-transcription API or fall back to
-another provider's key. Its default model is `gpt-4o-mini-transcribe`, with language
-auto-detection and a 120-second administrator ceiling. Existing trusted YAML,
-`NGN_DICTATION_*`, and CLI configuration select backend defaults; YAML/CLI values
-take precedence over environment defaults when explicitly supplied.
-
-Settings exposes the enabled preference, model, language, and recording limit,
-which persist in the workspace settings row. The administrator's disabled flag,
-maximum duration, endpoint, and key reference remain authoritative. The browser
-records locally and uploads bounded 16 kHz mono PCM16 WAV. The application enforces
-its own format, deadline, and byte limits for that route; there is no proxy ceiling
-to configure. It does not require microphone hardware or audio-device
-mounts in the pod. Audio and unsent transcripts are not persisted as workspace
-files.
 
 ## Operator Preflight
 
