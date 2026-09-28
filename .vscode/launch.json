@@ -18,6 +18,17 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "Attach: ngn serve --dev (tmux)",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "127.0.0.1",
+                "port": 5678
+            },
+            "subProcess": true,
+            "justMyCode": false
         }
     ]
 }

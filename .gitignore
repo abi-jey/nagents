@@ -12,6 +12,8 @@ logs
 .playwright-mcp
 .agents/chrome-context
 .agents/skills
+.local
+./deployments/private
 
 # Machine-local files
 /.local/
