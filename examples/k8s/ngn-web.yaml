@@ -77,6 +77,9 @@ data:
         server_tokens off;
         client_body_temp_path /tmp/client_temp;
         proxy_temp_path /tmp/proxy_temp;
+        fastcgi_temp_path /tmp/fastcgi_temp;
+        uwsgi_temp_path /tmp/uwsgi_temp;
+        scgi_temp_path /tmp/scgi_temp;
         client_max_body_size 64k;
         client_body_timeout 60s;
         send_timeout 3600s;
