@@ -32,7 +32,8 @@ delivery dates. See the [README](README.md) for installation and usage.
 
 The optional legacy server provides HTTP/SSE chat, session management, and
 tool/MCP reload. Its bundled chat UI has been removed from the current source;
-`python -m nagents.server` remains the API-only Docker default. See the
+`python -m nagents.server` explicitly selects the API (the Docker image defaults
+to `ngn serve`). See the
 [legacy server guide](docs/guide/server.md) for its single-operator security
 boundary. These implementations do not imply identical capabilities across the
 core library, server, and ngn clients.
@@ -69,6 +70,10 @@ the [ngn usage guide](docs/guide/ngn.md).
   and explicit follow-ups with inherited permission ceilings. This is not a
   distributed orchestration system or A2A protocol implementation.
 - API-key providers and separate ChatGPT/Codex subscription authentication.
+- Shared named provider connections for web and terminal clients use secret-free
+  YAML and environment-variable key references. Chat-model preferences are
+  selected separately; GPT-Live Voice duplex settings are also independent of
+  the connection and chat model.
 - A local React/Vite web client launched by `ngn serve`, backed by the same
   harness rather than the legacy API server. It adds workspace session navigation,
   web-side settings and channel management, and read-only context inspection. This

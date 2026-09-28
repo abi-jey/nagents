@@ -130,9 +130,17 @@ so Docker-backed shell tools need separate, explicitly authorized provisioning.
 ## Kubernetes and Remote Access
 
 The repository's `examples/k8s/deployment.yaml` is a cluster-specific legacy API
-deployment with an explicit `python -m nagents.server` command. It binds on the pod network and reads
-`NAGENTS_SERVER_TOKEN` from the `nagents-server-auth` Secret. Create the `nagents`
-namespace first if absent, then provision a separate high-entropy token:
+deployment with an explicit `python -m nagents.server` command. It binds on the
+pod network and reads `NAGENTS_SERVER_TOKEN` from the `nagents-server-auth`
+Secret. Create the `nagents`
+namespace first if absent. The manifest is **not apply-ready**: render
+`NAGENTS_API_NODE` as the reviewed node label and `NAGENTS_API_DIGEST` as a
+reviewed 64-hex-character image digest of hardened current source, in a private
+manifest outside Git. Substitute only those two variables with `envsubst
+'${NAGENTS_API_NODE} ${NAGENTS_API_DIGEST}'` so no other shell syntax is expanded;
+validate both inputs and review the result before applying. Its control-plane
+toleration, ephemeral state and Docker socket mount also need cluster-specific
+review. Provision a separate high-entropy token:
 
 ```bash
 token_file="$(mktemp /tmp/nagents-server-token.XXXXXX)"
