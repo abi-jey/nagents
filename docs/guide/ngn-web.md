@@ -1104,10 +1104,12 @@ workspace override is applied. Reset deletes the workspace rows and inherits
 current global defaults. The
 CLI/TUI do not load this web-only override.
 
-Existing version-1 through version-4 rows are validated against their original
-schemas, retain supported preferences, and receive newer fields from trusted
-defaults. Version-5 rows store workspace differences. Unknown fields remain
-invalid. Existing chat preferences and revision checks are retained.
+Version-1 through version-4 rows without removed fields retain supported
+preferences and receive newer fields from trusted defaults. Version-5 rows
+store workspace differences. Unknown or removed fields fail loading; see the
+[manual upgrade steps](ngn-configuration.md#updating-existing-installations-to-provider-yaml-v2)
+before restarting an existing installation. Existing chat preferences and
+revision checks are retained when their rows are valid.
 
 Legacy built-in selections migrate to `assistant`. An old read-only selection
 remains read-only through the workspace restriction, rather than gaining write

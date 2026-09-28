@@ -25,6 +25,7 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ProviderRegistryStore
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
+from nagents.provider.openai import CODEX_ENDPOINT
 from nagents.provider.openai import CodexConfigError
 from nagents.web.live import create_agent
 from nagents.web.live_settings import GlobalVoiceInput
@@ -77,6 +78,17 @@ def test_connection_snapshot_explains_fixed_endpoints_without_keys(kind: str, en
     assert account["effective_endpoint"] == endpoint
     assert account["credential_source"] == f"API key ${profile.key_env}"
     assert "model" not in account
+
+
+def test_openai_connection_endpoint_reflects_authentication_route() -> None:
+    chatgpt = sample(auth="chatgpt")
+    assert chatgpt.effective_endpoint == CODEX_ENDPOINT
+    codex = sample(auth="codex")
+    assert "local Codex configuration" in codex.effective_endpoint
+    assert codex.effective_endpoint != "https://api.openai.com/v1"
+    auto = sample(auth="auto")
+    assert CODEX_ENDPOINT in auto.effective_endpoint
+    assert "https://api.openai.com/v1" in auto.effective_endpoint
 
 
 def test_registry_is_shared_revisioned_and_contains_no_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -49,6 +49,7 @@ def test_container_serve_starts_from_defaults_or_env_without_a_file(
 
         assert main(["serve", "--workspace", str(tmp_path), "--model", "gpt-6-luna"]) == 0
         assert serve.call_args.args[0].model_explicit
+        assert serve.call_args.args[0].model_config_explicit
 
         monkeypatch.setenv("NGN_PROVIDER", "anthropic")
         monkeypatch.setenv("NGN_MODEL", "claude-example")

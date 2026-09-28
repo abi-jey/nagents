@@ -237,6 +237,8 @@ class WebSettings:
         self._global_startup_model = (
             harness.config.global_model_default or self._startup_global_model or self.defaults.model
         )
+        self._pinned_startup_model = harness.config.model_config_explicit
+        self._startup_model = harness.config.model
         self.global_path = harness.config.data_dir / "web-defaults.db"
         self.global_revision = "0" * 64
         self.global_persisted = False
@@ -292,6 +294,10 @@ class WebSettings:
 
     def sync_provider(self) -> None:
         """Project a shared provider selection into the existing web settings view."""
+        if self.harness.config.provider_id:
+            # A key entered for an unnamed web override must never become the
+            # credential of a subsequently selected named connection.
+            self._restore_key()
         self.values = self._effective_values(self.values)
         self.harness.config.model = self.harness.config.profile(self.values.agent).model or self.values.model
         self.harness.agent.provider.model = self.harness.config.model
@@ -458,15 +464,19 @@ class WebSettings:
                     values = values.model_copy(
                         update={"agent": "assistant", "read_only": values.read_only or values.agent == "reviewer"}
                     )
-                model_store = self.harness.provider_store.model_store("workspace")
-                if (version < 5 and values.model != self.defaults.model) or "model" in differences:
-                    model_store.save(values.model, only_if_missing=True)
-                selected_model = self.harness.provider_store.model()
-                if selected_model:
-                    values = values.model_copy(update={"model": selected_model})
-                local_model = model_store.load()
-                if version == 5 and local_model:
-                    differences["model"] = local_model
+                if self._pinned_startup_model:
+                    values = values.model_copy(update={"model": self._startup_model})
+                    differences.pop("model", None)
+                else:
+                    model_store = self.harness.provider_store.model_store("workspace")
+                    if (version < 5 and values.model != self.defaults.model) or "model" in differences:
+                        model_store.save(values.model, only_if_missing=True)
+                    selected_model = self.harness.provider_store.model()
+                    if selected_model:
+                        values = values.model_copy(update={"model": selected_model})
+                    local_model = model_store.load()
+                    if version == 5 and local_model:
+                        differences["model"] = local_model
                 effective_defaults = self._effective_values(self.defaults)
                 self.workspace_overrides = (
                     {
@@ -492,7 +502,11 @@ class WebSettings:
                 self.persisted = True
             elif self.global_persisted or self.harness.provider_store.model():
                 self.defaults = self._effective_values(self.defaults)
-                selected_model = self.harness.provider_store.model() or self.defaults.model
+                selected_model = (
+                    self._startup_model
+                    if self._pinned_startup_model
+                    else self.harness.provider_store.model() or self.defaults.model
+                )
                 effective = self.defaults.model_copy(update={"model": selected_model})
                 with self.harness.operation("load global defaults"):
                     await self.harness.reconfigure_provider(self.provider_config(effective))
@@ -511,7 +525,7 @@ class WebSettings:
         """Defaults shared by workspaces using the same application data directory."""
         self.defaults = self.startup_defaults.model_copy(update={"model": self._global_startup_model})
         current_model = self.harness.provider_store.model_store("global").load()
-        if current_model:
+        if current_model and not self._pinned_startup_model:
             self.defaults = self.defaults.model_copy(update={"model": current_model})
         self.global_revision = "0" * 64
         self.global_persisted = False
@@ -539,12 +553,14 @@ class WebSettings:
         values = json.loads(payload)
         if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
             raise ValueError("Invalid global settings fields")
+        if self._pinned_startup_model:
+            values.pop("model", None)
         self.defaults = SettingsValues.model_validate({**self.defaults.model_dump(), **values})
         model_store = self.harness.provider_store.model_store("global")
-        if "model" in values:
+        if "model" in values and not self._pinned_startup_model:
             model_store.save(self.defaults.model, only_if_missing=True)
         selected_model = model_store.load()
-        if selected_model:
+        if selected_model and not self._pinned_startup_model:
             self.defaults = self.defaults.model_copy(update={"model": selected_model})
         self.validate(self.defaults)
         self.global_revision = revision
@@ -601,10 +617,11 @@ class WebSettings:
                 )
             await db.commit()
         global_model_store = self.harness.provider_store.model_store("global")
-        if reset:
-            global_model_store.save(self._startup_global_model)
-        else:
-            global_model_store.save(values.model)
+        if not self._pinned_startup_model:
+            if reset:
+                global_model_store.save(self._startup_global_model)
+            else:
+                global_model_store.save(values.model)
         await self.load_global()
         if self.persisted:
             inherited = SettingsValues.model_validate({**self.defaults.model_dump(), **self.workspace_overrides})
@@ -769,7 +786,10 @@ class WebSettings:
             ) from None
         # Publish without an await after commit. GETs see the previous
         # committed snapshot throughout the transaction, never a draft.
-        harness.provider_store.model_store("workspace").save(values.model if not reset and "model" in overrides else "")
+        if not self._pinned_startup_model:
+            harness.provider_store.model_store("workspace").save(
+                values.model if not reset and "model" in overrides else ""
+            )
         self.values = values
         self.workspace_overrides = {} if reset else overrides
         self.effective_mode = harness.mode

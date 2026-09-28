@@ -85,6 +85,8 @@ class HarnessConfig:
     skill_token_limit: int = 10000
     # Distinguish a selected model from the built-in API default when switching to ChatGPT.
     model_explicit: bool = field(default=False, repr=False, compare=False)
+    # Environment, trusted YAML, and CLI model choices outrank saved UI preferences at startup.
+    model_config_explicit: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
@@ -399,5 +401,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         or model_overridden
         or bool(os.environ.get("NGN_MODEL") or ScopedProviderRegistryStore(config.workspace).model())
     )
+    config.model_config_explicit = os.environ.get("NGN_MODEL") is not None or model_overridden
     config.__post_init__()
     return config

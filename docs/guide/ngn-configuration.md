@@ -142,6 +142,32 @@ chat or Voice model and no API-key values.
 Create a named connection in the web UI or TUI and set its environment variable;
 the provider editor does not offer an API-key-value field.
 
+#### Updating existing installations to provider YAML v2
+
+Stop ngn and back up your configuration and session databases before upgrading.
+Version-1 `providers.yaml` files are not read by the new schema. In both the global
+file and any workspace provider files, set `version: 2` and remove `model` and
+`live` from each `providers.NAME` entry. Keep `revision`, `active`, and the
+connection's kind, authentication, endpoint, and environment-variable name.
+Put the selected chat model in `models.yaml` alongside the provider file, for
+example:
+
+```yaml
+version: 1
+model: gpt-6-luna
+```
+
+Re-enter voice-duplex model and voice preferences in Voice settings (Global or
+Workspace) after restarting. These preferences are independent of the provider
+connection; there is no automatic import from the old provider YAML.
+
+Older saved web-settings rows containing removed fields also cannot be loaded.
+Before upgrading, reset the Global and Workspace web settings using the old UI.
+If already upgraded, stop ngn, back up the databases, and remove only the
+`ngn_web_global_settings` row (in `data_dir/web-defaults.db`) and the
+`ngn_web_settings` row (in that workspace's session database), then restart
+and re-enter preferences. Keep other tables and session history intact.
+
 ## File locations and trust
 
 | Item | Location or selection | Behavior |

@@ -25,6 +25,7 @@ from typing import cast
 import yaml
 
 from nagents.provider.auth import validate_prefix
+from nagents.provider.openai import CODEX_ENDPOINT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -202,6 +203,13 @@ class ProviderProfile:
 
     @property
     def effective_endpoint(self) -> str:
+        if self.kind == "openai":
+            if self.auth == "chatgpt":
+                return CODEX_ENDPOINT
+            if self.auth == "codex":
+                return "Selected by local Codex configuration (ChatGPT Codex or configured API endpoint)"
+            if self.auth == "auto":
+                return f"Auth-dependent: {CODEX_ENDPOINT}, local Codex configuration, or {DEFAULT_ENDPOINTS['openai']}"
         return self.base_url or DEFAULT_ENDPOINTS.get(self.kind, "")
 
     @property

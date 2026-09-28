@@ -527,6 +527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = replace(config, **overrides)
         if "model" in overrides:
             config.model_explicit = True
+            config.model_config_explicit = True
             config.global_model_default = config.model
         if config.provider_id:
             from .harness.providers import ScopedProviderRegistryStore

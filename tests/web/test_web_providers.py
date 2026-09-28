@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -108,6 +109,49 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 assert "Model catalog completed: connection=work count=1" in caplog.text
                 assert "providers={}" in caplog.text
                 assert "synthetic-private-key" not in caplog.text
+
+    asyncio.run(check())
+
+
+def test_named_connection_does_not_inherit_a_saved_web_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_BASE_KEY", "base-key")
+    monkeypatch.delenv("TEST_SHARED_KEY", raising=False)
+
+    async def check() -> None:
+        config = HarnessConfig(tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_BASE_KEY")
+        async with client_app(tmp_path, config=config) as (_, client, headers, _):
+            before = (await client.get("/api/settings", headers=headers)).json()
+            values = {
+                **before["values"],
+                "provider": "openrouter",
+                "auth": "api-key",
+                "api": "auto",
+                "base_url": "",
+                "api_key_env": "TEST_SHARED_KEY",
+            }
+            saved = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={"revision": before["revision"], "values": values, "api_key": "stored-test-key"},
+            )
+            assert saved.status_code == 200, saved.text
+            assert os.environ["TEST_SHARED_KEY"] == "stored-test-key"
+
+            registry = (await client.get("/api/providers", headers=headers)).json()
+            named = await client.put(
+                "/api/provider-scopes/workspace/providers/team",
+                headers=headers,
+                json={
+                    "revision": registry["revision"],
+                    "profile": {"kind": "openrouter", "auth": "api-key", "api_key_env": "TEST_SHARED_KEY"},
+                },
+            )
+            assert named.status_code == 200, named.text
+            assert "TEST_SHARED_KEY" not in os.environ
+            assert (await client.get("/api/settings", headers=headers)).json()["connection"]["key_configured"] is False
+            bootstrap = (await client.get("/api/bootstrap")).json()
+            assert bootstrap["provider_setup"]["configured"] is False
+            assert "stored-test-key" not in str(bootstrap)
 
     asyncio.run(check())
 

@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from nagents.harness.config import HarnessConfig
+from nagents.harness.providers import ScopedProviderRegistryStore
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 
@@ -128,6 +129,79 @@ def test_global_settings_preserve_submit_mode_when_omitted(tmp_path: Path) -> No
             )
             assert again.status_code == 200, again.text
             assert again.json()["values"]["submit_mode"] == "interrupt"
+
+    asyncio.run(scenario())
+
+
+def test_explicit_startup_model_overrides_saved_global_and_workspace_choices(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        data_dir = tmp_path / "data"
+        store = ScopedProviderRegistryStore(tmp_path)
+        store.model_store("global").save("old-global")
+        store.model_store("workspace").save("old-workspace")
+        async with client_app(tmp_path, config=HarnessConfig(tmp_path, data_dir=data_dir, demo=True)) as (
+            _,
+            client,
+            headers,
+            _,
+        ):
+            global_before = (await client.get("/api/settings/global", headers=headers)).json()
+            global_saved = await client.post(
+                "/api/settings/global",
+                headers=headers,
+                json={
+                    "revision": global_before["revision"],
+                    "values": {**global_before["values"], "model": "saved-global"},
+                },
+            )
+            assert global_saved.status_code == 200, global_saved.text
+            workspace_before = (await client.get("/api/settings", headers=headers)).json()
+            workspace_saved = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={
+                    "revision": workspace_before["revision"],
+                    "values": {**workspace_before["values"], "model": "saved-workspace"},
+                },
+            )
+            assert workspace_saved.status_code == 200, workspace_saved.text
+
+        pinned = HarnessConfig(
+            tmp_path,
+            data_dir=data_dir,
+            demo=True,
+            model="cli-model",
+            global_model_default="cli-model",
+            model_explicit=True,
+            model_config_explicit=True,
+        )
+        async with client_app(tmp_path, config=pinned) as (_, client, headers, harnesses):
+            global_current = (await client.get("/api/settings/global", headers=headers)).json()
+            assert global_current["values"]["model"] == "cli-model"
+            global_changed = await client.post(
+                "/api/settings/global",
+                headers=headers,
+                json={
+                    "revision": global_current["revision"],
+                    "values": {**global_current["values"], "max_output": 65536},
+                },
+            )
+            assert global_changed.status_code == 200, global_changed.text
+            workspace_current = (await client.get("/api/settings", headers=headers)).json()
+            assert workspace_current["values"]["model"] == "cli-model"
+            workspace_changed = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={
+                    "revision": workspace_current["revision"],
+                    "values": {**workspace_current["values"], "max_tool_rounds": 9},
+                },
+            )
+            assert workspace_changed.status_code == 200, workspace_changed.text
+            assert (await client.get("/api/bootstrap")).json()["model"] == "cli-model"
+            assert harnesses[0].agent.provider.model == "cli-model"
+        assert store.model_store("global").load() == "saved-global"
+        assert store.model_store("workspace").load() == "saved-workspace"
 
     asyncio.run(scenario())
 
