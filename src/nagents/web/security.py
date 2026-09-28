@@ -100,14 +100,19 @@ class LocalOnly:
         if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
             await reject(404, "Not found.")
             return
-        # Live polling has one bounded, non-secret cursor. Every other query is
-        # still rejected, including duplicate cursors and tokens in URLs.
+        # Only bounded, non-secret Live cursor and Voice scope selectors are accepted.
+        # Other queries (including duplicate parameters and tokens) remain rejected.
         live_cursor = (
             scope["method"] == "GET"
             and re.fullmatch(r"/api/live/sessions/[A-Za-z0-9_-]{1,128}", path) is not None
             and re.fullmatch(rb"after=[0-9]{1,16}", scope["query_string"]) is not None
         )
-        if scope["query_string"] and not live_cursor:
+        voice_scope = (
+            scope["method"] == "GET"
+            and path == "/api/live/settings"
+            and scope["query_string"] in {b"scope=global", b"scope=workspace"}
+        )
+        if scope["query_string"] and not (live_cursor or voice_scope):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return
         method = scope["method"]
@@ -127,17 +132,6 @@ class LocalOnly:
             if method == "POST" and len(parts) == 6 and parts[1:3] == ["api", "sessions"] and parts[4] == "uploads":
                 # Authentication precedes streaming. The dedicated route enforces
                 # MIME, actual byte counts, concurrency and a read deadline.
-                await self.app(scope, receive, secure_send)
-                return
-            if path == "/api/dictation/transcribe":
-                if [value.lower() for value in headers.getlist("content-type")] != ["audio/wav"]:
-                    await reject(415, "Use audio/wav for the recording upload.")
-                    return
-                if headers.getlist("content-encoding"):
-                    await reject(415, "Content-Encoding is not supported for recordings.")
-                    return
-                # The route acquires the idle slot before reading, then counts
-                # actual bytes under its captured configuration and a deadline.
                 await self.app(scope, receive, secure_send)
                 return
             if headers.get("content-type", "").lower() not in {"application/json", "application/json; charset=utf-8"}:

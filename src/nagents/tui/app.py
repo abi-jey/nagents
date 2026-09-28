@@ -55,7 +55,6 @@ from .channel import TuiChannelHost
 from .clipboard import copy_native
 from .commands import SlashMenu
 from .delivery import DeliveryWidget
-from .dictation import DictationModal
 from .login import DeviceLoginModal
 from .login import LoginMethodModal
 from .login import OpenRouterLoginModal
@@ -110,7 +109,6 @@ Esc                   Cancel work; deny an approval
 Ctrl+P                Commands
 Ctrl+N / Ctrl+L       New session / saved sessions
 Ctrl+T                Agent tree / conversations
-Ctrl+G                Dictation (opt-in; editable draft)
 Mouse text selection  Copy automatically on release
 Ctrl+C                Copy selection; otherwise cancel / exit
 Ctrl+Shift+C           Copy selection without cancelling
@@ -134,7 +132,6 @@ class NagentsApp(App[None]):
         Binding("ctrl+n", "new_session", "New", priority=True),
         Binding("ctrl+l", "sessions", "Sessions", priority=True),
         Binding("ctrl+t", "tasks", "Agents", priority=True),
-        Binding("ctrl+g", "dictation", "Dictation", priority=True),
         Binding("f6", "focus_pane", "Message / conversation", priority=True),
         Binding("escape", "cancel", "Cancel", priority=True),
         Binding("ctrl+c", "interrupt", "Cancel / exit", priority=True),
@@ -1010,9 +1007,7 @@ class NagentsApp(App[None]):
                     self.query_one(Composer).focus(scroll_visible=False)
 
     def action_cancel(self) -> None:
-        if isinstance(self.screen, DictationModal):
-            self.screen.run_worker(self.screen.action_cancel_dictation())
-        elif isinstance(self.screen, TaskScreen):
+        if isinstance(self.screen, TaskScreen):
             self.screen.action_close()
         elif isinstance(self.screen, DeviceLoginModal):
             self.screen.action_cancel_login()
@@ -1032,9 +1027,6 @@ class NagentsApp(App[None]):
 
     def action_interrupt(self) -> None:
         if self._copy_selection():
-            return
-        if isinstance(self.screen, DictationModal):
-            self.screen.run_worker(self.screen.action_cancel_dictation())
             return
         if isinstance(self.screen, DeviceLoginModal):
             self.screen.action_cancel_login()
@@ -1060,9 +1052,6 @@ class NagentsApp(App[None]):
         self._shutting_down = True
         self._queued_prompts.clear()
         try:
-            for screen in reversed(self.screen_stack):
-                if isinstance(screen, DictationModal):
-                    await screen.close()
             if self.screen_stack and isinstance(self.screen, DeviceLoginModal):
                 self.screen.clear_code()
             if self._active is not None:
@@ -1162,36 +1151,6 @@ class NagentsApp(App[None]):
         except (ValueError, RuntimeError, PermissionError) as exc:
             self._status(f"Follow-up not sent; draft kept. {exc}", error=True)
 
-    def action_dictation(self) -> None:
-        if isinstance(self.screen, ModalScreen) or self._shutting_down:
-            return
-        self._hide_completions()
-        if self.busy:
-            self._status("Finish or stop current work before recording. Your draft is kept.")
-        elif self.harness.config.demo:
-            self._status("Dictation is disabled in offline demo; no microphone or transcription request was started.")
-        elif not self.harness.config.dictation_enabled:
-            self.push_screen(
-                DetailModal(
-                    "DICTATION / OPT-IN",
-                    "Enable with --dictation or dictation_enabled = true in trusted YAML.\n\n"
-                    "Install the voice extra and provide a separate transcription API key. "
-                    "Ctrl+G or /dictate opens explicit recording controls; audio is never captured automatically. "
-                    "The resulting text is an editable draft, never an automatically submitted message.",
-                )
-            )
-        else:
-            self.push_screen(DictationModal(self.harness.config), self._dictation_result)
-
-    def _dictation_result(self, text: str | None) -> None:
-        if self._shutting_down:
-            return
-        composer = self.query_one(Composer)
-        if text:
-            composer.insert(text)
-            self._status("Dictation inserted into your draft. Review it, then Enter sends.")
-        composer.focus()
-
     def command(self, text: str) -> None:
         self._hide_completions()
         parts = text.split(maxsplit=1)
@@ -1215,8 +1174,6 @@ class NagentsApp(App[None]):
                 self._status(str(exc), error=True)
         elif name == "/tasks":
             self._show_tasks()
-        elif name == "/dictate":
-            self.action_dictation()
         elif name == "/queue":
             if argument == "clear":
                 self._queued_prompts.clear()
@@ -1291,7 +1248,7 @@ class NagentsApp(App[None]):
                 from nagents.harness.providers import ProviderProfile
 
                 self.push_screen(
-                    ProviderEditor(profile=ProviderProfile(kind="openrouter", model="openrouter/auto")),
+                    ProviderEditor(profile=ProviderProfile(kind="openrouter")),
                     self._save_provider,
                 )
             else:
@@ -1324,7 +1281,8 @@ class NagentsApp(App[None]):
         choices.extend(
             (
                 key,
-                f"{key}  [{'workspace' if key in local.providers else 'global'}]  /  {profile.kind} / {profile.model}"
+                f"{key}  [{'workspace' if key in local.providers else 'global'}]  /  "
+                f"{profile.kind} / {profile.credential_source} / {profile.effective_endpoint}"
                 + ("  [active]" if key == registry.active else ""),
             )
             for key, profile in registry.providers.items()
@@ -1356,7 +1314,7 @@ class NagentsApp(App[None]):
                     ("edit", "Edit connection and Live settings"),
                     ("activate", "Use in this workspace"),
                     *([("global", "Set as global default")] if scope == "global" else []),
-                    ("models", "Fetch model IDs"),
+                    ("models", "Browse model catalog (sets workspace model)"),
                     ("delete", "Delete connection"),
                 ],
             ),
@@ -1392,7 +1350,8 @@ class NagentsApp(App[None]):
         registry = self.harness.provider_store.load_scope(scope)
         await self.harness.save_provider(name, profile, registry.revision, scope)
         await self._notice(
-            f"Saved {name} in {scope} YAML. Environment variable: ${profile.key_env} (if API key authentication)."
+            f"Saved {name} in {self.harness.provider_store.store(scope).path}. "
+            f"Credential: {profile.credential_source}. Endpoint: {profile.effective_endpoint}."
         )
 
     async def _activate_provider(self, name: str, scope: str = "workspace") -> None:
@@ -1413,7 +1372,7 @@ class NagentsApp(App[None]):
     async def _provider_models(self, name: str) -> None:
         models = await self.harness.provider_models(name)
         if not models:
-            await self._notice("The provider returned no models; enter a model ID manually in Edit.")
+            await self._notice("The provider returned no models; use /model to enter an ID manually.")
             return
         self.push_screen(
             ChoiceModal(f"MODELS / {name}", [(model, model) for model in models]),
@@ -1421,17 +1380,9 @@ class NagentsApp(App[None]):
         )
 
     def _choose_provider_model(self, name: str, model: str | None) -> None:
-        from dataclasses import replace
-
         if not model:
             return
-        registry = self.harness.provider_store.load()
-        profile = registry.providers.get(name)
-        if profile is not None:
-            scope = "workspace" if name in self.harness.provider_store.load_scope("workspace").providers else "global"
-            self.push_screen(
-                ProviderEditor(name, replace(profile, model=model)), lambda result: self._save_provider(result, scope)
-            )
+        self.command(f"/model {model}")
 
     def _chosen_provider(self, token: str | None) -> None:
         if not token:
@@ -1644,6 +1595,8 @@ class NagentsApp(App[None]):
             await self._notice(f"Profile changed to {self.harness.config.agent}.")
         elif name == "/model":
             await self.harness.set_model(argument)
+            if hasattr(self.harness, "provider_store"):
+                self.harness.provider_store.model_store("workspace").save(argument)
             await self._notice(f"Model changed to {self.harness.config.model}.")
 
     async def _sessions(self) -> None:

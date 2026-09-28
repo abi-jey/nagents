@@ -38,8 +38,9 @@ from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
-from .dictation import WebDictation
 from .history import WebHistory
+from .provider_setup import provider_error
+from .provider_setup import provider_setup
 from .replay import RunReplay
 from .subscriptions import EventBus
 from .trash import SessionTrash
@@ -176,7 +177,6 @@ class WebState:
         self.session_revision = 0
         self.active: Run | None = None
         self.mutating = False
-        self.dictation = WebDictation()
         self.bus = EventBus()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
         # Preserve explicit custom persistence adapters. Their unlinked rows still
@@ -441,17 +441,19 @@ class WebState:
                         if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
                             run.final_text = event.final_text
                         if isinstance(event, ErrorEvent):
+                            reason, message = provider_error(event)
                             logger.warning(
-                                "Provider run error: session=%s run=%s recoverable=%s",
+                                "Provider run error: session=%s run=%s reason=%s recoverable=%s",
                                 run.session_id,
                                 run.id,
+                                reason,
                                 event.recoverable,
                             )
                             if not event.recoverable:
                                 run.outcome = "failed"
                             record = {
                                 "event": "error",
-                                "message": "The provider run failed. Check local provider configuration before trying again.",
+                                "message": message,
                                 "recoverable": event.recoverable,
                             }
                         else:
@@ -485,8 +487,19 @@ class WebState:
             raise
         except Exception:
             run.outcome = "failed"
-            logger.warning("Run producer failed: session=%s run=%s", run.session_id, run.id)
-            await self.send(run, {"event": "error", "message": "Run failed. Completed actions were not rolled back."})
+            # Readiness is advisory: an injected/scripted provider can run without
+            # the configured connection's key. When the real provider fails, give
+            # the same local-only setup guidance without exposing its exception.
+            setup = provider_setup(self.running_harness)
+            reason = "missing_credentials" if not setup["configured"] else "run_failed"
+            logger.warning("Run producer failed: session=%s run=%s reason=%s", run.session_id, run.id, reason)
+            await self.send(
+                run,
+                {
+                    "event": "error",
+                    "message": setup["message"] or "Run failed. Completed actions were not rolled back.",
+                },
+            )
         finally:
             if run.pending is not None and not run.pending.answer.done():
                 run.pending.answer.set_result(False)

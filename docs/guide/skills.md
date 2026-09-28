@@ -320,8 +320,7 @@ Dynamic skills use the **text `Agent.run()` lifecycle**, including that lifecycl
 when called by a channel/web host. Supplying discovery is an extension-enabled
 configuration: batch execution, realtime voice execution, and `run_simple()`
 reject it rather than silently ignoring refresh/loading hooks. Use a separate
-Agent without skill discovery for those modes. Dictation that produces text for
-a subsequent normal run is distinct from realtime execution.
+Agent without skill discovery for those modes.
 
 The registered skill tool retains the normal tool executor and plugin hooks.
 Harness skill loading is a read-only builtin; it does not authorize file writes,

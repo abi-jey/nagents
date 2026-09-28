@@ -26,9 +26,12 @@ from nagents.session import SessionManager
 from nagents.types import RetryConfig
 
 from .live_settings import LIVE_VOICES
+from .live_settings import GlobalVoiceInput
 from .live_settings import LiveSettingsInput
 from .live_settings import Revision
+from .live_settings import WorkspaceVoiceInput
 from .routing import RoutingStore
+from .voice_preferences import Scope
 
 if TYPE_CHECKING:
     from .live_runtime import LiveService
@@ -62,9 +65,9 @@ def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
     if demo:
         return "GPT-Live is unavailable in offline demo mode. Restart ngn serve without --demo."
     if not values.enabled:
-        return "GPT-Live is disabled. Enable it in Connection settings."
+        return "GPT-Live is disabled. Enable it in Voice settings."
     if values.provider == "azure_openai_compatible_v1" and not values.base_url:
-        return "The Azure v1 Live provider requires an API base URL. Open Connection settings to set it."
+        return "The Azure v1 Live provider requires an API base URL. Open Provider connections to set it."
     if not connection.key_configured:
         if connection.profile is not None:
             return (
@@ -129,7 +132,7 @@ def create_agent(
     key = connection.api_key.get_secret_value()
     provider: Provider
     if connection.profile is not None:
-        provider = build_live_provider(connection.profile, options, key)
+        provider = build_live_provider(connection.profile, options, key, values.model)
     elif values.provider in {"azure_openai_compatible_v1", "foundry"}:
         provider = FoundryProvider(
             base_url=values.base_url,
@@ -181,17 +184,16 @@ def register(
         )
 
     @app.get("/api/live/settings")
-    async def connection_settings() -> dict[str, object]:
-        return await settings().snapshot()
+    async def connection_settings(scope: Scope | None = None) -> dict[str, object]:
+        return await settings().snapshot(scope)
 
     @app.post("/api/live/settings")
-    async def save_settings(body: LiveSettingsInput) -> dict[str, object]:
+    async def save_settings(body: GlobalVoiceInput | WorkspaceVoiceInput | LiveSettingsInput) -> dict[str, object]:
         result = await settings().change(body)
         logger.info(
-            "Live settings saved: provider=%s source=%s enabled=%s",
-            body.values.provider,
+            "Live settings saved: scope=%s source=%s",
+            result.get("scope", "legacy"),
             result.get("source", "legacy"),
-            body.values.enabled,
         )
         return result
 

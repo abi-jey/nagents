@@ -47,7 +47,7 @@ then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -77,7 +77,7 @@ named environment variable, never literal YAML values.
 
 Other configuration groups: `shell_timeout`, `max_output` (bytes),
 `max_file_bytes`, and `max_tool_rounds`; `theme`, `theme_background`, `animations`,
-`submit_mode`, `tab_action`; separate `dictation_*` preferences. Use the complete
+`submit_mode`, `tab_action`. Use the complete
 configuration guide for accepted types and bounds rather than inventing keys.
 
 `AGENTS.md` supplies project task context, including nested instructions as
@@ -249,8 +249,7 @@ Text-only legacy Completions cannot drive the coding Harness's tools.
 `OpenAIProvider` uses its credential-provider interface for ChatGPT authentication; the Harness owns device
 login, refresh, and credential storage. `auth="chatgpt"` requires the default
 OpenAI route with `api="auto"`; custom endpoints use API-key authentication.
-Dictation has separate transcription credentials and is not authorized by
-ChatGPT device login. Provider model discovery is explicit; a listed model ID
+Provider model discovery is explicit; a listed model ID
 does not prove capability or account entitlement. Custom provider subclasses
 must honor verification, generation events, retries, and cleanup, not just return
 strings from `generate`.
@@ -265,8 +264,7 @@ Consume async event generators to completion or close them with
 Hooks, custom executors, compaction strategies, and dynamic skills belong to the
 text loop. Extension-enabled batch, realtime voice, and `run_simple()` reject
 execution instead of silently bypassing that lifecycle. Realtime/audio and STT
-have their own library interfaces; browser/TUI dictation produces a draft for a
-subsequent text run.
+have their own library interfaces.
 
 ## Skills, children, and timers
 
@@ -327,8 +325,8 @@ session. Installing a `nagents.channels` entry point and enabling a connection
 in Channels is the web integration path; attaching a standalone Agent does not
 configure an existing web server.
 
-Web Settings persist an allowlist of model/profile/tool limits, delegation depth,
-and dictation preferences in the workspace database with revision checks and
+Web Settings persist an allowlist of model/profile/tool limits and delegation depth
+in the workspace database with revision checks and
 idle-only writes. Provider routing, credentials, trusted Python plugins, and
 paths remain startup configuration. CLI/TUI do not load the web-only overrides.
 The Channels panel owns connector configuration and refresh; it is distinct from

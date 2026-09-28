@@ -12,13 +12,11 @@ from textual.containers import Vertical
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button
-from textual.widgets import Checkbox
 from textual.widgets import Input
 from textual.widgets import Select
 from textual.widgets import Static
 
 from nagents.harness.providers import KINDS
-from nagents.harness.providers import LiveProfile
 from nagents.harness.providers import ProviderProfile
 
 if TYPE_CHECKING:
@@ -32,9 +30,7 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
     def __init__(self, name: str = "", profile: ProviderProfile | None = None) -> None:
         super().__init__()
         self.connection_name = name
-        self.profile = profile or ProviderProfile(
-            kind="openai", model="gpt-4.1", auth="auto", live=LiveProfile(backend_mode="assistant")
-        )
+        self.profile = profile or ProviderProfile(kind="openai", auth="auto")
 
     def compose(self) -> ComposeResult:
         value = self.profile
@@ -51,8 +47,9 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 yield Select([(kind.label, name) for name, kind in KINDS.items()], value=value.kind, id="provider-kind")
                 yield Static("Authentication", markup=False)
                 yield Select([(mode, mode) for mode in KINDS[value.kind].auth], value=value.auth, id="provider-auth")
-                yield Static("Model ID", markup=False)
-                yield Input(value.model, id="provider-model")
+                yield Static("Chat model: /model (workspace preference, independent of connection)", markup=False)
+                yield Static(f"Credential source: {value.credential_source}", markup=False)
+                yield Static(f"Effective endpoint: {value.effective_endpoint}", markup=False)
                 yield Static("HTTP API", markup=False)
                 yield Select([(api, api) for api in KINDS[value.kind].apis], value=value.api, id="provider-api")
                 yield Static("API prefix URL", id="provider-url-help", markup=False)
@@ -63,21 +60,6 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 yield Input(value.api_version, id="provider-version")
                 yield Static("Entra token scope (Foundry only)", markup=False)
                 yield Input(value.scope, id="provider-scope")
-                yield Checkbox("Enable GPT-Live", value=value.live.enabled, id="provider-live")
-                yield Static("Voice backend mode", markup=False)
-                yield Select(
-                    [("Main assistant", "assistant"), ("Separate hosted backend", "hosted")],
-                    value=value.live.backend_mode,
-                    id="provider-backend-mode",
-                )
-                yield Static("Live voice model", markup=False)
-                yield Input(value.live.model, id="provider-live-model")
-                yield Static("Live hosted backend model", markup=False)
-                yield Input(value.live.backend_model, id="provider-backend-model")
-                yield Static("Live voice", markup=False)
-                yield Select(
-                    [(voice, voice) for voice in ("marin", "cedar")], value=value.live.voice, id="provider-voice"
-                )
                 yield Static("", id="provider-error", markup=False)
             with Horizontal(classes="dialog-actions"):
                 yield Button("Save", id="provider-save", variant="primary")
@@ -92,7 +74,6 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
             "chatgpt",
             "codex",
         }
-        self.query_one("#provider-backend-mode", Select).disabled = not KINDS[self.profile.kind].live
 
     @on(Select.Changed, "#provider-kind")
     def changed_kind(self, event: Select.Changed) -> None:
@@ -111,13 +92,6 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
         url.display = KINDS[kind].endpoint_required
         if not url.display:
             url.value = ""
-        mode = self.query_one("#provider-backend-mode", Select)
-        mode.disabled = not KINDS[kind].live
-        mode.value = "assistant" if KINDS[kind].live else "hosted"
-        enabled = self.query_one("#provider-live", Checkbox)
-        enabled.disabled = not KINDS[kind].live
-        if enabled.disabled:
-            enabled.value = False
 
     @on(Select.Changed, "#provider-auth")
     def changed_auth(self, event: Select.Changed) -> None:
@@ -140,30 +114,19 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
         kind = self.query_one("#provider-kind", Select).value
         auth = self.query_one("#provider-auth", Select).value
         api = self.query_one("#provider-api", Select).value
-        voice = self.query_one("#provider-voice", Select).value
-        backend_mode = self.query_one("#provider-backend-mode", Select).value
-        if not all(isinstance(item, str) for item in (kind, auth, api, voice, backend_mode)):
+        if not all(isinstance(item, str) for item in (kind, auth, api)):
             return
         assert isinstance(kind, str) and isinstance(auth, str) and isinstance(api, str)
-        assert isinstance(voice, str) and isinstance(backend_mode, str)
         name = input_value("provider-name")
         try:
             profile = ProviderProfile(
                 kind=kind,
                 auth=auth,
                 api=api,
-                model=input_value("provider-model"),
                 base_url=input_value("provider-url"),
                 api_key_env=input_value("provider-env") if auth in {"auto", "api-key"} or kind == "openai" else "",
                 api_version=input_value("provider-version"),
                 scope=input_value("provider-scope"),
-                live=LiveProfile(
-                    enabled=self.query_one("#provider-live", Checkbox).value,
-                    model=input_value("provider-live-model"),
-                    backend_model=input_value("provider-backend-model"),
-                    voice=voice,
-                    backend_mode=backend_mode,
-                ),
             )
             profile.validate()
         except ValueError as error:

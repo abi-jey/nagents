@@ -74,6 +74,7 @@ async def scheduled_app(
         return instance
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only-scripted-provider-key")
     config = HarnessConfig(
         workspace=tmp_path,
         data_dir=tmp_path / "data",

@@ -49,8 +49,7 @@ export function useSessions() {
     if (!config) throw new Error("Reconnect to ngn before changing sessions.");
     if (id) {
       if (!sessions.some((session) => session.id === id)) throw new Error("Session unavailable. Refresh the connection.");
-      // Keep the existing selected-session handshake for dictation's session and
-      // settings-revision protections. The server-owned route selects the UI root
+      // The server-owned route selects the UI root
       // without moving the Harness underneath another chat's running producer.
       return accept(await snapshotResponse(await request("sessions/resume", config.token, { session_id: id })));
     }
@@ -73,8 +72,8 @@ export function useSessions() {
     }
   }
   function acceptSettings(reply: SettingsReply) {
-    setConfig((current) => current && { ...current, model: reply.values.model, agent: reply.values.agent,
-      provider: reply.connection.provider, dictation: reply.dictation });
+    setConfig((current) => current && { ...current, model: reply.effective_model || reply.values.model, agent: reply.values.agent,
+      provider: reply.connection.provider });
   }
   function acceptCredentials(bootstrap: Bootstrap) {
     // Credential-only recovery updates every HTTP consumer through config, while

@@ -38,8 +38,6 @@ export function Composer({
   running,
   submit,
   cancel,
-  dictation,
-  review,
   status,
   attachments,
   hasAttachments = false,
@@ -58,8 +56,6 @@ export function Composer({
   running: boolean;
   submit: () => void;
   cancel: () => void;
-  dictation?: ReactNode;
-  review?: ReactNode;
   status?: ReactNode;
   attachments?: ReactNode;
   hasAttachments?: boolean;
@@ -110,14 +106,12 @@ export function Composer({
           }
         }}
       />
-      {review}
       {attachments}
       <div className="composer-bottom">
         {!!attachmentTypes.length && <label className="attachment-picker">Attach
           <input type="file" aria-label="Attach images or PDFs" multiple accept={attachmentTypes.join(",")} disabled={attachmentsDisabled}
             onChange={(event) => { addAttachments?.([...event.currentTarget.files || []]); event.currentTarget.value = ""; }} />
         </label>}
-        {dictation}
         {status}
         <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.</span>
         {running && (

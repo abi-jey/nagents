@@ -94,11 +94,6 @@ Any explicitly selected config file is trusted.
 See the [full schema and recipes](docs/guide/ngn-configuration.md) for types,
 defaults, ranges, profile replacement, relative paths, and LiteLLM endpoints.
 
-Optional microphone dictation uses the `voice` extra, a separate transcription
-API-key reference, and explicit opt-in. Transcriptions become editable previews,
-not automatically sent prompts. ChatGPT subscription access does not cover the
-paid transcription API. See [dictation](docs/guide/ngn.md#dictation).
-
 Python plugins can change how the agent builds context, compacts history, and
 executes tools. The TUI uses the same harness as the headless client; Textual
 remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
@@ -125,6 +120,8 @@ The new frontend source lives in `src/nagents/web-ui/`; its Vite build goes to
 building or reloading. Use `ngn serve --dev` in an editable checkout to build stale
 assets and reload after frontend or Python edits. Source build/check commands are in
 [Contributing](docs/development/contributing.md#web-client-development).
+For the runtime image's no-config startup, mounted YAML and Kubernetes Secret or
+environment-variable examples, see the [container configuration guide](docs/guide/ngn-container.md).
 
 The legacy server's authentication hardening and removal of its old UI are also
 post-`0.5.0` changes. Do not apply the current security guarantees to that older

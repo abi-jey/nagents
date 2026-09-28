@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
@@ -35,11 +37,9 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 assert before["active"] == "" and before["providers"] == {}
                 profile = {
                     "kind": "openai",
-                    "model": "gpt-4.1",
                     "auth": "api-key",
                     "api": "responses",
                     "api_key_env": "${TEST_PROVIDER_KEY}",
-                    "live": {"enabled": True, "model": "gpt-live-1", "backend_model": "gpt-5.6-luna", "voice": "marin"},
                 }
                 invalid = await client.put(
                     "/api/provider-scopes/workspace/providers/work",
@@ -50,6 +50,18 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                     },
                 )
                 assert invalid.status_code == 422
+                coupled = await client.put(
+                    "/api/provider-scopes/workspace/providers/work",
+                    headers=headers,
+                    json={"revision": before["revision"], "profile": {**profile, "model": "gpt-6-luna"}},
+                )
+                assert coupled.status_code == 422
+                voice_coupled = await client.put(
+                    "/api/provider-scopes/workspace/providers/work",
+                    headers=headers,
+                    json={"revision": before["revision"], "profile": {**profile, "live": {"enabled": True}}},
+                )
+                assert voice_coupled.status_code == 422
                 result = await client.put(
                     "/api/provider-scopes/workspace/providers/work",
                     headers=headers,
@@ -61,11 +73,18 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 assert result.status_code == 200, result.text
                 data = result.json()
                 assert data["active"] == "work" and data["providers"]["work"]["key_configured"]
+                assert "model" not in data["providers"]["work"]
+                assert data["providers"]["work"]["credential_source"] == "API key $TEST_PROVIDER_KEY"
+                assert data["providers"]["work"]["effective_endpoint"] == "https://api.openai.com/v1"
                 assert "synthetic-private-key" not in result.text
                 store = ScopedProviderRegistryStore(tmp_path)
                 assert data["scope"] == "workspace"
                 assert data["origins"]["work"] == "workspace"
                 assert "synthetic-private-key" not in store.workspace_store.path.read_text()
+                document = yaml.safe_load(store.workspace_store.path.read_text())
+                assert document["version"] == 2
+                assert "model" not in document["providers"]["work"]
+                assert "live" not in document["providers"]["work"]
                 assert (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()[
                     "providers"
                 ] == {}
@@ -94,13 +113,55 @@ def test_provider_crud_model_catalog_and_live_are_shared(
     asyncio.run(check())
 
 
+def test_named_connection_does_not_inherit_a_saved_web_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_BASE_KEY", "base-key")
+    monkeypatch.delenv("TEST_SHARED_KEY", raising=False)
+
+    async def check() -> None:
+        config = HarnessConfig(tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_BASE_KEY")
+        async with client_app(tmp_path, config=config) as (_, client, headers, _):
+            before = (await client.get("/api/settings", headers=headers)).json()
+            values = {
+                **before["values"],
+                "provider": "openrouter",
+                "auth": "api-key",
+                "api": "auto",
+                "base_url": "",
+                "api_key_env": "TEST_SHARED_KEY",
+            }
+            saved = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={"revision": before["revision"], "values": values, "api_key": "stored-test-key"},
+            )
+            assert saved.status_code == 200, saved.text
+            assert os.environ["TEST_SHARED_KEY"] == "stored-test-key"
+
+            registry = (await client.get("/api/providers", headers=headers)).json()
+            named = await client.put(
+                "/api/provider-scopes/workspace/providers/team",
+                headers=headers,
+                json={
+                    "revision": registry["revision"],
+                    "profile": {"kind": "openrouter", "auth": "api-key", "api_key_env": "TEST_SHARED_KEY"},
+                },
+            )
+            assert named.status_code == 200, named.text
+            assert "TEST_SHARED_KEY" not in os.environ
+            assert (await client.get("/api/settings", headers=headers)).json()["connection"]["key_configured"] is False
+            bootstrap = (await client.get("/api/bootstrap")).json()
+            assert bootstrap["provider_setup"]["configured"] is False
+            assert "stored-test-key" not in str(bootstrap)
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize(
     "profile",
     [
-        ProviderProfile(kind="openai", model="gpt-4.1", auth="codex"),
+        ProviderProfile(kind="openai", auth="codex"),
         ProviderProfile(
             kind="foundry",
-            model="deployment",
             auth="entra",
             api="responses",
             base_url="https://example.openai.azure.com/openai/v1",
@@ -130,7 +191,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             store = ScopedProviderRegistryStore(tmp_path)
             global_before = (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()
-            profile = {"kind": "openai", "model": "gpt-4.1", "auth": "codex"}
+            profile = {"kind": "openai", "auth": "codex"}
             added = await client.put(
                 "/api/provider-scopes/global/providers/personal",
                 headers=headers,
@@ -161,8 +222,9 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
                 "/api/live/settings",
                 headers=headers,
                 json={
+                    "scope": "workspace",
                     "revision": live_before["revision"],
-                    "values": live_before["values"],
+                    "overrides": {},
                 },
             )
             assert stale_live.status_code == 409
@@ -171,7 +233,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
                 headers=headers,
                 json={
                     "revision": selected.json()["revision"],
-                    "profile": {"kind": "anthropic", "model": "claude-4", "auth": "api-key"},
+                    "profile": {"kind": "anthropic", "auth": "api-key"},
                 },
             )
             assert local.status_code == 200, local.text

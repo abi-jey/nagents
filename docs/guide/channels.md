@@ -309,8 +309,7 @@ In `ngn serve`, use **Attach**, paste an image, or drop files into the composer.
 Images show a local draft preview; PDFs show their filename/type. Remove an
 attachment before sending to discard it. Uploading or pasting only stages a draft:
 **Send** (or Enter) explicitly submits it, with or without accompanying text.
-Switching conversations discards that conversation's attachment drafts. Dictation
-continues to produce editable text rather than an audio attachment.
+Switching conversations discards that conversation's attachment drafts.
 
 The host accepts up to **3 attachments, 8 MiB each**, from JPEG, PNG, GIF, WebP,
 and PDF. The available picker types are the intersection of this allowlist and

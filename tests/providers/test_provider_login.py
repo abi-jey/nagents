@@ -152,7 +152,7 @@ def test_invalid_saved_login_is_ignored_with_a_diagnostic(tmp_path: Path) -> Non
         )
     )
     config = load_config(tmp_path)
-    assert config.provider == "openai" and config.model == "gpt-4.1"
+    assert config.provider == "openai" and config.model == "gpt-6-luna"
     assert any("Ignored" in note for note in config.diagnostics)
 
 
@@ -197,11 +197,11 @@ def test_harness_provider_prefers_environment_key_over_stored_key(
 @pytest.mark.requires_posix
 def test_harness_login_api_persists_and_logout_removes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path))
+        harness = Harness(HarnessConfig(workspace=tmp_path, model="gpt-6-luna"))
         try:
             await harness.initialize()
             await harness.login_api(login())
-            assert harness.config.provider == "openrouter" and harness.config.model == "openrouter/auto"
+            assert harness.config.provider == "openrouter" and harness.config.model == "gpt-6-luna"
             assert isinstance(harness.agent.provider, HarnessProvider)
             harness.agent.provider.credentials()
             assert harness.agent.provider.api_key == SECRET
@@ -349,7 +349,7 @@ def test_cli_login_stores_key_from_stdin_without_rendering(
     assert "Signed in to openai" in output and SECRET not in output
     assert store().key_for("openai") == SECRET
     config = load_config(tmp_path)
-    assert (config.provider, config.model) == ("openai", "gpt-4.1")
+    assert (config.provider, config.model) == ("openai", "gpt-6-luna")
 
 
 @pytest.mark.requires_posix

@@ -34,6 +34,7 @@ PROVIDERS.update(
 )
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
+DEFAULT_HARNESS_MODEL = "gpt-6-luna"
 API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
 
@@ -55,7 +56,8 @@ class HarnessConfig:
     workspace: Path
     provider: str = "openai"
     provider_id: str = ""
-    model: str = "gpt-4.1"
+    model: str = DEFAULT_HARNESS_MODEL
+    global_model_default: str = ""  # Loader-only baseline for global web defaults.
     base_url: str = ""
     api_key_env: str = "OPENAI_API_KEY"
     agent: str = "assistant"
@@ -80,13 +82,11 @@ class HarnessConfig:
     api: str = "auto"
     max_subagent_depth: int = 2
     theme_background: str = "auto"
-    dictation_enabled: bool = False
-    dictation_model: str = "gpt-4o-mini-transcribe"
-    dictation_base_url: str = "https://api.openai.com/v1"
-    dictation_api_key_env: str = "OPENAI_API_KEY"
-    dictation_language: str = ""
-    dictation_max_seconds: int = 120
     skill_token_limit: int = 10000
+    # Distinguish a selected model from the built-in API default when switching to ChatGPT.
+    model_explicit: bool = field(default=False, repr=False, compare=False)
+    # Environment, trusted YAML, and CLI model choices outrank saved UI preferences at startup.
+    model_config_explicit: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.workspace = self.workspace.expanduser().resolve()
@@ -163,25 +163,6 @@ class HarnessConfig:
             raise ValueError("max_tool_rounds must be between 1 and 1000")
         if type(self.max_subagent_depth) is not int or not 0 <= self.max_subagent_depth <= 8:
             raise ValueError("max_subagent_depth must be an integer between 0 and 8 (root depth is 0)")
-        if type(self.dictation_enabled) is not bool:
-            raise ValueError("dictation_enabled must be a boolean")
-        if not self.dictation_model.strip():
-            raise ValueError("dictation_model must not be empty")
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.dictation_api_key_env):
-            raise ValueError("dictation_api_key_env must be an environment variable name, not a literal secret")
-        url = urlsplit(self.dictation_base_url)
-        if (
-            url.scheme not in {"http", "https"}
-            or not url.hostname
-            or any(char.isspace() or ord(char) < 32 for char in self.dictation_base_url)
-        ):
-            raise ValueError("dictation_base_url must be an HTTP(S) URL")
-        if url.username or url.password or url.query or url.fragment:
-            raise ValueError("dictation_base_url must not contain credentials, query parameters, or fragments")
-        if self.dictation_language and not re.fullmatch(r"[a-z]{2}", self.dictation_language):
-            raise ValueError("dictation_language must be empty (auto-detect) or a two-letter lowercase language code")
-        if type(self.dictation_max_seconds) is not int or not 1 <= self.dictation_max_seconds <= 300:
-            raise ValueError("dictation_max_seconds must be an integer between 1 and 300")
 
     def profile(self, name: str) -> AgentProfile:
         if name == "assistant":
@@ -201,7 +182,8 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
     Only secret-free routing fields are read here. The API key remains in the
     protected store and is resolved lazily by the provider at request time.
     """
-    registry = ScopedProviderRegistryStore(config.workspace).load()
+    store = ScopedProviderRegistryStore(config.workspace)
+    registry = store.load()
     if registry.active:
         profile = registry.providers[registry.active]
         return (
@@ -209,7 +191,8 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
                 config,
                 provider_id=registry.active,
                 provider=profile.kind,
-                model=profile.model,
+                model=store.model() or config.model,
+                model_explicit=bool(store.model()) or config.model_explicit,
                 base_url=profile.base_url,
                 api=profile.api,
                 auth=profile.auth,
@@ -224,11 +207,14 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
         return config, "Ignored an unreadable saved provider login; run ngn login again."
     if selection is None:
         return config, ""
+    if selection.model and not store.model():
+        store.model_store("global").save(selection.model, only_if_missing=True)
     try:
         candidate = replace(
             config,
             provider=selection.provider,
-            model=selection.model or config.model,
+            model=store.model() or config.model,
+            model_explicit=bool(store.model()) or config.model_explicit,
             base_url=selection.base_url,
             api=selection.api or config.api,
             auth=selection.auth or config.auth,
@@ -241,8 +227,13 @@ def _login_defaults(config: HarnessConfig) -> tuple[HarnessConfig, str]:
 
 def load_config(workspace: Path, config_path: Path | None = None, *, trust_project: bool = False) -> HarnessConfig:
     """Load trusted config only; never import plugins or read credential values."""
-    config, login_note = _login_defaults(HarnessConfig(workspace=workspace, trust_project=trust_project))
-    model_overridden = os.environ.get("NGN_MODEL") is not None
+    defaults = HarnessConfig(workspace=workspace, trust_project=trust_project)
+    fallback_model = defaults.model
+    config, login_note = _login_defaults(defaults)
+    global_model = ScopedProviderRegistryStore(config.workspace).model_store("global").load() or fallback_model
+    if os.environ.get("NGN_MODEL") is None:
+        config.model = ScopedProviderRegistryStore(config.workspace).model() or config.model
+    model_overridden = False
     strings = {
         "provider_id",
         "provider",
@@ -257,10 +248,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "tab_action",
         "api",
         "theme_background",
-        "dictation_model",
-        "dictation_base_url",
-        "dictation_api_key_env",
-        "dictation_language",
     }
     integers = {
         "max_output",
@@ -268,9 +255,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "skill_token_limit",
         "max_tool_rounds",
         "max_subagent_depth",
-        "dictation_max_seconds",
     }
-    booleans = {"demo", "animations", "dictation_enabled", "read_only"}
+    booleans = {"demo", "animations", "read_only"}
     allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles"}
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
@@ -291,6 +277,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             config.shell_timeout = float(env_value)
         else:
             setattr(config, key, Path(env_value) if key == "data_dir" else env_value)
+            if key == "model":
+                global_model = env_value
 
     user = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn/config.yaml"
     project = config.workspace / ".ngn/config.yaml"
@@ -339,7 +327,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         }:
             config.provider_id = ""
         for key, value in values.items():
-            if key == "model":
+            if key == "model" and isinstance(value, str):
+                global_model = value
                 model_overridden = True
             if key in strings | {"data_dir"}:
                 if not isinstance(value, str):
@@ -395,6 +384,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
+    config.global_model_default = global_model
     if config.provider_id:
         registry = ScopedProviderRegistryStore(config.workspace).load()
         if config.provider_id not in registry.providers:
@@ -406,7 +396,11 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         config.auth = selected.auth
         config.api_key_env = selected.key_env
         config.api_version = selected.api_version
-        if not model_overridden:
-            config.model = selected.model
+    config.model_explicit = (
+        config.model_explicit
+        or model_overridden
+        or bool(os.environ.get("NGN_MODEL") or ScopedProviderRegistryStore(config.workspace).model())
+    )
+    config.model_config_explicit = os.environ.get("NGN_MODEL") is not None or model_overridden
     config.__post_init__()
     return config

@@ -7,12 +7,12 @@ assuming every current field or behavior is present in that snapshot.
 
 ## Quick example
 
-Configuration is **flat YAML**. Do not wrap it in an `ngn:`, `provider:`, `theme:`,
-or `dictation:` mapping. Named agent profiles are the only nested mapping:
+Configuration is **flat YAML**. Do not wrap it in an `ngn:`, `provider:`, or `theme:`
+mapping. Named agent profiles are the only nested mapping:
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -76,8 +76,8 @@ configuration; see [profiles](#agent-profiles) before combining a profile-specif
 ### Shared named provider connections
 
 `ngn` and `ngn serve` share `$XDG_CONFIG_HOME/ngn/providers.yaml` (default
-`~/.config/ngn/providers.yaml`) for global connections. Use **Global settings →
-Provider connections** to edit them and choose the default. **Workspace settings →
+`~/.config/ngn/providers.yaml`) for global connections. Use **Settings → Global →
+Provider connections** to edit them and choose the default. **Settings → Workspace →
 Provider connections** manages connections and a selection for this workspace;
 its YAML lives at `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml`.
 The workspace list includes global connections, which can be selected without
@@ -87,8 +87,15 @@ ngn is stopped. A revision prevents an older UI from overwriting another
 process's edits. A separate connection can be selected for a trusted agent profile using
 `profiles.NAME.provider: CONNECTION_NAME`.
 
-The file contains only routing, model, Live preferences and **environment
-variable names**. Use `api_key_env: OPENAI_API_KEY` or
+Provider connections contain kind, authentication source, endpoint where needed,
+HTTP API and **environment variable names**. Chat models are chosen separately:
+global `$XDG_CONFIG_HOME/ngn/models.yaml` and workspace
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/models.yaml` provide shared
+defaults for the CLI, TUI and web UI. Trusted YAML `model`, agent-profile models,
+`NGN_MODEL` and explicit `--model` overrides retain their precedence. Switching
+connections does not change the chat model. Voice duplex preferences are edited
+separately in **GPT-Live → Voice settings**: Global supplies defaults, and the
+workspace may override individual fields. Use `api_key_env: OPENAI_API_KEY` or
 `api_key_env: ${OPENAI_API_KEY}`; ngn resolves the variable when it makes a
 request. It never writes the key value to this file. Set environment variables
 in the environment of the **ngn process** (including the `ngn serve` process),
@@ -107,22 +114,15 @@ environment variable; subscription tokens are never used as voice API keys.
 Example:
 
 ```yaml
-version: 1
+version: 2
 revision: "0000000000000000000000000000000000000000000000000000000000000000"
 active: work
 providers:
   work:
     kind: foundry
-    model: my-responses-deployment
     base_url: https://resource.openai.azure.com/openai/v1
     api: responses
     auth: entra
-    live:
-      enabled: true
-      model: my-live-deployment
-      backend_model: my-responses-deployment
-      voice: marin
-      backend_mode: hosted
 ```
 
 The UI generates a fresh revision on save. Workspace YAML uses the same schema:
@@ -135,8 +135,38 @@ list of model IDs, not a guarantee of access. Providers without a catalog or a
 compatible `/models` endpoint require manual model entry. Saving a named
 connection does not perform network authentication.
 
+Voice defaults are stored in `$XDG_CONFIG_HOME/ngn/voice.db`, and workspace
+overrides in the workspace session database. Provider connections contain no
+chat or Voice model and no API-key values.
+
 Create a named connection in the web UI or TUI and set its environment variable;
 the provider editor does not offer an API-key-value field.
+
+#### Updating existing installations to provider YAML v2
+
+Stop ngn and back up your configuration and session databases before upgrading.
+Version-1 `providers.yaml` files are not read by the new schema. In both the global
+file and any workspace provider files, set `version: 2` and remove `model` and
+`live` from each `providers.NAME` entry. Keep `revision`, `active`, and the
+connection's kind, authentication, endpoint, and environment-variable name.
+Put the selected chat model in `models.yaml` alongside the provider file, for
+example:
+
+```yaml
+version: 1
+model: gpt-6-luna
+```
+
+Re-enter voice-duplex model and voice preferences in Voice settings (Global or
+Workspace) after restarting. These preferences are independent of the provider
+connection; there is no automatic import from the old provider YAML.
+
+Older saved web-settings rows containing removed fields also cannot be loaded.
+Before upgrading, reset the Global and Workspace web settings using the old UI.
+If already upgraded, stop ngn, back up the databases, and remove only the
+`ngn_web_global_settings` row (in `data_dir/web-defaults.db`) and the
+`ngn_web_settings` row (in that workspace's session database), then restart
+and re-enter preferences. Keep other tables and session history intact.
 
 ## File locations and trust
 
@@ -145,6 +175,7 @@ the provider editor does not offer an API-key-value field.
 | Global/user YAML | `$XDG_CONFIG_HOME/ngn/config.yaml`; defaults to `~/.config/ngn/config.yaml` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
 | Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.yaml`; defaults to `~/.config/ngn/providers.yaml` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
 | Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml` | Workspace-only connections and selection; inherits global connections and default. |
+| Global/workspace chat-model preferences | `models.yaml` beside the corresponding provider registry | Shared chat-model choice, independent of connection identity; no credentials or Live data. |
 | Project YAML | `<workspace>/.ngn/config.yaml` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
 | Explicit YAML | `--config /any/path/settings.yaml` | Any filename/location is accepted. Selecting the file explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
@@ -200,7 +231,7 @@ or authentication-route selection. String choices are case-sensitive.
 | --- | --- | --- | --- |
 | `provider` | string | `"openai"` | A provider name or alias from the table below. |
 | `provider_id` | string | `""` | Optional named connection from `providers.yaml`; its endpoint, auth and key reference take precedence over flat provider fields. |
-| `model` | string | `"gpt-4.1"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
+| `model` | string | `"gpt-6-luna"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
 | `api` | string | `"auto"` | `"auto"`, `"chat_completions"`, `"responses"`, `"messages"`, or `"completions"`. Selects the request protocol, not the authentication method. |
 | `base_url` | string | `""` | Empty selects the provider default. Otherwise an HTTP(S) API-prefix URL with a hostname, no whitespace, user/password, query parameters, or fragment. Do not include a generation-route suffix. Required explicitly for LiteLLM and Azure. |
 | `api_key_env` | string | `"OPENAI_API_KEY"` | Environment-variable name matching `[A-Za-z_][A-Za-z0-9_]*`, never a literal key. Changing provider does not automatically change this default. |
@@ -300,25 +331,8 @@ the other presets use painted surfaces. `"terminal"` retains native surfaces for
 any preset, with preset-specific ANSI accents. `"theme"` paints the background;
 the `terminal` preset then uses a dark graphite-based surface fallback.
 
-### Dictation
-
-| Field | YAML type | Default | Accepted values and meaning |
-| --- | --- | --- | --- |
-| `dictation_enabled` | boolean | `false` | Explicit opt-in to microphone transcription. Installing the extra alone does not enable it. |
-| `dictation_model` | string | `"gpt-4o-mini-transcribe"` | Nonempty after trimming whitespace; transcription model ID, separate from the conversation model. |
-| `dictation_base_url` | string | `"https://api.openai.com/v1"` | Nonempty HTTP(S) URL with a hostname; no whitespace/control characters, embedded credentials, query parameters, or fragments. Separate from the conversation endpoint. |
-| `dictation_api_key_env` | string | `"OPENAI_API_KEY"` | Environment-variable name matching `[A-Za-z_][A-Za-z0-9_]*` for the transcription API key, never a literal secret. |
-| `dictation_language` | string | `""` | Empty for auto-detection, or exactly two lowercase ASCII letters matching `[a-z]{2}`, for example `"en"`. The service must support the code. |
-| `dictation_max_seconds` | integer | `120` | `1` through `300`, inclusive; maximum recording duration in seconds. |
-
-Dictation returns an **editable preview**, not an automatically submitted chat
-message. It is not the realtime speech-to-speech library workflow. The
-transcription endpoint requires its own paid API access; ChatGPT device login
-and subscription benefits do not authorize this call. See
-[dictation usage and privacy](ngn.md#dictation).
-
-Browser GPT-Live connections are configured in **GPT-Live → Connection settings**
-and saved per workspace. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
+Browser GPT-Live preferences are configured in **GPT-Live → Voice settings**
+at either scope. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
 
 ### Storage and extensions
 
@@ -337,8 +351,8 @@ Select workspace and trust through the CLI; diagnostics are generated by loading
 
 Every configurable top-level **scalar** field in the tables above has an
 `NGN_<UPPERCASE_FIELD_NAME>` environment default. This includes
-`NGN_API`, `NGN_MAX_SUBAGENT_DEPTH`, `NGN_THEME_BACKGROUND`, and all six
-`NGN_DICTATION_*` fields as well as provider, model, limits, and state storage.
+`NGN_API`, `NGN_MAX_SUBAGENT_DEPTH`, and `NGN_THEME_BACKGROUND` as well as
+provider, model, limits, and state storage.
 
 ```bash
 NGN_THEME=ocean NGN_ANIMATIONS=false ngn --demo
@@ -380,7 +394,7 @@ string fields:
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
 | `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
-| `provider` | `""` | Optional named connection ID in `providers.yaml`. Empty follows the active connection. The profile's `model`, if set, overrides the connection's model. |
+| `provider` | `""` | Optional named connection ID in `providers.yaml`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
 
 ```yaml
 agent: audit
@@ -467,7 +481,7 @@ in these files, URLs, or command arguments.
 
 ```yaml
 provider: openai
-model: gpt-4.1
+model: gpt-6-luna
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -481,17 +495,17 @@ That route can select a different account-supported default model.
 
 ```yaml
 provider: openrouter
-model: openai/gpt-4.1-mini
+model: openai/gpt-6-luna
 api: chat_completions
 auth: api-key
 api_key_env: OPENROUTER_API_KEY
 ```
 
 The default endpoint is `https://openrouter.ai/api/v1`; no `base_url` override is
-needed. Set the referenced key in your launcher environment. This model was used
-for a live ngn read-tool/response smoke test; choose another model if preferred,
-but check that it supports tools. An explicit environment-file launch through uv
-is shown in the [installation guide](ngn-installation.md#explicit-environment-files).
+needed. Set the referenced key in your launcher environment. Choose a model your
+OpenRouter account exposes and check that it supports tools. An explicit
+environment-file launch through uv is shown in the
+[installation guide](ngn-installation.md#explicit-environment-files).
 
 ### Anthropic
 

@@ -1,4 +1,4 @@
-"""Main-app integration of manual child follow-ups and opt-in voice drafts."""
+"""Main-app integration of manual child follow-ups."""
 
 from __future__ import annotations
 
@@ -11,17 +11,11 @@ from textual.widgets import TextArea
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.tui import NagentsApp
-from nagents.tui.dictation import DictationModal
-from nagents.tui.screens import DetailModal
 from nagents.tui.tasks import TaskScreen
-from nagents.tui.widgets import Composer
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import setup_harness
-from tests.support.tui import FakeHarness
 from tests.support.tui import idle
-from tests.support.tui import make_app
 from tests.support.tui import send
-from tests.tui.test_tui_dictation import FakeVoice
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -80,94 +74,5 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
                 and "Human child follow-up" in message.content
                 for message in await harness.history()
             )
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("cancel_key", ["escape", "ctrl+c"])
-def test_main_dictation_binding_cancels_capture_and_keeps_draft(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    cancel_key: str,
-) -> None:
-    async def scenario() -> None:
-        backend = FakeHarness(tmp_path)
-        backend.config.demo = False
-        backend.config.dictation_enabled = True
-        voice = FakeVoice(backend.config)
-        monkeypatch.setattr("nagents.tui.dictation.VoiceDictation", lambda config: voice)
-        app = make_app(backend)
-        async with app.run_test(size=(80, 24)) as pilot:
-            await idle(app, pilot)
-            composer = app.query_one(Composer)
-            composer.load_text("Existing draft")
-            await pilot.press("ctrl+g")
-            await pilot.pause()
-            assert isinstance(app.screen, DictationModal)
-            assert voice.capture_calls == 0
-            await pilot.click("#dictation-primary")
-            await pilot.pause()
-            assert voice.capture_calls == 1
-            await pilot.press(cancel_key)
-            await pilot.pause()
-            assert not isinstance(app.screen, DictationModal)
-            assert voice.closed and voice.cancelled.is_set()
-            assert not voice.uploads
-            assert composer.text == "Existing draft" and not backend.prompts
-
-    asyncio.run(scenario())
-
-
-def test_main_dictation_uses_edited_preview_without_sending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def scenario() -> None:
-        backend = FakeHarness(tmp_path)
-        backend.config.demo = False
-        backend.config.dictation_enabled = True
-        voice = FakeVoice(backend.config)
-        voice.upload_release.set()
-        monkeypatch.setattr("nagents.tui.dictation.VoiceDictation", lambda config: voice)
-        app = make_app(backend)
-        async with app.run_test(size=(80, 24)) as pilot:
-            await idle(app, pilot)
-            composer = app.query_one(Composer)
-            composer.load_text("Before. ")
-            composer.move_cursor((0, len(composer.text)))
-            app.command("/dictate")
-            await pilot.pause()
-            assert isinstance(app.screen, DictationModal)
-            await pilot.click("#dictation-primary")
-            await pilot.pause(0.3)
-            await pilot.click("#dictation-primary")
-            await pilot.pause()
-            preview = app.screen.query_one("#dictation-preview", TextArea)
-            assert preview.text == "Synthetic dictated draft."
-            preview.load_text("Edited transcript")
-            await pilot.pause(0.3)
-            await pilot.click("#dictation-primary")
-            await pilot.pause()
-            assert composer.text == "Before. Edited transcript"
-            assert voice.closed and not backend.prompts
-            assert composer.has_focus
-
-    asyncio.run(scenario())
-
-
-def test_dictation_requires_opt_in_and_demo_stays_offline(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        backend = FakeHarness(tmp_path)
-        backend.config.demo = False
-        app = make_app(backend)
-        async with app.run_test() as pilot:
-            await idle(app, pilot)
-            await pilot.press("ctrl+g")
-            assert isinstance(app.screen, DetailModal)
-            assert "--dictation" in app.screen.text
-            await pilot.press("escape")
-            backend.config.demo = True
-            backend.config.dictation_enabled = True
-            app.command("/dictate")
-            await pilot.pause()
-            assert not isinstance(app.screen, DictationModal)
-            assert not backend.prompts
 
     asyncio.run(scenario())

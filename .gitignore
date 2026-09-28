@@ -13,6 +13,10 @@ logs
 .agents/chrome-context
 .agents/skills
 
+# Machine-local files
+/.local/
+/deployment/private/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

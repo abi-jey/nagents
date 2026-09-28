@@ -34,6 +34,7 @@ from nagents.types import TextContent
 
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
+from .config import DEFAULT_HARNESS_MODEL
 from .connection import build_provider
 from .credentials import ProviderLogin
 from .credentials import ProviderLoginStore
@@ -171,9 +172,10 @@ class Harness:
             config.auth = selected.auth
             config.api_key_env = selected.key_env
             config.api_version = selected.api_version
-            config.model = selected.model
         self._built_provider_profile = self.providers.providers.get(config.provider_id)
         self._api_model = config.model
+        self._selected_model = config.model
+        self._selected_model_explicit = config.model_explicit
         self._initialized = False
         self._session_created = False
         self._closed = False
@@ -187,9 +189,7 @@ class Harness:
         self.tool_settings = WorkspaceTools(self.workspace)
         self.agent = Agent(
             provider=(
-                build_provider(
-                    replace(self.providers.providers[config.provider_id], model=config.model), config, self.openai_auth
-                )
+                build_provider(self.providers.providers[config.provider_id], config, self.openai_auth)
                 if config.provider_id and not config.demo
                 else HarnessProvider(config, self.login_store if not config.provider_id else None)
             ),
@@ -212,6 +212,7 @@ class Harness:
         profile = config.profile(config.agent)
         if profile.model:
             self.config.model = profile.model
+            self.config.model_explicit = True
             self.agent.provider.model = profile.model
         self.refresh_instructions()
 
@@ -665,9 +666,9 @@ class Harness:
             elif self.config.provider_id and self.config.provider_id != self.providers.active and self.providers.active:
                 await self._select_provider(self.providers.active)
             self.config.agent = name
-            if profile.model:
-                self.config.model = profile.model
-                self.agent.provider.model = profile.model
+            self.config.model = profile.model or self._selected_model
+            self.config.model_explicit = bool(profile.model) or self._selected_model_explicit
+            self.agent.provider.model = self.config.model
             self.refresh_instructions()
 
     async def set_model(self, model: str) -> None:
@@ -675,6 +676,9 @@ class Harness:
             if not model.strip():
                 raise ValueError("Model must not be empty")
             self.config.model = model
+            self.config.model_explicit = True
+            self._selected_model = model
+            self._selected_model_explicit = True
             self.agent.provider.model = model
 
     async def reconfigure_provider(self, config: "HarnessConfig") -> None:
@@ -700,7 +704,7 @@ class Harness:
                 profile = registry.providers.get(config.provider_id)
                 if profile is None:
                     raise ValueError("Named provider connection was removed; reload settings")
-                replacement = build_provider(replace(profile, model=config.model), config, self.openai_auth)
+                replacement = build_provider(profile, config, self.openai_auth)
             elif config.auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
                     self._api_model = self.agent.provider.model
@@ -715,6 +719,7 @@ class Harness:
         for name in identity:
             setattr(self.config, name, getattr(config, name))
         self.config.model = config.model
+        self.config.model_explicit = True
         self.agent.provider.model = config.model
 
     async def _select_provider(self, name: str) -> None:
@@ -726,7 +731,6 @@ class Harness:
             self.config,
             provider_id=name,
             provider=profile.kind,
-            model=profile.model,
             base_url=profile.base_url,
             api=profile.api,
             auth=profile.auth,
@@ -825,7 +829,6 @@ class Harness:
             self.config,
             provider_id=name,
             provider=profile.kind,
-            model=profile.model,
             base_url=profile.base_url,
             api=profile.api,
             auth=profile.auth,
@@ -843,8 +846,9 @@ class Harness:
     async def _use_chatgpt(self) -> None:
         if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
             self._api_model = self.agent.provider.model
-        if self.config.model == "gpt-4.1":
+        if self.config.model == DEFAULT_HARNESS_MODEL and not self.config.model_explicit:
             self.config.model = DEFAULT_CODEX_MODEL
+            self._selected_model = DEFAULT_CODEX_MODEL
         replacement = OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
         try:
             await self.agent.close()
@@ -887,7 +891,7 @@ class Harness:
             candidate = replace(
                 self.config,
                 provider=login.provider,
-                model=login.model or self.config.model,
+                model=self.config.model,
                 base_url=login.base_url,
                 api=login.api,
                 auth="api-key",
@@ -932,7 +936,7 @@ class Harness:
                     replacement = (
                         build_provider(profile, self.config, self.openai_auth)
                         if profile.auth != "chatgpt"
-                        else OpenAIProvider(self.openai_auth.credentials, model=profile.model)
+                        else OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
                     )
                     try:
                         await self.agent.close()
@@ -1005,9 +1009,6 @@ class Harness:
                 f"Composer: submit_mode={self.config.submit_mode}; tab_action={self.config.tab_action}",
                 f"Agent: {self.config.agent} ({self.mode}); profiles: {', '.join(self.config.profile_names)}",
                 f"Subagents: max depth {self.config.max_subagent_depth} (root=0); shared 3 concurrent / 8 executions per run",
-                f"Dictation: {'enabled (explicit start only)' if self.config.dictation_enabled else 'disabled'}; "
-                f"model: {self.config.dictation_model}; endpoint: {self.config.dictation_base_url}; "
-                f"key reference: ${self.config.dictation_api_key_env}",
                 f"Project configuration trusted: {self.config.trust_project}",
                 f"Config files: {', '.join(str(path) for path in self.config.config_paths) or 'built-in defaults'}",
                 f"Tools: {', '.join(self.agent.tool_registry.names())}",

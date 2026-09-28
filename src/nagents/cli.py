@@ -82,17 +82,6 @@ def _parser() -> argparse.ArgumentParser:
         help="Use preset background (theme), inherited terminal background (terminal), or preset default (auto)",
     )
     common.add_argument(
-        "--dictation",
-        action=argparse.BooleanOptionalAction,
-        dest="dictation_enabled",
-        help="Enable opt-in /dictate microphone transcription (never records automatically)",
-    )
-    common.add_argument("--dictation-model", help="Transcription API model, separate from the coding model")
-    common.add_argument("--dictation-base-url", help="OpenAI-compatible transcription API base URL")
-    common.add_argument("--dictation-api-key-env", help="Environment variable containing the transcription API key")
-    common.add_argument("--dictation-language", help="Two-letter transcription language, or empty for auto-detect")
-    common.add_argument("--dictation-max-seconds", type=int, help="Maximum recording duration (1-300, default: 120)")
-    common.add_argument(
         "--submit-mode", choices=("queue", "interrupt"), help="New prompts while working: queue or interrupt-and-send"
     )
     common.add_argument(
@@ -509,12 +498,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "api",
                 "max_subagent_depth",
                 "theme_background",
-                "dictation_enabled",
-                "dictation_model",
-                "dictation_base_url",
-                "dictation_api_key_env",
-                "dictation_language",
-                "dictation_max_seconds",
             )
             if hasattr(args, name)
         }
@@ -542,6 +525,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugins.append(f"{location}:{function}")
             overrides["plugins"] = tuple(plugins)
         config = replace(config, **overrides)
+        if "model" in overrides:
+            config.model_explicit = True
+            config.model_config_explicit = True
+            config.global_model_default = config.model
         if config.provider_id:
             from .harness.providers import ScopedProviderRegistryStore
 
@@ -551,12 +538,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             config = replace(
                 config,
                 provider=profile.kind,
-                model=overrides.get("model", profile.model),
                 base_url=profile.base_url,
                 api=profile.api,
                 auth=profile.auth,
                 api_key_env=profile.key_env,
                 api_version=profile.api_version,
+                model_explicit=True,
             )
         if args.command == "serve":
             if getattr(args, "design", None):

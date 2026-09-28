@@ -4,20 +4,18 @@ import { purgeTrash, readTrash, restoreTrash, saveRetention, type TrashItem } fr
 import { TrashController, type TrashDependencies } from "./trashController.js";
 import type { useSessions } from "./useSessions.js";
 import type { useChatRun } from "../chat/useChatRun.js";
-import type { useDictation } from "../dictation/useDictation.js";
 import type { useOperations } from "../../app/useOperations.js";
 
 type Options = {
   sessions: ReturnType<typeof useSessions>;
   chat: ReturnType<typeof useChatRun>;
-  dictation: ReturnType<typeof useDictation>;
   operations: ReturnType<typeof useOperations>;
   busy: boolean;
   blocked: boolean;
 };
 
 /** Session membership changes own their controllers, drafts, and selection races. */
-export function useSessionActions({ sessions, chat, dictation, operations, busy, blocked }: Options) {
+export function useSessionActions({ sessions, chat, operations, busy, blocked }: Options) {
   const token = sessions.config?.token || "";
   const [deletion, setDeletion] = useState<DeletionState>({ pending: false, error: "" });
   const removeAction = useRef(confirmPermanent);
@@ -53,21 +51,16 @@ export function useSessionActions({ sessions, chat, dictation, operations, busy,
   useEffect(() => { trashController.activate(); return () => trashController.dispose(); }, [trashController]);
 
   function canDeleteSession(id: string): boolean {
-    const keepingReview = id !== sessions.currentSelection().id && dictation.controller.getSnapshot().phase === "review";
-    return !!token && !operations.occupied() && !busy && !blocked && !trash.open &&
-      (!dictation.controller.active || keepingReview);
+    return !!token && !operations.occupied() && !busy && !blocked && !trash.open;
   }
 
   async function trashMutation(action: () => Promise<void>) {
-    if (!token || operations.occupied() || busy || blocked ||
-        (dictation.controller.active && dictation.controller.getSnapshot().phase !== "review"))
+    if (!token || operations.occupied() || busy || blocked)
       throw new Error("Finish the current operation before changing Trash.");
     await operations.run(action);
   }
 
   async function removeSession(id: string, permanent: boolean) {
-    if (dictation.controller.active && id === sessions.currentSelection().id)
-      throw new Error("Finish dictation review before deleting this session. Your draft is kept.");
     return deleteSessionFromView(id, {
       selection: sessions.currentSelection,
       remove: (root) => sessions.remove(root, permanent),

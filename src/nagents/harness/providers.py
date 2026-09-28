@@ -25,6 +25,7 @@ from typing import cast
 import yaml
 
 from nagents.provider.auth import validate_prefix
+from nagents.provider.openai import CODEX_ENDPOINT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -135,6 +136,13 @@ KINDS: dict[str, ProviderKind] = {
     ),
 }
 
+DEFAULT_ENDPOINTS = {
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "anthropic": "https://api.anthropic.com/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta",
+}
+
 
 def env_name(value: str) -> str:
     """Accept NAME or ${NAME}; reject literal keys and other interpolation."""
@@ -146,55 +154,24 @@ def env_name(value: str) -> str:
 
 
 @dataclass(frozen=True)
-class LiveProfile:
-    enabled: bool = False
-    model: str = "gpt-live-1"
-    backend_model: str = "gpt-5.6-luna"
-    voice: str = "marin"
-    backend_mode: str = "hosted"
-
-    def validate(self) -> None:
-        if not isinstance(self.voice, str) or not isinstance(self.backend_mode, str):
-            raise ValueError("Invalid Live voice or backend mode")
-        if (
-            type(self.enabled) is not bool
-            or self.voice not in {"marin", "cedar"}
-            or self.backend_mode not in {"hosted", "assistant"}
-        ):
-            raise ValueError("Invalid Live settings")
-        for model in (self.model, self.backend_model):
-            if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}", model):
-                raise ValueError("Invalid Live model ID")
-
-
-@dataclass(frozen=True)
 class ProviderProfile:
     kind: str
-    model: str
     auth: str = "api-key"
     base_url: str = ""
     api: str = "auto"
     api_key_env: str = ""
     api_version: str = ""
     scope: str = "https://ai.azure.com/.default"
-    live: LiveProfile = field(default_factory=LiveProfile)
 
     def validate(self) -> None:
         if any(
             not isinstance(getattr(self, name), str)
-            for name in ("kind", "model", "auth", "base_url", "api", "api_key_env", "api_version", "scope")
-        ) or not isinstance(self.live, LiveProfile):
-            raise ValueError("Provider fields must be strings and Live settings must be a mapping")
+            for name in ("kind", "auth", "base_url", "api", "api_key_env", "api_version", "scope")
+        ):
+            raise ValueError("Provider fields must be strings")
         spec = KINDS.get(self.kind)
         if spec is None or self.auth not in spec.auth or self.api not in spec.apis:
             raise ValueError("Unsupported provider, authentication mode, or API")
-        if (
-            not isinstance(self.model, str)
-            or not self.model.strip()
-            or len(self.model) > 200
-            or not self.model.isprintable()
-        ):
-            raise ValueError("Invalid model ID")
         if spec.endpoint_required and not self.base_url:
             raise ValueError("This provider requires an API prefix URL")
         if self.kind == "openai" and self.base_url:
@@ -219,13 +196,33 @@ class ProviderProfile:
             raise ValueError("This authentication mode does not use an API key")
         if self.auth in {"chatgpt", "codex"} and (self.base_url or self.api != "auto"):
             raise ValueError("ChatGPT/Codex requires the default endpoint and API")
-        self.live.validate()
-        if not spec.live and self.live != LiveProfile():
-            raise ValueError("This provider does not support GPT-Live")
 
     @property
     def key_env(self) -> str:
         return env_name(self.api_key_env or KINDS[self.kind].env)
+
+    @property
+    def effective_endpoint(self) -> str:
+        if self.kind == "openai":
+            if self.auth == "chatgpt":
+                return CODEX_ENDPOINT
+            if self.auth == "codex":
+                return "Selected by local Codex configuration (ChatGPT Codex or configured API endpoint)"
+            if self.auth == "auto":
+                return f"Auth-dependent: {CODEX_ENDPOINT}, local Codex configuration, or {DEFAULT_ENDPOINTS['openai']}"
+        return self.base_url or DEFAULT_ENDPOINTS.get(self.kind, "")
+
+    @property
+    def credential_source(self) -> str:
+        if self.auth == "entra":
+            return "Microsoft Entra ID (DefaultAzureCredential)"
+        if self.auth == "codex":
+            return f"Local Codex discovery; Live key ${self.key_env} or Codex discovery"
+        if self.auth == "chatgpt":
+            return f"ChatGPT device login; Live key ${self.key_env}"
+        if self.auth == "auto":
+            return f"ChatGPT / Codex / API key ${self.key_env}"
+        return f"API key ${self.key_env}"
 
 
 @dataclass(frozen=True)
@@ -259,11 +256,89 @@ class ProviderRegistry:
             "revision": self.revision,
             "active": self.active,
             "providers": {
-                name: {**asdict(profile), "key_configured": bool(os.environ.get(profile.key_env))}
+                name: {
+                    **asdict(profile),
+                    "key_configured": bool(os.environ.get(profile.key_env)),
+                    "credential_source": profile.credential_source,
+                    "effective_endpoint": profile.effective_endpoint,
+                }
                 for name, profile in self.providers.items()
             },
             "kinds": {name: asdict(spec) for name, spec in KINDS.items()},
         }
+
+
+class ModelPreferenceStore:
+    """Scoped chat-model choice, separate from connection identity and Live."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def load(self) -> str:
+        try:
+            info = self.path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+                raise ValueError("Model preference must be a regular, bounded file")
+            raw = self.path.read_bytes()
+            if len(raw) > 4096:
+                raise ValueError("Model preference is too large")
+            data = yaml.safe_load(raw)
+            if (
+                not isinstance(data, dict)
+                or set(data) != {"version", "model"}
+                or type(data["version"]) is not int
+                or data["version"] != 1
+            ):
+                raise ValueError("Invalid model preference format")
+            model = data["model"]
+            if not isinstance(model, str) or (
+                model and (not model.strip() or len(model) > 200 or not model.isprintable())
+            ):
+                raise ValueError("Invalid model preference")
+            return model
+        except FileNotFoundError:
+            return ""
+        except (yaml.YAMLError, UnicodeError, OSError):
+            raise ValueError("Model preference is unreadable or invalid") from None
+
+    def save(self, model: str, *, only_if_missing: bool = False) -> str:
+        if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
+            raise ValueError("Invalid model preference")
+        directory = self.path.parent
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = directory / ".models.lock"
+        if lock.is_symlink():
+            raise ValueError("Model preference lock must not be a symlink")
+        with lock.open("a+b") as stream, _exclusive_lock(stream):
+            try:
+                self.path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                current = self.load()
+                if only_if_missing:
+                    return current
+                if current == model:
+                    return current
+            payload = yaml.safe_dump({"version": 1, "model": model}, sort_keys=True).encode("utf-8")
+            descriptor, temporary = tempfile.mkstemp(prefix=".models-", dir=directory)
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    if os.name != "nt":
+                        os.fchmod(output.fileno(), 0o600)
+                    output.write(payload)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, self.path)
+                if os.name != "nt":
+                    directory_fd = os.open(directory, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+            return model
 
 
 class ProviderRegistryStore:
@@ -275,6 +350,10 @@ class ProviderRegistryStore:
             raise ValueError("XDG_CONFIG_HOME must be an absolute path")
         self.path = path or home / "ngn" / "providers.yaml"
         self.allow_external_active = allow_external_active
+
+    @property
+    def model_store(self) -> ModelPreferenceStore:
+        return ModelPreferenceStore(self.path.with_name("models.yaml"))
 
     def load(self) -> ProviderRegistry:
         try:
@@ -289,7 +368,7 @@ class ProviderRegistryStore:
                 not isinstance(document, dict)
                 or set(document) != {"version", "revision", "active", "providers"}
                 or type(document["version"]) is not int
-                or document["version"] != 1
+                or document["version"] != 2
             ):
                 raise ValueError("Invalid provider configuration format")
             entries = document["providers"]
@@ -303,10 +382,7 @@ class ProviderRegistryStore:
                     or set(value) - set(ProviderProfile.__dataclass_fields__)
                 ):
                     raise ValueError("Invalid provider entry")
-                live = value.get("live", {})
-                if not isinstance(live, dict) or set(live) - set(LiveProfile.__dataclass_fields__):
-                    raise ValueError("Invalid Live entry")
-                profiles[name] = ProviderProfile(**{**value, "live": LiveProfile(**live)})
+                profiles[name] = ProviderProfile(**value)
             registry = ProviderRegistry(document["revision"], document["active"], profiles)
             registry.validate(allow_external_active=self.allow_external_active)
             return registry
@@ -331,7 +407,7 @@ class ProviderRegistryStore:
             next_registry = ProviderRegistry(secrets.token_hex(32), registry.active, registry.providers)
             payload = yaml.safe_dump(
                 {
-                    "version": 1,
+                    "version": 2,
                     "revision": next_registry.revision,
                     "active": next_registry.active,
                     "providers": {name: asdict(profile) for name, profile in next_registry.providers.items()},
@@ -391,6 +467,12 @@ class ScopedProviderRegistryStore:
 
     def load_scope(self, scope: str) -> ProviderRegistry:
         return self.store(scope).load()
+
+    def model_store(self, scope: str) -> ModelPreferenceStore:
+        return self.store(scope).model_store
+
+    def model(self) -> str:
+        return self.model_store("workspace").load() or self.model_store("global").load()
 
     def load(self) -> ProviderRegistry:
         global_registry = self.global_store.load()

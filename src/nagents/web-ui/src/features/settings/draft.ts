@@ -86,10 +86,6 @@ export function createDraft(values: SettingsValues): SettingsDraft {
     max_file_bytes: String(values.max_file_bytes),
     max_tool_rounds: String(values.max_tool_rounds),
     max_subagent_depth: String(values.max_subagent_depth),
-    dictation_enabled: values.dictation_enabled,
-    dictation_model: values.dictation_model,
-    dictation_language: values.dictation_language,
-    dictation_max_seconds: String(values.dictation_max_seconds),
     compact_trigger: values.compact_trigger,
     compact_tokens: String(values.compact_tokens),
     compact_messages: String(values.compact_messages),
@@ -105,7 +101,7 @@ export function selectProfile(
 ): SettingsDraft {
   const profile = profiles.find((candidate) => candidate.name === name);
   if (!profile) return draft;
-  return { ...draft, agent: name, model: profile.model || draft.model };
+  return { ...draft, agent: name };
 }
 
 export function parseDraft(
@@ -126,10 +122,6 @@ export function parseDraft(
     max_file_bytes: 0,
     max_tool_rounds: 0,
     max_subagent_depth: 0,
-    dictation_enabled: draft.dictation_enabled,
-    dictation_model: draft.dictation_model.trim(),
-    dictation_language: draft.dictation_language,
-    dictation_max_seconds: Number(draft.dictation_max_seconds.trim()),
     compact_trigger: draft.compact_trigger,
     compact_tokens: 0,
     compact_messages: 0,
@@ -166,17 +158,6 @@ export function parseDraft(
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(values.api_key_env) || [...values.api_key_env].length > 64) {
     errors.api_key_env = "Enter an environment variable name, not the key itself.";
   }
-  if (typeof draft.dictation_enabled !== "boolean")
-    errors.dictation_enabled = "Choose whether dictation is enabled.";
-  if (!values.dictation_model || [...values.dictation_model].length > 200 ||
-      /[\p{C}\p{Z}]/u.test(draft.dictation_model.replaceAll(" ", "")))
-    errors.dictation_model = "Enter a transcription model ID of 1 to 200 printable characters.";
-  if (!/^(?:[a-z]{2})?$/.test(draft.dictation_language))
-    errors.dictation_language = "Use two lowercase language letters, such as en, or leave blank for automatic detection.";
-  if (!/^\d+$/.test(draft.dictation_max_seconds.trim()) ||
-      !Number.isSafeInteger(values.dictation_max_seconds) ||
-      values.dictation_max_seconds < 1 || values.dictation_max_seconds > 300)
-    errors.dictation_max_seconds = "Enter a whole number from 1 to 300 seconds. The administrator's ceiling also applies.";
   if (!(compactionTriggers as readonly string[]).includes(values.compact_trigger))
     errors.compact_trigger = "Choose a supported compaction trigger.";
   if (!["queue", "interrupt"].includes(values.submit_mode)) errors.submit_mode = "Choose Queue or Interrupt.";

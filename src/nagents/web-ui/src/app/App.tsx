@@ -38,6 +38,7 @@ export function App() {
           select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />
         <Conversation token={client.sessions.config?.token || ""} key={client.sessions.sessionId}
           entries={client.chat.entries} sessionId={client.sessions.sessionId} demo={!!client.sessions.config?.demo}
+          providerSetup={client.sessions.config?.provider_setup}
           canSubmit={client.available.submit} submit={(value) => void submit(value)} />
         <WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select} />
       </main>

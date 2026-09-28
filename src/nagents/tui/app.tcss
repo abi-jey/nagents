@@ -155,13 +155,6 @@ Button:focus { text-style: $ngn-focus-style; border: tall $ngn-accent; backgroun
 #device-status { color: $ngn-accent; margin-top: 1; }
 .device-actions Button { min-width: 10; margin-left: 1; }
 .device-actions { align-horizontal: center; }
-DictationModal { background: $ngn-overlay; }
-DictationModal #dictation-dialog { background: $ngn-panel; color: $ngn-text; border: round $ngn-border; }
-DictationModal #dictation-title { color: $ngn-heading; }
-DictationModal #dictation-destination { color: $ngn-info; }
-DictationModal #dictation-status { color: $ngn-tool; }
-DictationModal #dictation-preview { background: $ngn-background; color: $ngn-text; border: tall $ngn-border; }
-DictationModal #dictation-preview:focus { border: tall $ngn-accent; }
 .channel-delivery { height: auto; margin: 0 0 1 0; padding: 0 1; border-left: thick $ngn-accent; }
 .channel-delivery Static { height: auto; color: $ngn-text; }
 .channel-delivery .delivery-label { color: $ngn-info; text-style: bold; }

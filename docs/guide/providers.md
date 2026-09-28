@@ -14,7 +14,7 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 
 ## Sign in from ngn
 
-Use `/provider` in the TUI or **Global/Workspace settings → Provider connections**
+Use `/provider` in the TUI or **Settings → Global/Workspace → Provider connections**
 in `ngn serve` to manage named connections shared across clients. Global ones
 are saved to `$XDG_CONFIG_HOME/ngn/providers.yaml`; workspace ones are saved to
 workspace-specific YAML under the same config root. Both use environment-variable **references**,
@@ -23,6 +23,12 @@ an API-key variable. Azure AI Foundry supports API-key variables and Microsoft
 Entra ID through the optional `azure-identity` package. Voice settings for a
 named connection use the same endpoint and credential reference. See
 [named provider configuration](ngn-configuration.md#shared-named-provider-connections).
+
+Chat model selection is independent: use `/model` in the TUI, `--model` for a
+single CLI invocation, or the global/workspace chat-model selector in web
+Settings. Connections display their credential source and effective endpoint;
+their YAML v2 entries do not contain a chat model. Legacy Live values are kept
+outside v2 connection entries until the separate voice migration consumes them.
 
 The historical `ngn login` command remains available for older single-login
 configurations and OpenAI device authorization; it is separate from the named

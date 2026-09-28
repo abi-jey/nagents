@@ -43,7 +43,7 @@ export function settingsFailure(cause: unknown, writing: boolean) {
     cause instanceof Error ? cause.message : "Settings request failed.";
   if (cause instanceof RequestError && cause.status === 409) {
     return {
-      message: `${message} Your draft is kept. Wait for any active run to finish, then refresh settings before trying again. No request was retried.`,
+      message: `${message} Your draft is kept. Wait for any active run to finish, then reload settings before trying again. No request was retried.`,
       needsRefresh: true,
     };
   }
@@ -52,7 +52,7 @@ export function settingsFailure(cause: unknown, writing: boolean) {
     writing && (!(cause instanceof RequestError) || cause.status >= 500);
   return {
     message: uncertain
-      ? `${message} The save outcome is unknown. Your draft is kept. Refresh settings to check the server before another change. No request was retried.`
+      ? `${message} The save outcome is unknown. Your draft is kept. Reload settings to check the server before another change. No request was retried.`
       : message,
     needsRefresh: uncertain,
   };

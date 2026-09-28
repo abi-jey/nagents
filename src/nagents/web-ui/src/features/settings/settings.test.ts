@@ -4,7 +4,6 @@ import { RequestError } from "../../api/client.js";
 import { createDraft, parseDraft, selectProfile } from "./draft.js";
 import { readSettings, resetSettings, saveSettings, settingsFailure } from "./transport.js";
 import type { SettingsReply, SettingsValues } from "./types.js";
-import { dictationConfig } from "../dictation/testFixtures.js";
 import { settingsValues } from "./testFixtures.js";
 
 const values: SettingsValues = settingsValues({ provider: "mock", api: "responses", api_key_env: "MOCK_API_KEY" });
@@ -30,7 +29,6 @@ const reply: SettingsReply = {
     key_configured: false,
     auth_status: "configured",
   },
-  dictation: dictationConfig,
 };
 
 test("settings drafts round-trip exact API keys and numeric values", () => {
@@ -85,11 +83,11 @@ test("model IDs reject blanks, excess length, and control characters even at the
   }
 });
 
-test("profiles come from the server and only nonempty profile models preset the draft", () => {
+test("profiles come from the server without changing the independent chat model draft", () => {
   const draft = createDraft(values);
   const selected = selectProfile(draft, "review", reply.profiles);
   assert.equal(selected.agent, "review");
-  assert.equal(selected.model, "review-model");
+  assert.equal(selected.model, draft.model);
   assert.equal(draft.agent, "assistant");
   const overridden = { ...selected, model: "explicit-model" };
   const parsed = parseDraft(overridden, reply.profiles);
@@ -214,7 +212,7 @@ test("reset sends only the expected revision and trusts the returned startup def
 });
 
 for (const detail of ["Settings changed in another connection.", "A run is active."]) {
-  test(`409 is not retried and requires an explicit refresh: ${detail}`, async (t) => {
+  test(`409 is not retried and requires an explicit reload: ${detail}`, async (t) => {
     const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ detail }, { status: 409 }));
     await assert.rejects(saveSettings("mock-token", reply.revision, values), (cause: unknown) => {
       assert.ok(cause instanceof RequestError);
@@ -231,7 +229,7 @@ for (const detail of ["Settings changed in another connection.", "A run is activ
   });
 }
 
-test("a lost or server-failed write has an uncertain outcome and must be refreshed", () => {
+test("a lost or server-failed write has an uncertain outcome and must be reloaded", () => {
   for (const cause of [new TypeError("Failed to fetch"), new SyntaxError("Invalid JSON"), new RequestError("Server failed", 500)]) {
     const failure = settingsFailure(cause, true);
     assert.equal(failure.needsRefresh, true);
