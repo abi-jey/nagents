@@ -1,9 +1,10 @@
 # Public ngn React deployment TEMPLATE; render privately before validation/apply.
 # Review secret preparation, live validation, and cutover before applying.
 # See ../../docs/guide/ngn-web-deployment.md before applying. No secrets here.
-# This file never changes the existing nagents Deployment, Service, or Ingress.
-# Substitute ONLY NGN_NODE and NGN_STATE_PATH.
-# ngn serve binds 0.0.0.0 directly and the main container runs as root to prepare state.
+# This file never changes the legacy nagents Deployment, Service, or Ingress.
+# Render ONLY NGN_NODE, NGN_STATE_PATH, NGN_HOST, NGN_APP_DIGEST and NGN_NGINX_DIGEST.
+# Digests must be reviewed for this revision and architecture; no image is pinned here.
+# ngn serves on pod loopback; nginx checks the external Host/Origin on port 8080.
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -61,9 +62,84 @@ metadata:
 data:
   config.yaml: |
     provider: openai
-    auth: chatgpt
+    auth: api-key
     api: auto
+    api_key_env: OPENAI_API_KEY
     data_dir: /state/sessions
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    # Requests may contain accidental secrets in URLs.
+    error_log /dev/null;
+    events { worker_connections 256; }
+    http {
+        access_log off;
+        server_tokens off;
+        client_body_temp_path /tmp/client_temp;
+        proxy_temp_path /tmp/proxy_temp;
+        client_max_body_size 64k;
+        client_body_timeout 60s;
+        send_timeout 3600s;
+
+        # The custom ts-serve operator must preserve the HTTPS hostname. No port,
+        # aliases, HTTP Origin or other authority is accepted by this template.
+        map "$http_host|$http_origin" $ngn_authority_allowed {
+            default 0;
+            "${NGN_HOST}|" 1;
+            "${NGN_HOST}|https://${NGN_HOST}" 1;
+        }
+        map $http_origin $ngn_upstream_origin {
+            "" "";
+            default "http://127.0.0.1:8765";
+        }
+        map $http_upgrade $ngn_upgrade {
+            default "";
+            ~*^websocket$ websocket;
+        }
+        map $ngn_upgrade $ngn_connection {
+            default "";
+            websocket upgrade;
+        }
+
+        server {
+            listen 8080 default_server;
+            server_name ${NGN_HOST};
+            if ($ngn_authority_allowed = 0) { return 403; }
+
+            add_header Cache-Control "no-store" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            proxy_http_version 1.1;
+            proxy_set_header Host "127.0.0.1:8765";
+            proxy_set_header Origin $ngn_upstream_origin;
+            proxy_set_header Authorization "";
+            proxy_set_header Proxy-Authorization "";
+            proxy_set_header Upgrade $ngn_upgrade;
+            proxy_set_header Connection $ngn_connection;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_cache off;
+            proxy_max_temp_file_size 0;
+            proxy_next_upstream off;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+            proxy_redirect off;
+
+            location = /readyz {
+                default_type text/plain;
+                return 200 "ready\n";
+            }
+            # The authenticated image/PDF upload route enforces its own 8 MiB
+            # limit and media checks; other mutations remain capped at 64 KiB.
+            location ~ "^/api/sessions/[A-Za-z0-9_-]+/uploads/[0-9a-f-]+$" {
+                client_max_body_size 8m;
+                proxy_pass http://127.0.0.1:8765;
+            }
+            location / {
+                proxy_pass http://127.0.0.1:8765;
+            }
+        }
+    }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -95,44 +171,83 @@ spec:
       imagePullSecrets:
         - name: ghcr-pull-secret
       securityContext:
+        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-        # Deliberately no fsGroup: OpenAIAuth requires 0700 dirs / 0600 files.
-      containers:
-        - name: ngn
-          image: ghcr.io/abi-jey/nagents/agent-server@sha256:2def52cc2843d1b7d599b91029b8a83c6e36bc97c4d71eae489dcb5eef578d50
+        # No fsGroup: provider logins and config must stay private to UID 1000.
+      initContainers:
+        - name: initialize-state
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:${NGN_APP_DIGEST}
           imagePullPolicy: IfNotPresent
-          # Prepare fixed private state directories and install the one-time seed
-          # credential if absent, then exec ngn. Runs as root so it can own and
-          # mode /state and the OpenAIAuth store without a separate init container.
           command:
             - /bin/sh
             - -ec
             - |
               umask 077
-              for directory in /state /state/home /state/config /state/workspace /state/sessions /state/channel-plugins /state/data /state/data/ngn /state/data/ngn/auth; do
-                mkdir -p "$directory"
-                chmod 0700 "$directory"
-              done
-              credential=/state/data/ngn/auth/openai.json
-              if [ ! -e "$credential" ]; then
-                if [ ! -s /seed/openai.json ]; then
-                  printf '%s\n' 'No saved ngn credential: provide ngn-web-codex-seed/openai.json for first startup.' >&2
+              marker=/state/.ngn-web-state
+              if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
+                printf '%s\n' 'Refusing an unsafe ngn state marker.' >&2
+                exit 1
+              fi
+              if [ ! -e "$marker" ]; then
+                # Do not adopt unrelated hostPath data by accident.
+                entries=$(find /state -mindepth 1 -maxdepth 1 -printf x -quit)
+                if [ -n "$entries" ]; then
+                  printf '%s\n' 'Refusing a non-empty uninitialized ngn state directory.' >&2
                   exit 1
                 fi
-                # Dereference the projected Secret only here.
-                install -m 0600 /seed/openai.json "$credential"
+                printf '%s\n' 'ngn-web-state-v1' > "$marker"
               fi
-              exec ngn serve \
-                --host 0.0.0.0 \
-                --port 8765 \
-                --workspace /state/workspace \
-                --config /etc/ngn/config.yaml
+              if [ "$(stat -c %h "$marker")" != 1 ] || [ "$(cat "$marker")" != ngn-web-state-v1 ]; then
+                printf '%s\n' 'Refusing an unrecognized ngn state marker.' >&2
+                exit 1
+              fi
+              chown 1000:1000 "$marker"
+              chmod 0600 "$marker"
+              # Only fixed paths: preserve workspace files and renewed logins.
+              for directory in /state /state/home /state/config /state/workspace /state/sessions /state/channel-plugins /state/data /state/data/ngn /state/data/ngn/auth; do
+                if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+                  printf '%s\n' 'Refusing an unsafe ngn state directory.' >&2
+                  exit 1
+                fi
+                mkdir -p "$directory"
+                chown 1000:1000 "$directory"
+                chmod 0700 "$directory"
+              done
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: state
+              mountPath: /state
+      containers:
+        - name: ngn
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:${NGN_APP_DIGEST}
+          imagePullPolicy: IfNotPresent
+          command: [ngn]
+          args: [serve, --host, "127.0.0.1", --port, "8765", --workspace, /state/workspace, --config, /etc/ngn/config.yaml]
           workingDir: /state/workspace
-          ports:
-            - name: http
-              containerPort: 8765
           env:
+            # An absent Secret/key is allowed: the UI starts with provider setup guidance.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ngn-web-provider
+                  key: OPENAI_API_KEY
+                  optional: true
             - name: HOME
               value: /state/home
             - name: XDG_DATA_HOME
@@ -142,8 +257,8 @@ spec:
             - name: NGN_CHANNEL_PLUGIN_PATH
               value: /state/channel-plugins
           securityContext:
-            runAsUser: 0
-            runAsGroup: 0
+            runAsUser: 1000
+            runAsGroup: 1000
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -177,6 +292,45 @@ spec:
               readOnly: true
             - name: ngn-tmp
               mountPath: /tmp
+        - name: nginx
+          image: nginxinc/nginx-unprivileged@sha256:${NGN_NGINX_DIGEST}
+          imagePullPolicy: IfNotPresent
+          command: [nginx]
+          args: [-g, "daemon off;"]
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: "${NGN_HOST}"
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: nginx-tmp
+              mountPath: /tmp
       volumes:
         - name: state
           persistentVolumeClaim:
@@ -184,17 +338,12 @@ spec:
         - name: config
           configMap:
             name: ngn-web-config
-        - name: codex-seed
-          secret:
-            secretName: ngn-web-codex-seed
-            optional: true
-            defaultMode: 0400
-            items:
-              - key: openai.json
-                path: openai.json
         - name: ngn-tmp
           emptyDir:
             sizeLimit: 256Mi
+        - name: nginx-tmp
+          emptyDir:
+            sizeLimit: 32Mi
 ---
 apiVersion: v1
 kind: Service

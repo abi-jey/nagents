@@ -352,10 +352,10 @@ processes/users with access to your loopback interface may access it. Do not exp
 the standalone server through a reverse proxy, public tunnel, port forward, or
 shared remote desktop. For administrator-managed **password-free Tailscale access**,
 see the [private deployment guide](ngn-web-deployment.md). That setup runs the
-same `ngn serve` process on one owner-approved workload, bound directly to the
-in-cluster Service, using HTTPS at the ingress without Funnel or NodePort exposure,
-and is not a general remote-access mode. Tailscale ACLs/grants and trusted cluster
-networking are the access boundary: everyone who can reach the Service shares
+same `ngn serve` process on one owner-approved workload, bound to pod loopback
+behind a same-pod nginx proxy reached by the in-cluster Service, using HTTPS at
+the ingress without Funnel or NodePort exposure. Tailscale ACLs/grants and
+trusted cluster networking are the access boundary: everyone who can reach the Service shares
 the trusted-user workspace, sessions, and approvals, with no multi-user isolation.
 ClusterIP is not public Internet exposure, but cluster clients can also reach it
 and forge headers. Same-origin fetch-metadata checks and the per-process CSRF

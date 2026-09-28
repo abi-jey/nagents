@@ -4,9 +4,9 @@
 # Prerequisites (run once):
 #   Create the nagents namespace first if absent: kubectl create namespace nagents
 #
-#   1. LLM/API keys from your dotenv file:
+#   1. LLM/API keys from an administrator-managed private env file:
 #        kubectl create secret generic nagents-secrets \
-#          --from-env-file=.env -n nagents
+#          --from-env-file=/private/path/provider.env -n nagents
 #      (keys must be valid env var names; empty values are skipped)
 #
 #   2. Registry pull secret for ghcr.io (copy from an existing namespace):
@@ -21,11 +21,12 @@
 #          --from-file=NAGENTS_SERVER_TOKEN="$token_file"
 #        rm -- "$token_file"
 #      Restart the deployment after token rotation. See docs/guide/server.md.
-#      Pin a reviewed hardened image before applying: v0.5.0 and older images
-#      do not enforce this token; an unverified :latest tag is not sufficient.
+#      Render NAGENTS_API_NODE and NAGENTS_API_DIGEST privately before applying.
+#      Use a reviewed digest built from hardened current source: v0.5.0 and
+#      older images do not enforce this token.
 #
-# Apply everything:
-#   kubectl apply -f examples/k8s/deployment.yaml
+# This template is not apply-ready: never apply it with unresolved placeholders.
+# See docs/guide/server.md for the legacy API's access and rendering assumptions.
 #
 # The server is exposed through a ts-serve (Tailscale) ingress, following the
 # same pattern as the other deployments in this cluster.
@@ -64,7 +65,7 @@ spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       nodeSelector:
-        kubernetes.io/hostname: abja
+        kubernetes.io/hostname: "${NAGENTS_API_NODE}"
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
@@ -80,8 +81,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: ghcr.io/abi-jey/nagents/agent-server:latest
-          imagePullPolicy: Always
+          image: ghcr.io/abi-jey/nagents/agent-server@sha256:${NAGENTS_API_DIGEST}
+          imagePullPolicy: IfNotPresent
           # The image defaults to ngn serve; retain this legacy HTTP/SSE API.
           command: ["python", "-m", "nagents.server"]
           ports:
