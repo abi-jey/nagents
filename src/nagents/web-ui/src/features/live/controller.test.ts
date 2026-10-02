@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { appendCaptions, LiveController, liveFailure } from "./controller.js";
-import type { LiveCreated, LiveSnapshot, MediaHandlers } from "./types.js";
+import type { LiveCreated, LiveSnapshot, LiveTransport, MediaHandlers } from "./types.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: Error) => void;
@@ -13,34 +13,41 @@ const created: LiveCreated = { session_id: "live-test", model: "gpt-live-1", voi
 const snapshot: LiveSnapshot = { session_id: "live-test", status: "connected", model: "gpt-live-1", voice: "marin", events: [], cursor: 0 };
 const revision = "a".repeat(64);
 
-function fixture(pollMs = 60_000) {
+function fixture(pollMs = 60_000, offer?: string) {
   const prepare = deferred<void>(), create = deferred<LiveCreated>(), read = deferred<LiveSnapshot>();
   const calls: string[] = [];
+  const transports: LiveTransport[] = [], offers: (string | undefined)[] = [], answers: (string | undefined)[] = [];
   let handlers!: MediaHandlers;
   let rejectClose = false;
   let rejectConnect = false;
-  let closeSnapshot: LiveSnapshot = { ...snapshot, status: "closed" };
+  let closeSnapshot: LiveSnapshot | Promise<LiveSnapshot> = { ...snapshot, status: "closed" };
+  let mediaSignal: AbortSignal | undefined;
   let nextRead = read.promise;
+  let nextPlay = Promise.resolve();
   const controller = new LiveController({
-    media: (callbacks) => {
+    media: (callbacks, transport) => {
+      transports.push(transport);
       handlers = callbacks;
       return {
-        prepare: async () => { calls.push("prepare"); return prepare.promise; },
-        connect: async (id, token) => { calls.push(`connect:${id}:${token}`); if (rejectConnect) throw new Error("Audio relay rejected connection"); },
+        prepare: async (signal) => { mediaSignal = signal; calls.push("prepare"); return prepare.promise; },
+        ...(offer ? { offer: () => offer, stop: () => { calls.push("media-stop"); } } : {}),
+        connect: async (id, token, answer) => { answers.push(answer); calls.push(`connect:${id}:${token}`); if (rejectConnect) throw new Error("Audio relay rejected connection"); },
         muteInput: (muted) => { calls.push(`mic:${muted}`); },
         muteOutput: (muted) => { calls.push(`speaker:${muted}`); },
-        play: async () => { calls.push("play"); handlers.playbackBlocked(false); },
+        play: async () => { calls.push("play"); handlers.playbackBlocked(false); return nextPlay; },
         close: () => { calls.push("media-close"); },
       };
     },
-    create: async (_voice, _signal, current, session) => { assert.equal(current, revision); calls.push(`create:${session}`); return create.promise; },
+    create: async (_voice, _signal, current, session, sdp) => { offers.push(sdp); assert.equal(current, revision); calls.push(`create:${session}`); return create.promise; },
     token: "test-token",
     read: async (_id, after) => { calls.push(`read:${after}`); return nextRead; },
     close: async (id) => { calls.push(`close:${id}`); if (rejectClose) throw new Error("Offline"); return closeSnapshot; },
     pollMs,
   });
-  return { controller, calls, prepare, create, read, handlers: () => handlers,
-    closeSnapshot: (reply: LiveSnapshot) => { closeSnapshot = reply; }, nextRead: (reply: Promise<LiveSnapshot>) => { nextRead = reply; },
+  return { controller, calls, transports, offers, answers, prepare, create, read, handlers: () => handlers,
+    mediaSignal: () => mediaSignal,
+    closeSnapshot: (reply: LiveSnapshot | Promise<LiveSnapshot>) => { closeSnapshot = reply; }, nextRead: (reply: Promise<LiveSnapshot>) => { nextRead = reply; },
+    nextPlay: (reply: Promise<void>) => { nextPlay = reply; },
     failClose: () => { rejectClose = true; }, failConnect: () => { rejectConnect = true; } };
 }
 
@@ -192,4 +199,111 @@ test("closing stops audio but keeps polling for the final status and captions", 
   assert.equal(f.controller.getSnapshot().captions[0].text, "Last words");
   assert.equal(f.calls.filter((call) => call.startsWith("read:")).length, 2);
   f.controller.dispose();
+});
+
+for (const status of ["closed", "error"] as const) test(`clean relay closure reconciles ${status} status and final captions`, async () => {
+  const f = fixture();
+  const start = f.controller.start("marin", revision); f.prepare.resolve(); f.create.resolve(created); await start;
+  f.handlers().connected(); f.handlers().playbackBlocked(true);
+  f.closeSnapshot({ ...snapshot, status, message: status === "closed" ? "Finalization confirmed." : "Provider failed.", cursor: 1,
+    events: [{ seq: 1, type: "transcript", speaker: "assistant", text: "Goodbye" }],
+  });
+  f.handlers().ended(); await setImmediate();
+  assert.equal(f.controller.getSnapshot().phase, status === "closed" ? "ended" : "error");
+  assert.equal(f.controller.getSnapshot().captions[0].text, "Goodbye");
+  assert.equal(f.controller.getSnapshot().playbackBlocked, false);
+  assert.equal(f.calls.filter((call) => call === "media-close").length, 1);
+  f.controller.dispose();
+});
+
+test("late playback rejection cannot display recovery controls after ending", async () => {
+  const f = fixture(), play = deferred<void>(); f.nextPlay(play.promise);
+  const start = f.controller.start("marin", revision); f.prepare.resolve(); f.create.resolve(created); await start;
+  f.handlers().connected();
+  const playing = f.controller.play();
+  await f.controller.end();
+  play.reject(new Error("Context closed")); await playing;
+  assert.equal(f.controller.getSnapshot().phase, "ended");
+  assert.equal(f.controller.getSnapshot().playbackBlocked, false);
+  f.controller.dispose();
+});
+
+test("login startup provisions the SDP and applies the answer without treating HTTP success as audio connection", async () => {
+  const f = fixture(60_000, "offer-sdp");
+  const start = f.controller.start("marin", revision, "ngn-chat-root", "webrtc");
+  f.prepare.resolve(); f.create.resolve({ ...created, sdp: "answer-sdp" }); await start;
+  assert.deepEqual(f.transports, ["webrtc"]); assert.deepEqual(f.offers, ["offer-sdp"]); assert.deepEqual(f.answers, ["answer-sdp"]);
+  assert.equal(f.controller.getSnapshot().phase, "connecting");
+  f.handlers().connected(); assert.equal(f.controller.getSnapshot().phase, "connected");
+  await f.controller.end(); f.controller.dispose();
+});
+
+test("a cancelled login creation closes the returned session and never applies a late SDP", async () => {
+  const f = fixture(60_000, "offer-sdp");
+  const start = f.controller.start("marin", revision, "ngn-chat-root", "webrtc");
+  f.prepare.resolve(); await setImmediate(); await f.controller.end();
+  f.create.resolve({ ...created, sdp: "late-answer" }); await start;
+  assert.deepEqual(f.answers, []); assert.ok(f.calls.includes("close:live-test"));
+  assert.equal(f.controller.getSnapshot().phase, "ended"); f.controller.dispose();
+});
+
+for (const status of ["closed", "error"] as const) test(`ending login voice stops devices before HTTP close and retains the peer until ${status} confirmation`, async () => {
+  const f = fixture(60_000, "offer-sdp"), closing = deferred<LiveSnapshot>();
+  const start = f.controller.start("marin", revision, "ngn-chat-root", "webrtc");
+  f.prepare.resolve(); f.create.resolve({ ...created, sdp: "answer-sdp" }); await start; f.handlers().connected();
+  f.closeSnapshot(closing.promise);
+  const ending = f.controller.end();
+  assert.equal(f.controller.getSnapshot().phase, "ending");
+  assert.ok(f.calls.indexOf("media-stop") < f.calls.indexOf("close:live-test"));
+  assert.ok(!f.calls.includes("media-close")); assert.equal(f.mediaSignal()?.aborted, false);
+  f.read.resolve(snapshot); await setImmediate();
+  assert.equal(f.controller.getSnapshot().phase, "ending", "the old poll cannot resurrect the call");
+  closing.resolve({ ...snapshot, status, message: "Provider finalization result.", cursor: 1,
+    events: [{ seq: 1, type: "transcript", speaker: "assistant", text: "Final caption" }],
+  });
+  await ending;
+  assert.equal(f.calls.filter((call) => call === "media-close").length, 1); assert.equal(f.mediaSignal()?.aborted, true);
+  assert.equal(f.controller.getSnapshot().phase, status === "closed" ? "ended" : "error");
+  assert.equal(f.controller.getSnapshot().captions[0].text, "Final caption");
+  if (status === "error") assert.match(f.controller.getSnapshot().error, /Provider finalization/);
+  f.controller.dispose();
+});
+
+test("login closing snapshots retain quiet RTC until final polling completes", async () => {
+  const f = fixture(60_000, "offer-sdp"), final = deferred<LiveSnapshot>();
+  const start = f.controller.start("marin", revision, "ngn-chat-root", "webrtc");
+  f.prepare.resolve(); f.create.resolve({ ...created, sdp: "answer-sdp" }); await start; f.handlers().connected();
+  f.closeSnapshot({ ...snapshot, status: "closing" }); f.nextRead(final.promise);
+  await f.controller.end();
+  assert.equal(f.controller.getSnapshot().phase, "ending");
+  assert.ok(!f.calls.includes("media-close")); assert.equal(f.mediaSignal()?.aborted, false);
+  final.resolve({ ...snapshot, status: "closed" }); await setImmediate();
+  assert.equal(f.controller.getSnapshot().phase, "ended");
+  assert.equal(f.calls.filter((call) => call === "media-close").length, 1); f.controller.dispose();
+});
+
+for (const alreadyEnding of [false, true]) test(`unmount ${alreadyEnding ? "during" : "starts"} login finalization without closing RTC early`, async () => {
+  const f = fixture(60_000, "offer-sdp"), closing = deferred<LiveSnapshot>();
+  const start = f.controller.start("marin", revision, "ngn-chat-root", "webrtc");
+  f.prepare.resolve(); f.create.resolve({ ...created, sdp: "answer-sdp" }); await start; f.handlers().connected();
+  f.closeSnapshot(closing.promise);
+  if (alreadyEnding) void f.controller.end();
+  let changes = 0; f.controller.subscribe(() => { changes++; });
+  f.controller.dispose(); f.controller.dispose();
+  assert.ok(f.calls.includes("media-stop")); assert.ok(!f.calls.includes("media-close"));
+  assert.equal(f.calls.filter((call) => call === "close:live-test").length, 1);
+  assert.equal(f.mediaSignal()?.aborted, false);
+  closing.resolve({ ...snapshot, status: "closed" }); await setImmediate();
+  assert.equal(f.calls.filter((call) => call === "media-close").length, 1);
+  assert.equal(f.mediaSignal()?.aborted, true); assert.equal(changes, 0);
+});
+
+test("unconfirmed login closure still releases the quiet peer", async () => {
+  const f = fixture(60_000, "offer-sdp");
+  const start = f.controller.start("marin", revision, "ngn-chat-root", "webrtc");
+  f.prepare.resolve(); f.create.resolve({ ...created, sdp: "answer-sdp" }); await start; f.handlers().connected();
+  f.failClose(); await f.controller.end();
+  assert.match(f.controller.getSnapshot().notice, /could not be confirmed/);
+  assert.equal(f.calls.filter((call) => call === "media-close").length, 1);
+  assert.equal(f.mediaSignal()?.aborted, true); f.controller.dispose();
 });

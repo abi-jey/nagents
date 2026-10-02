@@ -19,7 +19,7 @@ export function availability(state: ClientActivity) {
     channels: navigate,
     tools: navigate,
     designer: navigate && !state.running,
-    live: navigate && !state.running,
+    live: navigate,
     trash: free,
   };
 }

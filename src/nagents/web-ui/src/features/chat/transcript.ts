@@ -5,6 +5,16 @@ import type { LocalDelivery } from "./deliveries.js";
 import { uploadedAttachments } from "./uploads.js";
 import { channelMessage, sameUserMessage } from "./channelMessage.js";
 
+export type LiveCaption = {
+  sessionId: string;
+  seq: number;
+  speaker: "user" | "assistant";
+  start: number;
+  end: number;
+  anchorHistoryId: string;
+  fragmentIds?: string[];
+};
+
 export type Entry = {
   id: string;
   kind:
@@ -19,6 +29,7 @@ export type Entry = {
     | "followup"
     | "context"
     | "delivery"
+    | "live_caption"
     | "retained_tasks";
   delivery?: LocalDelivery;
   uploads?: Snapshot["history"][number]["uploads"];
@@ -72,9 +83,55 @@ export type Entry = {
   resultHistoryId?: string;
   ingressId?: string;
   sourceVerified?: boolean;
+  voice?: boolean;
+  voiceSessionId?: string;
+  liveCaption?: LiveCaption;
   // Local saved-row boundary, not an inferred run/task or source identity.
   historyTurn?: number;
 };
+
+export function sameLiveCaption(left: Entry, right: Entry): boolean {
+  return left.kind === "live_caption" && right.kind === "live_caption" &&
+    !!left.liveCaption && !!right.liveCaption && !!left.historyId && left.historyId === right.historyId &&
+    left.liveCaption.sessionId === right.liveCaption.sessionId && left.liveCaption.seq === right.liveCaption.seq;
+}
+
+function liveCaptionEntry(event: WireEvent): Entry | undefined {
+  const { history_id, voice_session_id, caption_seq, speaker, start_ms, end_ms, anchor_history_id } = event;
+  const content = event.text === undefined ? event.content : event.text;
+  if (event.source !== "live_caption" || typeof history_id !== "string" || !/^live-caption:[1-9]\d*$/.test(history_id) ||
+      typeof voice_session_id !== "string" || !voice_session_id ||
+      typeof caption_seq !== "number" || !Number.isSafeInteger(caption_seq) || caption_seq < 1 ||
+      (speaker !== "user" && speaker !== "assistant") || typeof content !== "string" || !content ||
+      typeof start_ms !== "number" || !Number.isFinite(start_ms) || start_ms < 0 ||
+      typeof end_ms !== "number" || !Number.isFinite(end_ms) || end_ms < start_ms ||
+      typeof anchor_history_id !== "string") return undefined;
+  return { id: history_id, kind: "live_caption", text: content, historyId: history_id,
+    liveCaption: { sessionId: voice_session_id, seq: caption_seq, speaker, start: start_ms, end: end_ms, anchorHistoryId: anchor_history_id },
+    ...(typeof event.history_index === "number" && Number.isSafeInteger(event.history_index) && event.history_index >= 0
+      ? { historyIndex: event.history_index } : {}),
+  };
+}
+
+// Presentation only: raw entries retain one identity per durable speech
+// fragment so history refreshes and replay never consume model messages.
+export function groupLiveCaptions(entries: readonly Entry[]): Entry[] {
+  const grouped: Entry[] = [];
+  let previous: LiveCaption | undefined;
+  for (const entry of entries) {
+    const caption = entry.liveCaption, last = grouped.at(-1), prior = last?.liveCaption;
+    if (entry.kind === "live_caption" && caption && previous && last?.kind === "live_caption" && prior &&
+        caption.sessionId === prior.sessionId && caption.speaker === prior.speaker && caption.seq > previous.seq &&
+        caption.anchorHistoryId === prior.anchorHistoryId && caption.start >= previous.start && caption.start - previous.end < 1600 &&
+        last.text.length + entry.text.length <= 2000) {
+      grouped[grouped.length - 1] = { ...last, text: last.text + entry.text,
+        liveCaption: { ...prior, end: Math.max(prior.end, caption.end), fragmentIds: [...(prior.fragmentIds || [last.id]), entry.id] } };
+    } else grouped.push(entry.kind === "live_caption" && caption
+      ? { ...entry, liveCaption: { ...caption, fragmentIds: [entry.id] } } : entry);
+    previous = entry.kind === "live_caption" ? caption : undefined;
+  }
+  return grouped;
+}
 
 export function ingressIdentity(value: unknown): string {
   return typeof value === "string" ? value : typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : "";
@@ -108,6 +165,20 @@ export function sameTranscriptUser(left: Pick<Entry, "historyId" | "ingressId" |
 }
 
 export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
+  if (event.event === "live_caption") {
+    const caption = liveCaptionEntry(event);
+    if (!caption?.liveCaption) return entries;
+    const source = caption.liveCaption;
+    const index = entries.findIndex((entry) => entry.kind === "live_caption" &&
+      (entry.historyId === caption.historyId || entry.liveCaption?.sessionId === source.sessionId && entry.liveCaption?.seq === source.seq));
+    if (index < 0) return [...entries, { ...caption, ...(event.saved === true ? {} : {
+      activity: entries.reduce((latest, entry) => Math.max(latest, entry.activity || 0), 0) + 1,
+    }) }];
+    const previous = entries[index];
+    if (!sameLiveCaption(previous, caption)) return entries;
+    if (previous.text === caption.text && JSON.stringify(previous.liveCaption) === JSON.stringify(caption.liveCaption)) return entries;
+    return entries.map((entry, i) => i === index ? { ...entry, ...caption, id: entry.id } : entry);
+  }
   const runId = text(event, "run_id");
   const taskId = text(event, "task_id");
   const activation =
@@ -216,7 +287,10 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     const ingressId = ingressIdentity(event.ingress_id) || undefined;
     // IDs establish message identity, not channel provenance. Only an explicit
     // backend verification flag permits the source annotation to supply a badge.
-    const message = channelMessage(text(event, "text"), event.source_verified === true ? event.source : undefined, messageId);
+    const voice = event.voice_verified === true;
+    const voiceSessionId = voice ? text(event, "voice_session_id") || undefined : undefined;
+    const message = voice ? { text: text(event, "text") }
+      : channelMessage(text(event, "text"), event.source_verified === true ? event.source : undefined, messageId);
     const sourceVerified = typeof event.source_verified === "boolean" ? event.source_verified : undefined;
     const index = entries.findIndex((entry) => entry.kind === "user" && sameTranscriptUser(entry, { ...message, historyId, ingressId, messageId, taskId }));
     if (index >= 0 && !entries[index].queued) {
@@ -224,6 +298,8 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       return save({ ...previous, historyId: previous.historyId || historyId, ingressId: previous.ingressId || ingressId,
         text: typeof event.text === "string" ? message.text : previous.text,
         sourceVerified, origin: message.origin, originId: message.originId,
+        ...(voice || previous.voice ? { voice: voice || undefined } : {}),
+        voiceSessionId,
         provenance: message.provenance, channelContext: message.channelContext,
         // A stable row keeps the same metadata object so identical replays stay value-equal.
          channel: previous.channel ?? message.channel, parts: previous.parts ?? messageParts(event), uploads: uploads ?? previous.uploads,
@@ -231,6 +307,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     }
     return save({ ...entries[index], kind: "user", ...message, ...scope, historyId, ingressId,
        sourceVerified, parts: messageParts(event), uploads,
+       ...(voice || entries[index]?.voice ? { voice: voice || undefined, voiceSessionId } : {}),
       messageId: messageId || entries[index]?.messageId,
       queued: event.queued === true }, index, !!message.origin && index < 0 && !event.saved);
   }
@@ -696,6 +773,10 @@ export function fromHistory({
     entries.push({ id: `delivery:${delivery.delivery_id}`, kind: "delivery", text: delivery.text, delivery });
   }
   for (const [historyIndex, message] of messages.entries()) {
+    if (message.role === "live_caption") {
+      entries = appendEvent(entries, { ...message, event: "live_caption", text: message.content, history_index: historyIndex, saved: true });
+      continue;
+    }
     if (message.role === "local_delivery") {
       for (const delivery of message.deliveries || []) deliver(delivery);
       continue;
@@ -771,6 +852,8 @@ export function fromHistory({
           message_id: message.message_id,
           ingress_id: message.ingress_id,
           source_verified: message.source_verified,
+          voice_verified: message.role === "user" ? message.voice_verified : undefined,
+          voice_session_id: message.role === "user" ? message.voice_session_id : undefined,
           source: message.role === "user" ? message.source : undefined,
           parts: message.role === "user" ? message.parts : undefined,
           uploads: message.role === "user" ? message.uploads : undefined,

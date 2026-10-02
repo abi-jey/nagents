@@ -73,6 +73,14 @@ export type Snapshot = {
     ingress_id?: string | number;
     // Missing on legacy replies; only explicit true authorizes channel source metadata.
     source_verified?: boolean;
+    // Only the host's admitted voice input may mark a saved row as voice.
+    voice_verified?: boolean;
+    voice_session_id?: string;
+    caption_seq?: number;
+    speaker?: "user" | "assistant";
+    start_ms?: number;
+    end_ms?: number;
+    anchor_history_id?: string;
     message_id?: string;
     source?: unknown;
     parts?: MessagePart[];

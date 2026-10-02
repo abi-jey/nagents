@@ -43,6 +43,7 @@ from .deletion import delete_session
 from .designer import Designer
 from .designer import register as register_designer
 from .live import create_agent as create_live_agent
+from .live import create_login_config
 from .live import register as register_live
 from .live_bridge import MainAgentBridge
 from .live_runtime import LiveService
@@ -61,6 +62,8 @@ from .tool_settings import register as register_tool_settings
 
 if TYPE_CHECKING:
     from nagents.harness.config import HarnessConfig
+
+    from .live_login import LoginVoiceConfig
 
 APPROVAL_TIMEOUT = 300
 logger = logging.getLogger("uvicorn.error")
@@ -179,18 +182,34 @@ def create_app(
             demo=config.demo,
             active=lambda: live.active_session_id,
             providers=harness.provider_store,
+            auth=harness.openai_auth,
         )
 
         def voice_agent(voice: str) -> Agent:
             connection = live_settings.admitted()
             handler = (
-                MainAgentBridge(state, live_settings.admitted_session()).handle
+                MainAgentBridge(state, live_settings.admitted_session(), voice_session_id=live.active_session_id).handle
                 if connection.values.backend_mode == "assistant"
                 else None
             )
             return create_live_agent(connection, voice, demo=live_settings.demo, client_handler=handler)
 
-        live = LiveService(voice_agent)
+        def login_voice(voice: str) -> "LoginVoiceConfig | None":
+            connection = live_settings.admitted()
+            if connection.voice_auth != "chatgpt":
+                return None
+            handler = MainAgentBridge(
+                state, live_settings.admitted_session(), voice_session_id=live.active_session_id
+            ).handle
+            return create_login_config(connection, voice, handler)
+
+        live = LiveService(
+            voice_agent,
+            login_factory=login_voice,
+            caption_factory=lambda identifier: state.bind_live_captions(
+                live_settings.admitted_session() or state.selected_session_id, identifier
+            ),
+        )
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
         app.state.live = live

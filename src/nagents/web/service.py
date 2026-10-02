@@ -32,6 +32,7 @@ from nagents.harness.execution import bind_channel_send
 from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
 
+from ._async import finish_on_cancel
 from ._async import join_owned as _join
 from .channel_host import ChannelHost
 from .channel_notices import ChannelNotices
@@ -50,6 +51,7 @@ from .wakeups import Wakeups
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from collections.abc import Awaitable
     from collections.abc import Callable
     from collections.abc import Iterator
 
@@ -198,8 +200,8 @@ class WebState:
         self.channels.changed.set()
 
     @contextmanager
-    def idle(self) -> Iterator[None]:
-        if self.active is not None or self.mutating:
+    def idle(self, *, allow_running: bool = False) -> Iterator[None]:
+        if (self.active is not None and not allow_running) or self.mutating:
             raise HTTPException(409, "Harness busy. Cancel or finish the active operation first.")
         self.mutating = True
         try:
@@ -282,6 +284,33 @@ class WebState:
         run = self.active
         if run is not None and run.id == run_id:
             self.publish(run, {**record, "event": "user_message", "text": record["content"]})
+
+    def live_captions(self, session_id: str, voice_session_id: str) -> Callable[[dict[str, object]], Awaitable[None]]:
+        """Freeze the admitted root and publish each caption only after commit."""
+
+        async def observe(event: dict[str, object]) -> None:
+            async def persist() -> None:
+                record = await self.history.add_live_caption(session_id, voice_session_id, event)
+                if record:
+                    self.bus.event(
+                        {
+                            **record,
+                            "event": "live_caption",
+                            "text": record["content"],
+                            "session_id": session_id,
+                            "schema_version": 1,
+                        }
+                    )
+
+            await finish_on_cancel(persist())
+
+        return observe
+
+    async def bind_live_captions(
+        self, session_id: str, voice_session_id: str
+    ) -> Callable[[dict[str, object]], Awaitable[None]]:
+        await self.history.register_live_call(session_id, voice_session_id)
+        return self.live_captions(session_id, voice_session_id)
 
     def disconnected(self) -> None:
         run = self.active

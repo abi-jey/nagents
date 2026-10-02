@@ -86,6 +86,10 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
                 )
                 db.execute("CREATE TABLE private_extension (value TEXT)")
                 db.execute("INSERT INTO private_extension VALUES ('private configuration')")
+                db.execute(
+                    "INSERT INTO ngn_web_voice_messages SELECT id, 'caller speech' FROM v2_messages WHERE session_id = ?",
+                    (root,),
+                )
 
             await state.channels.store._transaction(seed)
             subscriber = Subscriber(session_id=root, ready=True)
@@ -114,6 +118,7 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
             ):
                 assert not await rows(state, f"SELECT * FROM {table} WHERE {key} = ?", root)
             assert not await rows(state, "SELECT * FROM ngn_web_message_origins")
+            assert not await rows(state, "SELECT * FROM ngn_web_voice_messages")
             assert await rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", child) == [("child kept",)]
             assert await rows(state, "SELECT * FROM private_extension") == [("private configuration",)]
             assert await rows(state, "SELECT * FROM ngn_web_settings") == settings_before

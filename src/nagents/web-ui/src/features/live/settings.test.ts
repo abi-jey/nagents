@@ -103,5 +103,8 @@ test("settings and session transport use same-origin authenticated routes with a
     for (const { init } of requests) { assert.equal(new Headers(init?.headers).get("X-Ngn-Token"), "local-web-token"); assert.equal(init?.credentials, "same-origin"); }
     assert.deepEqual(JSON.parse(String(requests[1].init?.body)), body);
     assert.deepEqual(JSON.parse(String(requests[2].init?.body)), { voice: "marin", revision: settings.revision, session_id: "ngn-chat-root" });
+    await liveApi("local-web-token").create("marin", signal, settings.revision, "ngn-chat-root", "offer-sdp");
+    assert.equal(requests[3].path, "/api/live/sessions");
+    assert.deepEqual(JSON.parse(String(requests[3].init?.body)), { voice: "marin", revision: settings.revision, session_id: "ngn-chat-root", sdp: "offer-sdp" });
   } finally { globalThis.fetch = original; }
 });

@@ -5,6 +5,8 @@ import { ActivityRecord } from "./ActivityRecord.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
+import { Icon } from "../../components/Icon.js";
+import { captionTime, conversationEntries } from "./captionPresentation.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import type { Bootstrap } from "../../types.js";
 import {
@@ -121,8 +123,17 @@ export function TranscriptItems({
         className={`entry ${entry.kind}`}
         data-record-key={entry.id}
         data-level={entry.level}
+        data-speaker={entry.liveCaption?.speaker}
       >
-        {entry.delivery ? <LocalDeliveryCard delivery={entry.delivery} /> : entry.kind === "tool" ||
+        {entry.liveCaption ? <>
+          <div className="entry-label chat-live-caption-label">
+            <span>{entry.liveCaption.speaker === "user" ? "You" : "ngn"}</span>
+            <span className="chat-live-badge"><Icon name="wave" size={12} />Live</span>
+            <time aria-label={`Voice time ${captionTime(entry.liveCaption.start)}`}>{captionTime(entry.liveCaption.start)}</time>
+          </div>
+          {entry.liveCaption.fragmentIds?.filter(id => id !== entry.id).map(id => <span key={id} data-record-key={id} className="chat-live-caption-anchor" aria-hidden="true" />)}
+          <p className="chat-live-caption-text">{entry.text}</p>
+        </> : entry.delivery ? <LocalDeliveryCard delivery={entry.delivery} /> : entry.kind === "tool" ||
         entry.kind === "task" ||
         entry.kind === "context" ? (
           <ExecutionRecord
@@ -150,6 +161,7 @@ export function TranscriptItems({
                       ? `Human follow-up ${entry.followup}`
                        : "Status"}
               {entry.origin && !entry.channel && <span className="origin-badge">{entry.origin}</span>}
+              {entry.voice && <span className="origin-badge">Voice</span>}
               {entry.queued && <span className="origin-badge">{entry.admission === "queued" ? "Queued" : entry.admission === "sending" ? "Sending…" : "Delivery unconfirmed"}</span>}
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
@@ -294,7 +306,9 @@ export function Conversation({
     }
     lastActivity.current = activity;
     setAnnouncement(
-      latestActivity?.kind === "user"
+      latestActivity?.liveCaption
+        ? `New Live caption from ${latestActivity.liveCaption.speaker === "user" ? "you" : "your assistant"}.`
+        : latestActivity?.kind === "user"
         ? `New user message${latestActivity.origin ? ` from ${latestActivity.origin}` : ""}.`
         : latestActivity?.kind === "notification"
         ? `Notification delivered from ${latestActivity.sourceName} to ${latestActivity.taskName}.`
@@ -304,8 +318,9 @@ export function Conversation({
     );
     if (!activityVisible()) setNewActivity(true);
   }, [activity, latestActivity]);
-  const earlier = groupTranscript(entries.filter((entry) => entry.delivery?.earlier));
-  const items = groupTranscript(entries.filter((entry) => !entry.delivery?.earlier));
+  const display = conversationEntries(entries);
+  const earlier = groupTranscript(display.filter((entry) => entry.delivery?.earlier));
+  const items = groupTranscript(display.filter((entry) => !entry.delivery?.earlier));
   const names = new Map(
     entries
       .filter((entry) => entry.kind === "task" && entry.taskId)
@@ -360,7 +375,7 @@ export function Conversation({
                 setNewActivity(false);
               }}
             >
-              {latestActivity?.kind === "user" ? "New message" : "New task activity"}
+              {latestActivity?.liveCaption ? "New Live caption" : latestActivity?.kind === "user" ? "New message" : "New task activity"}
             </button>
           )}
         </div>

@@ -33,6 +33,7 @@ class VoicePreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
 
     enabled: bool = False
+    connection_id: str = Field(default="", max_length=64, pattern=r"^$|^[a-z][a-z0-9_-]{0,63}$")
     backend_mode: Literal["assistant", "hosted"] = "assistant"
     model: ModelId = Field(
         default="gpt-live-1", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$"
@@ -43,7 +44,9 @@ class VoicePreferences(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$",
     )
-    voice: Literal["marin", "cedar"] = "marin"
+    voice: Literal[
+        "marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
+    ] = "marin"
 
 
 class VoiceOverrides(VoicePreferences):

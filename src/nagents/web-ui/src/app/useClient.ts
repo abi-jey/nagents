@@ -21,7 +21,8 @@ export function useClient() {
   );
   const operations = useOperations();
   const { operating, error, setError } = operations;
-  const [panel, setPanel] = useState<"none" | "tools" | "designer" | "live">("none");
+  const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
+  const [liveOpen, setLiveOpen] = useState(false);
   const busy = operating || !!chat.runId || sessions.globalBusy;
 
   // The UI rejects competing operations immediately, matching the backend's 409 policy.
@@ -87,6 +88,8 @@ export function useClient() {
     if (id && id === sessions.sessionId) return true;
     if (!(id ? access().navigate : access().create)) return false;
     return operate(async () => {
+      // A voice connection belongs to the chat where it was opened.
+      setLiveOpen(false);
       chat.pause();
       try {
         const snapshot = await sessions.select(id);
@@ -134,10 +137,12 @@ export function useClient() {
     ...membership,
     available: access(),
     panel,
+    liveOpen,
     showTools: () => { if (access().tools) setPanel("tools"); },
-    showDesigner: () => { if (access().designer) setPanel("designer"); },
-    showLive: () => { if (access().live) setPanel("live"); },
-    closePanel: () => { setPanel("none"); if (panel !== "live") void connect(); },
+    showDesigner: () => { if (access().designer) { setLiveOpen(false); setPanel("designer"); } },
+    showLive: () => { if (access().live) setLiveOpen(true); },
+    closeLive: () => setLiveOpen(false),
+    closePanel: () => { setPanel("none"); void connect(); },
     dismissError: () => setError(""),
     sessions,
     context,

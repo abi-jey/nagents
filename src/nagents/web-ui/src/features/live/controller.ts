@@ -1,8 +1,8 @@
-import type { Caption, LiveCreated, LiveEvent, LiveMedia, LiveSnapshot, LiveState, MediaHandlers } from "./types.js";
+import type { Caption, LiveCreated, LiveEvent, LiveMedia, LiveSnapshot, LiveState, LiveTransport, MediaHandlers } from "./types.js";
 
 interface Dependencies {
-  media(handlers: MediaHandlers): LiveMedia;
-  create(voice: string, signal: AbortSignal, revision: string, sessionId: string): Promise<LiveCreated>;
+  media(handlers: MediaHandlers, transport: LiveTransport): LiveMedia;
+  create(voice: string, signal: AbortSignal, revision: string, sessionId: string, sdp?: string): Promise<LiveCreated>;
   token: string;
   read(id: string, after: number, signal: AbortSignal): Promise<LiveSnapshot>;
   close(id: string): Promise<LiveSnapshot>;
@@ -70,6 +70,11 @@ export class LiveController {
     this.abort?.abort(); this.abort = undefined;
     this.stopMedia();
   }
+  private quietMedia() {
+    clearTimeout(this.connectionTimer);
+    if (this.media?.stop) this.media.stop();
+    else this.stopMedia();
+  }
   private async closeRemote(id: string): Promise<{ snapshot?: LiveSnapshot; notice: string }> {
     if (!id) return { notice: "" };
     try {
@@ -93,14 +98,14 @@ export class LiveController {
     return true;
   }
   private ending(message: string) {
-    this.stopMedia();
+    this.quietMedia();
     this.endingDeadline ||= Date.now() + 45_000;
     this.update({ phase: "ending", notice: message, endedAt: this.state.endedAt || Date.now(), playbackBlocked: false });
   }
   private fail(message: string) {
     const id = this.state.sessionId;
     ++this.epoch; this.release();
-    this.update({ phase: "error", error: message, endedAt: Date.now() });
+    this.update({ phase: "error", error: message, endedAt: Date.now(), playbackBlocked: false });
     const epoch = this.epoch;
     void this.closeRemote(id).then(({ snapshot, notice }) => {
       if (epoch !== this.epoch) return;
@@ -109,7 +114,7 @@ export class LiveController {
     });
   }
 
-  async start(voice: string, revision: string, sessionId = ""): Promise<void> {
+  async start(voice: string, revision: string, sessionId = "", transport: LiveTransport = "websocket"): Promise<void> {
     if (this.disposed || ["permission", "connecting", "connected", "ending"].includes(this.state.phase)) return;
     const epoch = ++this.epoch;
     const abort = new AbortController(); this.abort = abort; this.cursor = 0; this.endingDeadline = 0;
@@ -121,22 +126,23 @@ export class LiveController {
           clearTimeout(this.connectionTimer);
           this.update({ phase: "connected", startedAt: this.state.startedAt || Date.now() });
         },
+        ended: () => { if (epoch === this.epoch) void this.end(); },
         failed: (message) => { if (epoch === this.epoch) this.fail(message); },
         playbackBlocked: (blocked) => { if (epoch === this.epoch) this.update({ playbackBlocked: blocked }); },
-      });
+      }, transport);
       this.media = media;
       await media.prepare(abort.signal);
       if (epoch !== this.epoch) return;
       this.update({ phase: "connecting" });
       // Keep awaiting a cancelled creation so a late-created server session can
       // be explicitly closed. The server lease covers a lost HTTP response.
-      const session = await this.deps.create(voice, AbortSignal.timeout(70_000), revision, sessionId);
+      const session = await this.deps.create(voice, AbortSignal.timeout(70_000), revision, sessionId, media.offer?.());
       if (epoch !== this.epoch) { await this.closeRemote(session.session_id); return; }
       this.update({ sessionId: session.session_id });
       this.connectionTimer = setTimeout(() => {
-        if (epoch === this.epoch) this.fail("The audio relay timed out. Check the connection to ngn serve, then try again.");
+        if (epoch === this.epoch) this.fail("The voice connection timed out. Check your network, then try again.");
       }, 25_000);
-      await media.connect(session.session_id, this.deps.token);
+      await media.connect(session.session_id, this.deps.token, session.sdp);
       if (epoch !== this.epoch) return;
       void this.poll(epoch, abort.signal);
     } catch (cause) {
@@ -164,7 +170,11 @@ export class LiveController {
   async end(): Promise<void> {
     if (["idle", "ended", "ending"].includes(this.state.phase)) return;
     const epoch = ++this.epoch, id = this.state.sessionId;
-    this.release();
+    // Closing a WebRTC primary before the sideband's session.close can prevent
+    // the provider's final event from arriving. Stop devices immediately while
+    // retaining the quiet peer until the server confirms or times out closure.
+    if (id && this.media?.stop) { clearTimeout(this.timer); this.quietMedia(); }
+    else this.release();
     this.update({ phase: "ending", error: "", endedAt: Date.now(), playbackBlocked: false });
     const { snapshot, notice } = await this.closeRemote(id);
     if (epoch !== this.epoch) return;
@@ -172,9 +182,12 @@ export class LiveController {
       this.consume(snapshot);
       if (this.terminal(snapshot)) return;
       this.ending(snapshot.message || "Waiting for Live to finish closing…");
-      const abort = new AbortController(); this.abort = abort;
+      const abort = this.abort || new AbortController(); this.abort = abort;
       void this.poll(epoch, abort.signal);
-    } else this.update({ phase: "ended", notice: notice || "Conversation ended. Your microphone is off." });
+    } else {
+      this.release();
+      this.update({ phase: "ended", notice: notice || "Conversation ended. Your microphone is off." });
+    }
   }
 
   muteInput() {
@@ -188,12 +201,22 @@ export class LiveController {
     this.media?.muteOutput(muted); this.update({ outputMuted: muted });
   }
   async play() {
+    const epoch = this.epoch;
     try { await this.media?.play(); }
-    catch { this.update({ playbackBlocked: true }); }
+    catch { if (epoch === this.epoch) this.update({ playbackBlocked: true }); }
   }
   dispose() {
-    this.disposed = true; ++this.epoch; this.release();
-    void this.closeRemote(this.state.sessionId);
+    if (this.disposed) return;
+    this.disposed = true;
     this.listeners.clear();
+    if (this.state.sessionId && this.media?.stop && ["connecting", "connected", "ending"].includes(this.state.phase)) {
+      // Modal unmount owns the same bounded finalization as the End button.
+      // An already-running close/poll must keep its epoch so it can release RTC.
+      if (this.state.phase === "ending") this.quietMedia();
+      else void this.end();
+      return;
+    }
+    ++this.epoch; this.release();
+    void this.closeRemote(this.state.sessionId);
   }
 }

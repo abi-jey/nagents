@@ -223,3 +223,23 @@ test("verified linked web input without a source object deduplicates by UUID the
   assert.equal(state.entries[0].historyId, "web-history"); assert.equal(state.entries[0].ingressId, "web-ingress");
   assert.equal(state.entries[0].origin, undefined); assert.equal(state.entries[0].originId, undefined);
 });
+
+test("voice projections keep their explicit badge across history and replay without classifying typed text", () => {
+  const request = "Please inspect the current workspace.";
+  const record = { event: "user_message", run_id: "voice-run", history_id: "voice-row", text: request, voice_verified: true };
+  let entries = appendEvent([], record);
+  assert.equal(entries[0].voice, true); assert.equal(entries[0].text, request);
+  const snapshot: Snapshot = { session_id: "root", sessions: [], retained_tasks: [], history: [
+    row("voice-row", "user", request, { voice_verified: true }),
+    row("typed-row", "user", "Live voice request for the selected chat. Speech data: []"),
+  ] };
+  entries = applySnapshot({ entries }, snapshot).entries;
+  entries = appendEvent(entries, record);
+  assert.equal(entries.filter(entry => entry.kind === "user").length, 2);
+  assert.equal(entries[0].voice, true); assert.equal(entries[1].voice, undefined);
+  assert.equal(entries[1].text, snapshot.history[1].content);
+  for (const voice_verified of [undefined, false, 1, "true"]) {
+    const unverified = appendEvent([], { ...record, voice_verified });
+    assert.equal(unverified[0].voice, undefined);
+  }
+});

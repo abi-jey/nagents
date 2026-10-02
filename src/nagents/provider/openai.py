@@ -216,14 +216,15 @@ def _load_config(home: Path | str = "", *, profile: str = "", model: str = "", f
         mode = auth.get("auth_mode")
         oauth = mode == "chatgpt" or (mode is None and bool(auth.get("tokens")))
         if oauth and for_live:
-            # Matches Codex's voice auth selection: ChatGPT text login can use
-            # an API-key fallback for voice, never its subscription access token.
+            # This provider uses the public WebSocket voice APIs. The browser's
+            # ChatGPT Live transport has its own provisioning/authentication path.
             voice_key = _config_string(auth.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", ""))
             if not voice_key:
                 raise CodexConfigError(
-                    "Codex selected ChatGPT authentication, but GPT-Live voice requires an OpenAI API key. "
+                    "Codex selected ChatGPT authentication, but the public GPT-Live WebSocket API and "
+                    "Realtime require an OpenAI API key. "
                     "No cached API key or OPENAI_API_KEY fallback was found. The saved ChatGPT login can "
-                    "still run the delegated backend."
+                    "still run the delegated backend. Use ngn serve browser voice for GPT-Live with ChatGPT login."
                 )
             return _CodexConfig(model, api, directory, base_url=base_url, api_key=voice_key)
         if oauth:
@@ -485,8 +486,9 @@ class OpenAIProvider(Provider):
             raise ValueError("ChatGPT authentication uses the Responses protocol")
         if live_config is not None or realtime_config is not None:
             raise ValueError(
-                "Selected ChatGPT subscription authentication. GPT-Live and Realtime require "
-                "OpenAI API-key authentication; this saved login can still run the delegated backend."
+                "Selected ChatGPT subscription authentication. The public GPT-Live WebSocket API and Realtime "
+                "require OpenAI API-key authentication; this saved login can still run the delegated backend. "
+                "Use ngn serve browser voice for GPT-Live with ChatGPT login."
             )
         super().__init__(
             ProviderType.OPENAI_COMPATIBLE,
