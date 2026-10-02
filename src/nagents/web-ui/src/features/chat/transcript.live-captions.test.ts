@@ -129,6 +129,17 @@ test("a stale history snapshot retains newly observed speech until persistence c
   assert.deepEqual(state.entries, []);
 });
 
+test("an ordered socket snapshot removes cleared speech even before an earlier history snapshot observed it", () => {
+  const cache = new LiveSessions();
+  const empty = snapshot([]);
+  cache.receive({ type: "snapshot", session_id: "root", epoch: "server", cursor: 1, snapshot: empty });
+  cache.receive({ type: "event", session_id: "root", epoch: "server", cursor: 2, record: caption(1) });
+  let state = cache.receive({ type: "snapshot", session_id: "root", epoch: "server", cursor: 1, snapshot: empty });
+  assert.equal(state.entries.length, 1, "an older cursor cannot clear newer speech");
+  state = cache.receive({ type: "snapshot", session_id: "root", epoch: "server", cursor: 3, snapshot: empty });
+  assert.deepEqual(state.entries, [], "clear/compaction cannot resurrect an event-only caption");
+});
+
 test("only verified voice user provenance can link a delegation to its speech call", () => {
   const verified = { event: "user_message", history_id: "voice-input", text: "A delegated request", voice_verified: true, voice_session_id: "voice-a" };
   let entries = appendEvent([], verified);

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from typing import Literal
 
+from nagents.harness.connection import _codex_files_exist
 from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import _load_config
 
@@ -32,10 +33,15 @@ def resolve_voice_auth(
     if profile.auth == "auto" and auth.logged_in():
         return "chatgpt", auth.credentials
     if profile.auth in {"auto", "codex"}:
+        codex_configured = _codex_files_exist()
+        if profile.auth == "codex" and not codex_configured:
+            return "chatgpt", None
         try:
             selected = _load_config(model=model)
         except CodexConfigError:
-            return ("chatgpt" if profile.auth == "codex" else "api-key"), None
+            # An invalid selected Codex login is not permission to send speech
+            # through another account's environment API key.
+            return ("chatgpt" if profile.auth == "codex" or codex_configured else "api-key"), None
         if selected.oauth:
             return "chatgpt", selected.credentials
     return "api-key", None

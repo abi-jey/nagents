@@ -222,7 +222,14 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
   if (current.position?.epoch === frame.epoch && (frame.cursor < current.position.cursor || (frame.type === "event" && frame.cursor === current.position.cursor))) return current;
   if (frame.type === "event" && current.position && current.position.epoch !== frame.epoch) return current;
   let next = current;
-  if (frame.type === "snapshot") next = applySnapshot(current, frame.snapshot);
+  if (frame.type === "snapshot") {
+    // Socket snapshots are checkpointed against this ordered event cursor.
+    // Every published caption was already committed, so an absent row was
+    // cleared/compacted. Only unversioned HTTP reads need to keep newer speech.
+    const captions = new Set(frame.snapshot.history.filter(row => row.role === "live_caption").map(row => row.history_id));
+    next = applySnapshot({ ...current, entries: current.entries.filter(entry =>
+      entry.kind !== "live_caption" || captions.has(entry.historyId)) }, frame.snapshot);
+  }
   else {
     const event = frame.record;
     let activeRun = current.activeRun;

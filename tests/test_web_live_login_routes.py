@@ -15,9 +15,12 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import CodexCredentials
+from nagents.provider.openai import _load_config
 from nagents.web.live_auth import LOGIN_VOICES
 from nagents.web.live_settings import LIVE_VOICES
 from nagents.web.service import Run
+from tests.providers.test_openai_local import write_config
+from tests.providers.test_openai_local import write_oauth_auth
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
@@ -109,7 +112,9 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[RoutedLiveService]:
         factory: Callable[[str], Agent],
         *,
         login_factory: Callable[[str], LoginVoiceConfig | None],
+        caption_factory: object = None,
     ) -> RoutedLiveService:
+        del caption_factory
         instance = RoutedLiveService(factory, login_factory=login_factory)
         instances.append(instance)
         return instance
@@ -233,7 +238,7 @@ def test_login_sdp_route_admits_the_selected_assistant_and_selected_voice(
             assert "selected chat" in services[0].configs[0].instructions
             assert login.reads == 1
             connection = await app.state.live_settings.connection()
-            assert connection.profile_name == "voice" and harnesses[0].config.provider == "chat"
+            assert connection.profile_name == "voice" and harnesses[0].config.provider_id == "chat"
             assert all(secret not in result.text for secret in (LOGIN_SECRET, KEY_SECRET, ACCOUNT))
             await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
 
@@ -318,5 +323,76 @@ def test_login_voice_can_connect_during_assistant_work_without_unlocking_setting
                 release.set()
                 await active.task
                 state.finish(active)
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("auth", ["auto", "codex"])
+@pytest.mark.parametrize("invalid", ["malformed", "expired", "workspace"])
+def test_invalid_codex_login_never_falls_back_to_an_environment_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    login: LoginState,
+    services: list[RoutedLiveService],
+    auth: str,
+    invalid: str,
+) -> None:
+    login.available = False
+    codex_home = tmp_path / "codex"
+    write_config(codex_home, 'forced_chatgpt_workspace_id = "required-workspace"\n' if invalid == "workspace" else "")
+    if invalid == "malformed":
+        (codex_home / "auth.json").write_text("invalid JSON")
+    else:
+        write_oauth_auth(codex_home, expires=0 if invalid == "expired" else None)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("OPENAI_API_KEY", KEY_SECRET)
+    monkeypatch.setenv("TEST_LOGIN_VOICE_KEY", KEY_SECRET)
+    monkeypatch.setattr("nagents.web.live_auth._load_config", _load_config)
+
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path, auth)) as (_, client, headers, harnesses):
+            revision = await configure(client, headers)
+            capability = (await client.get("/api/live", headers=headers)).json()
+            assert capability["voice_auth"] == "chatgpt"
+            assert not capability["available"] and not capability["key_configured"]
+            response = await client.post(
+                "/api/live/sessions",
+                headers=headers,
+                json={"revision": revision, "session_id": harnesses[0].session_id, "sdp": OFFER},
+            )
+            assert response.status_code == 503
+            assert not services[0].browser_calls and not services[0].relay_calls
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("auth", ["auto", "codex"])
+def test_only_auto_may_use_an_api_key_when_no_codex_configuration_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    login: LoginState,
+    services: list[RoutedLiveService],
+    auth: str,
+) -> None:
+    login.available = False
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "absent-codex"))
+    monkeypatch.setenv("OPENAI_API_KEY", KEY_SECRET)
+    monkeypatch.setenv("TEST_LOGIN_VOICE_KEY", KEY_SECRET)
+    monkeypatch.setattr("nagents.web.live_auth._load_config", _load_config)
+
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path, auth)) as (_, client, headers, harnesses):
+            revision = await configure(client, headers)
+            capability = (await client.get("/api/live", headers=headers)).json()
+            assert capability["available"] is (auth == "auto")
+            assert capability["voice_auth"] == ("api-key" if auth == "auto" else "chatgpt")
+            response = await client.post(
+                "/api/live/sessions",
+                headers=headers,
+                json={"revision": revision, "session_id": harnesses[0].session_id},
+            )
+            assert response.status_code == (201 if auth == "auto" else 503)
+            assert bool(services[0].relay_calls) is (auth == "auto")
+            assert not services[0].browser_calls
 
     asyncio.run(check())
