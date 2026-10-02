@@ -19,6 +19,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
 from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live_bridge import voice_display
 from nagents.web.live_bridge import voice_prompt
 from nagents.web.service import Run
 from tests.support.web import ControlledHarness
@@ -64,6 +65,32 @@ def test_voice_prompt_preserves_speaker_data_and_limits_transcript() -> None:
     )
     assert "Earlier speech is omitted" in voice_prompt(long)
     assert "a newer request" in voice_prompt(long)
+
+
+def test_voice_display_preserves_new_caller_fragments_and_excludes_assistant_speech() -> None:
+    first = [{"speaker": "user", "text": "Earlier request", "start_ms": 0, "end_ms": 5}]
+    display, seen = voice_display(json.dumps(first), set())
+    assert display == "Earlier request"
+    current = json.dumps(
+        [
+            *first,
+            {"speaker": "assistant", "text": "Earlier answer", "start_ms": 10, "end_ms": 20},
+            {"speaker": "user", "text": "Please", "start_ms": 25, "end_ms": 30},
+            {"speaker": "user", "text": " calculate", "start_ms": 30, "end_ms": 35},
+            {"speaker": "user", "text": " two plus two.", "start_ms": 35, "end_ms": 40},
+            {"speaker": "assistant", "text": "One moment", "start_ms": 40, "end_ms": 45},
+        ]
+    )
+    display, seen = voice_display(current, seen)
+    assert display == "Please calculate two plus two."
+    assert voice_display(current, seen)[0] == display  # A same-context delegation still has a readable request.
+    repeated = json.dumps(
+        [
+            {"speaker": "user", "text": "very", "start_ms": 50, "end_ms": 55},
+            {"speaker": "user", "text": " very good", "start_ms": 55, "end_ms": 60},
+        ]
+    )
+    assert voice_display(repeated, seen)[0] == "very very good"
 
 
 def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_provider(tmp_path: Path) -> None:
@@ -264,10 +291,12 @@ def test_voice_keeps_its_original_chat_when_another_tab_selects_a_new_one(tmp_pa
         asyncio.run(scenario())
 
 
-def test_ending_voice_cancels_and_joins_the_main_assistant_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize("outcome", ["complete", "stop", "shutdown"])
+def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop(tmp_path: Path, outcome: str) -> None:
     async def scenario() -> None:
         entered = asyncio.Event()
         stopped = asyncio.Event()
+        release = asyncio.Event()
 
         async def generate(
             provider: HarnessProvider,
@@ -279,10 +308,10 @@ def test_ending_voice_cancels_and_joins_the_main_assistant_run(tmp_path: Path) -
         ) -> AsyncIterator[Event]:
             entered.set()
             try:
-                await asyncio.Event().wait()
+                await release.wait()
             finally:
                 stopped.set()
-            yield TextDoneEvent(text="Never finished")
+            yield TextDoneEvent(text="Completed after voice ended")
 
         with (
             patch.object(ControlledHarness, "run", Harness.run),
@@ -300,8 +329,26 @@ def test_ending_voice_cancels_and_joins_the_main_assistant_run(tmp_path: Path) -
                 assert run is not None
                 work.cancel()
                 assert (await asyncio.gather(work, return_exceptions=True))[0].__class__ is asyncio.CancelledError
-                assert stopped.is_set() and run.finished and run.outcome == "cancelled"
-                assert state.active is None and harnesses[0]._busy == ""
+                assert not stopped.is_set() and not run.finished and state.active is run
+                assert not run.task.done() and harnesses[0]._busy
+                if outcome == "complete":
+                    release.set()
+                    async with asyncio.timeout(5):
+                        await run.task
+                    assert run.finished and run.outcome == "completed"
+                    assert run.final_text == "Completed after voice ended"
+                    assert any(
+                        "Completed after voice ended" in str(message.content)
+                        for message in await harnesses[0].history()
+                    )
+                elif outcome == "stop":
+                    await state.stop(run)
+                    assert run.finished and run.outcome == "cancelled"
+                else:
+                    assert not run.task.done()  # Host shutdown below must still own this task.
+            assert stopped.is_set() and run.finished
+            assert run.outcome == ("completed" if outcome == "complete" else "cancelled")
+            assert state.active is None and harnesses[0]._busy == ""
 
     asyncio.run(scenario())
 
@@ -323,6 +370,35 @@ def test_voice_bridge_waits_for_host_reservation_instead_of_losing_speech(tmp_pa
                     assert not pending.done() and state.active is None
                 assert await pending == "Answered after the reservation"
                 assert state.active is None
+
+    asyncio.run(scenario())
+
+
+def test_stopping_the_assistant_does_not_cancel_its_voice_waiter(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        entered = asyncio.Event()
+
+        async def produce(run: Run, prompt: str) -> None:
+            if "first request" in prompt:
+                entered.set()
+                await asyncio.Event().wait()
+            run.final_text = "The next voice request still works"
+
+        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
+            state = app.state.web
+            bridge = MainAgentBridge(state, state.selected_session_id)
+            with patch.object(state, "produce_session", produce):
+                waiting = asyncio.create_task(bridge.handle(speech("first request")))
+                async with asyncio.timeout(5):
+                    await entered.wait()
+                    run = state.active
+                    assert run is not None
+                    await state.stop(run)
+                    assert await waiting == (
+                        "The assistant request was stopped. Check the chat for any actions already completed."
+                    )
+                assert not waiting.cancelled() and run.finished and state.active is None
+                assert await bridge.handle(speech("second request")) == "The next voice request still works"
 
     asyncio.run(scenario())
 
@@ -437,5 +513,5 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
 
 def _config(path: Path) -> HarnessConfig:
     return HarnessConfig(
-        workspace=path, data_dir=path / "data", provider="anthropic", model="chat-model", auth="api-key"
+        workspace=path, data_dir=path / "data", provider="anthropic", auth="api-key", model="chat-model"
     )

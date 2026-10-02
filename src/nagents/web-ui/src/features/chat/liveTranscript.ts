@@ -1,7 +1,7 @@
 import type { ActiveRun, Snapshot, WireEvent } from "../../types.js";
 import type { Position, SessionFrame } from "../../api/subscription.js";
 import type { QueuedMessage } from "../../api/messages.js";
-import { appendEvent, fromHistory, sameTranscriptUser, type Entry } from "./transcript.js";
+import { appendEvent, fromHistory, sameLiveCaption, sameTranscriptUser, type Entry } from "./transcript.js";
 
 export type LiveTranscript = {
   entries: Entry[];
@@ -22,6 +22,7 @@ export function pendingApprovals(run?: ActiveRun): WireEvent[] {
   return [...pending.values()];
 }
 function compatible(saved: Entry, previous: Entry): boolean {
+  if (saved.kind === "live_caption" || previous.kind === "live_caption") return sameLiveCaption(saved, previous);
   if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
   if (saved.abandoned || previous.abandoned) return false;
   if (saved.callPosition !== undefined && previous.callPosition !== undefined && saved.callPosition !== previous.callPosition) return false;
@@ -51,6 +52,7 @@ function turnOwners(entries: Entry[]): Map<Entry, Entry> {
   const inputs = new Map<string, Entry>();
   let savedInput: Entry | undefined;
   for (const entry of entries) {
+    if (entry.kind === "live_caption") continue;
     if (!entry.taskId && (entry.kind === "user" || entry.kind === "context")) {
       if (entry.historyIndex !== undefined) savedInput = entry;
       if (entry.runId && entry.kind === "user") inputs.set(entry.runId, entry);
@@ -112,18 +114,21 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   };
   function keep(entry: Entry) {
     if (used.has(entry.id) || matchedIds.has(entry.id)) return;
-    if (!entry.delivery && (entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
+    const freshCaption = entry.kind === "live_caption" && !knownHistory?.some((row) => row.history_id === entry.historyId);
+    if (!entry.delivery && (freshCaption || entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
   }
   for (const [position, entry] of roots.entries()) {
     const index = matches[position];
     if (index < 0) {
-      const activity = entry.origin && announceNewUsers ? [...previous, ...next].reduce((latest, item) => Math.max(latest, item.activity || 0), 0) + 1 : entry.activity;
-      next.push({ ...entry, id: entry.delivery ? entry.id : id(), activity }); continue;
+      const activity = (entry.origin || entry.liveCaption) && announceNewUsers ? [...previous, ...next].reduce((latest, item) => Math.max(latest, item.activity || 0), 0) + 1 : entry.activity;
+      next.push({ ...entry, id: entry.delivery || entry.kind === "live_caption" ? entry.id : id(), activity }); continue;
     }
     for (let i = after; i < index; i++) keep(previous[i]);
     const old = previous[index];
-    next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "user"
+    next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "live_caption"
+      ? { ...entry, id: old.id, activity: old.activity } : entry.kind === "user"
       ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, activity: old.activity,
+          voice: entry.voice, voiceSessionId: entry.voiceSessionId,
           origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext,
            channel: entry.channel, parts: entry.parts, uploads: entry.uploads }
       : { ...entry, ...old, historyId: entry.historyId, resultHistoryId: entry.resultHistoryId,
@@ -177,7 +182,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
           : !entry.streaming && !!owner && i > (positions.get(owner) ?? -1) &&
             !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item))));
       if (old) { claimed.add(old.id); if (owner) positions.set(owner, entries.indexOf(old)); }
-      return { ...entry, id: old?.id || `run:${run.id}:${index}`,
+      return { ...entry, id: old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`),
         historyId: entry.historyId || old?.historyId, resultHistoryId: entry.resultHistoryId || old?.resultHistoryId,
         historyIndex: old?.historyIndex, historyTurn: old?.historyTurn,
       };
@@ -217,7 +222,14 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
   if (current.position?.epoch === frame.epoch && (frame.cursor < current.position.cursor || (frame.type === "event" && frame.cursor === current.position.cursor))) return current;
   if (frame.type === "event" && current.position && current.position.epoch !== frame.epoch) return current;
   let next = current;
-  if (frame.type === "snapshot") next = applySnapshot(current, frame.snapshot);
+  if (frame.type === "snapshot") {
+    // Socket snapshots are checkpointed against this ordered event cursor.
+    // Every published caption was already committed, so an absent row was
+    // cleared/compacted. Only unversioned HTTP reads need to keep newer speech.
+    const captions = new Set(frame.snapshot.history.filter(row => row.role === "live_caption").map(row => row.history_id));
+    next = applySnapshot({ ...current, entries: current.entries.filter(entry =>
+      entry.kind !== "live_caption" || captions.has(entry.historyId)) }, frame.snapshot);
+  }
   else {
     const event = frame.record;
     let activeRun = current.activeRun;

@@ -369,6 +369,11 @@ def test_delegation_before_transcript_waits_for_ready() -> None:
 
         client = live.ClientDelegations(backend, collect_into(output))
         client.observe(delegation("task"))  # May arrive before its transcript.
+        # Empty transcription deltas and assistant backchannels are not caller
+        # task context. Preserve their exact fragments while retaining the notice.
+        client.observe(transcript("session.output_transcript.delta", "Go ahead.", 0))
+        client.observe(transcript("session.input_transcript.delta", "", 5))
+        client.observe(transcript("session.input_transcript.delta", " \t", 10))
         worker = asyncio.create_task(client.run())
         try:
             await asyncio.sleep(0.05)
@@ -380,6 +385,56 @@ def test_delegation_before_transcript_waits_for_ready() -> None:
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "role,text,ready", [("assistant", "Hello", False), ("user", " \n", False), ("user", "hi", True)]
+)
+def test_only_substantive_user_history_makes_delegations_ready(
+    monkeypatch: pytest.MonkeyPatch, role: str, text: str, ready: bool
+) -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+
+        async def backend(context: str, identifier: str) -> str:
+            calls.append(context)
+            return "Verified answer"
+
+        async def handler(request: web.Request) -> web.WebSocketResponse:
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            await socket.receive_json()
+            await socket.send_json({"type": "session.started"})
+            await socket.send_json(delegation("early"))
+            await asyncio.sleep(0.05)
+            assert bool(calls) is ready
+            if not ready:
+                await socket.send_json(transcript("session.input_transcript.delta", "A real caller request", 10))
+            async for message in socket:
+                if message.json()["type"] == "session.commentary.append":
+                    await socket.send_json({"type": "session.closed"})
+                    break
+            return socket
+
+        options = LiveConfig(
+            delegation="client", history=({"role": role, "content": [{"type": "input_text", "text": text}]},)
+        )
+        async with live_server(monkeypatch, handler), asyncio.timeout(HANG_GUARD):
+            await live.converse(
+                options.session(),
+                "fixture-key",
+                backend,
+                AudioDuplex(input=BlockingMic([])),
+                CollectingSpeaker(),
+                collect_into([]),
+                _LiveUpdates(),
+                options,
+            )
+        assert len(calls) == 1
+        if not ready:
+            assert "A real caller request" in calls[0]
 
     asyncio.run(scenario())
 

@@ -25,7 +25,7 @@ from nagents.provider import ProviderType
 from nagents.session import SessionManager
 from nagents.types import RetryConfig
 
-from .live_settings import LIVE_VOICES
+from .live_login import LoginVoiceConfig
 from .live_settings import GlobalVoiceInput
 from .live_settings import LiveSettingsInput
 from .live_settings import Revision
@@ -42,12 +42,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger("uvicorn.error")
 SessionId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
 Cursor = Annotated[int, Query(ge=0, le=2**53 - 1)]
+ASSISTANT_VOICE_INSTRUCTIONS = (
+    "You are the voice of the assistant in the selected chat. Keep spoken replies concise. "
+    "Delegate reasoning, workspace requests, and actions to the existing assistant backend. "
+    "That assistant retains the chat history, configured provider, tools, and approval rules. "
+    "Speak its verified results and ask for clarification when needed. "
+    "Never claim a tool action succeeded or was cancelled without confirmation from the assistant."
+)
 
 
 class SessionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     voice: str = Field(default="", max_length=64)
+    sdp: str = Field(default="", max_length=65536)
     revision: Revision
     session_id: str = Field(default="", max_length=80, pattern=r"^$|^ngn-[a-zA-Z0-9-]+$")
 
@@ -55,24 +63,30 @@ class SessionInput(BaseModel):
 def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
     """Local readiness only: never probe the provider, read a login, or create an agent."""
     values = connection.values
+    if values.connection_id and connection.profile is None:
+        return "The saved voice connection no longer exists. Choose a connection in Voice settings."
     if connection.profile is not None and connection.profile.kind not in {
         "openai",
         "openai_compatible",
         "foundry",
         "azure_openai_compatible_v1",
     }:
-        return "The active provider does not support GPT-Live. Select an OpenAI or Foundry connection."
+        return "The selected voice connection does not support GPT-Live. Choose OpenAI or Foundry in Voice settings."
     if demo:
         return "GPT-Live is unavailable in offline demo mode. Restart ngn serve without --demo."
     if not values.enabled:
         return "GPT-Live is disabled. Enable it in Voice settings."
+    if connection.voice_auth == "chatgpt" and values.backend_mode != "assistant":
+        return "ChatGPT voice uses your main assistant. Choose Main assistant in Voice settings."
     if values.provider == "azure_openai_compatible_v1" and not values.base_url:
         return "The Azure v1 Live provider requires an API base URL. Open Provider connections to set it."
     if not connection.key_configured:
+        if connection.voice_auth == "chatgpt":
+            return "Sign in to the selected ChatGPT or Codex connection, then refresh Voice settings."
         if connection.profile is not None:
             return (
                 f"Set ${connection.profile.key_env} in the ngn serve environment, then restart the server. "
-                "ChatGPT/Codex login does not authorize Live."
+                "Or choose a ChatGPT/Codex voice connection in Voice settings."
             )
         return "Open Global or Workspace settings → Provider connections to configure Live credentials."
     return ""
@@ -92,16 +106,18 @@ def capabilities(
         "available": not reason,
         "reason": reason,
         "provider": values.provider,
-        "model": values.model,
+        "model": connection.voice_model,
         "backend_model": values.backend_model,
         "backend_mode": values.backend_mode,
         "assistant": assistant or {},
         "voice": values.voice,
-        "voices": list(LIVE_VOICES),
+        "voices": list(connection.voices),
         "active_session_id": active_session_id,
         "revision": connection.revision,
         "enabled": values.enabled,
         "key_configured": connection.key_configured,
+        "voice_auth": connection.voice_auth,
+        "transport": "webrtc" if connection.voice_auth == "chatgpt" else "websocket",
     }
 
 
@@ -116,7 +132,7 @@ def create_agent(
     reason = unavailable_reason(connection, demo=demo)
     if reason:
         raise HTTPException(503, reason)
-    if voice and voice not in LIVE_VOICES:
+    if (voice or connection.values.voice) not in connection.voices:
         raise HTTPException(422, "Choose a supported Live voice.")
     values = connection.values
     if values.backend_mode == "assistant" and client_handler is None:
@@ -157,12 +173,35 @@ def create_agent(
         provider,
         SessionManager(Path(":memory:")),
         system_prompt=(
-            "You are a helpful AI voice assistant. Keep spoken replies concise. "
-            "Delegate reasoning to your hosted backend. You have no access to the user's workspace or chat history."
+            ASSISTANT_VOICE_INSTRUCTIONS
+            if values.backend_mode == "assistant"
+            else (
+                "You are a helpful AI voice assistant. Keep spoken replies concise. "
+                "Delegate reasoning to your hosted backend. You have no access to the user's workspace or chat history."
+            )
         ),
         tools=[],
         compactor=None,
         save_tool_outputs=False,
+    )
+
+
+def create_login_config(
+    connection: "LiveConnection", voice: str, handler: Callable[[str], Awaitable[str]]
+) -> LoginVoiceConfig:
+    reason = unavailable_reason(connection, demo=False)
+    if reason:
+        raise HTTPException(503, reason)
+    if connection.login_credentials is None:
+        raise HTTPException(503, "Sign in to the selected ChatGPT or Codex connection first.")
+    if (voice or connection.values.voice) not in connection.voices:
+        raise HTTPException(422, "Choose a supported ChatGPT voice.")
+    return LoginVoiceConfig(
+        credentials=connection.login_credentials,
+        model=connection.voice_model,
+        voice=voice or connection.values.voice,
+        instructions=ASSISTANT_VOICE_INSTRUCTIONS,
+        handler=handler,
     )
 
 
@@ -199,12 +238,14 @@ def register(
 
     @app.post("/api/live/sessions", status_code=201)
     async def create(body: SessionInput) -> dict[str, object]:
-        if body.voice and body.voice not in LIVE_VOICES:
-            raise HTTPException(422, "Choose a supported Live voice.")
         current = settings()
         host = state()
-        with host.idle():
+        # Voice can join an already-working assistant. Reserve configuration and
+        # selection while provisioning without cancelling or replacing its run.
+        with host.idle(allow_running=True):
             async with current.admit(body.revision, body.session_id) as connection:
+                if body.voice and body.voice not in connection.voices:
+                    raise HTTPException(422, "Choose a supported Live voice.")
                 reason = unavailable_reason(connection, demo=current.demo)
                 if reason:
                     raise HTTPException(503, reason)
@@ -227,7 +268,14 @@ def register(
                             409,
                             "This chat uses a pinned designed agent. Select a main assistant chat for voice.",
                         )
-                result = await service().create_stream(body.voice)
+                if connection.voice_auth == "chatgpt":
+                    if not body.sdp:
+                        raise HTTPException(422, "ChatGPT voice requires a browser WebRTC offer.")
+                    result = await service().create(body.sdp, body.voice)
+                else:
+                    if body.sdp:
+                        raise HTTPException(422, "This voice connection uses the server audio relay.")
+                    result = await service().create_stream(body.voice)
                 logger.info("Live connection created: session=%s", result.get("session_id", ""))
                 return result
 

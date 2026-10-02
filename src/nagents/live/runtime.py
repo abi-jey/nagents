@@ -224,17 +224,21 @@ class ClientDelegations:
         kind = event.get("type")
         if kind in {"session.input_transcript.delta", "session.output_transcript.delta"}:
             user = kind == "session.input_transcript.delta"
+            text = event.get("delta")
+            if not isinstance(text, str):
+                raise ValueError("Live transcript deltas must contain text")
             self.fragments.append(
                 {
                     "speaker": "user" if user else "assistant",
-                    "text": event["delta"],
+                    "text": text,
                     "start_ms": event["start_ms"],
                     "end_ms": event["end_ms"],
                 }
             )
             if user:
                 self.revision += 1
-                self.ready.set()
+                if text.strip():
+                    self.ready.set()
         elif kind == "session.delegation.created":
             if not self.enabled:
                 return
@@ -431,8 +435,8 @@ async def converse(
                     "end_ms": 0,
                 }
             )
-        if options.history:
-            delegations.ready.set()
+            if message["role"] == "user" and parts[0]["text"].strip():
+                delegations.ready.set()
         delegations.updates = updates
         delegations.enabled = options.handle_delegations
         delegations.timeout = options.backend_timeout

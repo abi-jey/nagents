@@ -1,9 +1,9 @@
 import { request, RequestError } from "../../api/client.js";
 import type { LiveSettingsInput, LiveSettingsSnapshot, LiveSettingsValues, VoiceOverrides, VoicePreferences, VoiceScope } from "./types.js";
 
-const preferenceKeys = ["enabled", "backend_mode", "model", "backend_model", "voice"] as const;
+const preferenceKeys = ["enabled", "connection_id", "backend_mode", "model", "backend_model", "voice"] as const;
 function preferences(values: LiveSettingsValues): VoicePreferences {
-  return { enabled: values.enabled, backend_mode: values.backend_mode, model: values.model, backend_model: values.backend_model, voice: values.voice };
+  return { enabled: values.enabled, ...(values.connection_id !== undefined ? { connection_id: values.connection_id } : {}), backend_mode: values.backend_mode, model: values.model, backend_model: values.backend_model, voice: values.voice };
 }
 
 export function settingsApi(token: string) {
@@ -83,7 +83,7 @@ export class LiveSettingsController {
     const { snapshot, values, overrides, scope, loading, saving } = this.state;
     if (!snapshot || !values || scope !== "workspace" || loading || saving) return;
     const next = { ...overrides };
-    if (enabled) Object.assign(next, { [key]: values[key] });
+    if (enabled) Object.assign(next, { [key]: key === "connection_id" ? values.connection_id || "" : values[key] });
     else delete next[key];
     this.update({ overrides: next, values: enabled ? values : { ...values, [key]: snapshot.global_preferences[key] }, dirty: true });
   }

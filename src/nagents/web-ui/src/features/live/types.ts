@@ -1,3 +1,10 @@
+export type LiveTransport = "websocket" | "webrtc";
+
+export interface AudioDeviceSelection {
+  inputId: string;
+  outputId: string;
+}
+
 export interface LiveCapability {
   available: boolean;
   reason: string;
@@ -12,16 +19,20 @@ export interface LiveCapability {
   voice: string;
   voices: string[];
   active_session_id: string;
+  transport?: LiveTransport;
+  voice_auth?: "chatgpt" | "api-key" | "entra";
 }
 
 export interface LiveCreated {
   session_id: string;
   model: string;
   voice: string;
+  sdp?: string;
 }
 
 export interface LiveSettingsValues {
   enabled: boolean;
+  connection_id?: string;
   backend_mode: "assistant" | "hosted";
   provider: string;
   model: string;
@@ -31,7 +42,7 @@ export interface LiveSettingsValues {
 }
 
 export type VoiceScope = "global" | "workspace";
-export type VoicePreferences = Pick<LiveSettingsValues, "enabled" | "backend_mode" | "model" | "backend_model" | "voice">;
+export type VoicePreferences = Pick<LiveSettingsValues, "enabled" | "connection_id" | "backend_mode" | "model" | "backend_model" | "voice">;
 export type VoiceOverrides = Partial<VoicePreferences>;
 
 export interface LiveSettingsSnapshot {
@@ -40,16 +51,18 @@ export interface LiveSettingsSnapshot {
   key_configured: boolean;
   providers: string[];
   voices: string[];
+  connections?: { name: string; provider: string; scope: VoiceScope }[];
   source?: "providers";
   profile_name?: string;
   connection_scope?: "global" | "workspace";
   api_key_env?: string;
   auth?: string;
+  voice_auth?: "chatgpt" | "api-key" | "entra";
   live_supported?: boolean;
   scope: VoiceScope;
   global_preferences: VoicePreferences;
   overrides: VoiceOverrides;
-  origins: Record<keyof VoicePreferences, VoiceScope>;
+  origins: { [Key in keyof VoicePreferences]: VoiceScope };
 }
 
 export type LiveSettingsInput = {
@@ -107,15 +120,18 @@ export interface LiveState {
 
 export interface MediaHandlers {
   connected(): void;
+  ended(): void;
   failed(message: string): void;
   playbackBlocked(blocked: boolean): void;
 }
 
 export interface LiveMedia {
   prepare(signal: AbortSignal): Promise<void>;
-  connect(sessionId: string, token: string): Promise<void>;
+  offer?(): string;
+  connect(sessionId: string, token: string, answer?: string): Promise<void>;
   muteInput(muted: boolean): void;
   muteOutput(muted: boolean): void;
   play(): Promise<void>;
+  stop?(): void;
   close(): void;
 }

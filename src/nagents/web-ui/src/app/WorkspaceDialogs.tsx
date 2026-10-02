@@ -17,11 +17,12 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
   const { sessions, chat } = client;
   const config = sessions.config;
   function openRestored(id: string) { client.trashController.close(); void select(id); }
-  function closeLive() { closePanel(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }
+  function closeLive() { client.closeLive(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }
+  function configureVoiceConnection() { client.closeLive(); client.settings.show(); }
   return <>
     {client.panel === "designer" && config && <Designer token={config.token} configureChannels={client.channels.show} close={closePanel} />}
     {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={client.busy} close={closePanel} />}
-    {client.panel === "live" && config && <LiveDialog key={config.token} token={config.token} sessionId={sessions.sessionId} close={closeLive} />}
+    {client.liveOpen && config && <LiveDialog key={`${config.token}:${sessions.sessionId}`} token={config.token} sessionId={sessions.sessionId} close={closeLive} configureConnection={configureVoiceConnection} />}
     {client.settings.open && <SettingsDialog settings={client.settings} />}
     {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController}
       permanent={(item) => client.deletionController.showTrash(item)} openSession={openRestored}

@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents.agent import Agent
+    from nagents.web.live_login import LoginVoiceConfig
 
 SECRET = "sk-fixture-live-private-key"
 SESSION = "live-fixture-session"
@@ -45,7 +46,12 @@ SESSION = "live-fixture-session"
 
 def configuration(path: Path, *, demo: bool = False) -> HarnessConfig:
     return HarnessConfig(
-        workspace=path, data_dir=path / "data", provider="anthropic", model="chat-only-model", auth="api-key", demo=demo
+        workspace=path,
+        data_dir=path / "data",
+        provider="anthropic",
+        auth="api-key",
+        model="chat-only-model",
+        demo=demo,
     )
 
 
@@ -117,7 +123,13 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> None:
 def services(monkeypatch: pytest.MonkeyPatch) -> list[FakeLiveService]:
     instances: list[FakeLiveService] = []
 
-    def factory(agent_factory: Callable[[str], Agent]) -> FakeLiveService:
+    def factory(
+        agent_factory: Callable[[str], Agent],
+        *,
+        login_factory: Callable[[str], LoginVoiceConfig | None] | None = None,
+        caption_factory: object = None,
+    ) -> FakeLiveService:
+        del login_factory, caption_factory
         service = FakeLiveService(agent_factory)
         instances.append(service)
         return service
@@ -204,6 +216,31 @@ def test_factory_uses_only_committed_key_and_tool_free_hosted_agent(
         finally:
             await agent.close()
             await second.close()
+
+    asyncio.run(check())
+
+
+def test_factory_configures_voice_as_the_existing_assistants_frontend() -> None:
+    async def handle(transcript: str) -> str:
+        return "The existing assistant's verified result"
+
+    async def check() -> None:
+        values = LiveValues.model_validate(
+            {**LiveValues.defaults().model_dump(), "enabled": True, "backend_mode": "assistant"}
+        )
+        agent = create_agent(LiveConnection(values, "1" * 64, SecretStr(SECRET)), client_handler=handle)
+        try:
+            config = agent.provider.live_config
+            assert config is not None and config.client_handler is handle and config.delegation == "client"
+            payload = agent.live_configuration()
+            assert payload["delegation"] == {"type": "client"}
+            assert isinstance(payload["instructions"], str)
+            assert "voice of the assistant in the selected chat" in payload["instructions"]
+            assert "chat history, configured provider, tools, and approval rules" in payload["instructions"]
+            assert "hosted backend" not in payload["instructions"]
+            assert agent.tool_registry.get_all() == [] and agent.session.db_path == Path(":memory:")
+        finally:
+            await agent.close()
 
     asyncio.run(check())
 

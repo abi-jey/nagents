@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import asynccontextmanager
 from contextlib import closing
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -27,11 +28,13 @@ from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
+from . import live_captions
 from ._async import finish_on_cancel
 from .local_delivery import presentation
 from .routing import RoutingStore
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from collections.abc import Callable
     from collections.abc import Iterator
     from pathlib import Path
@@ -46,6 +49,17 @@ if TYPE_CHECKING:
 class Ingress:
     work: Work
     run_id: str
+    owner: asyncio.Task[object] | None = None
+    expected: tuple[str | None, ...] = ()
+    consumed: bool = False
+
+
+@dataclass
+class VoiceInput:
+    session_id: str
+    run_id: str
+    text: str
+    voice_session_id: str = ""
     owner: asyncio.Task[object] | None = None
     expected: tuple[str | None, ...] = ()
     consumed: bool = False
@@ -67,6 +81,10 @@ class _InputIdentity(AgentPlugin):
             # this point, or by other tasks, cannot steal the ingress identity.
             ingress.owner = asyncio.current_task()
             ingress.expected = self.session._message_values(context.session_id, message)
+        voice = self.session.voice.get()
+        if voice is not None and not voice.consumed and not voice.expected and context.session_id == voice.session_id:
+            voice.owner = asyncio.current_task()
+            voice.expected = self.session._message_values(context.session_id, message)
         return message
 
 
@@ -76,6 +94,7 @@ class WebHistory(_HarnessSession):
         self.store = InboxStore(path, "web-history", 1000)
         self.received = received
         self.ingress: ContextVar[Ingress | None] = ContextVar("ngn_web_ingress", default=None)
+        self.voice: ContextVar[VoiceInput | None] = ContextVar("ngn_web_voice_input", default=None)
         self.identity = _InputIdentity(self)
         self._annotations_ready = False
         self._annotations_lock = asyncio.Lock()
@@ -89,10 +108,24 @@ class WebHistory(_HarnessSession):
                 if not self._annotations_ready:
 
                     def create(db: sqlite3.Connection) -> None:
+                        live_captions.initialize(db)
                         db.execute(
                             "CREATE TABLE IF NOT EXISTS ngn_web_message_origins ("
                             "history_id INTEGER PRIMARY KEY REFERENCES v2_messages(id), "
                             "inbox_id INTEGER NOT NULL UNIQUE REFERENCES ngn_web_inbox(id))"
+                        )
+                        db.execute(
+                            "CREATE TABLE IF NOT EXISTS ngn_web_voice_messages ("
+                            "history_id INTEGER PRIMARY KEY REFERENCES v2_messages(id), "
+                            "transcript TEXT NOT NULL)"
+                        )
+                        # Core clear/delete operations use independent SQLite
+                        # connections. A trigger keeps projection removal atomic
+                        # even when that connection has foreign_keys disabled.
+                        db.execute(
+                            "CREATE TRIGGER IF NOT EXISTS ngn_web_voice_message_delete "
+                            "BEFORE DELETE ON v2_messages BEGIN "
+                            "DELETE FROM ngn_web_voice_messages WHERE history_id = OLD.id; END"
                         )
 
                     await self.store._transaction(create)
@@ -106,9 +139,44 @@ class WebHistory(_HarnessSession):
         finally:
             self.ingress.reset(token)
 
+    @asynccontextmanager
+    async def voice_request(
+        self, session_id: str, run_id: str, text: str, *, voice_session_id: str = ""
+    ) -> AsyncIterator[None]:
+        """Project one admitted voice input without rewriting its model context."""
+        if not text.strip() or len(text) > 12000:
+            raise ValueError("A voice request needs a bounded caller transcript")
+        token = self.voice.set(VoiceInput(session_id, run_id, text, voice_session_id=voice_session_id))
+        try:
+            # Harness sets a blank title from its prompt before writing history.
+            # Claim that same blank slot with the caller's words before running it.
+            def title(db: sqlite3.Connection) -> None:
+                if voice_session_id and not live_captions.register(db, session_id, voice_session_id):
+                    raise ValueError("This voice call was invalidated when chat history was cleared. Reconnect voice.")
+                db.execute(
+                    "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
+                    (" ".join(text.split())[:80], session_id),
+                )
+
+            await self.store._transaction(title)
+            yield
+        finally:
+            self.voice.reset(token)
+
     async def add_message(self, session_id: str, message: Message) -> int:
         ingress = self.ingress.get()
         values = self._message_values(session_id, message)
+        voice = self.voice.get()
+        if (
+            voice is not None
+            and not voice.consumed
+            and voice.owner is asyncio.current_task()
+            and voice.session_id == session_id
+            and voice.expected
+        ):
+            voice.consumed = True
+            if message.role == "user" and values == voice.expected:
+                return await self._add_voice(voice, values)
         if (
             ingress is None
             or ingress.consumed
@@ -159,6 +227,31 @@ class WebHistory(_HarnessSession):
         # notification before propagating; restart snapshots never guess IDs.
         return await finish_on_cancel(persist())
 
+    async def _add_voice(self, voice: VoiceInput, values: tuple[str | None, ...]) -> int:
+        async def persist() -> int:
+            def insert(db: sqlite3.Connection) -> tuple[int, dict[str, object]]:
+                cursor = db.execute(
+                    "INSERT INTO v2_messages(session_id, role, content, tool_calls, tool_call_id, name) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    values,
+                )
+                history_id = cursor.lastrowid
+                assert history_id is not None
+                db.execute("UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (voice.session_id,))
+                db.execute("INSERT INTO ngn_web_voice_messages VALUES (?, ?)", (history_id, voice.text))
+                if voice.voice_session_id:
+                    db.execute("INSERT INTO ngn_web_voice_origins VALUES (?, ?)", (history_id, voice.voice_session_id))
+                db.row_factory = sqlite3.Row
+                row = db.execute(self._select() + " WHERE m.id = ?", (history_id,)).fetchone()
+                assert row is not None
+                return history_id, self._project(row)
+
+            history_id, record = await self.store._transaction(insert)
+            self.received(voice.run_id, record)
+            return history_id
+
+        return await finish_on_cancel(persist())
+
     @staticmethod
     def _select() -> str:
         return (
@@ -168,8 +261,11 @@ class WebHistory(_HarnessSession):
             "i.prompt AS origin_prompt, (SELECT json_group_array(json_object('upload_id', u.upload_id, "
             "'filename', u.filename, 'media_type', u.media_type, 'byte_length', u.byte_length)) "
             "FROM (SELECT upload_id, filename, media_type, byte_length, inbox_id, position "
-            "FROM ngn_web_uploads ORDER BY position) u WHERE u.inbox_id = i.id) AS upload_metadata "
+            "FROM ngn_web_uploads ORDER BY position) u WHERE u.inbox_id = i.id) AS upload_metadata, "
+            "v.transcript AS voice_transcript, vo.voice_session_id AS voice_session_id "
             "FROM v2_messages m "
+            "LEFT JOIN ngn_web_voice_messages v ON v.history_id = m.id "
+            "LEFT JOIN ngn_web_voice_origins vo ON vo.history_id = m.id "
             "LEFT JOIN ngn_web_message_origins o ON o.history_id = m.id "
             "LEFT JOIN ngn_web_inbox i ON i.id = o.inbox_id AND i.session_id = m.session_id"
         )
@@ -190,6 +286,11 @@ class WebHistory(_HarnessSession):
             "ingress_id": "",
             "source_verified": False,
         }
+        if row["voice_transcript"] is not None and message.role == "user":
+            record.update(content=str(row["voice_transcript"]), parts=[], voice_verified=True)
+            if row["voice_session_id"]:
+                record["voice_session_id"] = row["voice_session_id"]
+            return record
         if row["origin_id"] is None or message.role != "user":
             return record
         message_id = str(row["origin_message_id"])
@@ -292,9 +393,19 @@ class WebHistory(_HarnessSession):
                     }
                     for receipt in deliveries.earlier
                 ]
-                return [*earlier, *records]
+                return [*earlier, *live_captions.merge(db, session_id, records)]
 
         return await finish_on_cancel(asyncio.to_thread(read))
+
+    async def add_live_caption(
+        self, session_id: str, voice_session_id: str, event: dict[str, object]
+    ) -> dict[str, object]:
+        return await self.store._transaction(lambda db: live_captions.append(db, session_id, voice_session_id, event))
+
+    async def register_live_call(self, session_id: str, voice_session_id: str) -> None:
+        accepted = await self.store._transaction(lambda db: live_captions.register(db, session_id, voice_session_id))
+        if not accepted:
+            raise ValueError("This voice call was invalidated when chat history was cleared. Reconnect voice.")
 
 
 # Only this exact, host-owned adapter has the audited assistant-write path.

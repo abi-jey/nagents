@@ -302,7 +302,7 @@ def test_callback_construction_remains_oauth(tmp_path: Path) -> None:
         assert await provider.verify_model() is True
         callback.assert_not_awaited()  # verify_model stays local on the OAuth route.
 
-        with pytest.raises(ValueError, match="GPT-Live and Realtime require OpenAI API-key authentication"):
+        with pytest.raises(ValueError, match="public GPT-Live WebSocket API and Realtime require OpenAI API-key"):
             OpenAIProvider(callback, live_config=LiveConfig())
         assert not hasattr(OpenAIProvider, "from_local")
 
@@ -326,7 +326,7 @@ def test_voice_live_config_uses_api_key_never_oauth_token(tmp_path: Path, monkey
     missing = tmp_path / "missing-voice-key"
     write_oauth_auth(missing)
     monkeypatch.delenv("OPENAI_API_KEY")
-    with pytest.raises(CodexConfigError, match="GPT-Live voice requires an OpenAI API key"):
+    with pytest.raises(CodexConfigError, match="public GPT-Live WebSocket API"):
         OpenAIProvider(home=missing, live_config=LiveConfig())
 
     # An expired ChatGPT token is irrelevant to voice when a cached API key exists.
@@ -508,5 +508,5 @@ def test_realtime_config_uses_api_key_not_subscription_token(tmp_path: Path, mon
     missing = tmp_path / "missing"
     write_oauth_auth(missing)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(CodexConfigError, match="GPT-Live voice requires an OpenAI API key"):
+    with pytest.raises(CodexConfigError, match="public GPT-Live WebSocket API"):
         OpenAIProvider(home=missing, realtime_config=RealtimeConfig())

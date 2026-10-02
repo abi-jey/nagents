@@ -30,9 +30,9 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? " rail-collapsed" : ""}`}>
       <a className="skip-link" href="#composer">Skip to prompt</a>
-      <main inert={client.panel === "designer"} className={sidebarCollapsed ? "sidebar-collapsed" : undefined}>
+      <main inert={client.panel === "designer"} className={[sidebarCollapsed && "sidebar-collapsed", client.liveOpen && "voice-open"].filter(Boolean).join(" ")}>
         <WorkspaceHeader client={client} navOpen={navOpen} toggleNavigation={() => setNavOpen(!navOpen)} />
         <WorkspaceSidebar client={client} composer={composer} open={navOpen} close={closeNavigation}
           select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />

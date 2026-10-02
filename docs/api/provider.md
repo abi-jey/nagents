@@ -189,9 +189,11 @@ use the configured compatible API; a saved ChatGPT login uses the dedicated Code
 OAuth transport. See [local discovery](../guide/providers.md#local-codex-configuration).
 
 `OpenAIProvider(model="gpt-live-1", live_config=LiveConfig(...))` uses the same
-discovery for voice. As in the Codex client, voice requires an API key and may
+discovery for the public Live WebSocket API. This path requires an API key and may
 use its `OPENAI_API_KEY` environment fallback even when normal text inference uses
 saved ChatGPT authentication. OAuth tokens are never sent as Live API keys.
+The [web voice interface](../guide/ngn-web.md#gpt-live-voice-conversations) also
+supports ChatGPT login through its separate WebRTC and server-side control path.
 
 For the CLI's own login
 workflow and limitations, see [ngn](../guide/ngn.md) and

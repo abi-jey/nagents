@@ -29,6 +29,7 @@ from pydantic import SecretStr
 from pydantic import field_validator
 from pydantic import model_validator
 
+from nagents.harness.auth import OpenAIAuth
 from nagents.harness.connection import live_auth_available
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ScopedProviderRegistryStore
@@ -36,6 +37,8 @@ from nagents.live import LiveConfig
 from nagents.provider.auth import validate_prefix
 
 from ._async import join_owned
+from .live_auth import LOGIN_VOICES
+from .live_auth import resolve_voice_auth
 from .voice_preferences import Scope
 from .voice_preferences import VoiceOverrides
 from .voice_preferences import VoicePreferenceStore
@@ -47,6 +50,9 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine
     from collections.abc import Iterator
     from pathlib import Path
+
+    from .live_auth import LoginCredentials
+    from .live_auth import VoiceAuth
 
 LIVE_VOICES = ("marin", "cedar")
 LIVE_PROVIDERS = ("openai", "openai_compatible", "azure_openai_compatible_v1")
@@ -63,11 +69,12 @@ class LiveValues(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True, hide_input_in_errors=True)
 
     enabled: bool
+    connection_id: str = Field(default="", max_length=64, pattern=r"^$|^[a-z][a-z0-9_-]{0,63}$")
     backend_mode: Literal["assistant", "hosted"] = "assistant"
     provider: Literal["openai", "openai_compatible", "azure_openai_compatible_v1", "foundry"]
     model: ModelId
     backend_model: ModelId
-    voice: Literal["marin", "cedar"]
+    voice: Literal["marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
     base_url: str = Field(max_length=2048)
 
     @field_validator("base_url")
@@ -163,6 +170,21 @@ class LiveConnection:
     voice_scope: str = ""
     global_preferences: VoicePreferences | None = None
     overrides: VoiceOverrides | None = None
+    connections: tuple[tuple[str, str, str], ...] = ()
+    voice_auth: VoiceAuth = "api-key"
+    login_credentials: LoginCredentials | None = field(default=None, repr=False)
+
+    @property
+    def voices(self) -> tuple[str, ...]:
+        return LOGIN_VOICES if self.voice_auth == "chatgpt" else LIVE_VOICES
+
+    @property
+    def voice_model(self) -> str:
+        return (
+            "gpt-live-1-codex"
+            if self.voice_auth == "chatgpt" and self.values.model == "gpt-live-1"
+            else self.values.model
+        )
 
     @property
     def key_configured(self) -> bool:
@@ -174,7 +196,8 @@ class LiveConnection:
             "revision": self.revision,
             "key_configured": self.key_configured,
             "providers": list(LIVE_PROVIDERS),
-            "voices": list(LIVE_VOICES),
+            "voices": list(self.voices),
+            "voice_auth": self.voice_auth,
         }
         if self.voice_scope and self.global_preferences is not None and self.overrides is not None:
             selected = self.overrides.selected() if self.voice_scope == "workspace" else {}
@@ -186,6 +209,9 @@ class LiveConnection:
                 origins={name: "workspace" if name in selected else "global" for name in VoicePreferences.model_fields},
                 profile_name=self.profile_name,
                 live_supported=self.profile is not None and self.profile.kind in NAMED_LIVE_PROVIDERS,
+                connections=[
+                    {"name": name, "provider": provider, "scope": scope} for name, provider, scope in self.connections
+                ],
             )
         if self.profile is not None:
             result.update(
@@ -199,7 +225,7 @@ class LiveConnection:
 
 
 def _public_values(values: LiveValues, *keys: SecretStr) -> None:
-    strings = (values.provider, values.model, values.backend_model, values.voice, values.base_url)
+    strings = (values.provider, values.model, values.backend_model, values.voice, values.base_url, values.connection_id)
     for key in keys:
         secret = key.get_secret_value()
         if secret and any(secret in value for value in strings):
@@ -236,6 +262,7 @@ class LiveSettings:
         demo: bool,
         active: Callable[[], str],
         providers: ScopedProviderRegistryStore | None = None,
+        auth: OpenAIAuth | None = None,
     ) -> None:
         self.db_path = db_path
         self.demo = demo
@@ -247,6 +274,7 @@ class LiveSettings:
         self._admission: ContextVar[LiveConnection] = ContextVar("live_connection")
         self.providers = providers or ScopedProviderRegistryStore(db_path.parent)
         self.voice = VoicePreferenceStore(db_path, self.providers)
+        self.auth = auth or OpenAIAuth()
         self._session: ContextVar[str] = ContextVar("live_chat_session")
 
     def _scoped(self, scope: Scope) -> LiveConnection:
@@ -254,8 +282,6 @@ class LiveSettings:
         local = self.providers.load_scope("workspace")
         registry = global_registry if scope == "global" else self.providers.load()
         name = registry.active
-        profile = registry.providers.get(name)
-        connection_scope = "workspace" if scope == "workspace" and name in local.providers else "global"
 
         def read(
             db: sqlite3.Connection,
@@ -279,6 +305,13 @@ class LiveSettings:
                     **(overrides.selected() if scope == "workspace" else {}),
                 }
             )
+            selected_name = preferences.connection_id or name
+            profile = registry.providers.get(selected_name)
+            connection_scope = "workspace" if scope == "workspace" and selected_name in local.providers else "global"
+            voice_auth, credentials = (
+                resolve_voice_auth(profile, self.auth, preferences.model) if profile else ("api-key", None)
+            )
+            voices = LOGIN_VOICES if voice_auth == "chatgpt" else LIVE_VOICES
             values = LiveValues.model_validate(
                 {
                     **preferences.model_dump(),
@@ -286,22 +319,45 @@ class LiveSettings:
                     if profile is not None and profile.kind in NAMED_LIVE_PROVIDERS
                     else "openai",
                     "base_url": profile.base_url if profile is not None else "",
+                    "model": ("gpt-live-1-codex" if voice_auth == "chatgpt" else "gpt-live-1")
+                    if preferences.model in {"gpt-live-1", "gpt-live-1-codex"}
+                    else preferences.model,
+                    "voice": preferences.voice
+                    if preferences.voice in voices
+                    else ("cove" if voice_auth == "chatgpt" else "marin"),
                 }
             )
             supported = profile is not None and profile.kind in NAMED_LIVE_PROVIDERS
             return LiveConnection(
                 values,
                 revision,
-                SecretStr(os.environ.get(profile.key_env, "") if supported and profile is not None else ""),
+                SecretStr(
+                    os.environ.get(profile.key_env, "")
+                    if supported and profile is not None and voice_auth != "chatgpt"
+                    else ""
+                ),
                 profile=profile,
-                profile_name=name,
-                credential_available=live_auth_available(profile, values.model)
+                profile_name=selected_name,
+                credential_available=(
+                    credentials is not None if voice_auth == "chatgpt" else live_auth_available(profile, values.model)
+                )
                 if supported and profile is not None
                 else False,
                 connection_scope=connection_scope,
                 voice_scope=scope,
                 global_preferences=global_values,
                 overrides=overrides,
+                voice_auth=voice_auth,
+                login_credentials=credentials,
+                connections=tuple(
+                    (
+                        identifier,
+                        candidate.kind,
+                        "workspace" if scope == "workspace" and identifier in local.providers else "global",
+                    )
+                    for identifier, candidate in registry.providers.items()
+                    if candidate.kind in NAMED_LIVE_PROVIDERS
+                ),
             )
 
         connection = self.voice.transaction(read)
@@ -411,8 +467,9 @@ class LiveSettings:
 
     async def connection(self) -> LiveConnection:
         self._ready()
-        if self.providers.load().active:
-            return await self.scoped("workspace")
+        scoped = await self.scoped("workspace")
+        if self.providers.load().active or scoped.values.connection_id:
+            return scoped
 
         async def read() -> LiveConnection:
             try:
@@ -493,13 +550,16 @@ class LiveSettings:
                     assert isinstance(next_global, VoicePreferences)
                     assert isinstance(next_local, VoiceOverrides)
                     selected_registry = self.providers.load()
+                    requested = body.preferences if isinstance(body, GlobalVoiceInput) else body.overrides
+                    selected_id = requested.connection_id
+                    available = global_registry if scope == "global" else selected_registry
+                    if selected_id:
+                        selected_profile = available.providers.get(selected_id)
+                        if selected_profile is None or selected_profile.kind not in NAMED_LIVE_PROVIDERS:
+                            raise HTTPException(422, "Choose an existing GPT-Live provider connection in this scope.")
                     keys = tuple(
                         SecretStr(os.environ.get(profile.key_env, ""))
-                        for profile in (
-                            global_registry.providers.get(global_registry.active),
-                            selected_registry.providers.get(selected_registry.active),
-                        )
-                        if profile is not None
+                        for profile in (*global_registry.providers.values(), *selected_registry.providers.values())
                     )
                     try:
                         for selected in (
@@ -536,6 +596,8 @@ class LiveSettings:
 
         if self.providers.load().active:
             raise HTTPException(422, "Named provider connections use scoped Voice preferences.")
+        if body.values.voice not in LIVE_VOICES:
+            raise HTTPException(422, "Choose a supported API-key Live voice.")
 
         def save(db: sqlite3.Connection) -> LiveConnection:
             current = self._read(db)

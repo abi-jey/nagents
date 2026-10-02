@@ -20,6 +20,7 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.live import create_agent
+from nagents.web.live import unavailable_reason
 from nagents.web.live_settings import GlobalVoiceInput
 from nagents.web.live_settings import LiveSettings
 from nagents.web.live_settings import WorkspaceVoiceInput
@@ -61,6 +62,98 @@ def named(path: Path) -> ScopedProviderRegistryStore:
 
 def settings(path: Path) -> LiveSettings:
     return LiveSettings(path / "sessions.db", demo=False, active=lambda: "")
+
+
+@pytest.mark.parametrize("kind,auth", [("anthropic", "api-key"), ("gemini", "api-key"), ("openai", "chatgpt")])
+def test_voice_connection_preserves_independent_chat_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, auth: str
+) -> None:
+    providers = named(tmp_path)
+    before = providers.load_scope("global")
+    providers.save_scope(
+        ProviderRegistry(active="chat", providers={**before.providers, "chat": ProviderProfile(kind=kind, auth=auth)}),
+        expected=before.revision,
+        scope="global",
+    )
+    monkeypatch.setenv("TEST_VOICE_KEY", "private-voice-key")
+
+    async def handle(transcript: str) -> str:
+        return transcript
+
+    async def check() -> None:
+        owner = settings(tmp_path)
+        await owner.load()
+        before = voice(await owner.snapshot("global"))
+        await owner.change(
+            GlobalVoiceInput(
+                scope="global",
+                revision=before["revision"],
+                preferences=VoicePreferences(enabled=True, connection_id="primary"),
+            )
+        )
+        connection = await owner.connection()
+        assert connection.profile_name == "primary" and connection.key_configured
+        assert connection.values.connection_id == "primary"
+        assert connection.connection_scope == "global"
+        assert providers.load().active == "chat"
+        assert providers.load().providers["chat"].kind == kind
+        assert "private-voice-key" not in str(connection.snapshot())
+        assert ("primary", "openai", "global") in connection.connections
+        agent = create_agent(connection, client_handler=handle)
+        try:
+            assert agent.provider.api_key == "private-voice-key"
+            assert agent.provider.live_config is not None
+            assert agent.provider.live_config.delegation == "client"
+        finally:
+            await agent.close()
+            await owner.shutdown()
+
+    asyncio.run(check())
+
+
+def test_missing_voice_connection_never_falls_back_to_chat(tmp_path: Path) -> None:
+    providers = named(tmp_path)
+
+    async def check() -> None:
+        owner = settings(tmp_path)
+        await owner.load()
+        before = voice(await owner.snapshot("workspace"))
+        for identifier in ("missing", "unsupported"):
+            if identifier == "unsupported":
+                registry = providers.load_scope("workspace")
+                providers.save_scope(
+                    ProviderRegistry(providers={"unsupported": ProviderProfile(kind="anthropic")}),
+                    expected=registry.revision,
+                    scope="workspace",
+                )
+                before = voice(await owner.snapshot("workspace"))
+            with pytest.raises(HTTPException) as rejected:
+                await owner.change(
+                    WorkspaceVoiceInput(
+                        scope="workspace",
+                        revision=before["revision"],
+                        overrides=VoiceOverrides(enabled=True, connection_id=identifier),
+                    )
+                )
+            assert rejected.value.status_code == 422
+        await owner.change(
+            WorkspaceVoiceInput(
+                scope="workspace",
+                revision=before["revision"],
+                overrides=VoiceOverrides(enabled=True, connection_id="primary"),
+            )
+        )
+        selected = await owner.connection()
+        registry = providers.load_scope("global")
+        providers.save_scope(ProviderRegistry(), expected=registry.revision, scope="global")
+        missing = await owner.connection()
+        assert missing.revision != selected.revision
+        assert missing.profile is None and not missing.key_configured
+        assert missing.profile_name == "primary"
+        assert "no longer exists" in unavailable_reason(missing, demo=False)
+        await owner.shutdown()
+
+    asyncio.run(check())
 
 
 def test_global_and_local_voice_values_are_independent_of_provider_yaml(

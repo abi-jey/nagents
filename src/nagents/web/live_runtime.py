@@ -1,13 +1,14 @@
 """Bounded, server-owned Live calls and browser audio relays.
 
-The server's native connection owns audio, delegation, and finalization. The
-legacy WebRTC supervisor remains for its standalone API lifecycle. Only
-normalized captions and application status survive a completed call.
+The server owns delegation and finalization. API-key connections relay audio;
+ChatGPT login uses browser WebRTC media with an authenticated server sideband.
+Only normalized captions and application status survive a completed call.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections import deque
 from contextlib import aclosing
@@ -33,13 +34,18 @@ from nagents.live import LiveAPI
 from nagents.live import LiveEvent
 
 from ._async import join_owned
+from .live_login import ChatGPTLiveConnection
+from .live_login import LoginVoiceError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from collections.abc import Awaitable
     from collections.abc import Callable
 
     from nagents import Agent
     from nagents.events import Event
+
+    from .live_login import LoginVoiceConfig
 
 MAX_SDP_BYTES = 65536
 MAX_AUDIO_FRAME = 9600  # 100 ms of mono PCM16 at 24 kHz.
@@ -68,6 +74,7 @@ class _Record:
     message: str = "Connecting to Live."
     events: deque[Payload] = field(default_factory=lambda: deque(maxlen=MAX_EVENTS))
     cursor: int = 0
+    caption_keys: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_EVENTS), repr=False)
 
     def append(self, kind: str, text: str, **fields: object) -> None:
         self.cursor += 1
@@ -106,6 +113,7 @@ class _Call:
     audio_in: _BrowserInput | None = None
     audio_out: _BrowserOutput | None = None
     browser: bool = False
+    captions: Callable[[Payload], Awaitable[None]] | None = field(default=None, repr=False)
 
     def fail(self, message: str, status: int = 502) -> None:
         if not self.failure:
@@ -159,6 +167,12 @@ def _transcript(record: _Record, speaker: str, text: object, payload: Payload, s
         and 0 <= start <= end <= 1e12
     ):
         fields.update(start_ms=start, end_ms=end)
+    source_id = payload.get("source_event_id", payload.get("event_id"))
+    if isinstance(source_id, str) and source_id and len(source_id) <= 256:
+        identity = json.dumps([source_id, speaker, text, fields.get("start_ms"), fields.get("end_ms")])
+        if identity in record.caption_keys:
+            return
+        record.caption_keys.append(identity)
     record.append("transcript", text, **fields)
 
 
@@ -212,8 +226,16 @@ class LiveService:
     calls retain at most 256 normalized events each, without Agents or secrets.
     """
 
-    def __init__(self, factory: Callable[[str], Agent]) -> None:
+    def __init__(
+        self,
+        factory: Callable[[str], Agent],
+        *,
+        login_factory: Callable[[str], LoginVoiceConfig | None] | None = None,
+        caption_factory: Callable[[str], Awaitable[Callable[[Payload], Awaitable[None]]]] | None = None,
+    ) -> None:
         self._factory = factory
+        self._login_factory = login_factory
+        self._caption_factory = caption_factory
         self._active: dict[str, _Call] = {}
         self._records: dict[str, _Record] = {}
         self._closed = False
@@ -241,7 +263,7 @@ class LiveService:
         self._active[identifier] = call
         self._records[identifier] = call.record
         call.record.append("status", call.record.message)
-        call.task = asyncio.create_task(self._run(call, sdp, voice), name="web-live-session")
+        call.task = asyncio.create_task(self._run_created(call, sdp, voice), name="web-live-session")
         try:
             await call.ready.wait()
             if call.stop.is_set() or call.failure or call.task.done():
@@ -366,6 +388,85 @@ class LiveService:
             raise HTTPException(404, "Unknown Live session.")
         return self._records[identifier]
 
+    async def _run_created(self, call: _Call, sdp: str, voice: str) -> None:
+        try:
+            if self._caption_factory is not None:
+                call.captions = await self._caption_factory(call.record.identifier)
+            login = self._login_factory(voice) if self._login_factory is not None else None
+        except Exception:
+            call.fail("ChatGPT voice configuration is unavailable. Check your selected connection.", 503)
+            call.record.transition("error", call.failure)
+            self._active.pop(call.record.identifier, None)
+            completed = [key for key in self._records if key not in self._active]
+            for key in completed[:-MAX_COMPLETED]:
+                del self._records[key]
+            call.ready.set()
+            return
+        if login is not None:
+            await self._run_login(call, sdp, login)
+        else:
+            await self._run(call, sdp, voice)
+
+    async def _run_login(self, call: _Call, sdp: str, config: LoginVoiceConfig) -> None:
+        connection = ChatGPTLiveConnection(config)
+        observers: list[asyncio.Task[None]] = []
+        call.record.model, call.record.voice = config.model, config.voice
+
+        async def observe() -> None:
+            try:
+                async with aclosing(connection.events()) as events:
+                    async for payload in events:
+                        event = LiveEvent(event_type=str(payload.get("type", "")), payload=payload)
+                        if await self._capture_event(call, event, connection.identifier, ""):
+                            return
+            except LoginVoiceError as error:
+                call.fail(str(error))
+            except Exception:
+                call.fail("The ChatGPT voice control connection was interrupted.")
+            finally:
+                call.finalized = connection.finalized
+
+        try:
+            if call.stop.is_set():
+                return
+            async with asyncio.timeout(PROVISION_SECONDS):
+                call.answer = _sdp(await connection.provision(sdp))
+            del sdp
+            observer = asyncio.create_task(observe(), name="web-chatgpt-live-sideband")
+            observers.append(observer)
+            await self._connected(call, observer)
+        except LoginVoiceError as error:
+            call.fail(str(error))
+        except Exception:
+            call.fail("The ChatGPT voice connection could not be established.")
+        finally:
+            if call.record.status != "closing":
+                call.record.transition("closing", "Closing ChatGPT voice.")
+            with suppress(Exception):
+                async with asyncio.timeout(CLEANUP_SECONDS):
+                    await connection.close()
+            if observers and not observers[0].done():
+                await asyncio.wait(observers, timeout=FINALIZE_SECONDS)
+            for observer in observers:
+                if not observer.done():
+                    observer.cancel()
+            await asyncio.gather(*observers, return_exceptions=True)
+            with suppress(Exception):
+                async with asyncio.timeout(CLEANUP_SECONDS + 1):
+                    await connection.aclose()
+            call.finalized = connection.finalized
+            if connection.identifier and not call.finalized:
+                call.fail("ChatGPT voice finalization could not be confirmed.")
+            confirmation = "Finalization confirmed." if call.finalized else "Finalization is unconfirmed."
+            call.record.transition(
+                "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
+            )
+            self._active.pop(call.record.identifier, None)
+            completed = [key for key in self._records if key not in self._active]
+            for key in completed[:-MAX_COMPLETED]:
+                del self._records[key]
+            call.ready.set()
+
     async def _run(self, call: _Call, sdp: str, voice: str) -> None:
         try:
             if call.stop.is_set():
@@ -452,6 +553,8 @@ class LiveService:
         agent: Agent | None = None
         try:
             try:
+                if self._caption_factory is not None:
+                    call.captions = await self._caption_factory(call.record.identifier)
                 agent = self._factory(voice)
                 config = agent.provider.live_config
                 if (
@@ -540,7 +643,7 @@ class LiveService:
         try:
             async with aclosing(agent.run()) as events:
                 async for event in events:
-                    if self._event(call, event, identifier, agent.provider.api_key):
+                    if await self._capture_event(call, event, identifier, agent.provider.api_key):
                         return
             if not call.finalized:
                 call.fail("Live connection ended before finalization.")
@@ -549,6 +652,15 @@ class LiveService:
         except Exception:
             if not call.finalized:
                 call.fail("Live connection was interrupted.")
+
+    async def _capture_event(self, call: _Call, event: Event, identifier: str, secret: str) -> bool:
+        previous = call.record.cursor
+        stopped = self._event(call, event, identifier, secret)
+        if call.captions is not None and call.record.cursor != previous:
+            latest = call.record.events[-1]
+            if latest["type"] == "transcript":
+                await call.captions(dict(latest))
+        return stopped
 
     @staticmethod
     def _event(call: _Call, event: Event, identifier: str, secret: str) -> bool:
