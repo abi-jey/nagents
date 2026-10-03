@@ -52,8 +52,14 @@ def provider_setup(harness: Harness) -> ProviderSetup:
 
 
 def provider_error(event: ErrorEvent) -> tuple[str, str]:
-    """Classify only known provider codes; upstream messages may contain secrets."""
+    """Classify known run codes; upstream messages and metadata may contain secrets."""
     code = event.code
+    if code == "MAX_TOOL_ROUNDS":
+        return (
+            "tool_round_limit",
+            "This run reached its tool-round limit. Review the progress before continuing with a new message "
+            "or adjusting the round limit in Settings.",
+        )
     if message := transport_error_message(event):
         return ("chatgpt_network" if code == "CODEX_CONNECTION" else "provider_failure"), message
     if code == "CODEX_AUTH" or code == "CODEX_HTTP_401":

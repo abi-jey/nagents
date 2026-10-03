@@ -448,7 +448,11 @@ class SubagentManager:
                 async with aclosing(child._run(prompt, trigger=info.trigger, notifications=notifications)) as events:
                     async for event in events:
                         if isinstance(event, ErrorEvent) and not event.recoverable:
-                            info.error = "Subagent reported a provider or tool-loop error; its response is not a successful result."
+                            info.error = (
+                                "Subagent reached its tool-round limit; its response is not a successful result."
+                                if event.code == "MAX_TOOL_ROUNDS"
+                                else "Subagent reported a provider or tool-loop error; its response is not a successful result."
+                            )
                         elif isinstance(event, DoneEvent):
                             done = event
                 if done is None:
