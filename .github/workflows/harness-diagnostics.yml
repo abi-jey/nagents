@@ -1,0 +1,50 @@
+name: Offline harness diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/harness-diagnostics.yml'
+      - 'benchmarks/**'
+      - 'src/nagents/**/*.py'
+      - 'tests/support/**'
+      - 'pyproject.toml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/harness-diagnostics.yml'
+      - 'benchmarks/**'
+      - 'src/nagents/**/*.py'
+      - 'tests/support/**'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NGN_DIAGNOSTIC_DOCKER_TESTS: '0'
+      LITELLM_LOCAL_MODEL_COST_MAP: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install optional test environment
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r benchmarks/terminal_bench/requirements.txt editables==0.5
+          .venv/bin/python -m pip install --no-build-isolation -e '.[dev]'
+      - name: Test adapters and diagnostics without model calls
+        run: >-
+          .venv/bin/python -m pytest -q
+          benchmarks/terminal_bench/tests
+          benchmarks/diagnostics/tests
