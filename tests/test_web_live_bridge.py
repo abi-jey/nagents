@@ -348,7 +348,11 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
                 assert (await asyncio.gather(work, return_exceptions=True))[0].__class__ is asyncio.CancelledError
                 assert not stopped.is_set() and not run.finished and state.active is run
                 assert not run.task.done() and harnesses[0]._busy
-                assert [report["status"] for report in reports] == ["queued", "working", "working"]
+                assert [report["status"] for report in reports if "model_request" not in report] == [
+                    "queued",
+                    "working",
+                    "working",
+                ]
                 assert reports[-1]["run_id"] == run.id
                 if outcome == "complete":
                     release.set()
@@ -368,7 +372,7 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
             assert stopped.is_set() and run.finished
             assert run.outcome == ("completed" if outcome == "complete" else "cancelled")
             assert state.active is None and harnesses[0]._busy == ""
-            assert [report["status"] for report in reports] == [
+            assert [report["status"] for report in reports if "model_request" not in report] == [
                 "queued",
                 "working",
                 "working",
@@ -520,7 +524,11 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                         await queued.wait()
                         run = state.active
                         assert run is not None
-                        assert [record["status"] for record in reports] == ["queued", "working", "working"]
+                        assert [record["status"] for record in reports if "model_request" not in record] == [
+                            "queued",
+                            "working",
+                            "working",
+                        ]
                         await connection.close()
                         await reader
                         assert connection.finalized and commands == ["session.close"]
@@ -531,7 +539,12 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                         release.set()
                         await run.task
                     assert stopped.is_set() and run.outcome == "completed" and run.finished
-                    assert [record["status"] for record in reports] == ["queued", "working", "working", "completed"]
+                    assert [record["status"] for record in reports if "model_request" not in record] == [
+                        "queued",
+                        "working",
+                        "working",
+                        "completed",
+                    ]
                     assert reports[-1]["result_text"] == "Finished after native voice ended"
                     assert len(inputs) == 1 and commands == ["session.close"]
                     rows = await state.history.snapshot(root)
@@ -592,10 +605,10 @@ def test_voice_request_cancelled_before_admission_has_no_assistant_run(tmp_path:
                     MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(speech("Wait"))
                 )
                 await asyncio.sleep(0.02)
-                assert [report["status"] for report in reports] == ["queued"]
+                assert [report["status"] for report in reports if "model_request" not in report] == ["queued"]
                 waiting.cancel()
                 await asyncio.gather(waiting, return_exceptions=True)
-            assert [report["status"] for report in reports] == ["queued", "cancelled"]
+            assert [report["status"] for report in reports if "model_request" not in report] == ["queued", "cancelled"]
             assert all(report["run_id"] == "" for report in reports)
             assert all("request_input" not in report for report in reports)
             assert state.active is None and await state.harness.history() == []
@@ -628,11 +641,20 @@ def test_voice_reply_timeout_keeps_working_status_until_actual_completion(
                     await entered.wait()
                 run = state.active
                 assert run is not None and not run.task.done()
-                assert [report["status"] for report in reports] == ["queued", "working", "working"]
+                assert [report["status"] for report in reports if "model_request" not in report] == [
+                    "queued",
+                    "working",
+                    "working",
+                ]
                 release.set()
                 await run.task
                 assert state.active is None and run.outcome == "completed"
-                assert [report["status"] for report in reports] == ["queued", "working", "working", "completed"]
+                assert [report["status"] for report in reports if "model_request" not in report] == [
+                    "queued",
+                    "working",
+                    "working",
+                    "completed",
+                ]
                 assert reports[-1]["run_id"] == run.id
 
     asyncio.run(scenario())
@@ -808,7 +830,11 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
                 snapshot = (
                     await client.get(f"/api/live/sessions/{created.json()['session_id']}", headers=headers)
                 ).json()
-                assert [event["status"] for event in snapshot["events"] if event["type"] == "delegation"] == [
+                assert [
+                    event["status"]
+                    for event in snapshot["events"]
+                    if event["type"] == "delegation" and not event.get("detail_type")
+                ] == [
                     "queued",
                     "working",
                     "working",

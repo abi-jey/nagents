@@ -125,14 +125,47 @@ export interface DelegationText {
   text: string;
   truncated: boolean;
   characters: number;
+  characters_complete?: boolean;
+}
+
+export type InspectionEventType = "delegation" | "model_context" | "http_request_body";
+
+export interface LiveModelRequest {
+  seq: number;
+  type: "model_context" | "http_request_body";
+  model_call_id: string;
+  round: number;
+  attempt_id?: string;
+  segmented?: boolean;
+  payload: DelegationText;
+}
+
+export interface LiveDelegationTimelineEvent extends LiveDelegationRecord {
+  type?: InspectionEventType;
+  model_call_id?: string;
+  round?: number;
+  attempt_id?: string;
+  segmented?: boolean;
+  capture_limited?: true;
+}
+
+export interface VoiceContextDetailsRecord extends VoiceContext {
+  voice_session_id: string;
+  available: boolean;
+  instructions: DelegationText;
+  history: { type: "message"; role: "user" | "assistant"; content: { type: "input_text" | "output_text"; text: string }[] }[];
+  history_truncated: boolean;
+  reason: string;
 }
 
 export interface LiveDelegationDetails extends LiveDelegationRecord {
   source: "app_callback";
   request: { transcript?: DelegationText; input?: DelegationText };
   result?: DelegationText & { kind: "assistant_output" | "terminal_explanation" };
-  timeline: LiveDelegationRecord[];
+  timeline: LiveDelegationTimelineEvent[];
   timeline_truncated: boolean;
+  model_requests?: LiveModelRequest[];
+  model_requests_truncated?: boolean;
 }
 
 export interface LiveMessageEvent {

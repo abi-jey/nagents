@@ -57,8 +57,8 @@ function view() {
   const payload = (name: string) => [...container.querySelectorAll("details")].find(element => element.querySelector("summary")?.textContent?.startsWith(name));
   return {
     container, dom, button, payload, selected, viewed, dismissed: () => dismissed,
-    render: async (item = delegation(), items = [item]) => act(async () => root.render(createElement(DelegationInspector, {
-      token: "private-local-token", delegation: item, delegations: items,
+    render: async (item = delegation(), items = [item], token = "private-local-token") => act(async () => root.render(createElement(DelegationInspector, {
+      token, delegation: item, delegations: items,
       select: id => { selected.push(id); }, close: () => { dismissed++; }, viewChat: id => { viewed.push(id); },
     }))),
     unmount: async () => { await act(async () => root.unmount()); mounted = false; },
@@ -88,8 +88,8 @@ test("inspector fetches only the selected authenticated request and shows its ex
     assert.equal(calls[0].init.credentials, "same-origin");
     assert.equal(calls[0].init.cache, "no-store");
     assert.equal(calls[0].init.body, undefined);
-    assert.equal(ui.payload("Voice request payload")?.querySelector("pre")?.textContent, data.request.transcript!.text);
-    assert.equal(ui.payload("Input sent to assistant")?.querySelector("pre")?.textContent, data.request.input.text);
+    assert.equal(ui.payload("Speech transcript context")?.querySelector("pre")?.textContent, data.request.transcript!.text);
+    assert.equal(ui.payload("Assistant request input")?.querySelector("pre")?.textContent, data.request.input.text);
     assert.equal(ui.container.querySelector("private-payload"), null, "payloads render as text, never markup");
     assert.equal(ui.payload("Assistant result")?.querySelector("pre")?.textContent, "Four.\n");
     const events = [...ui.container.querySelectorAll("ol li")].map(row => JSON.parse(row.querySelector("pre")!.textContent!));
@@ -143,8 +143,8 @@ for (const [field, value] of [
     try {
       await ui.render();
       assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /different voice request/);
-      assert.equal(ui.payload("Voice request payload"), undefined);
-      assert.equal(ui.payload("Input sent to assistant"), undefined);
+      assert.equal(ui.payload("Speech transcript context"), undefined);
+      assert.equal(ui.payload("Assistant request input"), undefined);
       assert.equal(ui.container.querySelector("ol"), null);
       assert.equal(ui.button("Refresh").disabled, false);
     } finally { await ui.close(); }
@@ -168,8 +168,8 @@ for (const [name, change] of inconsistentDetails) {
     try {
       await ui.render();
       assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /incomplete or inconsistent/);
-      assert.equal(ui.payload("Voice request payload"), undefined);
-      assert.equal(ui.payload("Input sent to assistant"), undefined);
+      assert.equal(ui.payload("Speech transcript context"), undefined);
+      assert.equal(ui.payload("Assistant request input"), undefined);
       assert.equal(ui.container.querySelector("ol"), null);
       assert.equal(ui.button("Refresh").disabled, false);
     } finally { await ui.close(); }
@@ -207,13 +207,13 @@ for (const change of [{ chatSessionId: "ngn-other-chat" }, { runId: "other-run" 
     t.mock.method(globalThis, "fetch", async () => ++calls === 1 ? Response.json(detail()) : pending.promise);
     try {
       await ui.render();
-      assert.ok(ui.payload("Voice request payload"));
+      assert.ok(ui.payload("Speech transcript context"));
       const next = delegation(change);
       await ui.render(next);
       assert.equal(calls, 2, "every bound identity change fetches scoped details");
-      assert.equal(ui.payload("Voice request payload"), undefined, "an old payload cannot be shown under new ownership");
+      assert.equal(ui.payload("Speech transcript context"), undefined, "an old payload cannot be shown under new ownership");
       await act(async () => pending.resolve(Response.json(detail(next))));
-      assert.ok(ui.payload("Voice request payload"));
+      assert.ok(ui.payload("Speech transcript context"));
     } finally { await ui.close(); }
   });
 }
@@ -228,7 +228,7 @@ test("a failed request can be retried without retaining the error or changing th
   try {
     await ui.render();
     assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /temporarily unavailable/);
-    assert.equal(ui.payload("Voice request payload"), undefined);
+    assert.equal(ui.payload("Speech transcript context"), undefined);
     await act(async () => ui.button("Refresh").click());
     assert.deepEqual(paths, Array(2).fill("/api/live/sessions/voice-one/delegations/request-one"));
     assert.equal(ui.container.querySelector('[role="alert"]'), null);
@@ -273,8 +273,8 @@ test("queued cancellation shows captured request and a terminal explanation with
   t.mock.method(globalThis, "fetch", async () => Response.json(data));
   try {
     await ui.render(item);
-    assert.match(ui.payload("Voice request payload")!.textContent!, /Showing the first 3 characters/);
-    assert.match(ui.payload("Input sent to assistant")!.textContent!, /has not been dispatched/);
+    assert.match(ui.payload("Speech transcript context")!.textContent!, /Showing the first 3 of 20 characters/);
+    assert.match(ui.payload("Assistant request input")!.textContent!, /No assistant request input was captured/);
     assert.equal(ui.payload("Outcome")?.querySelector("pre")?.textContent, item.text);
     assert.equal(ui.payload("Assistant result"), undefined);
     assert.equal(ui.button("View in chat"), undefined);
@@ -294,5 +294,98 @@ test("unmount aborts the pending details request and ignores its late response",
     assert.equal(signal?.aborted, true);
     await act(async () => pending.resolve(Response.json(detail())));
     assert.equal(ui.container.childElementCount, 0);
+  } finally { await ui.close(); }
+});
+
+function modelDetail(): LiveDelegationDetails {
+  const data = detail(delegation({ seq: 6 }));
+  const call = "a".repeat(32), attempt = "b".repeat(32);
+  const model = { ...data.timeline.at(-1)!, type: "model_context" as const, seq: 2, status: "working" as const, model_call_id: call, round: 1, text: "Model input captured." };
+  const body = { ...model, type: "http_request_body" as const, seq: 3, attempt_id: attempt, segmented: true, text: "Provider body chunk captured." };
+  const payload = '{"messages":[{"role":"user","content":"<private>model input</private>"}],"tools":[],"config":{"temperature":0}}';
+  data.timeline = [data.timeline[0], model, body, { ...body, seq: 4, capture_limited: true, text: "Model request capture limit reached." }, data.timeline.at(-1)!];
+  data.model_requests = [
+    { seq: 2, type: "model_context", model_call_id: call, round: 1, payload: { text: payload, characters: payload.length, truncated: false } },
+    { seq: 3, type: "http_request_body", model_call_id: call, round: 1, attempt_id: attempt, segmented: true, payload: { text: '{"model":', characters: 9, truncated: true, characters_complete: false } },
+  ];
+  data.model_requests_truncated = true;
+  return data;
+}
+
+test("typed model event rows expand their actual capture, with body chunks and retention limits explicitly labeled", async (t) => {
+  const ui = view(), data = modelDetail();
+  t.mock.method(globalThis, "fetch", async () => Response.json(data));
+  try {
+    await ui.render(delegation({ seq: 6 }));
+    assert.equal(ui.container.querySelector('[role="alert"]'), null);
+    assert.deepEqual([...ui.container.querySelectorAll(".inspection-event-type")].map(item => item.textContent), ["delegation", "model_context", "http_request_body", "http_request_body", "delegation"]);
+    const model = ui.container.querySelector<HTMLElement>('[data-event-type="model_context"]')!;
+    assert.equal(model.querySelector("pre")?.textContent, data.model_requests![0].payload.text);
+    assert.match(model.textContent!, /Post-plugin model input, before provider encoding/);
+    assert.equal(model.querySelector("private"), null);
+    const disclosure = model.querySelector<HTMLDetailsElement>("details")!;
+    assert.equal(disclosure.open, false);
+    await act(async () => disclosure.querySelector<HTMLElement>("summary")!.click());
+    assert.equal(disclosure.open, true);
+    assert.deepEqual(JSON.parse(model.querySelector(".inspection-event-metadata pre")!.textContent!), data.timeline[1]);
+    const bodies = ui.container.querySelectorAll('[data-event-type="http_request_body"]');
+    assert.equal(bodies[0].querySelector("pre")?.textContent, '{"model":');
+    assert.match(bodies[0].textContent!, /Observed provider request body chunk/);
+    assert.match(bodies[0].textContent!, /full size was not recorded/);
+    assert.match(bodies[1].querySelector("summary")!.textContent!, /Capture retention limit reached/);
+    assert.match(bodies[1].textContent!, /No additional request payload was retained/);
+    assert.match(ui.container.textContent!, /Some model request captures were omitted/);
+    assert.equal([...ui.container.querySelectorAll("pre")].filter(pre => pre.textContent === data.model_requests![0].payload.text).length, 1, "timeline captures are not duplicated in a second list");
+  } finally { await ui.close(); }
+});
+
+test("captures retained beyond the timeline remain separately expandable", async (t) => {
+  const ui = view(), data = modelDetail();
+  data.timeline = [data.timeline.at(-1)!]; data.timeline_truncated = true;
+  t.mock.method(globalThis, "fetch", async () => Response.json(data));
+  try {
+    await ui.render(delegation({ seq: 6 }));
+    assert.match(ui.container.textContent!, /Earlier model captures/);
+    assert.equal(ui.payload("model_context · round 1 · #2")?.querySelector("pre")?.textContent, data.model_requests![0].payload.text);
+    assert.match(ui.payload("http_request_body · round 1 · #3")?.textContent || "", /body chunk/);
+  } finally { await ui.close(); }
+});
+
+for (const [name, change] of [
+  ["missing model correlation", (data: LiveDelegationDetails) => { delete data.timeline[1].model_call_id; }],
+  ["a limit marker without correlation", (data: LiveDelegationDetails) => { delete data.timeline[3].model_call_id; }],
+  ["a mismatched capture round", (data: LiveDelegationDetails) => { data.model_requests![0].round = 2; }],
+  ["an unsegmented HTTP payload", (data: LiveDelegationDetails) => { data.model_requests![1].segmented = false; }],
+  ["duplicate capture identities", (data: LiveDelegationDetails) => { data.model_requests!.push(data.model_requests![0]); }],
+  ["a capture over its payload bound", (data: LiveDelegationDetails) => { data.model_requests![0].payload = { text: "x".repeat(65537), characters: 65537, truncated: false }; }],
+  ["a Unicode capture over its byte bound", (data: LiveDelegationDetails) => { data.model_requests![0].payload = { text: "🌍".repeat(20000), characters: 20000, truncated: false }; }],
+  ["captures over their aggregate byte bound", (data: LiveDelegationDetails) => {
+    data.seq = 30;
+    data.model_requests = Array.from({ length: 5 }, (_, index) => ({ ...data.model_requests![0], seq: 20 + index, payload: { text: "界".repeat(21000), characters: 21000, truncated: false } }));
+  }],
+  ["an unknown total on a supposedly complete payload", (data: LiveDelegationDetails) => { data.model_requests![0].payload.characters_complete = false; }],
+] as const) {
+  test(`inspector rejects ${name} without rendering captured input`, async (t) => {
+    const ui = view(), data = modelDetail(); change(data);
+    t.mock.method(globalThis, "fetch", async () => Response.json(data));
+    try {
+      await ui.render(delegation({ seq: 6 }));
+      assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /incomplete or inconsistent|did not match/);
+      assert.equal(ui.container.querySelector("pre"), null);
+    } finally { await ui.close(); }
+  });
+}
+
+test("a changed authentication token hides retained request captures until the new scoped fetch returns", async (t) => {
+  const ui = view(), pending = pendingResponse(); let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => ++calls === 1 ? Response.json(modelDetail()) : pending.promise);
+  try {
+    const item = delegation({ seq: 6 });
+    await ui.render(item);
+    assert.ok(ui.container.querySelector('[data-event-type="model_context"] pre'));
+    await ui.render(item, [item], "new-token");
+    assert.equal(ui.container.querySelector("pre"), null);
+    await act(async () => pending.resolve(Response.json(modelDetail())));
+    assert.ok(ui.container.querySelector('[data-event-type="model_context"] pre'));
   } finally { await ui.close(); }
 });

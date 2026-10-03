@@ -5,7 +5,7 @@ import { browserMedia, liveSupport } from "./browser.js";
 import { currentLiveDelegation, LiveController } from "./controller.js";
 import { DelegationInspector } from "./DelegationInspector.js";
 import { LiveComposer } from "./LiveComposer.js";
-import { AudioDeviceSettings } from "./AudioDeviceSettings.js";
+import { VoiceSettingsDialog } from "./VoiceSettingsDialog.js";
 import { VoiceContextDetails } from "./VoiceContextDetails.js";
 import { OutputDeviceNotice } from "./OutputDeviceNotice.js";
 import { LiveSettings } from "./LiveSettings.js";
@@ -21,7 +21,7 @@ function duration(seconds: number) {
 }
 
 // Voice lives inside the composer. Captions use the same authenticated chat
-// event stream as typed messages; expanding settings never remounts the call.
+// event stream as typed messages; opening settings never remounts the call.
 export function LiveDialog({ token, sessionId, close, configureConnection, autoStart = true,
   openSettingsInitially = !autoStart, consumeStartIntent }: {
   token: string; sessionId: string; close: () => void; configureConnection?: () => void; autoStart?: boolean;
@@ -38,7 +38,6 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
   const [settingsOpen, setSettingsOpen] = useState(openSettingsInitially);
   const [settingsVisited, setSettingsVisited] = useState(openSettingsInitially);
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [inspectedId, setInspectedId] = useState("");
@@ -88,7 +87,6 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     setContextOpen(false);
     if (settingsOpen) { closeSettings(); return; }
     setInspectionOpen(false); setSettingsVisited(true); setSettingsOpen(true);
-    requestAnimationFrame(() => document.querySelector<HTMLSelectElement>("#voice-inline-settings select")?.focus({ preventScroll: true }));
   }
   function closeInspection() {
     setInspectionOpen(false);
@@ -101,7 +99,6 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
   }
   function closeSettings() {
     setSettingsOpen(false);
-    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#voice-session .voice-settings-trigger")?.focus());
   }
   function showContext() {
     if (contextOpen) {
@@ -147,33 +144,26 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     return () => clearInterval(timer);
   }, [connected]);
   useEffect(() => { if (state.phase === "ended" || state.phase === "error") void refresh(); }, [state.phase]);
-  useEffect(() => {
-    if (settingsOpen) document.querySelector<HTMLSelectElement>("#voice-inline-settings select")?.focus({ preventScroll: true });
-  }, [settingsOpen]);
-
-  return <LiveComposer state={state} status={status} elapsed={duration(elapsed)}
+  return <><LiveComposer state={state} status={status} elapsed={duration(elapsed)}
     disabled={settingsOpen || settingsSaving || loading || !config?.available || !!unavailable}
     unavailable={unavailable} loading={loading} voice={voice}
     settingsOpen={settingsOpen} settingsSaving={settingsSaving} inspectionOpen={inspectionOpen} inspect={inspect}
     contextOpen={contextOpen} showContext={showContext}
     audioNotice={<OutputDeviceNotice connected={connected} outputId={state.devices.outputId} hidden={settingsOpen}
       useDefault={() => controller.switchDevice("output", "")} />}
-    contextDetails={contextOpen && state.context && <VoiceContextDetails context={state.context} close={showContext} />}
+    contextDetails={contextOpen && state.context && <VoiceContextDetails context={state.context} token={token} sessionId={state.sessionId} close={showContext} />}
     inspector={inspectionOpen && inspected && <DelegationInspector token={token} delegation={inspected} delegations={state.delegations} select={setInspectedId} close={closeInspection} viewChat={viewChat} />}
     start={() => { setInspectionOpen(false); setContextOpen(false); if (config) void controller.start(voice, config.revision, sessionId, config.transport); }}
     end={() => { startIntent.current = false; void controller.end(); }} close={() => { if (!settingsSaving) { startIntent.current = false; close(); } }} configure={configure}
     muteInput={() => controller.muteInput()} muteOutput={() => controller.muteOutput()}
-    play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat}>
-    {settingsVisited && <>
-      <div className="voice-quick-devices live-settings-form"><AudioDeviceSettings transport="websocket"
-        disabled={["permission", "connecting", "ending"].includes(state.phase)} active={connected} activeSelection={state.devices}
-        applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined} /></div>
-      <details className="voice-preferences" open={preferencesOpen} onToggle={event => setPreferencesOpen(event.currentTarget.open)}>
-        <summary>Voice &amp; connection</summary>
-        <LiveSettings token={token} assistant={config?.assistant} transport={config?.transport} showDevices={false}
-          hidden={!settingsOpen || !preferencesOpen} onSavingChange={setSettingsSaving} configureConnection={configureConnection}
-          blocked={active || !!config?.active_session_id} saved={snapshot => void saved(snapshot)} back={closeSettings} />
-      </details>
-    </>}
-  </LiveComposer>;
+    play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat} />
+    {settingsVisited && <VoiceSettingsDialog open={settingsOpen} saving={settingsSaving} close={closeSettings}>
+      <LiveSettings token={token} assistant={config?.assistant} transport={config?.transport}
+        audioDisabled={["permission", "connecting", "ending"].includes(state.phase)} audioActive={connected} audioSelection={state.devices}
+        applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined}
+        hidden={!settingsOpen} onSavingChange={setSettingsSaving}
+        configureConnection={configureConnection && (() => { closeSettings(); configureConnection(); })}
+        blocked={active || !!config?.active_session_id} saved={snapshot => void saved(snapshot)} back={closeSettings} />
+    </VoiceSettingsDialog>}
+  </>;
 }

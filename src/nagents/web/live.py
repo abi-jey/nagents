@@ -295,6 +295,10 @@ def register(
     async def delegation_details(session_id: SessionId, delegation_id: SessionId) -> dict[str, object]:
         return await service().delegation_details(session_id, delegation_id)
 
+    @app.get("/api/live/sessions/{session_id}/context")
+    async def context_details(session_id: SessionId) -> dict[str, object]:
+        return await service().context_details(session_id)
+
     @app.post("/api/live/sessions/{session_id}/close")
     async def close(session_id: SessionId) -> dict[str, object]:
         result = await service().close(session_id)

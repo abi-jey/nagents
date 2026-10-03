@@ -129,25 +129,20 @@ test("ChatGPT voice setup identifies the existing login and restricts new hosted
   } finally { await ui.close(); }
 });
 
-test("ready settings prioritize devices and default voice while setup errors reveal advanced fields", async (t) => {
+test("the full settings form exposes devices, voice, scope, connection and model without disclosures", async (t) => {
   const ui = view();
   t.mock.method(globalThis, "fetch", async (_path: string, init: RequestInit) => init.method === "POST"
     ? Response.json({ detail: "The selected voice model is unavailable." }, { status: 422 })
     : Response.json({ ...snapshot, live_supported: true }));
   try {
     await act(async () => ui.root.render(createElement(LiveSettings, { token: "token", blocked: false, back: () => {}, saved: () => {} })));
-    const advanced = ui.container.querySelector<HTMLDetailsElement>(".live-settings-advanced")!;
-    assert.equal(advanced.open, false);
-    assert.equal(advanced.querySelector("summary")?.textContent, "Connection & model");
+    assert.equal(ui.container.querySelector("details"), null);
+    for (const label of ["Default voice", "Voice connection", "Reasoning backend", "Starting context", "Apply voice preferences to"])
+      assert.ok(ui.select(label), `${label} is directly accessible`);
+    assert.ok(ui.label("GPT-Live model")?.querySelector("input"));
     assert.equal(ui.select("Default voice").closest("details"), null);
     assert.equal(ui.container.querySelector('select[aria-label="Microphone"]')?.closest("details"), null);
-    assert.equal(ui.select("Voice connection").closest("details"), advanced);
-    await act(async () => advanced.querySelector("summary")!.click());
-    assert.equal(advanced.open, true);
-    await act(async () => advanced.querySelector("summary")!.click());
-    assert.equal(advanced.open, false);
     await act(async () => ui.button("Save settings").click());
-    assert.equal(advanced.open, true, "A failed save exposes the configuration needed to recover");
     assert.match(ui.container.querySelector(".live-settings-feedback")?.textContent || "", /voice model is unavailable/);
   } finally { await ui.close(); }
 });
@@ -155,12 +150,13 @@ test("ready settings prioritize devices and default voice while setup errors rev
 test("connected audio devices remain editable while voice and provider preferences are blocked", async (t) => {
   const ui = view();
   const changes: [string, string][] = [];
-  let dismissed = 0;
+  let dismissed = 0, managed = 0;
   t.mock.method(globalThis, "fetch", async () => Response.json({ ...snapshot, live_supported: true }));
   const props = {
     token: "token", blocked: true, audioActive: true, audioDisabled: false,
     audioSelection: { inputId: "mic-one", outputId: "speaker-one" },
     applyDevice: async (kind: "input" | "output", id: string) => { changes.push([kind, id]); },
+    configureConnection: () => { managed++; },
     back: () => { dismissed++; }, saved: () => {},
   };
   try {
@@ -171,6 +167,9 @@ test("connected audio devices remain editable while voice and provider preferenc
     assert.equal(ui.select("Speaker").value, "speaker-one");
     assert.equal(ui.container.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, true);
     assert.equal(ui.button("Save settings").disabled, true);
+    assert.equal(ui.button("Manage provider connections").matches(":disabled"), true);
+    await act(async () => ui.button("Manage provider connections").click());
+    assert.equal(managed, 0, "the disabled connection fieldset prevents navigation during voice");
     assert.match(ui.container.textContent!, /Applies immediately/);
     assert.match(ui.container.textContent!, /before changing voice behavior, starting context, connection, or model/);
     await ui.change("Microphone", "");

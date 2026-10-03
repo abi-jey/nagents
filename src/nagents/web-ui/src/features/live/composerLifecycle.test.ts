@@ -47,6 +47,8 @@ function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = fa
 function view(options: { capability?: Promise<Response>; settings?: Promise<Response>; denied?: boolean; delegation?: boolean; voiceAuth?: LiveCapability["voice_auth"] } = {}) {
   const dom = new JSDOM("<footer class='composer-area'><div id='root'></div><form id='text-form'><textarea id='composer'></textarea><button type='submit'>Send</button></form></footer>", { url: "https://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  dom.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
   const frames = new Map<number, FrameRequestCallback>();
   let frameId = 0, captures = 0, creates = 0, closures = 0, sockets = 0, capabilityReads = 0, settingsReads = 0, dismissals = 0, submissions = 0;
   let denied = !!options.denied, expectedToken = "fixture-token";
@@ -142,9 +144,9 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
   dom.window.document.getElementById("text-form")!.addEventListener("submit", event => { event.preventDefault(); submissions++; });
   const root = createRoot(container);
   let mounted = true;
-  const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(item => (item.getAttribute("aria-label") || item.textContent?.trim()) === name)!;
+  const button = (name: string) => [...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(item => (item.getAttribute("aria-label") || item.textContent?.trim()) === name)!;
   return {
-    dom, container, textarea, tracks, button,
+    dom, container: dom.window.document.body, textarea, tracks, button,
     counts: () => ({ captures, creates, closures, sockets, capabilityReads, dismissals, submissions }),
     capability: (next: LiveCapability) => { currentCapability = next; },
     deny: (value: boolean) => { denied = value; },
@@ -157,14 +159,6 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
       key: `${props.token || "fixture-token"}:${props.sessionId || "ngn-one"}`,
     }))),
     click: async (name: string) => act(async () => button(name).click()),
-    expandPreferences: async () => act(async () => {
-      const details = container.querySelector<HTMLDetailsElement>("details.voice-preferences")!;
-      assert.ok(details);
-      if (!details.open) details.querySelector("summary")!.click();
-      // Native details dispatches toggle in a queued task; let React receive it.
-      await new Promise<void>(resolve => setTimeout(resolve, 0));
-      assert.equal(details.open, true);
-    }),
     flushFrames: async () => act(async () => { const current = [...frames.values()]; frames.clear(); current.forEach(callback => callback(0)); }),
     unmount: async () => { await act(async () => root.unmount()); mounted = false; },
     async close() {
@@ -190,7 +184,7 @@ for (const phase of ["connected", "ended", "error"] as const) {
       await ui.renderParent({ token: "new-server-token" });
       assert.equal(ui.counts().captures, 1, "credentials recovery must not reopen the microphone");
       assert.equal(ui.counts().creates, priorCreates, "no new provider allocation without a fresh click");
-      assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, true);
+      assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, false);
       assert.ok(ui.tracks.every(track => track.readyState === "ended"));
       ui.deny(false);
       await ui.click("Start voice");
@@ -255,7 +249,7 @@ test("parent settings intent survives token refresh without microphone access", 
     await ui.renderParent();
     await ui.click("Open voice settings");
     await ui.renderParent({ token: "new-server-token" });
-    assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, false);
+    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, true);
     assert.equal(ui.counts().captures, 0);
     assert.equal(ui.counts().creates, 0);
   } finally { await ui.close(); }
@@ -266,11 +260,10 @@ test("settings-only entry and saving preferences never start microphone or provi
   const start = t.mock.method(LiveController.prototype, "start");
   try {
     await ui.render({ autoStart: false });
-    assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, false);
-    await ui.expandPreferences();
+    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, true);
     await ui.click("Save settings");
     await ui.flushFrames();
-    assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, true);
+    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, false);
     assert.ok(ui.counts().capabilityReads >= 2);
     assert.equal(start.mock.calls.length, 0);
     assert.equal(ui.counts().captures, 0);
@@ -285,10 +278,12 @@ test("settings-only quick device selection saves locally without requiring a con
   const ui = view();
   try {
     await ui.render({ autoStart: false });
-    const picker = ui.container.querySelector<HTMLSelectElement>('.voice-quick-devices select[aria-label="Microphone"]')!;
+    const picker = ui.container.querySelector<HTMLSelectElement>('#voice-settings-dialog select[aria-label="Microphone"]')!;
     assert.ok(picker);
-    assert.equal(picker.closest("form"), null);
-    assert.equal(ui.container.querySelector<HTMLDetailsElement>(".voice-preferences")?.open, false);
+    assert.equal(picker.closest("#text-form"), null);
+    assert.equal(picker.closest("dialog")?.id, "voice-settings-dialog");
+    assert.equal(ui.container.querySelector("form form"), null);
+    assert.equal(ui.container.querySelector(".voice-preferences, .live-settings-advanced"), null);
     await act(async () => {
       picker.value = "microphone";
       picker.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true }));
@@ -297,7 +292,7 @@ test("settings-only quick device selection saves locally without requiring a con
     assert.equal(picker.value, "microphone");
     assert.equal(ui.counts().captures, 0);
     assert.equal(ui.counts().creates, 0);
-    assert.equal(ui.container.querySelector('.voice-quick-devices [role="alert"]'), null);
+    assert.equal(ui.container.querySelector('.live-device-settings [role="alert"]'), null);
   } finally { await ui.close(); }
 });
 
@@ -383,17 +378,17 @@ for (const blocked of ["unavailable", "occupied"] as const) {
   });
 }
 
-test("opening and closing inline Audio and request details leaves the connected call mounted", async (t) => {
+test("opening and closing the Audio overlay and request details leaves the connected call mounted", async (t) => {
   const ui = view({ delegation: true });
   const end = t.mock.method(LiveController.prototype, "end");
   const dispose = t.mock.method(LiveController.prototype, "dispose");
   try {
     await ui.render();
     await ui.click("Audio devices and voice settings");
+    await ui.click("Back to conversation");
     await ui.click("Audio devices and voice settings");
-    await ui.click("Audio devices and voice settings");
-    await act(async () => ui.container.querySelector(".voice-quick-devices select")!.dispatchEvent(new ui.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, true);
+    await act(async () => ui.container.querySelector("#voice-settings-dialog")!.dispatchEvent(new ui.dom.window.Event("cancel", { bubbles: true, cancelable: true })));
+    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, false);
     await ui.click("Request & events");
     assert.ok(ui.container.querySelector(".delegation-inspector"));
     await ui.click("Close delegation details");
@@ -413,11 +408,39 @@ test("settings finishing their background load does not steal focus from typed c
   const ui = view({ settings: pending.promise });
   try {
     await ui.render({ autoStart: false });
-    await ui.expandPreferences();
+    await ui.click("Back to conversation");
     ui.textarea.focus();
     await act(async () => pending.resolve(Response.json(settings)));
     assert.equal(ui.dom.window.document.activeElement, ui.textarea);
     assert.equal(ui.counts().captures, 0);
+  } finally { await ui.close(); }
+});
+
+test("the settings overlay swaps an active microphone without restarting voice or losing mute", async () => {
+  const ui = view();
+  try {
+    await ui.render();
+    await ui.click("Mute microphone");
+    await ui.click("Audio devices and voice settings");
+    const dialog = ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")!;
+    assert.equal(dialog.open, true);
+    const microphone = dialog.querySelector<HTMLSelectElement>('select[aria-label="Microphone"]')!;
+    assert.equal(microphone.disabled, false);
+    assert.equal(dialog.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, true);
+    await act(async () => {
+      microphone.value = "microphone";
+      microphone.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true }));
+    });
+    assert.equal(ui.counts().captures, 2, "only the explicit device change requests replacement media");
+    assert.equal(ui.counts().creates, 1);
+    assert.equal(ui.counts().closures, 0);
+    assert.equal(ui.tracks[0].readyState, "ended");
+    assert.equal(ui.tracks[1].readyState, "live");
+    assert.equal(ui.tracks[1].enabled, false);
+    await ui.click("Back to conversation");
+    assert.equal(dialog.open, false);
+    assert.equal(ui.counts().submissions, 0);
+    assert.equal(ui.tracks[1].readyState, "live");
   } finally { await ui.close(); }
 });
 

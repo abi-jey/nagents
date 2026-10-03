@@ -208,6 +208,7 @@ async def test_login_voice_retains_codex_or_ngn_oauth_precedence(
         assert selected.api_key.get_secret_value() == ""
         login = create_login_config(selected, "", backend)
         assert login is not None
+        assert selected.values.voice == login.voice == "sol"
         assert (await login.credentials()).access_token == (codex_token if auth == "codex" else "synthetic-ngn")
 
 
@@ -229,5 +230,7 @@ async def test_explicit_api_profiles_remain_independent_of_codex(tmp_path: Path,
         try:
             assert voice.provider.base_url == (endpoint or "https://api.openai.com/v1")
             assert voice.provider.api_key == PROFILE_KEY
+            assert voice.provider.live_config is not None
+            assert selected.values.voice == voice.provider.live_config.voice == "marin"
         finally:
             await voice.close()

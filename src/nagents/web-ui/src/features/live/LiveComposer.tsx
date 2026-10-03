@@ -27,7 +27,6 @@ export interface LiveComposerProps {
   viewChat(runId: string): void;
   inspect(): void;
   inspector?: ReactNode;
-  children?: ReactNode;
   contextOpen?: boolean;
   showContext?(): void;
   contextDetails?: ReactNode;
@@ -35,7 +34,7 @@ export interface LiveComposerProps {
 }
 
 /** The voice presence and controls share the composer's layout, never cover chat. */
-export function LiveComposer({ state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, children, contextOpen = false, showContext, contextDetails, audioNotice }: LiveComposerProps) {
+export function LiveComposer({ state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice }: LiveComposerProps) {
   const connected = state.phase === "connected";
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const delegation = currentLiveDelegation(state.delegations);
@@ -50,10 +49,9 @@ export function LiveComposer({ state, status, elapsed, disabled, unavailable, lo
   const startDisabled = disabled || settingsSaving || settingsOpen || loading;
   const interactionDisabled = connected ? false : active || startDisabled;
 
-  return <section id="voice-session" className={`voice-composer phase-${state.phase}${connected ? " is-connected" : ""}${settingsOpen || inspectionOpen || contextOpen ? " has-expansion" : ""}`} aria-label="Voice in this chat" onKeyDown={event => {
+  return <section id="voice-session" className={`voice-composer phase-${state.phase}${connected ? " is-connected" : ""}${inspectionOpen || contextOpen ? " has-expansion" : ""}`} aria-label="Voice in this chat" onKeyDown={event => {
     if (event.key === "Escape" && contextOpen) { event.stopPropagation(); showContext?.(); }
     else if (event.key === "Escape" && inspectionOpen) { event.stopPropagation(); inspect(); }
-    else if (event.key === "Escape" && settingsOpen && !settingsSaving) { event.stopPropagation(); configure(); }
   }}>
     <div className="voice-presence">
       <LiveSphere phase={state.phase} micMuted={state.micMuted} outputMuted={state.outputMuted}
@@ -71,19 +69,18 @@ export function LiveComposer({ state, status, elapsed, disabled, unavailable, lo
           <button type="button" className={`voice-mic${state.micMuted ? " is-muted" : ""}`} aria-label={state.micMuted ? "Unmute microphone" : "Mute microphone"} title={state.micMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={state.micMuted} disabled={!connected} onClick={muteInput}><Icon name={state.micMuted ? "mic-off" : "mic"} size={18} /></button>
           <button type="button" className={`voice-speaker${state.outputMuted ? " is-muted" : ""}`} aria-label={state.outputMuted ? "Unmute speaker" : "Mute speaker"} title={state.outputMuted ? "Unmute speaker" : "Mute speaker"} aria-pressed={state.outputMuted} disabled={!connected} onClick={muteOutput}><Icon name={state.outputMuted ? "volume-off" : "volume"} size={18} /></button>
         </> : <button type="button" className="voice-start" disabled={startDisabled} onClick={start}><Icon name="wave" size={16} /><span>{state.phase === "error" ? "Retry" : state.phase === "ended" ? "Start again" : "Start voice"}</span></button>}
-        <button type="button" className="voice-settings-trigger" aria-label="Audio devices and voice settings" aria-expanded={settingsOpen} aria-controls="voice-inline-settings" disabled={settingsSaving} onClick={configure}><Icon name="settings" size={16} /><span>Audio</span></button>
+        <button type="button" className="voice-settings-trigger" aria-label="Audio devices and voice settings" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-controls="voice-settings-dialog" disabled={settingsSaving} onClick={configure}><Icon name="settings" size={16} /><span>Audio</span></button>
         {active ? <button type="button" className="voice-stop" aria-label={connected ? "End voice" : state.phase === "ending" ? "Ending voice" : "Cancel connection"} disabled={state.phase === "ending"} onClick={end}><Icon name="stop" size={15} /><span>{connected ? "Stop" : state.phase === "ending" ? "Ending" : "Cancel"}</span></button> : <button type="button" className="voice-dismiss" aria-label="Close voice controls" title="Close voice controls" disabled={settingsSaving} onClick={close}><Icon name="close" size={17} /></button>}
       </div>
     </div>
     {delegation && <div className="voice-delegation" data-status={delegation.status} aria-label="Voice delegation">
-      <Icon name="channels" size={14} /><span role="status">{delegationLabel}{connected && pending > 1 ? ` · ${pending} requests` : ""}</span>
+      <code className="voice-event-type">delegation</code><span role="status">{delegationLabel}{connected && pending > 1 ? ` · ${pending} requests` : ""}</span>
       <button type="button" className="voice-request-trigger" aria-expanded={inspectionOpen} aria-controls="voice-inline-delegation" onClick={inspect}>Request &amp; events<Icon name="chevron" size={12} /></button>
       {delegation.runId && <button type="button" className="voice-view-chat" aria-label={`View ${delegation.agent}'s request in chat`} onClick={() => viewChat(delegation.runId)}>View in chat</button>}
     </div>}
     {audioNotice}
     {state.playbackBlocked && <button type="button" className="voice-enable-audio" onClick={play}><Icon name="volume" size={16} />Enable audio</button>}
     {feedback && <div className={`voice-feedback${state.error ? " has-error" : ""}`} role={state.error ? "alert" : "status"}><p>{feedback}</p>{!active && <button type="button" disabled={loading} onClick={refresh}>Refresh</button>}</div>}
-    <div className="voice-inline-expansion" id="voice-inline-settings" hidden={!settingsOpen}>{children}</div>
     <div className="voice-inline-expansion" id="voice-inline-delegation" hidden={!inspectionOpen}>{inspector}</div>
     <div className="voice-inline-expansion" id="voice-inline-context" hidden={!contextOpen}>{contextDetails}</div>
   </section>;

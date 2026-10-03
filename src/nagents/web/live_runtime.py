@@ -13,6 +13,7 @@ import re
 from collections import deque
 from contextlib import aclosing
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
@@ -35,6 +36,11 @@ from nagents.live import LiveEvent
 
 from ._async import join_owned
 from .live_context import LiveSeed
+from .live_inspection import MAX_MODEL_BYTES
+from .live_inspection import MAX_MODEL_PAYLOAD
+from .live_inspection import MAX_MODEL_REQUESTS
+from .live_inspection import seed_details
+from .live_inspection import text_preview
 from .live_login import ChatGPTLiveConnection
 from .live_login import LoginVoiceError
 
@@ -58,7 +64,7 @@ MAX_COMPLETED = 8
 MAX_COMPLETED_DELEGATIONS = 32
 MAX_DELEGATION_REQUEST = 32768
 MAX_DELEGATION_RESULT = 16384
-MAX_DELEGATION_TIMELINE = 8
+MAX_DELEGATION_TIMELINE = 96
 LEASE_SECONDS = 40.0
 PROVISION_SECONDS = 25.0
 ATTACH_SECONDS = 10.0
@@ -85,6 +91,52 @@ class _DelegationDetails:
     result: Payload = field(default_factory=dict)
     timeline: deque[Payload] = field(default_factory=lambda: deque(maxlen=MAX_DELEGATION_TIMELINE))
     timeline_truncated: bool = False
+    model_requests: list[Payload] = field(default_factory=list)
+    model_requests_truncated: bool = False
+    model_bytes: int = 0
+
+    def capture_model(self, value: object, seq: int, status: str) -> Payload:
+        if status != "working" or not isinstance(value, dict):
+            return {}
+        kind, identifier, round_number = value.get("type"), value.get("model_call_id"), value.get("round")
+        payload = value.get("payload")
+        if (
+            not isinstance(kind, str)
+            or kind not in {"model_context", "http_request_body"}
+            or not isinstance(identifier, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", identifier)
+            or type(round_number) is not int
+            or not 0 <= round_number <= 1_000_000
+        ):
+            return {}
+        metadata: Payload = {"type": kind, "model_call_id": identifier, "round": round_number}
+        if kind == "http_request_body":
+            attempt_id = value.get("attempt_id")
+            if not isinstance(attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", attempt_id):
+                return {}
+            metadata.update(attempt_id=attempt_id, segmented=True)
+        if value.get("capture_limited") is True:
+            self.model_requests_truncated = True
+            return {**metadata, "capture_limited": True}
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("text"), str)
+            or type(payload.get("characters")) is not int
+            or payload["characters"] < len(payload["text"])
+            or type(payload.get("truncated")) is not bool
+        ):
+            return {}
+        if len(self.model_requests) >= MAX_MODEL_REQUESTS or self.model_bytes >= MAX_MODEL_BYTES:
+            self.model_requests_truncated = True
+            return {**metadata, "capture_limited": True}
+        preview = text_preview(payload["text"], min(MAX_MODEL_PAYLOAD, MAX_MODEL_BYTES - self.model_bytes))
+        preview["characters"] = payload["characters"]
+        preview["truncated"] = bool(preview["truncated"]) or payload["truncated"]
+        if payload.get("characters_complete") is False:
+            preview["characters_complete"] = False
+        self.model_bytes += len(str(preview["text"]).encode("utf-8"))
+        self.model_requests.append({"seq": seq, **metadata, "payload": preview})
+        return metadata
 
     def capture(self, update: Payload, status: str, explanation: str) -> bool:
         changed = False
@@ -117,6 +169,8 @@ class _DelegationDetails:
             **({"result": dict(self.result)} if self.result else {}),
             "timeline": [dict(event) for event in self.timeline],
             "timeline_truncated": self.timeline_truncated,
+            "model_requests": deepcopy(self.model_requests),
+            "model_requests_truncated": self.model_requests_truncated,
         }
 
 
@@ -133,6 +187,7 @@ class _Record:
     delegations: dict[str, Payload] = field(default_factory=dict)
     delegation_details: dict[str, _DelegationDetails] = field(default_factory=dict, repr=False)
     context: Payload = field(default_factory=dict)
+    context_details: Payload = field(default_factory=dict, repr=False)
 
     def append(self, kind: str, text: str, **fields: object) -> None:
         self.cursor += 1
@@ -191,6 +246,8 @@ class _Record:
         }
         details = self.delegation_details.get(identifier, _DelegationDetails())
         detail_changed = details.capture(update, status, metadata["text"])
+        model_metadata = details.capture_model(update.get("model_request"), self.cursor + 1, status)
+        detail_changed |= bool(model_metadata)
         if (
             not detail_changed
             and previous is not None
@@ -198,9 +255,11 @@ class _Record:
         ):
             return
         text = str(fields.pop("text"))
+        if model_metadata:
+            fields.update(detail_type=model_metadata["type"])
         self.append("delegation", text, **fields)
         self.delegations[identifier] = dict(self.events[-1])
-        details.remember(self.events[-1])
+        details.remember({**self.events[-1], **model_metadata})
         self.delegation_details[identifier] = details
         # Keep every admitted/pending task. Only completed history is disposable;
         # a long task may finish after many later requests have come and gone.
@@ -422,6 +481,25 @@ class LiveService:
             raise HTTPException(404, "Unknown Live delegation.")
         return {**state, **details.snapshot()}
 
+    async def context_details(self, session_id: str) -> Payload:
+        record = self._lookup(session_id)
+        return {
+            **deepcopy(record.context),
+            "voice_session_id": record.identifier,
+            "chat_session_id": record.context.get("chat_session_id", ""),
+            **(
+                deepcopy(record.context_details)
+                if record.context_details
+                else {
+                    "available": False,
+                    "instructions": text_preview("", 0),
+                    "history": [],
+                    "history_truncated": False,
+                    "reason": "Voice setup has not been dispatched.",
+                }
+            ),
+        }
+
     def _prune_records(self) -> None:
         completed = [
             key
@@ -605,6 +683,36 @@ class LiveService:
             call.seed = await self._context_factory(call.record.identifier)
             call.record.context = call.seed.report()
 
+    def _capture_context(self, call: _Call, instructions: str, history: tuple[Payload, ...]) -> None:
+        if not call.record.context_details:
+            # The inspector must not affect voice admission or provider behavior.
+            with suppress(Exception):
+                call.record.context_details = seed_details(instructions, history)
+
+    def _capture_agent_context(self, call: _Call, agent: Agent) -> None:
+        if call.record.context_details:
+            return
+        with suppress(Exception):
+            # Read the same session builder used by the public Live transport,
+            # including its effective instruction/history semantics.
+            config = agent.live_configuration()
+            instructions, history = config.get("instructions"), config.get("input")
+            if (
+                isinstance(instructions, str)
+                and isinstance(history, list)
+                and len(history) <= 16
+                and all(isinstance(item, dict) for item in history)
+            ):
+                self._capture_context(call, instructions, tuple(history))
+                return
+        call.record.context_details = {
+            "available": False,
+            "instructions": text_preview("", 0),
+            "history": [],
+            "history_truncated": False,
+            "reason": "Voice setup details could not be captured.",
+        }
+
     async def _run_stream_created(self, call: _Call, voice: str) -> None:
         try:
             login = self._login_factory(voice) if self._login_factory is not None else None
@@ -681,6 +789,7 @@ class LiveService:
                 offer = await media.offer() if media is not None else sdp
                 if call.stop.is_set():
                     return
+                self._capture_context(call, config.instructions, config.history)
                 answer = _sdp(await connection.provision(offer))
                 observers.append(asyncio.create_task(watch(), name="web-chatgpt-live-sideband"))
                 if call.stop.is_set():
@@ -795,6 +904,7 @@ class LiveService:
                 # Provisioning is bounded but is NOT canceled by an HTTP client
                 # disconnect: losing its response could orphan an allocated call.
                 async with asyncio.timeout(PROVISION_SECONDS):
+                    self._capture_agent_context(call, agent)
                     result = await api.create_webrtc(sdp, agent.live_configuration(media=True))
                 del sdp
                 identifier = _identifier(result)
@@ -935,6 +1045,7 @@ class LiveService:
 
     async def _observe(self, call: _Call, agent: Agent, identifier: str) -> None:
         try:
+            self._capture_agent_context(call, agent)
             async with aclosing(agent.run()) as events:
                 async for event in events:
                     if await self._capture_event(call, event, identifier, agent.provider.api_key):
