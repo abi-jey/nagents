@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from nagents.agent import Agent
     from nagents.audio import AudioInput
     from nagents.audio import AudioOutput
+    from nagents.web.live_handoff import LoginHandoff
 
 
 class Source:
@@ -382,8 +383,8 @@ def test_login_stream_owns_media_until_finalization_and_cleans_cancelled_setup(
         async def credentials() -> CodexCredentials:
             return CodexCredentials("fixture-token", "fixture-account")
 
-        async def backend(text: str) -> str:
-            return text
+        async def backend(request: LoginHandoff) -> str:
+            return request.text
 
         def forbidden_factory(voice: str) -> Agent:
             pytest.fail("A ChatGPT voice relay must never instantiate the API-key provider")

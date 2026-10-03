@@ -25,6 +25,7 @@ from nagents.provider import ProviderType
 from nagents.session import SessionManager
 from nagents.types import RetryConfig
 
+from .live_handoff import LoginHandoff
 from .live_login import LoginVoiceConfig
 from .live_settings import GlobalVoiceInput
 from .live_settings import LiveSettingsInput
@@ -197,7 +198,7 @@ def create_agent(
 
 
 def create_login_config(
-    connection: "LiveConnection", voice: str, handler: Callable[[str], Awaitable[str]]
+    connection: "LiveConnection", voice: str, handler: Callable[[LoginHandoff], Awaitable[str]]
 ) -> LoginVoiceConfig:
     reason = unavailable_reason(connection, demo=False)
     if reason:

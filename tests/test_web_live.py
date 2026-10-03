@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents.agent import Agent
+    from nagents.web.live_handoff import LoginHandoff
     from nagents.web.live_login import LoginVoiceConfig
 
 SECRET = "sk-fixture-live-private-key"
@@ -282,7 +283,7 @@ def test_factory_configures_voice_as_the_existing_assistants_frontend() -> None:
 
 
 def test_login_factory_binds_voice_to_existing_assistant_without_api_key() -> None:
-    async def handle(transcript: str) -> str:
+    async def handle(request: LoginHandoff) -> str:
         return "The existing assistant's verified result"
 
     async def credentials() -> CodexCredentials:

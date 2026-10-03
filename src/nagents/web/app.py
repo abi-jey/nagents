@@ -217,7 +217,7 @@ def create_app(
                 live_settings.admitted_session(),
                 voice_session_id=live.active_session_id,
                 report=live.delegation_reporter(live.active_session_id),
-            ).handle
+            ).handle_native
             return create_login_config(connection, voice, handler)
 
         async def voice_context(identifier: str) -> LiveSeed:

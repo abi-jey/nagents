@@ -21,12 +21,21 @@ from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
 from nagents.types import Message
 from nagents.web.live_bridge import MainAgentBridge
+from nagents.web.live_bridge import native_voice_prompt
 from nagents.web.live_bridge import voice_display
 from nagents.web.live_bridge import voice_prompt
+from nagents.web.live_handoff import LoginHandoff
+from nagents.web.live_login import ChatGPTLiveConnection
+from nagents.web.live_runtime import _Record
 from nagents.web.service import Run
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
+from tests.test_web_live_login import ANSWER
+from tests.test_web_live_login import OFFER
+from tests.test_web_live_login import config as login_config
+from tests.test_web_live_login import upstream
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -294,7 +303,10 @@ def test_voice_keeps_its_original_chat_when_another_tab_selects_a_new_one(tmp_pa
 
 
 @pytest.mark.parametrize("outcome", ["complete", "stop", "shutdown"])
-def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop(tmp_path: Path, outcome: str) -> None:
+@pytest.mark.parametrize("native", [False, True])
+def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop(
+    tmp_path: Path, outcome: str, native: bool
+) -> None:
     async def scenario() -> None:
         entered = asyncio.Event()
         stopped = asyncio.Event()
@@ -323,10 +335,10 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
         ):
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, harnesses):
                 state = app.state.web
+                bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
+                request = LoginHandoff("native-long-task", "A long task")
                 work = asyncio.create_task(
-                    MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(
-                        speech("A long task")
-                    )
+                    bridge.handle_native(request) if native else bridge.handle(speech("A long task"))
                 )
                 async with asyncio.timeout(5):
                     await entered.wait()
@@ -364,12 +376,208 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
             ]
             assert len({str(report["delegation_id"]) for report in reports}) == 1
             assert reports[-1]["chat_session_id"] == run.session_id
-            assert reports[0]["request_transcript"] == speech("A long task")
-            assert reports[2]["request_input"] == voice_prompt(speech("A long task"))
+            assert reports[0]["request_transcript"] == ("[]" if native else speech("A long task"))
+            assert reports[2]["request_input"] == (
+                native_voice_prompt(request) if native else voice_prompt(speech("A long task"))
+            )
             if outcome == "complete":
                 assert reports[-1]["result_text"] == "Completed after voice ended"
             else:
                 assert "result_text" not in reports[-1]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("historical_speech", ["[]", speech("An earlier, different request")])
+def test_native_handoff_uses_explicit_request_without_fabricating_captions(
+    tmp_path: Path, historical_speech: str
+) -> None:
+    request = LoginHandoff("provider-item-id", "Explain the README.", historical_speech, 1500)
+    seen: list[str] = []
+
+    async def generate(
+        provider: HarnessProvider,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: GenerationConfig | None = None,
+        stream: bool = True,
+        verify_model: bool = False,
+    ) -> AsyncIterator[Event]:
+        seen.append(str(messages[-1].content))
+        yield TextDoneEvent(text="README explanation")
+
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
+            state = app.state.web
+            root = state.selected_session_id
+            reports: list[dict[str, object]] = []
+            bridge = MainAgentBridge(state, root, voice_session_id="native-call", report=reports.append)
+            assert await bridge.handle_native(request) == "README explanation"
+            assert seen == [native_voice_prompt(request)]
+            assert "Respond to the latest unresolved caller request" not in seen[0]
+            rows = await state.history.snapshot(root)
+            assert [row["role"] for row in rows] == ["user", "assistant"]
+            assert rows[0]["content"] == "Explain the README."
+            assert rows[0]["voice_verified"] is True and rows[0]["voice_session_id"] == "native-call"
+            assert reports[0]["request_transcript"] == historical_speech
+            assert reports[0]["delegation_id"] != request.identifier  # App and upstream identities stay separate.
+            await state.live_captions(root, "native-call")(
+                {
+                    "type": "transcript",
+                    "seq": 1,
+                    "speaker": "user",
+                    "text": "Explain the README.",
+                    "start_ms": 1000,
+                    "end_ms": 1400,
+                }
+            )
+            rows = await state.history.snapshot(root)
+            captions = [row for row in rows if row["role"] == "live_caption"]
+            assert len(captions) == 1 and captions[0]["content"] == request.text
+            assert captions[0]["start_ms"] == 1000 and captions[0]["end_ms"] == 1400
+            assert len(seen) == 1  # A late caption never starts/replays the request.
+            assert len(await state.history.get_history(root)) == 2  # Captions stay out of model input.
+
+    with (
+        patch.object(ControlledHarness, "run", Harness.run),
+        patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
+        patch.object(HarnessProvider, "generate", generate),
+    ):
+        asyncio.run(scenario())
+
+
+def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued_handoffs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        entered, release, stopped, queued = (asyncio.Event() for _ in range(4))
+        reports: list[dict[str, object]] = []
+        inputs: list[str] = []
+        commands: list[str] = []
+
+        async def generate(
+            provider: HarnessProvider,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: GenerationConfig | None = None,
+            stream: bool = True,
+            verify_model: bool = False,
+        ) -> AsyncIterator[Event]:
+            inputs.append(str(messages[-1].content))
+            entered.set()
+            try:
+                await release.wait()
+            finally:
+                stopped.set()
+            yield TextDoneEvent(text="Finished after native voice ended")
+
+        async def handle(request: web.Request) -> web.StreamResponse:
+            if request.method == "POST":
+                return web.Response(status=201, text=ANSWER, headers={"Location": "/calls/rtc_native_bridge"})
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            for identifier, text in (("first", "Run the first task"), ("queued", "Do not start this second task")):
+                await socket.send_json(
+                    {
+                        "type": "delegation.created",
+                        "item": {
+                            "id": identifier,
+                            "type": "delegation",
+                            "target": "client",
+                            "content": [{"type": "input_text", "text": text}],
+                        },
+                    }
+                )
+            async for message in socket:
+                command = message.json()["type"]
+                commands.append(command)
+                if command == "session.close":
+                    await socket.send_json({"type": "session.closed"})
+                    break
+            return socket
+
+        with (
+            patch.object(ControlledHarness, "run", Harness.run),
+            patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
+            patch.object(HarnessProvider, "generate", generate),
+        ):
+            async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _), upstream(monkeypatch, handle):
+                state = app.state.web
+                root = state.selected_session_id
+                bridge = MainAgentBridge(state, root, voice_session_id="native-close-call", report=reports.append)
+                connection = ChatGPTLiveConnection(login_config(bridge.handle_native))
+                await connection.provision(OFFER)
+
+                async def read() -> None:
+                    async for event in connection.events():
+                        if event.get("delegation") == {"id": "queued", "target": "client"}:
+                            queued.set()
+
+                reader = asyncio.create_task(read())
+                try:
+                    async with asyncio.timeout(HANG_GUARD):
+                        await entered.wait()
+                        await queued.wait()
+                        run = state.active
+                        assert run is not None
+                        assert [record["status"] for record in reports] == ["queued", "working", "working"]
+                        await connection.close()
+                        await reader
+                        assert connection.finalized and commands == ["session.close"]
+                        assert state.active is run and not run.task.done() and not stopped.is_set()
+                        assert len(inputs) == 1
+                        assert inputs[0] == native_voice_prompt(LoginHandoff("first", "Run the first task"))
+                        assert not any(row["role"] == "live_caption" for row in await state.history.snapshot(root))
+                        release.set()
+                        await run.task
+                    assert stopped.is_set() and run.outcome == "completed" and run.finished
+                    assert [record["status"] for record in reports] == ["queued", "working", "working", "completed"]
+                    assert reports[-1]["result_text"] == "Finished after native voice ended"
+                    assert len(inputs) == 1 and commands == ["session.close"]
+                    rows = await state.history.snapshot(root)
+                    assert [row["role"] for row in rows] == ["user", "assistant"]
+                    assert rows[0]["content"] == "Run the first task"
+                    assert rows[0]["voice_session_id"] == "native-close-call" and rows[0]["voice_verified"]
+                finally:
+                    release.set()
+                    reader.cancel()
+                    await asyncio.gather(reader, return_exceptions=True)
+                    await connection.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_queued_native_request_is_inspectable_before_the_main_assistant_slot_is_available(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
+            state = app.state.web
+            queued = asyncio.Event()
+            record = _Record()
+
+            def report(update: dict[str, object]) -> None:
+                record.delegation(update)
+                queued.set()
+
+            request = LoginHandoff("native-pending", "The new requested action", speech("An older request"))
+            bridge = MainAgentBridge(
+                state, state.selected_session_id, voice_session_id=record.identifier, report=report
+            )
+            with state.idle():
+                task = asyncio.create_task(bridge.handle_native(request))
+                try:
+                    async with asyncio.timeout(HANG_GUARD):
+                        await queued.wait()
+                    assert state.active is None and await state.harness.history() == []
+                    item = next(iter(record.delegations.values()))
+                    assert item["status"] == "queued" and item["run_id"] == ""
+                    details = next(iter(record.delegation_details.values())).request
+                    assert details["input"]["text"] == native_voice_prompt(request)
+                    assert details["transcript"]["text"] == speech("An older request")
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+            assert next(iter(record.delegations.values()))["status"] == "cancelled"
+            assert state.active is None and await state.harness.history() == []
 
     asyncio.run(scenario())
 

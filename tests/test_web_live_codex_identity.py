@@ -85,7 +85,7 @@ async def connection(
         await settings.shutdown()
 
 
-async def backend(_transcript: str) -> str:
+async def backend(_request: object) -> str:
     raise AssertionError("No backend inference")
 
 

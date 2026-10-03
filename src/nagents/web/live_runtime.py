@@ -93,7 +93,7 @@ class _DelegationDetails:
             if (
                 field_name not in self.request
                 and isinstance(value, str)
-                and (field_name == "transcript" or status == "working")
+                and (field_name == "transcript" or status in {"queued", "working"})
             ):
                 self.request[field_name] = _bounded_text(value, MAX_DELEGATION_REQUEST)
                 changed = True

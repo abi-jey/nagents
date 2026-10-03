@@ -18,8 +18,11 @@ from uuid import uuid4
 
 import aiohttp
 
-from nagents.live.runtime import ClientDelegations
 from nagents.live.runtime import _no_redirects
+
+from .live_handoff import LoginDelegations
+from .live_handoff import LoginHandoff
+from .live_handoff import handoff_offset
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -41,7 +44,7 @@ class LoginVoiceConfig:
     model: str
     voice: str
     instructions: str
-    handler: Callable[[str], Awaitable[str]]
+    handler: Callable[[LoginHandoff], Awaitable[str]]
     history: tuple[Payload, ...] = ()
 
 
@@ -94,7 +97,11 @@ def normalize_event(event: Payload) -> Payload:
         identifier = item.get("id")
         if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 256:
             raise LoginVoiceError("ChatGPT voice returned an invalid delegation event.")
-        return {"type": "session.delegation.created", "delegation": {"id": identifier, "target": "client"}}
+        notice: Payload = {"type": "session.delegation.created", "delegation": {"id": identifier, "target": "client"}}
+        offset = handoff_offset(event.get("offset_ms"))
+        if offset is not None:
+            notice["offset_ms"] = offset
+        return notice
     if kind in {"session.closed", "session.usage.updated"}:
         usage = event.get("usage")
         if isinstance(usage, dict):
@@ -206,11 +213,7 @@ class ChatGPTLiveConnection:
             raise LoginVoiceError("ChatGPT voice needs one provisioned call and one control reader.")
         self._reading = True
 
-        async def backend(transcript: str, identifier: str) -> str:
-            return await self.config.handler(transcript)
-
-        delegations = ClientDelegations(backend, self._result)
-        delegations.timeout = 420
+        delegations = LoginDelegations(self.config.handler, self._result)
         worker = asyncio.create_task(delegations.run(), name="web-login-live-backend")
         self._workers.append(worker)
         try:
@@ -253,7 +256,7 @@ class ChatGPTLiveConnection:
                         # failure can discard its authoritative confirmation.
                         if worker.done():
                             worker.result()
-                        delegations.observe(event)
+                        delegations.observe(event, cast("Payload", raw))
                     yield event
                     if self.finalized:
                         return

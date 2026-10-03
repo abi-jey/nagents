@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from .live_handoff import MAX_HANDOFF_TEXT
+from .live_handoff import LoginHandoff
 from .service import Run
 
 if TYPE_CHECKING:
@@ -24,8 +26,7 @@ VOICE_REPLY_SECONDS = 300.0
 DelegationStatus = Literal["queued", "working", "completed", "failed", "cancelled"]
 
 
-def voice_prompt(transcript: str) -> str:
-    """Keep recent speech as data, preserving speaker order without inventing turns."""
+def _speech_data(transcript: str) -> tuple[list[dict[str, object]], bool]:
     try:
         fragments = json.loads(transcript)
         if not isinstance(fragments, list):
@@ -46,14 +47,16 @@ def voice_prompt(transcript: str) -> str:
             recent.append({key: fragment[key] for key in ("speaker", "text", "start_ms", "end_ms") if key in fragment})
     except (ValueError, TypeError):
         raise ValueError("Live transcript could not be processed; ask the caller to repeat the request") from None
+    recent.reverse()
+    return recent, len(recent) < len(fragments)
+
+
+def voice_prompt(transcript: str) -> str:
+    """Keep recent speech as data, preserving speaker order without inventing turns."""
+    recent, omitted = _speech_data(transcript)
     if not recent or not any(part["speaker"] == "user" for part in recent):
         raise ValueError("No caller speech is available yet; ask the caller to repeat the request")
-    recent.reverse()
-    prefix = (
-        "Earlier speech is omitted; consult this chat's saved history for previous outcomes. "
-        if len(recent) < len(fragments)
-        else ""
-    )
+    prefix = "Earlier speech is omitted; consult this chat's saved history for previous outcomes. " if omitted else ""
     return (
         "Live voice request for the selected chat. The JSON below contains partial speech fragments, "
         "not verified complete turns. Respond to the latest unresolved caller request, respect corrections "
@@ -61,6 +64,28 @@ def voice_prompt(transcript: str) -> str:
         "Use your usual tools and approval rules. Return a concise answer for the voice to speak. "
         + prefix
         + "Speech data:\n"
+        + json.dumps(recent, ensure_ascii=False)
+    )
+
+
+def native_voice_prompt(request: LoginHandoff) -> str:
+    """The native handoff owns the task; captions are optional historical context."""
+    if not request.text.strip() or len(request.text) > MAX_HANDOFF_TEXT:
+        raise ValueError("A native voice handoff needs a bounded request")
+    recent, omitted = _speech_data(request.transcript)
+    data: dict[str, object] = {"delegation_id": request.identifier, "request": request.text}
+    if request.offset_ms is not None:
+        data["offset_ms"] = request.offset_ms
+    return (
+        "Live voice request for the selected chat. Perform the explicit request in the handoff data below. "
+        "The separate speech data is optional historical context captured when this handoff arrived; "
+        "it may be partial or absent and must not replace the explicit request with an earlier task. "
+        "Respect this chat's saved history and previously completed actions. "
+        "Use your usual tools and approval rules. Return a concise answer for the voice to speak. "
+        + ("Earlier speech is omitted. " if omitted else "")
+        + "Handoff data:\n"
+        + json.dumps(data, ensure_ascii=False)
+        + "\nSpeech data:\n"
         + json.dumps(recent, ensure_ascii=False)
     )
 
@@ -121,8 +146,14 @@ class MainAgentBridge:
         }
 
     async def handle(self, transcript: str) -> str:
+        return await self._handle(transcript)
+
+    async def handle_native(self, request: LoginHandoff) -> str:
+        return await self._handle(request.transcript, request)
+
+    async def _handle(self, transcript: str, native: LoginHandoff | None = None) -> str:
         # This is an application request identity, not a guessed correlation with
-        # the provider's notice ID (the client-handler API supplies speech only).
+        # the provider's notice ID. Public client handlers supply speech only.
         identifier = uuid4().hex
         target = self._target()
 
@@ -141,13 +172,22 @@ class MainAgentBridge:
                     }
                 )
 
-        status("queued", "Waiting for the assistant.", request_transcript=transcript)
+        if native is None:
+            status("queued", "Waiting for the assistant.", request_transcript=transcript)
         try:
-            prompt = voice_prompt(transcript)
-            display, speech = voice_display(transcript, self._displayed_speech)
+            if native is None:
+                prompt = voice_prompt(transcript)
+                display, speech = voice_display(transcript, self._displayed_speech)
+            else:
+                prompt = native_voice_prompt(native)
+                display, speech = native.text.strip(), self._displayed_speech
         except ValueError:
+            if native is not None:
+                status("queued", "Waiting for the assistant.", request_transcript=transcript)
             status("failed", "The voice request could not be read. Please repeat it.")
             return "I need a clear, shorter request. Could you say it again?"
+        if native is not None:
+            status("queued", "Waiting for the assistant.", request_transcript=transcript, request_input=prompt)
         state = self.state
         try:
             # The sideband can delegate before the provisioning HTTP request
