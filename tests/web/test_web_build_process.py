@@ -59,7 +59,7 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
             str(build),
             str(tmp_path),
         ],
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     try:
@@ -72,15 +72,24 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
         if not during_spawn:
             driver.send_signal(stop_signal)
         assert driver.wait(timeout=HANG_GUARD) != 0
+        # Both fixture descendants inherit stdout and never close it themselves.
+        # EOF waits for their exit; reaping only the driver does not join them.
+        driver.communicate(timeout=HANG_GUARD)
         # If the grandchild survived, its monotonic heartbeat would keep advancing.
         last_write = heartbeat.stat().st_mtime_ns
         time.sleep(0.15)
         assert heartbeat.stat().st_mtime_ns == last_write, "Build grandchild was orphaned"
     finally:
-        if driver.poll() is None:
-            driver.kill()
-            driver.wait(timeout=HANG_GUARD)
-        pid_file = tmp_path / "build-pid"
-        if pid_file.exists():
-            with suppress(ProcessLookupError):
-                os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+        try:
+            if driver.poll() is None:
+                driver.kill()
+                driver.wait(timeout=HANG_GUARD)
+        finally:
+            try:
+                pid_file = tmp_path / "build-pid"
+                if pid_file.exists():
+                    with suppress(ProcessLookupError):
+                        os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+            finally:
+                if driver.stdout is not None:
+                    driver.stdout.close()
