@@ -119,7 +119,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
       </select></label>
       {(["api-key", "auto"].includes(draft.auth) || (draft.kind === "openai" && ["chatgpt", "codex"].includes(draft.auth))) && <label>API key environment variable
         <input value={draft.api_key_env} placeholder={spec.env} autoComplete="off" onChange={event => edit({ api_key_env: event.target.value })} />
-         <small>Use NAME or {"${NAME}"}. No key value is saved. For ChatGPT/Codex this variable supplies a separate API key for Live. {editing && (registry.providers[name]?.key_configured ? "Variable is set on the server." : "Variable is not set on the server.")}</small>
+         <small>Use NAME or {"${NAME}"}. No key value is saved. {editing && (registry.providers[name]?.key_configured ? "Variable is set on the server." : "Variable is not set on the server.")}</small>
        </label>}
       {!(draft.kind === "openai" && ["auto", "chatgpt", "codex"].includes(draft.auth)) && <label>API <select value={draft.api} onChange={event => edit({ api: event.target.value })}>{spec.apis.map(api => <option key={api} value={api}>{api}</option>)}</select></label>}
       {spec.endpoint_required && <label>API prefix URL <input value={draft.base_url} type="url" autoComplete="off" placeholder="https://resource.example.com/openai/v1" onChange={event => edit({ base_url: event.target.value })} /></label>}
