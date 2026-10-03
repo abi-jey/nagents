@@ -19,6 +19,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .error_presentation import transport_error_message
 from .events import CompactionDoneEvent
 from .events import CompactionStartedEvent
 from .events import DoneEvent
@@ -462,7 +463,7 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                     else:
                         print(_plain(f"[{event.name} completed in {event.duration_ms:.0f} ms]"), file=sys.stderr)
                 elif isinstance(event, ErrorEvent):
-                    print(_plain(f"Error: {event.message}"), file=sys.stderr)
+                    print(_plain(f"Error: {transport_error_message(event) or event.message}"), file=sys.stderr)
                 elif isinstance(event, Notice):
                     print(_plain(event.text), file=sys.stderr)
                 elif isinstance(event, DoneEvent) and not compacting:

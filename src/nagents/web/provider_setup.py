@@ -10,6 +10,7 @@ import os
 from typing import TYPE_CHECKING
 from typing import TypedDict
 
+from nagents.error_presentation import transport_error_message
 from nagents.harness.provider import HarnessProvider
 from nagents.provider import OpenAIProvider
 
@@ -53,6 +54,8 @@ def provider_setup(harness: Harness) -> ProviderSetup:
 def provider_error(event: ErrorEvent) -> tuple[str, str]:
     """Classify only known provider codes; upstream messages may contain secrets."""
     code = event.code
+    if message := transport_error_message(event):
+        return ("chatgpt_network" if code == "CODEX_CONNECTION" else "provider_failure"), message
     if code == "CODEX_AUTH" or code == "CODEX_HTTP_401":
         return (
             "chatgpt_auth",
