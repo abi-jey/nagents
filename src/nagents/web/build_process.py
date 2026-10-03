@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextlib import suppress
@@ -12,17 +13,31 @@ from pathlib import Path
 
 
 @contextmanager
-def _interruptible() -> Iterator[None]:
+def _interruptible() -> Iterator[Callable[[], None]]:
+    owned = False
+    pending = False
+
+    def acquired() -> None:
+        nonlocal owned
+        owned = True
+        if pending:
+            raise KeyboardInterrupt
+
     if threading.current_thread() is not threading.main_thread():
-        yield
+        yield acquired
         return
 
     def interrupted(signum: int, frame: object) -> None:
-        raise KeyboardInterrupt
+        nonlocal pending
+        if owned:
+            raise KeyboardInterrupt
+        # Popen may have launched descendants before returning the process.
+        # Wait for ownership before raising, so the caller can stop that tree.
+        pending = True
 
     previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        yield
+        yield acquired
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
@@ -52,7 +67,7 @@ def run_build_command(command: list[str], *, cwd: Path) -> None:
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-    with _interruptible():
+    with _interruptible() as acquired:
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -60,6 +75,7 @@ def run_build_command(command: list[str], *, cwd: Path) -> None:
             creationflags=creationflags,
         )
         try:
+            acquired()
             result = process.wait(timeout=300)
         except BaseException:
             _stop_tree(process)

@@ -272,43 +272,40 @@ def test_rtp_clock_handles_browser_jitter_without_adding_a_second_silence_stream
         source.connected.set()
         relay = ChatGPTMediaRelay(source, Output())
         produced = 0
-        peak = 0
-
-        async def browser() -> None:
-            nonlocal produced
-            # The correct 24 kHz input rate, arriving in 40 ms batches. A second
-            # 20 ms padding clock overflows the unchanged 1-second cap in ~2s.
-            for _ in range(65):
-                await asyncio.sleep(0.04)
-                for _ in range(2):
-                    source.frames.put_nowait(bytes(FRAME_BYTES))
-                    produced += FRAME_BYTES
-
-        async def sender() -> None:
-            nonlocal peak
-            while True:
-                peak = max(peak, len(relay._track.buffer))
-                await relay._track.recv()
-
-        feeding = asyncio.create_task(browser())
         pumping = asyncio.create_task(relay._microphone())
-        sending = asyncio.create_task(sender())
         try:
             async with asyncio.timeout(5):
-                done, _ = await asyncio.wait({feeding, pumping}, return_when=asyncio.FIRST_COMPLETED)
-                if pumping in done:
-                    pumping.result()
-                    pytest.fail("Microphone input ended before the browser producer")
-                await feeding
-                await asyncio.sleep(0.05)
+                for batch in range(65):
+                    if batch in {0, 32, 64}:
+                        # A browser/network gap must not fabricate queued input.
+                        # This exceeds the old source's 20 ms padding timer, but
+                        # imposes no deadline on how quickly the OS resumes us.
+                        await asyncio.sleep(0.04)
+                        await asyncio.sleep(0)
+                        assert not relay._track.buffer, "The source added a second silence stream"
+                    chunks = [pcm(1000 + batch, 480), pcm(2000 + batch, 480)]
+                    for chunk in chunks:
+                        source.frames.put_nowait(chunk)
+                    await eventually(lambda: len(relay._track.buffer) >= FRAME_BYTES * 2 or pumping.done())
+                    if pumping.done():
+                        pumping.result()
+                        pytest.fail("Microphone input ended before the browser producer")
+                    for chunk in chunks:
+                        # Advance the sender clock explicitly: validate real PCM
+                        # consumption/PTS without relying on Windows timer ticks
+                        # to keep two independent tasks within a four-frame peak.
+                        relay._track._started = asyncio.get_running_loop().time() - relay._track._samples / 24000
+                        frame = await relay._track.recv()
+                        assert frame.pts == produced // 2
+                        assert bytes(frame.planes[0]) == chunk
+                        produced += len(chunk)
+                    assert not relay._track.buffer
                 assert not pumping.done()
                 assert produced > MAX_BUFFER_BYTES * 2
-                assert peak <= FRAME_BYTES * 4
-                assert len(relay._track.buffer) <= FRAME_BYTES * 2
+                assert relay._track._samples * 2 == produced
         finally:
-            for task in (feeding, pumping, sending):
-                task.cancel()
-            await asyncio.gather(feeding, pumping, sending, return_exceptions=True)
+            pumping.cancel()
+            await asyncio.gather(pumping, return_exceptions=True)
             await relay.aclose()
 
     asyncio.run(scenario())
