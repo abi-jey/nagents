@@ -163,5 +163,5 @@ def test_temporary_container_credentials_cleaned_on_upload_failure(
             await agent.run("unused task instruction", cast("BaseEnvironment", Environment()), AgentContext())
 
     asyncio.run(scenario())
-    assert cleanups == [f"rm -f {adapter.CREDENTIALS}"]
+    assert cleanups == [f"rm -f {adapter.CREDENTIALS} {adapter.CODEX_CREDENTIALS}"]
     assert source.is_file()  # Host cleanup belongs to the credential provisioner.

@@ -200,3 +200,31 @@ remain retained privately. No failed attempt was discarded, no hidden verifier
 was used to tune a new model run, and no complete child-token or billing total is
 inferred from root usage. Ephemeral credentials were removed and task containers
 were torn down after the job.
+
+## Fourth candidate: observed response-phase timeout
+
+One fresh `data-anonymization` trial used clean source commit
+`b238bc9912e4ceb2144ccc1d97f5b690efb927a9`, a pre-release 0.18.0 snapshot,
+and wheel SHA-256
+`5e297928d855cc9ff53f4cf7d3ea1cec8563f3681388a7c1bca2f0e726a98820`.
+It retained GPT-6 Astra, the pinned task and Harbor revisions, the normal
+120-second model request deadline, 900-second agent budget, 30-round limit,
+and zero Harbor retries.
+
+The Harness stopped after 187.616 seconds with a fatal `CODEX_CONNECTION`.
+Its new diagnostic metadata reported `category=timeout`, `phase=response`,
+and `generation_elapsed_ms=120578.331`. This observes a timeout after response
+headers had arrived, with roughly 120.6 seconds spent in that generation.
+It does not explain why the deadline was exhausted or retrospectively establish
+the cause of earlier trials.
+
+The run recorded eight root tool calls, no root `ToolResult.error` events,
+one nonzero shell-command exit, and two completed native child tasks.
+The verifier returned reward zero; its output reported eight setup errors,
+so functional test bodies did not run. These observations remain separate from
+Harness completion and do not measure a task-accuracy improvement.
+
+The whole job took 229.35 seconds. Its private traces and frozen provenance
+are retained separately from earlier candidates. Temporary host credentials and
+all owned containers were removed. No retry, hidden-verifier workaround, or
+production default change was made for this candidate.
