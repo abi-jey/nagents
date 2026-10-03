@@ -228,3 +228,34 @@ The whole job took 229.35 seconds. Its private traces and frozen provenance
 are retained separately from earlier candidates. Temporary host credentials and
 all owned containers were removed. No retry, hidden-verifier workaround, or
 production default change was made for this candidate.
+
+### Same frozen runtime, explicit 300-second named connection
+
+A separate one-attempt configuration comparison reused the exact pre-release
+`b238bc9912e4ceb2144ccc1d97f5b690efb927a9` wheel and dependency constraints above.
+Its frozen adapter was `d4f35c80fe806a6e22f32dbb53629b14001ec3f9`, with runner
+SHA-256 `10391b2ecb949d671588802eb44c025b964302099ba70ca0c9ad577fe8a67dc7`.
+The task revision, GPT-6 Astra, 900-second agent budget, normal tool limits, and
+zero Harbor retries stayed unchanged. This wheel predates the final 0.18.0 release;
+the result does not claim identity with every file in the final release.
+
+The explicit `request_timeout=300` used the ordinary named Codex provider factory.
+It also changed the credential fixture from the original callback to a private,
+access-only Codex file. The resolver checked account and residency consistency;
+offline native-request tests verified matching endpoint, headers, payload, and
+redirect policy for root and child providers, apart from their HTTP deadline.
+This fixture difference is part of the recorded configuration, not an unreported
+provider replacement.
+
+The Harness stopped after 552.451 seconds with `Max tool rounds (30) exceeded`.
+It recorded 30 root tool calls, no root `ToolResult.error` events, one nonzero
+shell-command exit, and three completed native child tasks. No provider failure
+was observed in this trial. The verifier ran functional checks: **six passed and
+two failed**, with no setup or teardown errors, in 271.63 seconds. Reward remained
+zero. Whole-job time was 865.63 seconds.
+
+Both configurations and all failure evidence are retained. Temporary host
+credentials and all owned containers were removed after the comparison.
+One attempt per configuration does not isolate a causal effect of the deadline
+or establish a task-accuracy improvement. No extra trial, prompt adjustment,
+hidden-verifier workaround, or production default change followed this result.
