@@ -14,6 +14,7 @@ import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from enum import Enum
+from time import monotonic
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import cast
@@ -48,6 +49,7 @@ from ..types import Message
 from ..types import RetryConfig
 from ..types import ToolCall
 from ..types import ToolDefinition
+from ._diagnostics import failure_extra
 from .auth import BearerTokenProvider
 from .auth import bearer_headers
 from .auth import validate_endpoint
@@ -506,6 +508,7 @@ class Provider:
         Yields:
             Events as they occur (text chunks, tool calls, etc.)
         """
+        started = monotonic()
         # Verify model if requested
         if verify_model:
             is_valid = await self.verify_model()
@@ -526,15 +529,19 @@ class Provider:
                 message=f"Provider request failed (HTTP {e.status}); check the API route, model access, credentials, or gateway availability.",
                 code=str(e.status),
                 recoverable=e.is_retryable(),
+                extra=failure_extra(e, started),
             )
         except ProtocolError as e:
-            yield ErrorEvent(message=str(e), code="PROVIDER_PROTOCOL_ERROR", recoverable=False)
-        except Exception:
+            yield ErrorEvent(
+                message=str(e), code="PROVIDER_PROTOCOL_ERROR", recoverable=False, extra=failure_extra(e, started)
+            )
+        except Exception as e:
             logger.error("Provider request failed or returned invalid data")
             yield ErrorEvent(
                 message="Provider request failed, timed out, or returned invalid data; check the API route and request settings.",
                 code="PROVIDER_REQUEST_FAILED",
                 recoverable=False,
+                extra=failure_extra(e, started),
             )
 
     async def _dispatch(
