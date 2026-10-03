@@ -311,7 +311,7 @@ def _transcript(record: _Record, speaker: str, text: object, payload: Payload, s
 
 
 class _BrowserInput:
-    """Bounded microphone frames; keep the provider input clock moving during gaps."""
+    """Bounded PCM, with one WebSocket playout clock or raw input for RTP."""
 
     audio_format = AudioFormat()
 
@@ -322,16 +322,34 @@ class _BrowserInput:
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         await self.connected.wait()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
+        fmt = self.audio_format
+        bytes_per_second = fmt.sample_rate * fmt.sample_width * fmt.channels
         while True:
             if not self.fill_gaps:
                 yield await self.frames.get()
                 continue
+            # Browser capture is already paced, but network delivery can batch
+            # frames. Queued PCM and gap silence must share one output clock:
+            # an independent queue timeout followed by immediate PCM forwards
+            # would insert another audio timeline between delayed frames.
+            now = loop.time()
+            if now - deadline > 0.1:
+                deadline = now
+            await asyncio.sleep(max(0, deadline - now))
+            # Retain small scheduling jitter in the cumulative clock. Rebase
+            # only a substantial stall, including one during the sleep itself,
+            # so coarse timers do not slow capture or cause a backlog burst.
+            now = loop.time()
+            if now - deadline > 0.1:
+                deadline = now
             try:
-                async with asyncio.timeout(0.02):
-                    frame = await self.frames.get()
-            except TimeoutError:
+                frame = self.frames.get_nowait()
+            except asyncio.QueueEmpty:
                 frame = SILENCE_FRAME
             yield frame
+            deadline += len(frame) / bytes_per_second
 
 
 class _BrowserOutput:
@@ -604,7 +622,7 @@ class LiveService:
             # The RTP track owns the continuous 20 ms clock. Padding this input
             # too would add silence between slightly delayed browser frames and
             # overfeed a correctly paced sender. Primary provider WebSockets
-            # retain their existing gap padding above.
+            # instead use the input's single PCM/silence playout clock.
             call.audio_in.fill_gaps = False
             media = ChatGPTMediaRelay(call.audio_in, call.audio_out)
         except ImportError:
