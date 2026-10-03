@@ -134,7 +134,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
       </label>
       </fieldset>
       <div className="settings-model-controls">
-        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`, true)}>Save connection</button>}
+        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} settings.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
           <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active)} onClick={() => void action(async () => (await (await request(`${route}/activate`, token, { revision: registry.revision })).json()) as Registry, `Using ${name} ${scope === "global" ? "globally" : "in this workspace"}.`)}>Make active</button>
           {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as Registry, `Deleted ${name}.`)}>Delete</button>}
