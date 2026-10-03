@@ -103,6 +103,11 @@ def _codex_files_exist() -> bool:
     return (home / "auth.json").exists() or (home / "config.toml").exists()
 
 
+def codex_discovery_selected(profile: ProviderProfile) -> bool:
+    """Keep named Live connections on the text factory's selected auth source."""
+    return profile.kind == "openai" and (profile.auth == "codex" or (profile.auth == "auto" and _codex_files_exist()))
+
+
 def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAIAuth) -> Provider:
     """Use the library's provider-specific discovery and keep Azure SDK optional."""
     profile.validate()
@@ -159,7 +164,11 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str,
         )
     if profile.kind not in {"openai", "openai_compatible"}:
         raise ValueError("This provider does not support GPT-Live")
-    if profile.kind == "openai" and profile.auth in {"codex", "auto"} and not key:
+    if codex_discovery_selected(profile):
+        if not _codex_files_exist():
+            raise CodexConfigError("Local Codex configuration was not found; sign in with Codex first")
+        # An unrelated environment key must not replace Codex's selected
+        # credential or API prefix. Discovery errors remain terminal here.
         return OpenAIProvider(model=model, live_config=options, timeout=profile.request_timeout)
     return Provider(
         ProviderType.OPENAI_COMPATIBLE,
@@ -177,13 +186,11 @@ def live_auth_available(profile: ProviderProfile, model: str) -> bool:
     """Local readiness only. Never returns or logs credentials."""
     if profile.auth == "entra":
         return True
-    if os.environ.get(profile.key_env, ""):
-        return True
-    if profile.kind == "openai" and profile.auth in {"codex", "auto"}:
-        if profile.api_key_env and profile.key_env != "OPENAI_API_KEY" and not _codex_files_exist():
+    if codex_discovery_selected(profile):
+        if not _codex_files_exist():
             return False
         try:
             return bool(_load_config(model=model, for_live=True).api_key)
         except CodexConfigError:
             return False
-    return False
+    return bool(os.environ.get(profile.key_env, ""))
