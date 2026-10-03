@@ -1942,7 +1942,11 @@ class Agent:
         logger.warning(f"Max tool rounds ({self.max_tool_rounds}) exceeded")
         yield ErrorEvent(
             message=f"Max tool rounds ({self.max_tool_rounds}) exceeded",
+            code="MAX_TOOL_ROUNDS",
             recoverable=False,
+            extra={"max_tool_rounds": self.max_tool_rounds}
+            if type(self.max_tool_rounds) is int and self.max_tool_rounds > 0
+            else {},
             usage=replace(last_usage, session=replace(session_usage)),
         )
         yield DoneEvent(

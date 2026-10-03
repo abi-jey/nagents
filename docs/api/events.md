@@ -11,6 +11,20 @@ different answers. Tool failures use `ToolResultEvent.error`; generation
 failures use `ErrorEvent.message`. Initialization and extension failures can
 also raise exceptions instead of emitting an error event.
 
+When the agent exhausts its configured model/tool rounds, it emits
+`ErrorEvent(code="MAX_TOOL_ROUNDS", recoverable=False)` followed by
+`DoneEvent(finish_reason=FinishReason.UNKNOWN)`. The existing error message and
+usage totals are retained. For a positive plain integer limit, the error includes
+`extra={"max_tool_rounds": 30}` (using the actual configured value); booleans and
+other values are never coerced into this metadata. This is a round budget, not an
+aggregate tool-call count: one round can contain several calls. No extra model
+turn or automatic retry is added when the budget is exhausted.
+
+The web UI describes this known error as a round limit using fixed safe text.
+A native child that reaches its limit remains failed, retains its history, and
+reports a fixed budget explanation to its parent. These diagnostics do not change
+the library, Harness, or child round limits or their cleanup behavior.
+
 Built-in text providers attach safe diagnostics to caught generation failures in
 `ErrorEvent.extra["transport"]`. Existing `code`, `message`, and `recoverable`
 values keep their meaning; diagnostics do not enable retries or change deadlines.

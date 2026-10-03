@@ -376,7 +376,9 @@ def test_stop_on_start_ack_repairs_tool_history_and_cancels_unstarted_child(
                     await stream.aclose()
                     break
             assert all(worker.done() for worker in harness.tasks._workers.values())
-            assert harness.tasks.list()[0].status == "cancelled"
+            info = harness.tasks.list()[0]
+            worker = harness.tasks._workers[info.id]
+            assert info.status == "cancelled", (info.error, worker.cancelled(), worker.cancelling())
             assert_balanced(await harness.history())
         finally:
             await stream.aclose()

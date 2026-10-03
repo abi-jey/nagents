@@ -448,7 +448,11 @@ class SubagentManager:
                 async with aclosing(child._run(prompt, trigger=info.trigger, notifications=notifications)) as events:
                     async for event in events:
                         if isinstance(event, ErrorEvent) and not event.recoverable:
-                            info.error = "Subagent reported a provider or tool-loop error; its response is not a successful result."
+                            info.error = (
+                                "Subagent reached its tool-round limit; its response is not a successful result."
+                                if event.code == "MAX_TOOL_ROUNDS"
+                                else "Subagent reported a provider or tool-loop error; its response is not a successful result."
+                            )
                         elif isinstance(event, DoneEvent):
                             done = event
                 if done is None:
@@ -461,20 +465,30 @@ class SubagentManager:
             info.status = "cancelled"
             info.error = "Subagent cancelled with its parent run; it will not be replayed."
             raise
-        except TimeoutError:
-            info.status = "failed"
-            info.error = "Subagent exceeded its time limit."
-        except Exception:
+        except Exception as error:
             # Provider/extension exceptions may contain credentials or raw HTTP bodies.
+            # An owned operation can finish with an error while this worker is
+            # already cancelling. Preserve the stop request at this boundary;
+            # shared owned-operation joins still expose their original errors.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                info.status = "cancelled"
+                info.error = "Subagent cancelled; it will not be replayed. Subagent setup or execution failed."
+                raise asyncio.CancelledError from None
             info.status = "failed"
-            info.error = "Subagent failed during setup or execution; no successful result is available."
+            info.error = (
+                "Subagent exceeded its time limit."
+                if isinstance(error, TimeoutError)
+                else "Subagent failed during setup or execution; no successful result is available."
+            )
         finally:
             try:
                 if child is not None:
                     await _await_cleanup(asyncio.create_task(child.close(), name=f"ngn-subagent-close-{info.id}"))
             except asyncio.CancelledError:
-                info.status = "cancelled"
-                info.error = "Subagent cancelled with its parent run; it will not be replayed."
+                if info.status != "cancelled":
+                    info.status = "cancelled"
+                    info.error = "Subagent cancelled with its parent run; it will not be replayed."
                 raise
             except Exception:
                 task = asyncio.current_task()
