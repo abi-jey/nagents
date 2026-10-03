@@ -99,6 +99,10 @@ session twice. Observers use `handle_delegations=False` to avoid duplicate tool
 execution. Live lifecycle/control traffic is `LiveEvent`, separate from Realtime.
 
 `nagents.live.audio` provides paced inputs and application-owned playback gates.
+`PacedAudioInput` preserves source chunks and schedules their duration using the
+source's audio format. Its clock starts when the first nonempty chunk is available;
+waiting for source setup does not give buffered audio a head start. The default
+`silence_tail=True` continues with silence after the source ends.
 Verified-clip completion requires an output adapter with an actual `drain()`
 implementation. Muting a browser or SIP player's output remains the responsibility
 of the media path that owns playback.

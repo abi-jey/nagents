@@ -18,6 +18,8 @@ DEFAULT_FORMAT = AudioFormat()
 
 
 class PacedAudioInput:
+    """Preserve source chunks and pace them from the first available audio byte."""
+
     def __init__(self, source: AudioInput, *, silence_tail: bool = True) -> None:
         self.source = source
         self.audio_format = source.audio_format
@@ -25,11 +27,18 @@ class PacedAudioInput:
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         fmt = self.audio_format
-        deadline = asyncio.get_running_loop().time()
+        deadline = 0.0
+        started = False
         async for chunk in self.source:
+            if chunk and not started:
+                # Source setup/waiting is not elapsed playback. Empty chunks
+                # carry no audio duration and must not start the clock either.
+                deadline = asyncio.get_running_loop().time()
+                started = True
             yield chunk
-            deadline += len(chunk) / (fmt.sample_rate * fmt.sample_width * fmt.channels)
-            await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()))
+            if started:
+                deadline += len(chunk) / (fmt.sample_rate * fmt.sample_width * fmt.channels)
+            await asyncio.sleep(max(0, deadline - asyncio.get_running_loop().time()) if started else 0)
         if self.silence_tail:
             async for chunk in SilenceInput(fmt):
                 yield chunk
