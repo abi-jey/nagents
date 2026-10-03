@@ -217,9 +217,9 @@ class ProviderProfile:
         if self.auth == "entra":
             return "Microsoft Entra ID (DefaultAzureCredential)"
         if self.auth == "codex":
-            return f"Local Codex discovery; Live key ${self.key_env} or Codex discovery"
+            return "Local Codex configuration and credentials"
         if self.auth == "chatgpt":
-            return f"ChatGPT device login; Live key ${self.key_env}"
+            return "ChatGPT device login"
         if self.auth == "auto":
             return f"ChatGPT / Codex / API key ${self.key_env}"
         return f"API key ${self.key_env}"

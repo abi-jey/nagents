@@ -76,8 +76,9 @@ the workspace selection. Choosing another switches chat's
 provider; trusted agent profiles may also bind to a named provider. Voice
 models, backend mode and voice are separate Global/Workspace preferences in
 the settings icon beside **Voice**. Select a voice connection there or follow the active
-chat connection. ChatGPT/Codex login supports browser voice through WebRTC;
-API-key and Foundry connections use the server audio relay. The **Main assistant**
+chat connection. Every browser voice connection uses the same-origin ngn audio
+relay. The server owns ChatGPT/Codex media and control connections, or the Live
+WebSocket for supported API-key and Foundry connections. The **Main assistant**
 voice backend delegates reasoning to the selected workspace agent; **Separate hosted
 backend** uses a standalone model. No named-connection
 API key is stored in the web settings database. Provider connections never store
@@ -393,7 +394,12 @@ same-origin bootstrap). Mutations require an Origin header. Ordinary mutations
 require JSON and remain limited to 64 KiB; prompts are limited to 32,000 characters.
 The token is held in browser
 memory, never a URL or local storage. Responses are non-cacheable, frame embedding
-is blocked, and no third-party scripts/fonts are loaded.
+is blocked, and no third-party scripts/fonts are loaded. The browser's application
+connections, including event and audio WebSockets, stay on the ngn origin. Content
+Security Policy restricts connections, scripts, styles, fonts, and audio worklets
+to that origin; images and media also permit local `blob:` and `data:` content.
+Link DNS prefetching is disabled. External links open only when the user follows
+them; they are not embedded resources.
 
 WebSocket upgrades enforce the same Host/Origin boundary and authenticate before
 accepting a connection. The browser offers `ngn.events.v1` and
@@ -473,7 +479,7 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
-| `POST live/sessions` | `{voice?: string, revision, session_id, sdp?: string}` starts a GPT-Live call. ChatGPT login requires an SDP offer and returns an SDP answer. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, sdp?, context?}`. |
+| `POST live/sessions` | `{voice?: string, revision, session_id}` starts a GPT-Live call through the server. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, context?}` with an opaque application session ID. No provider SDP or credentials reach the browser. |
 | `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
 | `GET live/sessions/{session_id}/delegations/{delegation_id}` | On-demand request, dispatched input, result, and application event timeline for one delegation; authenticated and bounded. |
@@ -954,14 +960,15 @@ disappears during voice, a notice offers **Use system default** for the current
 call; output is never silently rerouted. Losing the active microphone stops
 voice with a reconnect message. Choose a working microphone before retrying.
 
-ChatGPT voice uses the signed-in account through browser WebRTC and a server-owned
-Live control connection. It requires **Main assistant** mode. Local Codex login
+ChatGPT voice uses the signed-in account through server-owned media and Live
+control connections. The browser exchanges audio only with ngn over a same-origin
+WebSocket. ChatGPT voice requires **Main assistant** mode. Local Codex login
 reads the existing Codex credential store; ChatGPT login uses ngn's existing
 sign-in and refresh flow. An explicit login connection uses that login even when
 an API key is present in the environment. The API-key path uses the selected
 provider's environment reference, and Foundry can use Entra credentials.
-Credential values, provider authentication headers and raw upstream errors are
-never returned by the API. ChatGPT voice follows the first-party Codex Live
+Credential values, provider authentication headers, SDP, and raw upstream errors
+are never returned by the API. ChatGPT voice follows the first-party Codex Live
 contract; it is separate from the public `/v1/live/sessions` API-key protocol.
 
 For a compatible dedicated endpoint, choose `openai_compatible` and enter its API
@@ -985,12 +992,13 @@ After a competing tab changes settings, reload the form before saving or connect
 
 Use a browser with `getUserMedia` in a secure
 context: loopback HTTP or HTTPS. Microphone permission and a working input device
-are required. API-key and Foundry connections use AudioWorklet and the same-origin
-`ngn serve` WebSocket to relay PCM audio through the server. ChatGPT login uses
-WebRTC media tracks directly between the browser and OpenAI; `ngn serve` exchanges
-the SDP and owns the authenticated sideband. In both paths, the server owns
-GPT-Live delegation and transcript events. Browser-supplied captions or delegation
-events never trigger assistant work. No host
+are required. AudioWorklet captures PCM audio and exchanges it with `ngn serve`
+over a same-origin WebSocket. The server uses its own Codex WebRTC media connection
+for ChatGPT login, or the provider's Live WebSocket for supported API-key/Entra
+connections. It owns provider negotiation, authentication, delegation, and
+transcript events. The browser never opens a provider connection or receives
+provider credentials. Browser-supplied captions or delegation events never trigger
+assistant work. Install the `web` extra for the server media relay. No host
 microphone, PortAudio, `voice` extra, or container audio-device mount is needed.
 
 In **Main assistant** mode, GPT-Live delegates requests through the normal
@@ -1013,8 +1021,8 @@ context. In both modes, provider-confirmed captions are saved against the chat
 selected when the call starts, separately from model input. Captions do not create
 extra assistant turns. Clearing or permanently deleting a chat removes its
 captions; a call already active during a clear cannot repopulate that chat.
-Audio is not saved to chat history. The session requests `store: false`; this
-does not override the provider's general data policy. Restarting the server
+Audio is not saved to chat history; the provider's own data policy still applies.
+Restarting the server
 discards active voice-session state, while saved chat captions remain.
 
 Only one voice call may be active per `ngn serve` instance, shared by its tabs.
@@ -1033,7 +1041,8 @@ All Live routes use the existing same-origin, Host, fetch-metadata, and
 `GET /api/live` returns `{available, reason, provider, model, backend_model,
 backend_mode, assistant, voice, voices, active_session_id, revision, enabled,
 key_configured, voice_auth, transport, context_mode}`; `voice_auth` identifies `chatgpt`,
-`api-key` or `entra`, and `transport` is `webrtc` or `websocket`.
+`api-key` or `entra`, and browser `transport` is always `websocket`. The selected
+voice connection uses the normal provider registry, authentication, and defaults.
 `key_configured` indicates available authentication, including a login; it does
 not imply an API key is stored. `assistant` contains the selected chat provider/model/profile,
 not a credential. `reason` is empty
@@ -1075,13 +1084,13 @@ approvals to that chat even if another tab changes the selection. A stale
 permission-pending tab receives `409` before provider setup. Admission captures
 one committed connection for that call. You can connect while the assistant is
 already working; new voice requests wait for its current work. The normal
-64 KiB JSON-body limit also applies. ChatGPT login additionally requires an `sdp`
-offer and returns the answer in `sdp`; the server attaches the control connection
-before returning it. No account credentials are included in either SDP. The browser
-enables its microphone track only after the media connection is established.
+64 KiB JSON-body limit also applies. The request accepts no `sdp` field. The server
+negotiates provider media and attaches the authenticated control connection before
+reporting the call ready. The response contains only application session metadata.
 
-For API-key/Foundry calls, the server alone sends `session.start` to GPT-Live;
-the browser sends audio frames only. Each browser WebSocket uses
+For every provider, the browser exchanges only binary PCM16 mono audio at 24 kHz
+on `/api/live/sessions/{session_id}/audio`. The server owns provider session setup.
+Each browser WebSocket uses
 `ngn.live.v1` and `ngn.token.<bootstrap token>` subprotocols, with no query
 parameters or provider credentials. Frames are bounded to 100 ms; a browser
 disconnect ends and finalizes the call. Session creation accepts no connection

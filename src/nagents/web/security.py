@@ -20,11 +20,13 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
+    "X-DNS-Prefetch-Control": "off",
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "microphone=(self), camera=()",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src blob:; "
-        "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; "
+        "media-src 'self' blob: data:; connect-src 'self'; worker-src 'self'; font-src 'self'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     ),
 }
 

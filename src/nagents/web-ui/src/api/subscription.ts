@@ -1,5 +1,6 @@
 import type { ActiveRun, Bootstrap, Session, Snapshot, WireEvent } from "../types.js";
 import { uploadedAttachments } from "../features/chat/uploads.js";
+import { serverSocketUrl } from "./origin.js";
 
 export type Position = { cursor: number; epoch: string };
 export type EventFrame = Position & (
@@ -169,10 +170,8 @@ export function subscribeEvents(options: SubscriptionOptions): () => void {
     options.status(failures ? "reconnecting" : "connecting");
     if (stopped) return;
     try {
-      const url = new URL("/api/events", options.url);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       socket = (options.socket || ((url, protocols) => new WebSocket(url, protocols)))(
-        url.href, ["ngn.events.v1", `ngn.token.${token}`],
+        serverSocketUrl("/api/events", options.url), ["ngn.events.v1", `ngn.token.${token}`],
       );
       const connection = socket;
       cancelHandshake = schedule(() => { if (socket === connection) retry(); }, HANDSHAKE_TIMEOUT);

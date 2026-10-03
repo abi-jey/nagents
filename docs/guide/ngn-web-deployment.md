@@ -102,14 +102,17 @@ Tailnet browser, HTTPS, access governed by Tailscale ACLs/grants
   `Sec-Fetch-Site` same-origin checks, query-parameter rejection, path-traversal
   rejection, security headers, and a 64 KiB request-body cap. Access logging stays off because
   URLs may contain accidental secrets.
-- Only `/api/events` accepts a WebSocket upgrade. `Sec-WebSocket-Protocol` passes
-  through unchanged; ngn validates the process token before accepting a subscription.
+- `/api/events` and `/api/live/sessions/{session_id}/audio` accept WebSocket
+  upgrades. `Sec-WebSocket-Protocol` passes through unchanged; ngn validates the
+  process token before accepting an event subscription or audio relay. Browser
+  voice connects only to ngn; the server owns provider authentication and connections,
+  including the Codex media/control path when ChatGPT/Codex login is selected.
 - TLS and tailnet admission are the operator's responsibility. Use the tailnet
   HTTPS URL; the hop from ts-serve to the pod is cluster HTTP, not end-to-end TLS.
 
 **Live validation gate:** confirm the custom ts-serve proxy preserves the external
 Host, `Sec-Fetch-Site`, and `X-Ngn-Token`, and streams NDJSON without buffering and
-supports the `/api/events` WebSocket upgrade. The Ingress does not itself prove TLS,
+supports both event and audio WebSocket upgrades. The Ingress does not itself prove TLS,
 tailnet-only exposure, or header preservation.
 
 ## State And Credentials

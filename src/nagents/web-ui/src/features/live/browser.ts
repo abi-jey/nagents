@@ -1,20 +1,21 @@
 import type { AudioDeviceSelection, LiveMedia, LiveTransport, MediaHandlers } from "./types.js";
 import { readAudioDevices } from "./devices.js";
 import { captureMicrophone, DeviceChangeQueue, replaceMicrophone, selectAudioOutput, type AudioSink } from "./device-routing.js";
-import { webrtcMedia } from "./webrtc.js";
 import { audioLevels, type AudioLevels } from "./audio-levels.js";
+import { serverSocketUrl } from "../../api/origin.js";
 
 export function liveSupport(transport: LiveTransport = "websocket"): string {
+  if (transport !== "websocket") return "Update ngn serve to use the server voice relay.";
   if (!globalThis.isSecureContext) return "Open ngn serve on localhost or HTTPS to use your microphone.";
-  const supported = transport === "webrtc" ? typeof globalThis.RTCPeerConnection === "function"
-    : typeof globalThis.AudioContext === "function" && typeof globalThis.AudioWorkletNode === "function" && typeof globalThis.WebSocket === "function";
+  const supported = typeof globalThis.AudioContext === "function" && typeof globalThis.AudioWorkletNode === "function" && typeof globalThis.WebSocket === "function";
   if (!globalThis.navigator?.mediaDevices?.getUserMedia || !supported)
     return "This browser does not support live audio. Try a current version of Chrome, Safari, Edge, or Firefox.";
   return "";
 }
 
 export function browserMedia(handlers: MediaHandlers, transport: LiveTransport = "websocket", devices: AudioDeviceSelection = readAudioDevices()): LiveMedia {
-  return transport === "webrtc" ? webrtcMedia(handlers, devices) : relayMedia(handlers, devices);
+  if (transport !== "websocket") throw new Error("Voice must connect through the ngn server relay.");
+  return relayMedia(handlers, devices);
 }
 
 function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): LiveMedia {
@@ -126,8 +127,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     },
     async connect(sessionId, token) {
       if (closed || !context) throw new DOMException("Cancelled", "AbortError");
-      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-      const channel = new WebSocket(`${scheme}//${location.host}/api/live/sessions/${encodeURIComponent(sessionId)}/audio`, ["ngn.live.v1", `ngn.token.${token}`]);
+      const channel = new WebSocket(serverSocketUrl(`/api/live/sessions/${encodeURIComponent(sessionId)}/audio`), ["ngn.live.v1", `ngn.token.${token}`]);
       socket = channel; channel.binaryType = "arraybuffer";
       channel.onmessage = (event: MessageEvent<ArrayBuffer>) => {
         if (closed) return;

@@ -364,3 +364,22 @@ test("relay output swaps serialize and pending sink selection aborts immediately
   f.media.close(); await rejected; finish(); await setImmediate();
   assert.deepEqual(f.sinks, ["first"]); assert.equal(f.context().closes, 1); assert.equal(f.socket().readyState, 3);
 });
+
+test("obsolete direct provider transport is rejected before acquiring browser media", (t) => {
+  const f = browserFixture(); t.after(f.restore);
+  const transport = "webrtc" as import("./types.js").LiveTransport;
+  assert.match(liveSupport(transport), /server voice relay/);
+  assert.throws(() => browserMedia({ connected: () => {}, ended: () => {}, failed: () => {}, playbackBlocked: () => {} }, transport), /ngn server relay/);
+  assert.deepEqual(f.constraints, []);
+  assert.equal(f.socket(), undefined);
+});
+
+test("a server session identifier cannot change the audio socket origin", async (t) => {
+  const f = browserFixture(); t.after(f.restore);
+  await f.media.prepare(new AbortController().signal);
+  const id = "https://provider.example/voice?token=secret";
+  const opening = f.media.connect(id, "ngn-token");
+  assert.equal(f.socket().url, `ws://127.0.0.1:8765/api/live/sessions/${encodeURIComponent(id)}/audio`);
+  f.socket().onopen(); await opening;
+  assert.equal(f.connected(), true);
+});

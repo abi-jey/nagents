@@ -58,6 +58,7 @@ test("voice setup selects a separate connection without changing the assistant o
   try {
     await act(async () => ui.root.render(createElement(LiveSettings, { token: "token", blocked: false, back: () => {}, saved: value => saved.push(value), assistant: { agent: "main", provider: "anthropic", model: "claude" } })));
     assert.equal(ui.select("Voice connection").disabled, true);
+    assert.equal(ui.select("Voice connection").options[0].textContent, "Use configured default provider");
     assert.equal(ui.label("Hosted backend model"), undefined);
     assert.match(ui.container.textContent!, /main · anthropic: claude/);
     await ui.customize("voice connection");
@@ -66,7 +67,7 @@ test("voice setup selects a separate connection without changing the assistant o
     await act(async () => ui.button("Save settings").click());
     assert.deepEqual(writes, [{ scope: "workspace", revision: "first", overrides: { connection_id: "voice-openai" } }]);
     assert.equal(saved[0].values.backend_mode, "assistant");
-    assert.match(ui.container.textContent!, /Credentials are available on the server/);
+    assert.match(ui.container.textContent!, /Uses the selected provider’s API credentials on the server/);
   } finally { await ui.close(); }
 });
 
@@ -118,7 +119,7 @@ test("ChatGPT voice setup identifies the existing login and restricts new hosted
   t.mock.method(globalThis, "fetch", async () => Response.json(login));
   try {
     await act(async () => ui.root.render(createElement(LiveSettings, { token: "token", blocked: false, back: () => {}, saved: () => {} })));
-    assert.match(ui.container.textContent!, /Uses your existing ChatGPT login on the server/);
+    assert.match(ui.container.textContent!, /Uses your existing ChatGPT\/Codex login on the server/);
     assert.equal(ui.select("Reasoning backend").querySelector<HTMLOptionElement>('option[value="hosted"]')?.disabled, true);
     assert.equal(ui.select("Reasoning backend").disabled, false, "a saved hosted configuration can still be corrected to main assistant");
     await ui.change("Reasoning backend", "assistant");
@@ -210,3 +211,36 @@ test("voice behavior controls preserve inherited instructions and save the selec
     assert.deepEqual(writes, [{ scope: "workspace", revision: "first", overrides: { instructions: "Speak calmly.\nKeep answers brief.", context_mode: "none" } }]);
   } finally { await ui.close(); }
 });
+
+for (const [voiceAuth, provider, description] of [
+  ["chatgpt", "openai", "ChatGPT/Codex login"],
+  ["api-key", "openai_compatible", "API credentials"],
+  ["entra", "foundry", "Microsoft Entra ID"],
+] as const) {
+  test(`${voiceAuth} voice uses registry connections and can return to the configured default`, async (t) => {
+    const ui = view(); const writes: LiveSettingsInput[] = [];
+    let managed = 0;
+    const selected: LiveSettingsSnapshot = {
+      ...snapshot, voice_auth: voiceAuth, profile_name: "selected-voice", live_supported: true,
+      values: { ...snapshot.values, provider, connection_id: "selected-voice" },
+      connections: [{ name: "selected-voice", provider, scope: "global" }],
+      overrides: { connection_id: "selected-voice", backend_mode: "assistant" },
+    };
+    t.mock.method(globalThis, "fetch", async (_path: string, init: RequestInit) => {
+      if (init.method === "POST") writes.push(JSON.parse(String(init.body)) as LiveSettingsInput);
+      return Response.json(selected);
+    });
+    try {
+      await act(async () => ui.root.render(createElement(LiveSettings, { token: "token", blocked: false, back: () => {}, saved: () => {}, configureConnection: () => { managed++; } })));
+      assert.match(ui.container.textContent!, new RegExp(description));
+      assert.match(ui.container.textContent!, /Microphone audio and playback connect only to ngn serve/);
+      assert.equal(ui.select("Voice connection").value, "selected-voice");
+      assert.equal(ui.select("Reasoning backend").querySelector<HTMLOptionElement>('option[value="hosted"]')?.disabled, voiceAuth === "chatgpt");
+      await act(async () => ui.button("Manage provider connections").click());
+      assert.equal(managed, 1);
+      await ui.change("Voice connection", "");
+      await act(async () => ui.button("Save settings").click());
+      assert.deepEqual(writes, [{ scope: "workspace", revision: "first", overrides: { connection_id: "", backend_mode: "assistant" } }]);
+    } finally { await ui.close(); }
+  });
+}

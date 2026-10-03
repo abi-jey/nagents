@@ -30,8 +30,8 @@ export async function delegationDetails(token: string, delegation: LiveDelegatio
 
 export function liveApi(token: string) {
   return {
-    create: async (voice: string, signal: AbortSignal, revision: string, sessionId: string, sdp?: string): Promise<LiveCreated> =>
-      (await request("live/sessions", token, { voice, revision, session_id: sessionId, ...(sdp ? { sdp } : {}) }, signal)).json() as Promise<LiveCreated>,
+    create: async (voice: string, signal: AbortSignal, revision: string, sessionId: string): Promise<LiveCreated> =>
+      (await request("live/sessions", token, { voice, revision, session_id: sessionId }, signal)).json() as Promise<LiveCreated>,
     read: async (id: string, after: number, signal: AbortSignal): Promise<LiveSnapshot> =>
       (await request(`live/sessions/${encodeURIComponent(id)}?after=${after}`, token, undefined, signal)).json() as Promise<LiveSnapshot>,
     close: async (id: string): Promise<LiveSnapshot> =>

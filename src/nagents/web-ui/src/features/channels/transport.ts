@@ -1,4 +1,5 @@
 import { RequestError } from "../../api/client.js";
+import { apiPath } from "../../api/origin.js";
 import { object } from "../../api/subscription.js";
 import type { Catalog, ChannelSave } from "./types.js";
 
@@ -16,10 +17,11 @@ function schema(value: unknown, depth = 0): boolean {
 export async function channelRequest(token: string, signal: AbortSignal, operation: "load" | "refresh" | "save" | "delete", id = "", body?: ChannelSave | { revision: string }): Promise<Catalog> {
   const path = operation === "refresh" ? "channels/refresh" : operation === "load" ? "channels" : `channels/${encodeURIComponent(id)}`;
   const payload = operation === "refresh" ? {} : body;
-  const response = await fetch(`/api/${path}`, {
+  const response = await fetch(apiPath(path), {
     method: { load: "GET", refresh: "POST", save: "PUT", delete: "DELETE" }[operation],
     headers: { "X-Ngn-Token": token, ...(payload ? { "Content-Type": "application/json" } : {}) },
     body: payload ? JSON.stringify(payload) : undefined, signal, cache: "no-store", credentials: "same-origin",
+    mode: "same-origin", redirect: "error",
   });
   if (!response.ok) throw new RequestError(channelError(response.status), response.status);
   const value: unknown = await response.json();

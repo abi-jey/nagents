@@ -72,7 +72,6 @@ class SessionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     voice: str = Field(default="", max_length=64)
-    sdp: str = Field(default="", max_length=65536)
     revision: Revision
     session_id: str = Field(default="", max_length=80, pattern=r"^$|^ngn-[a-zA-Z0-9-]+$")
 
@@ -135,7 +134,7 @@ def capabilities(
         "enabled": values.enabled,
         "key_configured": connection.key_configured,
         "voice_auth": connection.voice_auth,
-        "transport": "webrtc" if connection.voice_auth == "chatgpt" else "websocket",
+        "transport": "websocket",
     }
 
 
@@ -279,14 +278,7 @@ def register(
                             409,
                             "This chat uses a pinned designed agent. Select a main assistant chat for voice.",
                         )
-                if connection.voice_auth == "chatgpt":
-                    if not body.sdp:
-                        raise HTTPException(422, "ChatGPT voice requires a browser WebRTC offer.")
-                    result = await service().create(body.sdp, body.voice)
-                else:
-                    if body.sdp:
-                        raise HTTPException(422, "This voice connection uses the server audio relay.")
-                    result = await service().create_stream(body.voice)
+                result = await service().create_stream(body.voice)
                 logger.info("Live connection created: session=%s", result.get("session_id", ""))
                 return result
 

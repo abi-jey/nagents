@@ -1,4 +1,4 @@
-export type LiveTransport = "websocket" | "webrtc";
+export type LiveTransport = "websocket";
 export type VoiceContextMode = "recent" | "summary" | "none";
 
 export interface AudioDeviceSelection {
@@ -43,7 +43,6 @@ export interface LiveCreated {
   session_id: string;
   model: string;
   voice: string;
-  sdp?: string;
   context?: VoiceContext;
 }
 
@@ -198,13 +197,11 @@ export interface MediaHandlers {
 
 export interface LiveMedia {
   prepare(signal: AbortSignal): Promise<void>;
-  offer?(): string;
-  connect(sessionId: string, token: string, answer?: string): Promise<void>;
+  connect(sessionId: string, token: string): Promise<void>;
   muteInput(muted: boolean): void;
   muteOutput(muted: boolean): void;
   setInputDevice(deviceId: string): Promise<void>;
   setOutputDevice(deviceId: string): Promise<void>;
   play(): Promise<void>;
-  stop?(): void;
   close(): void;
 }

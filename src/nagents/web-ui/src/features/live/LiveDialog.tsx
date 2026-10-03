@@ -160,7 +160,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     muteInput={() => controller.muteInput()} muteOutput={() => controller.muteOutput()}
     play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat}>
     {settingsVisited && <>
-      <div className="voice-quick-devices live-settings-form"><AudioDeviceSettings transport={config?.transport || "webrtc"}
+      <div className="voice-quick-devices live-settings-form"><AudioDeviceSettings transport="websocket"
         disabled={["permission", "connecting", "ending"].includes(state.phase)} active={connected} activeSelection={state.devices}
         applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined} /></div>
       <details className="voice-preferences" open={preferencesOpen} onToggle={event => setPreferencesOpen(event.currentTarget.open)}>

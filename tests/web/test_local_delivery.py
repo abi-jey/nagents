@@ -123,7 +123,7 @@ def test_real_send_restart_assets_replay_and_auth(tmp_path: Path, monkeypatch: p
             assert response.headers["content-type"] == asset["media_type"]
             assert response.headers["x-content-type-options"] == "nosniff"
             assert "img-src 'self' blob:" in response.headers["content-security-policy"]
-            assert "media-src blob:" in response.headers["content-security-policy"]
+            assert "media-src 'self' blob:" in response.headers["content-security-policy"]
             assert app.client.get(path + "?token=bad", headers=app.headers).status_code == 400
             assert app.client.get(path.replace(root, "other-root"), headers=app.headers).status_code == 404
         for name in samples:

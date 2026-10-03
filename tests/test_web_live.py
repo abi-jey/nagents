@@ -17,11 +17,17 @@ from aiohttp import web
 from fastapi import HTTPException
 from pydantic import SecretStr
 
+from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live import LiveConfig
 from nagents.provider import FoundryProvider
+from nagents.provider.openai import CodexCredentials
 from nagents.web.live import create_agent
+from nagents.web.live import create_login_config
 from nagents.web.live_runtime import LiveService
 from nagents.web.live_settings import LIVE_PROVIDERS
 from nagents.web.live_settings import LIVE_VOICES
@@ -45,10 +51,24 @@ SESSION = "live-fixture-session"
 
 
 def configuration(path: Path, *, demo: bool = False) -> HarnessConfig:
+    providers = ScopedProviderRegistryStore(path)
+    if not providers.load().active:
+        providers.save_scope(
+            ProviderRegistry(
+                active="chat",
+                providers={
+                    "chat": ProviderProfile(kind="anthropic", auth="api-key"),
+                    "voice": ProviderProfile(kind="openai", auth="chatgpt"),
+                },
+            ),
+            expected="0" * 64,
+            scope="global",
+        )
     return HarnessConfig(
         workspace=path,
         data_dir=path / "data",
         provider="anthropic",
+        provider_id="chat",
         auth="api-key",
         model="chat-only-model",
         demo=demo,
@@ -56,14 +76,17 @@ def configuration(path: Path, *, demo: bool = False) -> HarnessConfig:
 
 
 class FakeLiveService:
-    def __init__(self, factory: Callable[[str], Agent]) -> None:
+    def __init__(
+        self, factory: Callable[[str], Agent], login_factory: Callable[[str], LoginVoiceConfig | None]
+    ) -> None:
         self.factory = factory
+        self.login_factory = login_factory
         self.loop = asyncio.get_running_loop()
         self.active_session_id = ""
         self.creates: list[str] = []
         self.snapshots: list[tuple[str, int]] = []
         self.closes: list[str] = []
-        self.agents: list[Agent] = []
+        self.configs: list[LoginVoiceConfig] = []
         self.delegations: list[dict[str, object]] = []
         self.shutdown_calls = 0
         self.entered = asyncio.Event()
@@ -76,14 +99,15 @@ class FakeLiveService:
         self.entered.set()
         await self.release.wait()
 
-        async def construct() -> Agent:
-            return self.factory(voice)
+        async def construct() -> LoginVoiceConfig:
+            config = self.login_factory(voice)
+            assert config is not None
+            await config.credentials()
+            return config
 
-        agent = await asyncio.create_task(construct())  # Runtime supervisor inherits admission context.
-        self.agents.append(agent)
-        options = agent.provider.live_config
-        assert options is not None
-        return {"session_id": SESSION, "model": agent.provider.model, "voice": options.voice}
+        config = await asyncio.create_task(construct())
+        self.configs.append(config)
+        return {"session_id": SESSION, "model": config.model, "voice": config.voice}
 
     async def snapshot(self, session_id: str, after: int = 0) -> dict[str, object]:
         self.snapshots.append((session_id, after))
@@ -92,8 +116,8 @@ class FakeLiveService:
         return {
             "session_id": session_id,
             "status": "connected",
-            "model": "gpt-live-1",
-            "voice": "marin",
+            "model": "gpt-live-1-codex",
+            "voice": "cove",
             "events": [{"seq": 38, "type": "transcript", "speaker": "assistant", "text": "Hello."}],
             "cursor": 38,
         }
@@ -103,16 +127,12 @@ class FakeLiveService:
 
     async def close(self, session_id: str) -> dict[str, object]:
         self.closes.append(session_id)
-        for agent in self.agents:
-            await agent.close()
         self.active_session_id = ""
         return {"session_id": session_id, "status": "closed"}
 
     async def shutdown(self) -> None:
         assert asyncio.get_running_loop() is self.loop
         self.shutdown_calls += 1
-        for agent in self.agents:
-            await agent.close()
         self.active_session_id = ""
 
 
@@ -121,6 +141,16 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in tuple(os.environ):
         if name.startswith("NGN_LIVE_") or name == "OPENAI_API_KEY":
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def chatgpt_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(OpenAIAuth, "logged_in", lambda auth: True)
+
+    async def credentials(auth: OpenAIAuth) -> CodexCredentials:
+        return CodexCredentials(SECRET, "fixture-account")
+
+    monkeypatch.setattr(OpenAIAuth, "credentials", credentials)
 
 
 @pytest.fixture
@@ -134,8 +164,9 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[FakeLiveService]:
         caption_factory: object = None,
         context_factory: object = None,
     ) -> FakeLiveService:
-        del login_factory, caption_factory, context_factory
-        service = FakeLiveService(agent_factory)
+        del caption_factory, context_factory
+        assert login_factory is not None
+        service = FakeLiveService(agent_factory, login_factory)
         instances.append(service)
         return service
 
@@ -143,15 +174,15 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[FakeLiveService]:
     return instances
 
 
-async def configure(client: httpx.AsyncClient, headers: dict[str, str], *, key: str = SECRET) -> str:
-    before = (await client.get("/api/live/settings", headers=headers)).json()
+async def configure(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
+    before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
     response = await client.post(
         "/api/live/settings",
         headers=headers,
         json={
+            "scope": "workspace",
             "revision": before["revision"],
-            "values": {**before["values"], "enabled": True, "backend_mode": "hosted"},
-            "api_key": key,
+            "overrides": {"enabled": True, "connection_id": "voice", "backend_mode": "assistant"},
         },
     )
     assert response.status_code == 200 and SECRET not in response.text
@@ -250,6 +281,24 @@ def test_factory_configures_voice_as_the_existing_assistants_frontend() -> None:
     asyncio.run(check())
 
 
+def test_login_factory_binds_voice_to_existing_assistant_without_api_key() -> None:
+    async def handle(transcript: str) -> str:
+        return "The existing assistant's verified result"
+
+    async def credentials() -> CodexCredentials:
+        return CodexCredentials(SECRET, "fixture-account")
+
+    values = LiveValues.model_validate({**LiveValues.defaults().model_dump(), "enabled": True})
+    connection = LiveConnection(
+        values, "1" * 64, SecretStr(""), credential_available=True, voice_auth="chatgpt", login_credentials=credentials
+    )
+    config = create_login_config(connection, "ember", handle)
+    assert config.handler is handle and config.credentials is credentials and config.voice == "ember"
+    assert config.model == "gpt-live-1-codex"
+    assert "voice of the assistant in the selected chat" in config.instructions
+    assert "chat history, configured provider, tools, and approval rules" in config.instructions
+
+
 def test_setup_and_calls_work_without_environment_and_persist_after_restart(
     tmp_path: Path, services: list[FakeLiveService]
 ) -> None:
@@ -268,14 +317,16 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
             assert info.headers["cache-control"] == "no-store"
             assert info.headers["permissions-policy"] == "microphone=(self), camera=()"
             before_history = await harnesses[0].history()
-            for voice in ("", "cedar"):
+            for voice in ("", "ember"):
                 response = await client.post(
-                    "/api/live/sessions", headers=headers, json={"voice": voice, "revision": revision}
+                    "/api/live/sessions",
+                    headers=headers,
+                    json={"voice": voice, "revision": revision, "session_id": harnesses[0].session_id},
                 )
                 assert response.status_code == 201 and response.json() == {
                     "session_id": SESSION,
-                    "model": "gpt-live-1",
-                    "voice": voice or "marin",
+                    "model": "gpt-live-1-codex",
+                    "voice": voice or "cove",
                 }
                 assert (await client.get("/api/live", headers=headers)).json()["active_session_id"] == SESSION
                 for query, after in (("", 0), ("?after=0", 0), ("?after=37", 37)):
@@ -285,8 +336,7 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
                 ended = await client.post(f"/api/live/sessions/{SESSION}/close", json={}, headers=headers)
                 assert ended.status_code == 200 and ended.json()["status"] == "closed"
             assert await harnesses[0].history() == before_history and harnesses[0].config.provider == "anthropic"
-            assert all(agent is not harnesses[0].agent for agent in services[0].agents)
-            assert all(agent.provider.api_key == SECRET for agent in services[0].agents)
+            assert len(services[0].configs) == 2
             assert not os.environ.get("OPENAI_API_KEY")
             with pytest.raises(HTTPException):
                 settings.admitted()
@@ -307,17 +357,7 @@ def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
         async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
             before = (await client.get("/api/live/settings", headers=headers)).json()
             assert before["values"]["backend_mode"] == "assistant"
-            saved = await client.post(
-                "/api/live/settings",
-                headers=headers,
-                json={
-                    "revision": before["revision"],
-                    "values": {**before["values"], "enabled": True},
-                    "api_key": SECRET,
-                },
-            )
-            assert saved.status_code == 200
-            revision = saved.json()["revision"]
+            revision = await configure(client, headers)
             ready = (await client.get("/api/live", headers=headers)).json()
             assert ready["backend_mode"] == "assistant"
             assert ready["assistant"] == {"agent": "assistant", "provider": "anthropic", "model": "chat-only-model"}
@@ -353,10 +393,7 @@ def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
                 },
             )
             assert started.status_code == 201
-            options = services[0].agents[0].provider.live_config
-            assert options is not None and options.delegation == "client"
-            assert options.client_handler is not None and services[0].agents[0].delegation_agent is None
-            assert services[0].agents[0].tool_registry.get_all() == []
+            assert services[0].configs[0].handler is not None
             assert harnesses[0].agent.tool_registry.get("shell") is not None
             await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
 
@@ -423,7 +460,16 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
             revision = ""
             session_ids: list[str] = []
             for restart in (False, True):
-                async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
+                async with client_app(
+                    tmp_path,
+                    config=HarnessConfig(
+                        workspace=tmp_path,
+                        data_dir=tmp_path / "data",
+                        provider="anthropic",
+                        auth="api-key",
+                        model="chat-only-model",
+                    ),
+                ) as (app, client, headers, harnesses):
                     assert not os.environ.get("OPENAI_API_KEY")
                     service: LiveService = app.state.live
                     assert isinstance(service, LiveService)
@@ -526,20 +572,30 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
 
 @pytest.mark.parametrize("demo", [False, True])
 def test_unavailable_setup_and_demo_remain_configurable(
-    tmp_path: Path, services: list[FakeLiveService], demo: bool
+    tmp_path: Path, services: list[FakeLiveService], demo: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def check() -> None:
-        async with client_app(tmp_path, config=configuration(tmp_path, demo=demo)) as (_, client, headers, _):
-            revision = await configure(client, headers, key="")
+        async with client_app(tmp_path, config=configuration(tmp_path, demo=demo)) as (_, client, headers, harnesses):
+            monkeypatch.setattr(OpenAIAuth, "logged_in", lambda auth: False)
+            revision = await configure(client, headers)
             info = (await client.get("/api/live", headers=headers)).json()
             assert not info["available"] and not info["key_configured"]
-            assert ("demo" if demo else "Provider connections") in info["reason"]
-            refused = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
+            assert ("demo" if demo else "Sign in") in info["reason"]
+            refused = await client.post(
+                "/api/live/sessions",
+                json={"revision": revision, "session_id": harnesses[0].session_id},
+                headers=headers,
+            )
             assert refused.status_code == 503
+            monkeypatch.setattr(OpenAIAuth, "logged_in", lambda auth: True)
             revision = await configure(client, headers)
             assert (await client.get("/api/live", headers=headers)).json()["available"] is (not demo)
             if demo:
-                refused = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
+                refused = await client.post(
+                    "/api/live/sessions",
+                    json={"revision": revision, "session_id": harnesses[0].session_id},
+                    headers=headers,
+                )
                 assert refused.status_code == 503 and "demo" in refused.text
             assert not services[0].creates
 
@@ -550,14 +606,14 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
     tmp_path: Path, services: list[FakeLiveService]
 ) -> None:
     async def check() -> None:
-        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             stale = (await client.get("/api/live", headers=headers)).json()["revision"]
             revision = await configure(client, headers)
             for path, body in (
                 ("/api/live/sessions", {"revision": stale}),
                 (
                     "/api/live/settings",
-                    {"revision": stale, "values": LiveValues.defaults().model_dump(), "api_key": SECRET},
+                    {"scope": "workspace", "revision": stale, "overrides": {"enabled": True}},
                 ),
             ):
                 response = await client.post(path, headers=headers, json=body)
@@ -567,31 +623,45 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
             service = services[0]
             service.release.clear()
             creating = asyncio.create_task(
-                client.post("/api/live/sessions", headers=headers, json={"revision": revision})
+                client.post(
+                    "/api/live/sessions",
+                    headers=headers,
+                    json={"revision": revision, "session_id": harnesses[0].session_id},
+                )
             )
             await service.entered.wait()
             try:
                 assert (
                     await client.post(
-                        "/api/live/settings", headers=headers, json={"revision": revision, "values": current["values"]}
+                        "/api/live/settings",
+                        headers=headers,
+                        json={"scope": "workspace", "revision": revision, "overrides": current["overrides"]},
                     )
                 ).status_code == 409
                 assert (
-                    await client.post("/api/live/sessions", headers=headers, json={"revision": revision})
+                    await client.post(
+                        "/api/live/sessions",
+                        headers=headers,
+                        json={"revision": revision, "session_id": harnesses[0].session_id},
+                    )
                 ).status_code == 409
             finally:
                 service.release.set()
             assert (await creating).status_code == 201
             assert (
                 await client.post(
-                    "/api/live/settings", headers=headers, json={"revision": revision, "values": current["values"]}
+                    "/api/live/settings",
+                    headers=headers,
+                    json={"scope": "workspace", "revision": revision, "overrides": current["overrides"]},
                 )
             ).status_code == 409
-            assert service.agents[0].provider.api_key == SECRET
+            assert len(service.configs) == 1
             await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
             assert (
                 await client.post(
-                    "/api/live/settings", headers=headers, json={"revision": revision, "values": current["values"]}
+                    "/api/live/settings",
+                    headers=headers,
+                    json={"scope": "workspace", "revision": revision, "overrides": current["overrides"]},
                 )
             ).status_code == 200
 
@@ -730,7 +800,7 @@ def test_safe_runtime_errors_and_unexpected_failures_are_redacted(
 ) -> None:
     async def check() -> None:
         async with (
-            client_app(tmp_path, config=configuration(tmp_path)) as (app, _, headers, _),
+            client_app(tmp_path, config=configuration(tmp_path)) as (app, _, headers, harnesses),
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url=URL
             ) as client,
@@ -741,7 +811,11 @@ def test_safe_runtime_errors_and_unexpected_failures_are_redacted(
                 (RuntimeError(SECRET), 500),
             ):
                 with patch.object(services[0], "create_stream", AsyncMock(side_effect=failure)):
-                    response = await client.post("/api/live/sessions", json={"revision": revision}, headers=headers)
+                    response = await client.post(
+                        "/api/live/sessions",
+                        json={"revision": revision, "session_id": harnesses[0].session_id},
+                        headers=headers,
+                    )
                     assert response.status_code == status and SECRET not in response.text
                     assert response.headers["cache-control"] == "no-store"
             assert (await client.get("/api/live/sessions/unknown", headers=headers)).status_code == 404

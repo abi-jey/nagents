@@ -1,7 +1,7 @@
 """Bounded, server-owned Live calls and browser audio relays.
 
-The server owns delegation and finalization. API-key connections relay audio;
-ChatGPT login uses browser WebRTC media with an authenticated server sideband.
+The server owns delegation, provider media, and finalization. Web voice uses
+the shared provider registry and relays PCM over the application's WebSocket.
 Only normalized captions and application status survive a completed call.
 """
 
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from nagents.events import Event
 
     from .live_login import LoginVoiceConfig
+    from .live_relay import ChatGPTMediaRelay
 
 MAX_SDP_BYTES = 65536
 MAX_AUDIO_FRAME = 9600  # 100 ms of mono PCM16 at 24 kHz.
@@ -461,7 +462,7 @@ class LiveService:
         self._active[identifier] = call
         self._records[identifier] = call.record
         call.record.append("status", call.record.message)
-        call.task = asyncio.create_task(self._run_stream(call, voice), name="web-live-relay")
+        call.task = asyncio.create_task(self._run_stream_created(call, voice), name="web-live-relay")
         try:
             await call.ready.wait()
             if call.stop.is_set() or call.failure or call.task.done():
@@ -582,7 +583,36 @@ class LiveService:
             call.seed = await self._context_factory(call.record.identifier)
             call.record.context = call.seed.report()
 
-    async def _run_login(self, call: _Call, sdp: str, config: LoginVoiceConfig) -> None:
+    async def _run_stream_created(self, call: _Call, voice: str) -> None:
+        try:
+            login = self._login_factory(voice) if self._login_factory is not None else None
+            if login is None:
+                # API-key and Entra connections use their native server-side
+                # audio transport; Codex login uses a server-owned media peer.
+                await self._run_stream(call, voice)
+                return
+            from .live_relay import ChatGPTMediaRelay
+
+            await self._seed(call)
+            if self._caption_factory is not None:
+                call.captions = await self._caption_factory(call.record.identifier)
+            assert call.audio_in is not None and call.audio_out is not None
+            media = ChatGPTMediaRelay(call.audio_in, call.audio_out)
+        except ImportError:
+            call.fail("Install nagents[web] on the server to enable ChatGPT voice audio.", 503)
+        except Exception:
+            call.fail("ChatGPT voice configuration is unavailable. Check your selected connection.", 503)
+        else:
+            await self._run_login(call, "", replace(login, history=call.seed.history), media)
+            return
+        call.record.transition("error", call.failure)
+        self._active.pop(call.record.identifier, None)
+        self._prune_records()
+        call.ready.set()
+
+    async def _run_login(
+        self, call: _Call, sdp: str, config: LoginVoiceConfig, media: ChatGPTMediaRelay | None = None
+    ) -> None:
         connection = ChatGPTLiveConnection(config)
         observers: list[asyncio.Task[None]] = []
         call.record.model, call.record.voice = config.model, config.voice
@@ -601,20 +631,71 @@ class LiveService:
             finally:
                 call.finalized = connection.finalized
 
+        async def watch() -> None:
+            reading = asyncio.create_task(observe(), name="web-chatgpt-live-events")
+            workers = [reading]
+            if media is not None:
+                workers.append(asyncio.create_task(media.wait(), name="web-chatgpt-live-media"))
+            try:
+                done, _ = await asyncio.wait(workers, return_when=asyncio.FIRST_COMPLETED)
+                for worker in done:
+                    worker.result()
+            except LoginVoiceError as error:
+                call.fail(str(error))
+            except Exception:
+                call.fail("The ChatGPT voice connection was interrupted.")
+            finally:
+                for worker in workers:
+                    worker.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
+
+        async def prepare() -> None:
+            async with asyncio.timeout(PROVISION_SECONDS):
+                offer = await media.offer() if media is not None else sdp
+                if call.stop.is_set():
+                    return
+                answer = _sdp(await connection.provision(offer))
+                observers.append(asyncio.create_task(watch(), name="web-chatgpt-live-sideband"))
+                if call.stop.is_set():
+                    return
+                if media is not None:
+                    await media.connect(answer)
+                else:
+                    call.answer = answer
+
+        preparing: list[asyncio.Task[None]] = []
+
+        async def wait_for_stop() -> None:
+            await call.stop.wait()
+
         try:
             if call.stop.is_set():
                 return
-            async with asyncio.timeout(PROVISION_SECONDS):
-                call.answer = _sdp(await connection.provision(sdp))
-            del sdp
-            observer = asyncio.create_task(observe(), name="web-chatgpt-live-sideband")
-            observers.append(observer)
-            await self._connected(call, observer)
+            setup = asyncio.create_task(prepare(), name="web-chatgpt-live-provision")
+            stopped = asyncio.create_task(wait_for_stop())
+            preparing.extend([setup, stopped])
+            await asyncio.wait(preparing, return_when=asyncio.FIRST_COMPLETED)
+            if call.stop.is_set():
+                # Once POST has started, cancellation cannot prove the provider
+                # did not allocate a call. Keep its bounded response reader until
+                # we learn the call ID, then the owned cleanup can close it. A
+                # known ID is sufficient to cancel a stalled media handshake.
+                if not connection.identifier:
+                    await setup
+                return
+            await setup
+            await self._connected(call, observers[0])
         except LoginVoiceError as error:
             call.fail(str(error))
         except Exception:
             call.fail("The ChatGPT voice connection could not be established.")
         finally:
+            for pending in preparing:
+                pending.cancel()
+            await asyncio.gather(*preparing, return_exceptions=True)
+            if media is not None:
+                with suppress(Exception):
+                    await media.quiet()
             if call.record.status != "closing":
                 call.record.transition("closing", "Closing ChatGPT voice.")
             with suppress(Exception):
@@ -629,6 +710,12 @@ class LiveService:
             with suppress(Exception):
                 async with asyncio.timeout(CLEANUP_SECONDS + 1):
                     await connection.aclose()
+            if media is not None:
+                try:
+                    async with asyncio.timeout(CLEANUP_SECONDS):
+                        await media.aclose()
+                except Exception:
+                    call.fail("ChatGPT voice audio cleanup could not be confirmed.")
             call.finalized = connection.finalized
             if connection.identifier and not call.finalized:
                 call.fail("ChatGPT voice finalization could not be confirmed.")

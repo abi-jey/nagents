@@ -31,6 +31,7 @@ from pydantic import model_validator
 
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.connection import live_auth_available
+from nagents.harness.providers import KINDS
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live import LiveConfig
@@ -59,7 +60,7 @@ if TYPE_CHECKING:
 
 LIVE_VOICES = ("marin", "cedar")
 LIVE_PROVIDERS = ("openai", "openai_compatible", "azure_openai_compatible_v1")
-NAMED_LIVE_PROVIDERS = (*LIVE_PROVIDERS, "foundry")
+NAMED_LIVE_PROVIDERS = tuple(name for name, kind in KINDS.items() if kind.live)
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 MAX_SETTINGS_BYTES = MAX_VOICE_BYTES
 MAX_KEY_BYTES = 4096

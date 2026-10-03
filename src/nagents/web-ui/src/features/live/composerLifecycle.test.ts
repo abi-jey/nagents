@@ -11,7 +11,7 @@ import type { LiveCapability, LiveDelegationDetails, LiveDelegationRecord, LiveS
 
 const capability: LiveCapability = {
   available: true, reason: "", enabled: true, key_configured: true, revision: "voice-revision",
-  provider: "openai", voice_auth: "chatgpt", transport: "webrtc", model: "gpt-live-1-codex",
+  provider: "openai", voice_auth: "chatgpt", transport: "websocket", model: "gpt-live-1-codex",
   backend_mode: "assistant", backend_model: "gpt-test", voice: "cove", voices: ["cove", "breeze"],
   assistant: { agent: "assistant", provider: "openai", model: "gpt-test" }, active_session_id: "",
 };
@@ -29,12 +29,12 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function view(options: { capability?: Promise<Response>; settings?: Promise<Response>; denied?: boolean; delegation?: boolean } = {}) {
+function view(options: { capability?: Promise<Response>; settings?: Promise<Response>; denied?: boolean; delegation?: boolean; voiceAuth?: LiveCapability["voice_auth"] } = {}) {
   const dom = new JSDOM("<footer class='composer-area'><div id='root'></div><form id='text-form'><textarea id='composer'></textarea><button type='submit'>Send</button></form></footer>", { url: "https://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   const frames = new Map<number, FrameRequestCallback>();
-  let frameId = 0, captures = 0, creates = 0, closures = 0, capabilityReads = 0, settingsReads = 0, dismissals = 0, submissions = 0;
-  let currentCapability = capability;
+  let frameId = 0, captures = 0, creates = 0, closures = 0, sockets = 0, capabilityReads = 0, settingsReads = 0, dismissals = 0, submissions = 0;
+  let currentCapability: LiveCapability = { ...capability, voice_auth: options.voiceAuth || capability.voice_auth };
   const tracks: { enabled: boolean; readyState: string; stop(): void; addEventListener(): void }[] = [];
   const record: LiveDelegationRecord = {
     seq: 1, delegation_id: "delegation-one", voice_session_id: "voice-one", chat_session_id: "ngn-one", run_id: "run-one",
@@ -46,25 +46,48 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     message: status === "closed" ? "Live session closed. Finalization confirmed." : "Connected",
     delegations: options.delegation ? [record] : [],
   });
-  class Audio {
-    srcObject = null;
-    pause() {}
-    async play() {}
+  class AudioNode {
+    port = { onmessage: (_event: MessageEvent<ArrayBuffer>) => {}, close() {} };
+    connect(other: object) { return other as this; }
+    disconnect() {}
   }
-  class Peer {
-    connectionState = "new";
-    onconnectionstatechange: (() => void) | undefined;
-    createDataChannel() { return { close() {} }; }
-    addTrack() { return { async replaceTrack() {} }; }
-    async createOffer() { return { sdp: "v=0\r\nfixture-offer\r\n" }; }
-    async setLocalDescription() {}
-    async setRemoteDescription() { this.connectionState = "connected"; this.onconnectionstatechange?.(); }
-    close() { this.connectionState = "closed"; this.onconnectionstatechange?.(); }
+  class Context {
+    state = "suspended";
+    currentTime = 0;
+    destination = {};
+    audioWorklet = { addModule: async (path: string) => { assert.equal(path, "/assets/live-capture.js"); } };
+    createMediaStreamSource() { return new AudioNode(); }
+    createGain() { return Object.assign(new AudioNode(), { gain: { value: 1 } }); }
+    async resume() { this.state = "running"; }
+    async setSinkId() {}
+    async close() {}
+  }
+  class Socket {
+    static OPEN = 1;
+    readyState = 1;
+    bufferedAmount = 0;
+    binaryType = "blob";
+    onopen = () => {};
+    onmessage = (_event: MessageEvent<ArrayBuffer>) => {};
+    onclose = () => {};
+    onerror = () => {};
+    constructor(url: string, protocols: string[]) {
+      sockets++;
+      assert.equal(url, "wss://localhost/api/live/sessions/voice-one/audio");
+      assert.deepEqual(protocols, ["ngn.live.v1", "ngn.token.fixture-token"]);
+      queueMicrotask(() => this.onopen());
+    }
+    send() {}
+    close() { this.readyState = 3; }
+  }
+  class ProviderPeer {
+    constructor() { assert.fail("ChatGPT login voice must never create a browser provider peer"); }
   }
   const globals = {
     window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     HTMLMediaElement: dom.window.HTMLMediaElement, localStorage: dom.window.localStorage,
-    Audio, AudioContext: undefined, RTCPeerConnection: Peer, isSecureContext: true, IS_REACT_ACT_ENVIRONMENT: true,
+    AudioContext: Context, AudioWorkletNode: AudioNode, WebSocket: Socket, location: dom.window.location,
+    RTCPeerConnection: ProviderPeer, isSecureContext: true, IS_REACT_ACT_ENVIRONMENT: true,
     navigator: { mediaDevices: {
       getUserMedia: async () => {
         captures++;
@@ -79,11 +102,15 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     requestAnimationFrame: (callback: FrameRequestCallback) => { const id = ++frameId; frames.set(id, callback); return id; },
     cancelAnimationFrame: (id: number) => { frames.delete(id); },
     fetch: async (path: string, init: RequestInit) => {
+      assert.ok(path.startsWith("/api/"));
+      assert.equal(init.mode, "same-origin");
+      assert.equal(init.redirect, "error");
       if (path === "/api/live") { capabilityReads++; return options.capability && capabilityReads === 1 ? options.capability : Response.json(currentCapability); }
-      if (path.startsWith("/api/live/settings")) { settingsReads++; return options.settings && settingsReads === 1 ? options.settings : Response.json(settings); }
+      if (path.startsWith("/api/live/settings")) { settingsReads++; return options.settings && settingsReads === 1 ? options.settings : Response.json({ ...settings, voice_auth: currentCapability.voice_auth }); }
       if (path === "/api/live/sessions") {
         assert.equal(init.method, "POST"); creates++;
-        return Response.json({ session_id: "voice-one", model: capability.model, voice: "cove", sdp: "v=0\r\nfixture-answer\r\n" });
+        assert.deepEqual(JSON.parse(String(init.body)), { voice: "cove", revision: "voice-revision", session_id: "ngn-one" });
+        return Response.json({ session_id: "voice-one", model: capability.model, voice: "cove" });
       }
       if (path === "/api/live/sessions/voice-one/close") { closures++; return Response.json(snapshot("closed")); }
       if (path.includes("/delegations/")) return Response.json(detail);
@@ -102,7 +129,7 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
   const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(item => (item.getAttribute("aria-label") || item.textContent?.trim()) === name)!;
   return {
     dom, container, textarea, tracks, button,
-    counts: () => ({ captures, creates, closures, capabilityReads, dismissals, submissions }),
+    counts: () => ({ captures, creates, closures, sockets, capabilityReads, dismissals, submissions }),
     capability: (next: LiveCapability) => { currentCapability = next; },
     render: async (props: Partial<ComponentProps<typeof LiveDialog>> = {}) => act(async () => root.render(createElement(LiveDialog, {
       token: "fixture-token", sessionId: "ngn-one", close: () => { dismissals++; }, ...props,
@@ -308,3 +335,19 @@ test("the sphere is a native button outside the text form and toggles microphone
     assert.equal(ui.counts().submissions, 0);
   } finally { await ui.close(); }
 });
+
+for (const voiceAuth of ["chatgpt", "api-key", "entra"] as const) {
+  test(`${voiceAuth} voice connects only to the ngn relay and releases local media on end`, async () => {
+    const ui = view({ voiceAuth });
+    try {
+      await ui.render();
+      assert.equal(ui.counts().captures, 1);
+      assert.equal(ui.counts().creates, 1);
+      assert.equal(ui.counts().sockets, 1);
+      assert.ok(ui.button("End voice"));
+      await ui.click("End voice");
+      assert.equal(ui.counts().closures, 1);
+      assert.ok(ui.tracks.every(track => track.readyState === "ended"));
+    } finally { await ui.close(); }
+  });
+}

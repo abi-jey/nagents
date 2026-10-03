@@ -107,9 +107,13 @@ login and `auth: codex` for the library's local Codex discovery (`CODEX_HOME` or
 registry. `auth: auto` prefers an existing ngn ChatGPT login or local Codex
 configuration before an OpenAI API-key environment variable. `auth: auto` is
 available only for OpenAI; `auth: codex` uses only local Codex discovery. OpenAI
-uses a fixed API host; use `openai_compatible` for custom endpoints. GPT-Live with a
-ChatGPT subscription requires a separate OpenAI API key in the configured
-environment variable; subscription tokens are never used as voice API keys.
+uses a fixed API host; use `openai_compatible` for custom endpoints.
+[Web voice](ngn-web.md#gpt-live-voice-conversations) uses the normal provider registry
+and defaults; an explicit Voice connection can select a different Live-capable
+provider. The browser sends audio only to ngn, which owns provider authentication
+and connections. ChatGPT/Codex login uses the server's native Codex media/control
+path, while API-key and Entra connections use supported Live WebSockets. Subscription
+tokens are never exposed to the browser or used as public Live API keys.
 
 Example:
 

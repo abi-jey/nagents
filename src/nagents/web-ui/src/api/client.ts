@@ -1,3 +1,5 @@
+import { apiPath } from "./origin.js";
+
 export class RequestError extends Error {
   constructor(
     message: string,
@@ -15,7 +17,7 @@ export async function request(
   signal?: AbortSignal,
   method = body ? "POST" : "GET",
 ): Promise<Response> {
-  const response = await fetch(`/api/${path}`, {
+  const response = await fetch(apiPath(path), {
     method,
     headers: {
       ...(token ? { "X-Ngn-Token": token } : {}),
@@ -24,6 +26,8 @@ export async function request(
     body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",
     credentials: "same-origin",
+    mode: "same-origin",
+    redirect: "error",
     signal,
   });
   return checked(response);
@@ -36,12 +40,14 @@ export async function requestBinary(
   headers: Record<string, string>,
   signal: AbortSignal,
 ): Promise<Response> {
-  return checked(await fetch(`/api/${path}`, {
+  return checked(await fetch(apiPath(path), {
     method: "POST",
     headers: { ...headers, "X-Ngn-Token": token, "Content-Type": body.type },
     body,
     cache: "no-store",
     credentials: "same-origin",
+    mode: "same-origin",
+    redirect: "error",
     signal,
   }));
 }
