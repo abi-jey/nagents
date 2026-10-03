@@ -20,12 +20,15 @@ from nagents.tui.screens import ChoiceModal
 from nagents.tui.screens import DetailModal
 from nagents.tui.themes import configure_theme
 from nagents.tui.widgets import Composer
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
 from tests.support.tui import make_app
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from textual.message import Message
 
 
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (132, 38)])
@@ -105,10 +108,21 @@ def test_mouse_selects_a_prefill_without_running_it(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
         app = make_app(backend)
-        async with app.run_test() as pilot:
+        prefilled = asyncio.Event()
+
+        def observe(message: Message) -> None:
+            if isinstance(message, Composer.Changed) and message.text_area.text == "/help ":
+                prefilled.set()
+
+        async with app.run_test(message_hook=observe) as pilot:
             await idle(app, pilot)
             await pilot.press("/", "h", "e", "l")
-            await pilot.click("#slash-options", offset=(3, 0))
+            # Flush layout before Pilot captures the target's mouse coordinates.
+            await pilot.pause()
+            assert await pilot.click("#slash-options", offset=(3, 0))
+            # OptionSelected -> Chosen -> Changed spans several message pumps.
+            async with asyncio.timeout(HANG_GUARD):
+                await prefilled.wait()
             assert app.query_one(Composer).text == "/help "
             assert not isinstance(app.screen, DetailModal)
             assert backend.prompts == []
