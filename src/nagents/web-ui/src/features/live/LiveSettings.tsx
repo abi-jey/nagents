@@ -49,7 +49,7 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
     <header><div><Icon name="settings" size={17} /><h3 id="live-settings-title" ref={heading} tabIndex={-1}>Voice settings</h3></div><button type="button" disabled={saving} onClick={back} aria-label="Back to conversation" title="Back to conversation"><Icon name="close" size={16} /></button></header>
     <form className="live-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <p className="live-settings-description">Choose your default voice, behavior, and starting context.</p>
-      {showDevices && <AudioDeviceSettings transport={transport || (chatgptLogin ? "webrtc" : "websocket")} disabled={audioDisabled} active={audioActive} activeSelection={audioSelection} applyDevice={applyDevice} />}
+      {showDevices && <AudioDeviceSettings transport={transport || "websocket"} disabled={audioDisabled} active={audioActive} activeSelection={audioSelection} applyDevice={applyDevice} />}
       {loading && <p role="status">Loading Voice settings…</p>}
       {values && snapshot && <fieldset className="live-voice-defaults" disabled={disabled}>
           <legend className="sr-only">Voice defaults</legend>
@@ -74,19 +74,20 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
             <legend className="sr-only">Connection and model preferences</legend>
         {preference("enabled", "Enable GPT-Live", <input type="checkbox" role="switch" checked={values.enabled} disabled={scope === "workspace" && !Object.hasOwn(overrides, "enabled")} onChange={event => controller.edit({ enabled: event.target.checked })} />)}
         {preference("connection_id", "Voice connection", <select value={values.connection_id || ""} disabled={scope === "workspace" && !Object.hasOwn(overrides, "connection_id")} onChange={event => controller.edit({ connection_id: event.target.value })}>
-          <option value="">Use active provider connection</option>
+          <option value="">Use configured default provider</option>
           {values.connection_id && !snapshot.connections?.some(connection => connection.name === values.connection_id) && <option value={values.connection_id}>{values.connection_id} · unavailable</option>}
           {snapshot.connections?.map(connection => <option key={connection.name} value={connection.name}>{connection.name} · {providerLabel(connection.provider)} ({connection.scope})</option>)}
         </select>)}
+        <small>Uses the normal provider configuration and its saved authentication. Leave the default selected or choose a Live-compatible connection. Microphone audio and playback connect only to ngn serve.</small>
         {preference("backend_mode", "Reasoning backend", <select value={values.backend_mode} disabled={scope === "workspace" && !Object.hasOwn(overrides, "backend_mode")} onChange={event => controller.edit({ backend_mode: event.target.value as "assistant" | "hosted" })}><option value="assistant">Main assistant (selected chat provider)</option><option value="hosted" disabled={chatgptLogin}>Hosted Responses (separate assistant)</option></select>)}
-        {chatgptLogin && <small>ChatGPT login connects GPT-Live to your main assistant. Hosted Responses requires an API-key connection.</small>}
+        {chatgptLogin && <small>ChatGPT/Codex login connects GPT-Live to your main assistant. Hosted Responses requires an API-key connection.</small>}
         {values.backend_mode === "assistant" && <p className="live-backend-note">{assistant ? `${assistant.agent} · ${assistant.provider}: ${assistant.model}.` : "Uses the main assistant selected in workspace settings."} Voice requests join the selected chat's history and use its tools and approval rules. Change its provider and model in normal workspace settings.</p>}
         <div className={`live-settings-models ${values.backend_mode === "assistant" ? "single" : ""}`}>
           {preference("model", "GPT-Live model", <input value={values.model} disabled={scope === "workspace" && !Object.hasOwn(overrides, "model")} autoComplete="off" spellCheck={false} maxLength={128} onChange={event => controller.edit({ model: event.target.value })} />)}
           {values.backend_mode === "hosted" && preference("backend_model", "Hosted backend model", <input value={values.backend_model} disabled={scope === "workspace" && !Object.hasOwn(overrides, "backend_model")} autoComplete="off" spellCheck={false} maxLength={128} onChange={event => controller.edit({ backend_model: event.target.value })} />)}
         </div>
         <div className="live-connection-summary" role="status"><strong>Saved voice connection</strong>
-          {snapshot.profile_name ? <p><span>{snapshot.profile_name} · {providerLabel(snapshot.values.provider)}</span><br />{snapshot.live_supported === false ? "Choose a connection that supports GPT-Live." : chatgptLogin ? snapshot.key_configured ? "Uses your existing ChatGPT login on the server." : "Sign in to ChatGPT for this provider connection before connecting." : snapshot.voice_auth === "entra" ? snapshot.key_configured ? "Uses Microsoft Entra ID on the server." : "Configure Microsoft Entra ID for this provider before connecting." : snapshot.key_configured ? "Credentials are available on the server." : "Credentials are missing. Configure this provider before connecting."}</p> : <p>Add an OpenAI or Foundry connection to use GPT-Live.</p>}
+          {snapshot.profile_name ? <p><span>{snapshot.profile_name} · {providerLabel(snapshot.values.provider)}</span><br />{snapshot.live_supported === false ? "Choose a connection that supports GPT-Live." : chatgptLogin ? snapshot.key_configured ? "Uses your existing ChatGPT/Codex login on the server." : "Sign in to ChatGPT/Codex for this provider connection before connecting." : snapshot.voice_auth === "entra" ? snapshot.key_configured ? "Uses Microsoft Entra ID on the server." : "Configure Microsoft Entra ID for this provider before connecting." : snapshot.key_configured ? "Uses the selected provider’s API credentials on the server." : "Configure credentials for the selected provider before connecting."}</p> : <p>Configure a provider connection that supports Live to use voice.</p>}
           {dirty && <small>Your connection selection applies after saving.</small>}
           {configureConnection && <button type="button" disabled={dirty} onClick={configureConnection}>Manage provider connections</button>}
         </div>

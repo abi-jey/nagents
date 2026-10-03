@@ -40,8 +40,8 @@ export function saveAudioDevices(selection: AudioDeviceSelection): boolean {
 }
 
 export function supportsAudioOutput(transport: LiveTransport = "websocket"): boolean {
-  const prototype: object | undefined = transport === "webrtc"
-    ? globalThis.HTMLMediaElement?.prototype : globalThis.AudioContext?.prototype;
+  if (transport !== "websocket") return false;
+  const prototype: object | undefined = globalThis.AudioContext?.prototype;
   return !!prototype && "setSinkId" in prototype && typeof prototype.setSinkId === "function";
 }
 

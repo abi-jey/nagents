@@ -17,7 +17,6 @@ from nagents.provider.openai import CodexConfigError
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import _load_config
 from nagents.web.live_auth import LOGIN_VOICES
-from nagents.web.live_settings import LIVE_VOICES
 from nagents.web.service import Run
 from tests.providers.test_openai_local import write_config
 from tests.providers.test_openai_local import write_oauth_auth
@@ -75,6 +74,7 @@ class RoutedLiveService:
         *,
         login_factory: Callable[[str], LoginVoiceConfig | None],
     ) -> None:
+        self.factory = factory
         self.login_factory = login_factory
         self.active_session_id = ""
         self.browser_calls: list[tuple[str, str]] = []
@@ -86,19 +86,26 @@ class RoutedLiveService:
         return self.delegations.append
 
     async def create(self, offer: str, voice: str = "") -> dict[str, object]:
+        pytest.fail("Browser SDP provisioning must be unreachable")
+
+    async def create_stream(self, voice: str = "") -> dict[str, object]:
         config = self.login_factory(voice)
-        assert config is not None
+        if config is None:
+            agent = self.factory(voice)
+            try:
+                assert agent.provider.api_key == KEY_SECRET
+                self.relay_calls.append(voice)
+                self.active_session_id = SESSION
+                assert agent.provider.live_config is not None
+                return {"session_id": SESSION, "model": agent.provider.model, "voice": agent.provider.live_config.voice}
+            finally:
+                await agent.close()
         self.configs.append(config)
         credentials = await config.credentials()
         assert credentials.access_token == LOGIN_SECRET and credentials.account_id == ACCOUNT
-        self.browser_calls.append((offer, voice))
-        self.active_session_id = SESSION
-        return {"session_id": SESSION, "model": config.model, "voice": config.voice, "sdp": OFFER}
-
-    async def create_stream(self, voice: str = "") -> dict[str, object]:
         self.relay_calls.append(voice)
         self.active_session_id = SESSION
-        return {"session_id": SESSION, "model": "gpt-live-1", "voice": voice or "marin"}
+        return {"session_id": SESSION, "model": config.model, "voice": config.voice}
 
     async def close(self, session_id: str) -> dict[str, object]:
         self.active_session_id = ""
@@ -178,7 +185,7 @@ def test_login_readiness_uses_saved_auth_without_api_keys_or_secret_disclosure(
             settings = await client.get("/api/live/settings", headers=headers)
             assert capability.json()["available"] and capability.json()["key_configured"]
             assert capability.json()["voice_auth"] == settings.json()["voice_auth"] == "chatgpt"
-            assert capability.json()["transport"] == "webrtc"
+            assert capability.json()["transport"] == "websocket"
             assert capability.json()["model"] == settings.json()["values"]["model"] == "gpt-live-1-codex"
             assert settings.json()["global_preferences"]["model"] == "gpt-live-1"
             assert capability.json()["voices"] == settings.json()["voices"] == list(LOGIN_VOICES)
@@ -210,7 +217,7 @@ def test_missing_chatgpt_login_does_not_fall_back_to_an_api_key(
             result = await client.post(
                 "/api/live/sessions",
                 headers=headers,
-                json={"revision": revision, "session_id": harnesses[0].session_id, "sdp": OFFER},
+                json={"revision": revision, "session_id": harnesses[0].session_id},
             )
             assert result.status_code == 503 and not services[0].browser_calls and not services[0].relay_calls
             assert login.reads == 0
@@ -218,28 +225,26 @@ def test_missing_chatgpt_login_does_not_fall_back_to_an_api_key(
     asyncio.run(check())
 
 
-def test_login_sdp_route_admits_the_selected_assistant_and_selected_voice(
+def test_login_pcm_route_admits_the_selected_assistant_and_rejects_browser_sdp(
     tmp_path: Path, login: LoginState, services: list[RoutedLiveService]
 ) -> None:
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
             revision = await configure(client, headers, voice="ember")
             body = {"revision": revision, "session_id": harnesses[0].session_id}
-            missing = await client.post("/api/live/sessions", headers=headers, json=body)
-            assert missing.status_code == 422 and "WebRTC offer" in missing.text
-            wrong_voice = await client.post(
-                "/api/live/sessions", headers=headers, json={**body, "sdp": OFFER, "voice": "marin"}
-            )
+            invalid = await client.post("/api/live/sessions", headers=headers, json={**body, "sdp": OFFER})
+            assert invalid.status_code == 422
+            wrong_voice = await client.post("/api/live/sessions", headers=headers, json={**body, "voice": "marin"})
             assert wrong_voice.status_code == 422
             wrong_chat = await client.post(
-                "/api/live/sessions", headers=headers, json={**body, "sdp": OFFER, "session_id": "ngn-other"}
+                "/api/live/sessions", headers=headers, json={**body, "session_id": "ngn-other"}
             )
             assert wrong_chat.status_code == 409
             assert not services[0].browser_calls and not services[0].relay_calls
-            result = await client.post("/api/live/sessions", headers=headers, json={**body, "sdp": OFFER})
+            result = await client.post("/api/live/sessions", headers=headers, json={**body})
             assert result.status_code == 201, result.text
-            assert result.json() == {"session_id": SESSION, "voice": "ember", "model": "gpt-live-1-codex", "sdp": OFFER}
-            assert services[0].browser_calls == [(OFFER, "")] and not services[0].relay_calls
+            assert result.json() == {"session_id": SESSION, "voice": "ember", "model": "gpt-live-1-codex"}
+            assert not services[0].browser_calls and services[0].relay_calls == [""]
             assert "selected chat" in services[0].configs[0].instructions
             assert login.reads == 1
             connection = await app.state.live_settings.connection()
@@ -261,7 +266,7 @@ def test_chatgpt_hosted_backend_is_rejected_before_provisioning(
             result = await client.post(
                 "/api/live/sessions",
                 headers=headers,
-                json={"revision": revision, "session_id": harnesses[0].session_id, "sdp": OFFER},
+                json={"revision": revision, "session_id": harnesses[0].session_id},
             )
             assert result.status_code == 503 and "main assistant" in result.text
             assert not services[0].browser_calls and not services[0].relay_calls and login.reads == 0
@@ -269,25 +274,24 @@ def test_chatgpt_hosted_backend_is_rejected_before_provisioning(
     asyncio.run(check())
 
 
-def test_explicit_api_key_voice_keeps_relay_transport_even_with_saved_login(
+def test_explicit_api_key_voice_uses_provider_relay_even_with_saved_login(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, login: LoginState, services: list[RoutedLiveService]
 ) -> None:
+    monkeypatch.setenv("TEST_LOGIN_VOICE_KEY", KEY_SECRET)
+
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path, "api-key")) as (_, client, headers, harnesses):
             revision = await configure(client, headers)
-            missing = (await client.get("/api/live", headers=headers)).json()
-            assert not missing["available"] and not missing["key_configured"]
-            assert missing["voice_auth"] == "api-key" and "TEST_LOGIN_VOICE_KEY" in missing["reason"]
-            monkeypatch.setenv("TEST_LOGIN_VOICE_KEY", KEY_SECRET)
             capability = (await client.get("/api/live", headers=headers)).json()
             assert capability["available"] and capability["voice_auth"] == "api-key"
-            assert capability["transport"] == "websocket" and capability["voices"] == list(LIVE_VOICES)
-            body = {"revision": revision, "session_id": harnesses[0].session_id, "voice": "cedar"}
-            invalid = await client.post("/api/live/sessions", headers=headers, json={**body, "sdp": OFFER})
-            assert invalid.status_code == 422 and "server audio relay" in invalid.text
-            result = await client.post("/api/live/sessions", headers=headers, json=body)
-            assert result.status_code == 201 and services[0].relay_calls == ["cedar"]
-            assert not services[0].browser_calls and login.reads == 0
+            assert capability["transport"] == "websocket"
+            response = await client.post(
+                "/api/live/sessions",
+                headers=headers,
+                json={"revision": revision, "session_id": harnesses[0].session_id},
+            )
+            assert response.status_code == 201
+            assert services[0].relay_calls == [""] and not services[0].browser_calls and login.reads == 0
 
     asyncio.run(check())
 
@@ -312,7 +316,7 @@ def test_login_voice_can_connect_during_assistant_work_without_unlocking_setting
                 response = await client.post(
                     "/api/live/sessions",
                     headers=headers,
-                    json={"revision": revision, "session_id": active.session_id, "sdp": OFFER},
+                    json={"revision": revision, "session_id": active.session_id},
                 )
                 assert response.status_code == 201, response.text
                 assert state.active is active and not active.task.done() and not active.task.cancelling()
@@ -322,7 +326,7 @@ def test_login_voice_can_connect_during_assistant_work_without_unlocking_setting
                     json={"revision": settings["revision"], "values": settings["values"]},
                 )
                 assert changed.status_code == 409
-                assert services[0].browser_calls == [(OFFER, "")] and login.reads == 1
+                assert services[0].relay_calls == [""] and login.reads == 1
                 assert state.active is active and not active.task.done()
             finally:
                 release.set()
@@ -363,7 +367,7 @@ def test_invalid_codex_login_never_falls_back_to_an_environment_api_key(
             response = await client.post(
                 "/api/live/sessions",
                 headers=headers,
-                json={"revision": revision, "session_id": harnesses[0].session_id, "sdp": OFFER},
+                json={"revision": revision, "session_id": harnesses[0].session_id},
             )
             assert response.status_code == 503
             assert not services[0].browser_calls and not services[0].relay_calls
@@ -372,7 +376,7 @@ def test_invalid_codex_login_never_falls_back_to_an_environment_api_key(
 
 
 @pytest.mark.parametrize("auth", ["auto", "codex"])
-def test_only_auto_may_use_an_api_key_when_no_codex_configuration_exists(
+def test_auto_uses_selected_provider_api_key_when_no_codex_configuration_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     login: LoginState,

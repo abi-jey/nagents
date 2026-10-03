@@ -153,11 +153,11 @@ test("settings and session transport use same-origin authenticated routes with a
     const body: LiveSettingsInput = { scope: "workspace", revision: settings.revision, overrides: {} };
     await api.save(body); await liveApi("local-web-token").create("marin", signal, settings.revision, "ngn-chat-root");
     assert.deepEqual(requests.map((r) => r.path), ["/api/live/settings?scope=workspace", "/api/live/settings", "/api/live/sessions"]);
-    for (const { init } of requests) { assert.equal(new Headers(init?.headers).get("X-Ngn-Token"), "local-web-token"); assert.equal(init?.credentials, "same-origin"); }
+    for (const { init } of requests) { assert.equal(new Headers(init?.headers).get("X-Ngn-Token"), "local-web-token"); assert.equal(init?.credentials, "same-origin"); assert.equal(init?.mode, "same-origin"); assert.equal(init?.redirect, "error"); }
     assert.deepEqual(JSON.parse(String(requests[1].init?.body)), body);
     assert.deepEqual(JSON.parse(String(requests[2].init?.body)), { voice: "marin", revision: settings.revision, session_id: "ngn-chat-root" });
-    await liveApi("local-web-token").create("marin", signal, settings.revision, "ngn-chat-root", "offer-sdp");
+    await liveApi("local-web-token").create("cove", signal, settings.revision, "ngn-chat-root");
     assert.equal(requests[3].path, "/api/live/sessions");
-    assert.deepEqual(JSON.parse(String(requests[3].init?.body)), { voice: "marin", revision: settings.revision, session_id: "ngn-chat-root", sdp: "offer-sdp" });
+    assert.deepEqual(JSON.parse(String(requests[3].init?.body)), { voice: "cove", revision: settings.revision, session_id: "ngn-chat-root" });
   } finally { globalThis.fetch = original; }
 });

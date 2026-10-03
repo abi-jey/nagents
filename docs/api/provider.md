@@ -192,8 +192,12 @@ OAuth transport. See [local discovery](../guide/providers.md#local-codex-configu
 discovery for the public Live WebSocket API. This path requires an API key and may
 use its `OPENAI_API_KEY` environment fallback even when normal text inference uses
 saved ChatGPT authentication. OAuth tokens are never sent as Live API keys.
-The [web voice interface](../guide/ngn-web.md#gpt-live-voice-conversations) also
-supports ChatGPT login through its separate WebRTC and server-side control path.
+The [web voice interface](../guide/ngn-web.md#gpt-live-voice-conversations) uses
+the normal provider registry and defaults, with an optional explicit voice
+connection. Its browser exchanges PCM audio only with the ngn server over a
+same-origin WebSocket. The server owns the native Codex media/control path for
+ChatGPT login, or the provider's Live WebSocket for supported API-key/Entra
+connections. The selected provider must support Live.
 
 For the CLI's own login
 workflow and limitations, see [ngn](../guide/ngn.md) and

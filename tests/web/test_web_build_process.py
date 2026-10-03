@@ -22,7 +22,8 @@ def test_failed_build_reports_exit_status(tmp_path: Path) -> None:
 
 @pytest.mark.requires_posix
 @pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT])
-def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: int) -> None:
+@pytest.mark.parametrize("during_spawn", [False, True], ids=["waiting", "spawning"])
+def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: int, during_spawn: bool) -> None:
     child = tmp_path / "child.py"
     child.write_text(
         "import time\nfrom pathlib import Path\n"
@@ -36,12 +37,25 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
         "subprocess.Popen([sys.executable, 'child.py'])\ntime.sleep(30)\n",
         encoding="utf-8",
     )
+    driver_source = "import os, sys, time\nfrom pathlib import Path\nfrom nagents.web import build_process\n"
+    if during_spawn:
+        # A child can execute before Popen returns to its caller. Deliver the
+        # real interrupt exactly in that ownership window, without a timing bet.
+        driver_source += (
+            "original_popen = build_process.subprocess.Popen\n"
+            "def spawning(*args, **kwargs):\n"
+            "    process = original_popen(*args, **kwargs)\n"
+            "    while not (Path(sys.argv[2]) / 'heartbeat').exists(): time.sleep(0.01)\n"
+            f"    os.kill(os.getpid(), {int(stop_signal)})\n"
+            "    return process\n"
+            "build_process.subprocess.Popen = spawning\n"
+        )
+    driver_source += "build_process.run_build_command([sys.executable, sys.argv[1]], cwd=Path(sys.argv[2]))"
     driver = subprocess.Popen(
         [
             sys.executable,
             "-c",
-            "import sys; from pathlib import Path; from nagents.web.build_process import run_build_command; "
-            "run_build_command([sys.executable, sys.argv[1]], cwd=Path(sys.argv[2]))",
+            driver_source,
             str(build),
             str(tmp_path),
         ],
@@ -55,7 +69,8 @@ def test_interrupt_cleans_up_build_and_grandchild(tmp_path: Path, stop_signal: i
             assert driver.poll() is None, "Build driver exited before spawning children"
             assert time.monotonic() < deadline, "Build subprocess did not start"
             time.sleep(0.02)
-        driver.send_signal(stop_signal)
+        if not during_spawn:
+            driver.send_signal(stop_signal)
         assert driver.wait(timeout=HANG_GUARD) != 0
         # If the grandchild survived, its monotonic heartbeat would keep advancing.
         last_write = heartbeat.stat().st_mtime_ns

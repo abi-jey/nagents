@@ -1,4 +1,4 @@
-"""ChatGPT-authenticated GPT-Live calls with browser media and owned sideband.
+"""ChatGPT-authenticated GPT-Live calls with server media and owned sideband.
 
 This is the Codex Live (quicksilver v2) contract. Its WebRTC provisioning,
 transcript items and context appends are distinct from public Live sessions.
@@ -105,7 +105,7 @@ def normalize_event(event: Payload) -> Payload:
 
 
 class ChatGPTLiveConnection:
-    """Own one login call; the browser owns its WebRTC microphone and playback."""
+    """Own one login call and its authenticated native sideband."""
 
     def __init__(self, config: LoginVoiceConfig) -> None:
         self.config = config
@@ -136,7 +136,7 @@ class ChatGPTLiveConnection:
         if self.identifier:
             raise LoginVoiceError("This ChatGPT voice call was already provisioned.")
         if not sdp.startswith(("v=0\r\n", "v=0\n")) or len(sdp.encode()) > MAX_SDP_BYTES:
-            raise LoginVoiceError("A valid browser audio offer is required.")
+            raise LoginVoiceError("A valid server audio offer is required.")
         session = {
             "model": self.config.model,
             "instructions": self.config.instructions,
@@ -165,10 +165,10 @@ class ChatGPTLiveConnection:
                 async for chunk in response.content.iter_chunked(8192):
                     raw.extend(chunk)
                     if len(raw) > MAX_SDP_BYTES:
-                        raise LoginVoiceError("ChatGPT voice returned an invalid browser audio answer.")
+                        raise LoginVoiceError("ChatGPT voice returned an invalid audio answer.")
                 answer = raw.decode("utf-8")
                 if not answer.startswith(("v=0\r\n", "v=0\n")):
-                    raise LoginVoiceError("ChatGPT voice returned an invalid browser audio answer.")
+                    raise LoginVoiceError("ChatGPT voice returned an invalid audio answer.")
                 return answer
         except (aiohttp.ClientError, TimeoutError, UnicodeError):
             raise LoginVoiceError("The ChatGPT voice connection could not be established.") from None

@@ -41,7 +41,8 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
       void client.recoverDraft(id).then((recovered) => { if (recovered) requestAnimationFrame(() => composer.current?.focus()); });
     }} />
     {client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
-      autoStart={client.liveIntent === "start"}
+      autoStart={client.liveAutoStart}
+      openSettingsInitially={client.liveIntent === "settings"} consumeStartIntent={client.consumeLiveStart}
       close={() => { client.closeLive(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }}
       configureConnection={() => { client.closeLive(); client.settings.show(); }} />}
     <Composer inputRef={composer} prompt={chat.prompt} setPrompt={chat.setPrompt} demo={!!config?.demo}

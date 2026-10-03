@@ -10,6 +10,7 @@ import { useUploads } from "../features/chat/useUploads";
 import { useOperations } from "./useOperations";
 import { availability } from "./availability";
 import { recoverOrphanDraft } from "../features/chat/draftRecovery.js";
+import { useVoicePresence } from "./useVoicePresence.js";
 
 export function useClient() {
   const sessions = useSessions();
@@ -23,8 +24,7 @@ export function useClient() {
   const operations = useOperations();
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
-  const [liveOpen, setLiveOpen] = useState(false);
-  const [liveIntent, setLiveIntent] = useState<"start" | "settings">("start");
+  const voice = useVoicePresence();
   const busy = operating || !!chat.runId || sessions.globalBusy;
 
   // The UI rejects competing operations immediately, matching the backend's 409 policy.
@@ -91,7 +91,7 @@ export function useClient() {
     if (!(id ? access().navigate : access().create)) return false;
     return operate(async () => {
       // A voice connection belongs to the chat where it was opened.
-      setLiveOpen(false);
+      voice.close();
       chat.pause();
       try {
         const snapshot = await sessions.select(id);
@@ -125,7 +125,7 @@ export function useClient() {
   async function recoverDraft(sourceId: string): Promise<boolean> {
     if (!access().create) return false;
     return operate(async () => {
-      setLiveOpen(false); chat.pause();
+      voice.close(); chat.pause();
       try {
         await recoverOrphanDraft(sourceId, { drafts: chat.drafts,
           openBlank: () => sessions.select(""), selected: () => sessions.currentSelection().id,
@@ -153,12 +153,14 @@ export function useClient() {
     ...membership,
     available: access(),
     panel,
-    liveOpen,
-    liveIntent,
+    liveOpen: voice.open,
+    liveIntent: voice.intent,
+    liveAutoStart: voice.shouldStart(token, sessions.sessionId),
+    consumeLiveStart: () => voice.consumeStart(voice.request),
     showTools: () => { if (access().tools) setPanel("tools"); },
-    showDesigner: () => { if (access().designer) { setLiveOpen(false); setPanel("designer"); } },
-    showLive: (intent: "start" | "settings" = "start") => { if (access().live) { setLiveIntent(intent); setLiveOpen(true); } },
-    closeLive: () => setLiveOpen(false),
+    showDesigner: () => { if (access().designer) { voice.close(); setPanel("designer"); } },
+    showLive: (intent: "start" | "settings" = "start") => { if (access().live) voice.show(intent, token, sessions.sessionId); },
+    closeLive: voice.close,
     closePanel: () => { setPanel("none"); void connect(); },
     dismissError: () => setError(""),
     sessions,
