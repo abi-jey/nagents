@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents import Agent
+    from nagents.web.live_handoff import LoginHandoff
     from nagents.web.live_login import Payload
 
 OFFER = "v=0\r\ns=fixture-offer\r\n"
@@ -36,11 +37,11 @@ async def credentials() -> CodexCredentials:
     return CodexCredentials(SECRET, "fixture-account")
 
 
-async def answer(transcript: str) -> str:
+async def answer(request: LoginHandoff) -> str:
     return "Four."
 
 
-def config(handler: Callable[[str], Awaitable[str]] = answer) -> LoginVoiceConfig:
+def config(handler: Callable[[LoginHandoff], Awaitable[str]] = answer) -> LoginVoiceConfig:
     return LoginVoiceConfig(credentials, "gpt-live-1-codex", "cove", "Use the selected assistant.", handler)
 
 
@@ -69,7 +70,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
     async def scenario() -> None:
         requests: list[str] = []
         commands: list[Payload] = []
-        transcripts: list[str] = []
+        handoffs: list[LoginHandoff] = []
         replied = asyncio.Event()
         history: tuple[Payload, ...] = (
             ({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Old saved request"}]},)
@@ -77,8 +78,8 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
             else ()
         )
 
-        async def backend(transcript: str) -> str:
-            transcripts.append(transcript)
+        async def backend(handoff: LoginHandoff) -> str:
+            handoffs.append(handoff)
             return "Four."
 
         async def handle(request: web.Request) -> web.StreamResponse:
@@ -102,19 +103,25 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
             assert request.path == "/v1/live/rtc_fixture"
             socket = web.WebSocketResponse()
             await socket.prepare(request)
-            # A notice can arrive before its usable speech context. Duplicate
-            # deliveries must not run the selected assistant twice.
-            notice = {"type": "delegation.created", "item": {"id": "delegation-1", "target": "client"}}
-            await socket.send_json(notice)
-            await socket.send_json(notice)
-            await asyncio.sleep(0.02)
-            assert not transcripts, "startup history must not satisfy the fresh caller-speech gate"
+            assert not handoffs, "startup history must not create an assistant request"
             await socket.send_json(
                 {"type": "output_transcript.added", "item": {"text": "Go ahead."}, "start_ms": 0, "end_ms": 20}
             )
             await socket.send_json(
                 {"type": "input_transcript.added", "item": {"text": "Two plus two?"}, "start_ms": 30, "end_ms": 50}
             )
+            notice = {
+                "type": "delegation.created",
+                "offset_ms": 60,
+                "item": {
+                    "id": "delegation-1",
+                    "type": "delegation",
+                    "target": "client",
+                    "content": [{"type": "input_text", "text": "Calculate two plus two."}],
+                },
+            }
+            await socket.send_json(notice)
+            await socket.send_json(notice)
             async for message in socket:
                 event = message.json()
                 commands.append(event)
@@ -149,8 +156,9 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
             assert requests == ["/calls", "/v1/live/rtc_fixture"]
             assert connection.finalized
             assert events[0] == {"type": "connection.attached", "session": {"id": "rtc_fixture"}}
-            assert len(transcripts) == 1
-            assert [part["speaker"] for part in json.loads(transcripts[0])] == ["assistant", "user"]
+            assert len(handoffs) == 1 and handoffs[0].text == "Calculate two plus two."
+            assert handoffs[0].identifier == "delegation-1" and handoffs[0].offset_ms == 60
+            assert [part["speaker"] for part in json.loads(handoffs[0].transcript)] == ["assistant", "user"]
             assert commands == [
                 {
                     "type": "delegation.context.append",
@@ -171,12 +179,12 @@ def test_login_results_keep_each_requesting_delegation_item_id_across_chunks_and
         expected = {"item-first": "First result. " * 90, "item-second": "Second result."}
         results = {identifier: "" for identifier in expected}
         order: list[str] = []
-        calls: list[str] = []
+        calls: list[LoginHandoff] = []
         replied = asyncio.Event()
 
-        async def backend(transcript: str) -> str:
-            calls.append(transcript)
-            return expected["item-first" if len(calls) == 1 else "item-second"]
+        async def backend(handoff: LoginHandoff) -> str:
+            calls.append(handoff)
+            return expected[handoff.identifier]
 
         async def handle(request: web.Request) -> web.StreamResponse:
             if request.method == "POST":
@@ -239,7 +247,7 @@ def test_login_results_keep_each_requesting_delegation_item_id_across_chunks_and
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
                 await connection.aclose()
-            assert len(calls) == 2 and all("Current caller request" in text for text in calls)
+            assert len(calls) == 2 and all(request.text == "Current caller request" for request in calls)
             assert order.count("item-first") > 1 and order[-1] == "item-second"
             assert results == expected and connection.finalized
 
@@ -315,7 +323,7 @@ def test_login_supervisor_waits_for_final_event_and_does_not_treat_eof_as_confir
         commands: list[str] = []
         attachments = 0
 
-        async def pending_backend(transcript: str) -> str:
+        async def pending_backend(handoff: LoginHandoff) -> str:
             backend_started.set()
             try:
                 await asyncio.Event().wait()
@@ -335,7 +343,17 @@ def test_login_supervisor_waits_for_final_event_and_does_not_treat_eof_as_confir
             await socket.send_json(
                 {"type": "input_transcript.added", "item": {"text": "Long task"}, "start_ms": 0, "end_ms": 10}
             )
-            await socket.send_json({"type": "delegation.created", "item": {"id": "long", "target": "client"}})
+            await socket.send_json(
+                {
+                    "type": "delegation.created",
+                    "item": {
+                        "id": "long",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{"type": "input_text", "text": "Long task"}],
+                    },
+                }
+            )
             async for message in socket:
                 kind = str(message.json()["type"])
                 commands.append(kind)
