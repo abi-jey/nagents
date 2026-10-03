@@ -20,6 +20,7 @@ from dataclasses import field
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version
 from pathlib import Path
+from time import monotonic
 from time import time
 from typing import TYPE_CHECKING
 from typing import cast
@@ -42,6 +43,8 @@ from ..observation import trace_config
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
+from ._diagnostics import FailurePhase
+from ._diagnostics import failure_extra
 from .base import Provider
 from .base import ProviderType
 from .gateway import GatewayHTTPClient
@@ -613,6 +616,8 @@ class OpenAIProvider(Provider):
             async for generated in super().generate(messages, tools, config, stream, verify_model):
                 yield generated
             return
+        started = monotonic()
+        phase: FailurePhase = "request"
         try:
             body = _request_body(self.model, messages, tools, config)
         except (TypeError, ValueError) as error:
@@ -655,6 +660,7 @@ class OpenAIProvider(Provider):
                 ) as client,
                 client.post(CODEX_ENDPOINT, json=body, headers=headers, allow_redirects=False) as response,
             ):
+                phase = "response"
                 if response.status != 200:
                     messages_by_status = {
                         401: "ChatGPT login expired or was rejected; sign in again with /login.",
@@ -831,8 +837,14 @@ class OpenAIProvider(Provider):
             for call in calls:
                 yield call
         except _ProtocolError as error:
-            yield ErrorEvent(message=str(error), code="CODEX_STREAM_INVALID")
-        except (aiohttp.ClientError, TimeoutError, ValueError):
             yield ErrorEvent(
-                message="Codex connection failed or timed out; retry the request.", code="CODEX_CONNECTION"
+                message=str(error),
+                code="CODEX_STREAM_INVALID",
+                extra=failure_extra(error, started, phase=phase, protocol=True),
+            )
+        except (aiohttp.ClientError, TimeoutError, ValueError) as error:
+            yield ErrorEvent(
+                message="Codex connection failed or timed out; retry the request.",
+                code="CODEX_CONNECTION",
+                extra=failure_extra(error, started, phase=phase),
             )
