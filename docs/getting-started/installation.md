@@ -76,9 +76,9 @@ print("nagents installed successfully!")
 
 ??? note "Check Version"
     ```python
-    import nagents
+    from importlib.metadata import version
 
-    print(nagents.__version__)
+    print(version("nagents"))
     ```
 
 ## Environment Setup

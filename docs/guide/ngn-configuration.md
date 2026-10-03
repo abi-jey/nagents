@@ -1,9 +1,9 @@
 # ngn configuration reference
 
 This page describes the current source-checkout `ngn` harness, which can differ
-from a published release or another coding assistant. The CLI is available in
-`v0.5.0`; see [release availability and installation](ngn-installation.md) before
-assuming every current field or behavior is present in that snapshot.
+from an installed release or another coding assistant. See
+[release availability and installation](ngn-installation.md) and the installed
+release notes before assuming every current field or behavior is available.
 
 ## Quick example
 

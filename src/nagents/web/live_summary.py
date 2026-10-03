@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from contextlib import aclosing
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Literal
@@ -19,6 +20,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.types import Message
 
+from ._async import finish_on_cancel
 from .live_context import MAX_SOURCE_BYTES
 
 if TYPE_CHECKING:
@@ -62,6 +64,52 @@ class _CachedSummary:
     expires: float
 
 
+async def _read_summary(provider: Provider, messages: list[Message]) -> SummaryResult:
+    result = SummaryResult(reason="invalid")
+    size = 0
+    count = 0
+    stream = cast("AsyncGenerator[Event, None]", provider.generate(messages, tools=[], config=None, stream=True))
+    async with aclosing(stream):
+        async for event in stream:
+            count += 1
+            if count > MAX_SUMMARY_EVENTS:
+                return SummaryResult(reason="too_long")
+            if isinstance(event, ErrorEvent):
+                return SummaryResult(reason="unavailable")
+            if isinstance(event, ToolCallEvent):
+                return SummaryResult(reason="invalid")
+            if result.text and isinstance(event, TextChunkEvent | ReasoningChunkEvent):
+                return SummaryResult(reason="invalid")
+            if isinstance(event, TextChunkEvent):
+                size += len(event.chunk.encode("utf-8"))
+                if size > MAX_SUMMARY_OUTPUT_BYTES:
+                    return SummaryResult(reason="too_long")
+            if isinstance(event, TextDoneEvent):
+                text = event.text.strip()
+                if event.finish_reason != FinishReason.STOP:
+                    return SummaryResult(reason="invalid")
+                if len(text.encode("utf-8")) > MAX_SUMMARY_OUTPUT_BYTES:
+                    return SummaryResult(reason="too_long")
+                if not text or result.text:
+                    return SummaryResult(reason="invalid")
+                result = SummaryResult(text, "generated")
+    return result
+
+
+async def _close_summary(worker: asyncio.Task[SummaryResult]) -> None:
+    if not worker.done():
+        worker.cancel()
+        # Arm cleanup only after generation has been interrupted. Two deadlines
+        # scheduled together can coalesce into one delivered CancelledError.
+        done, _ = await asyncio.wait({worker}, timeout=SUMMARY_CLEANUP_SECONDS)
+        if worker not in done:
+            worker.cancel()
+    # Keep ownership until cooperative generator cleanup has actually finished,
+    # including when the caller is disconnected or repeatedly cancelled.
+    with suppress(asyncio.CancelledError, Exception):
+        await worker
+
+
 class VoiceContextSummarizer:
     """One small cache per web host, keyed by exact source and provider identity."""
 
@@ -89,53 +137,18 @@ class VoiceContextSummarizer:
             return SummaryResult(cached.text, "cached", True)
 
         messages = [Message(role="system", content=_PROMPT), Message(role="user", content=source)]
-        result = SummaryResult(reason="invalid")
-        size = 0
-        count = 0
-        owner = asyncio.current_task()
-        cancelling = owner.cancelling() if owner is not None else 0
+        worker = asyncio.create_task(_read_summary(provider, messages), name="web-live-context-summary")
         try:
-            stream = cast(
-                "AsyncGenerator[Event, None]", provider.generate(messages, tools=[], config=None, stream=True)
-            )
-            # A second deadline bounds cooperative provider cleanup after the
-            # generation timeout. No detached provider task outlives this owner.
-            async with (
-                asyncio.timeout(SUMMARY_SECONDS + SUMMARY_CLEANUP_SECONDS),
-                asyncio.timeout(SUMMARY_SECONDS),
-                aclosing(stream),
-            ):
-                async for event in stream:
-                    count += 1
-                    if count > MAX_SUMMARY_EVENTS:
-                        return SummaryResult(reason="too_long")
-                    if isinstance(event, ErrorEvent):
-                        return SummaryResult(reason="unavailable")
-                    if isinstance(event, ToolCallEvent):
-                        return SummaryResult(reason="invalid")
-                    if result.text and isinstance(event, TextChunkEvent | ReasoningChunkEvent):
-                        return SummaryResult(reason="invalid")
-                    if isinstance(event, TextChunkEvent):
-                        size += len(event.chunk.encode("utf-8"))
-                        if size > MAX_SUMMARY_OUTPUT_BYTES:
-                            return SummaryResult(reason="too_long")
-                    if isinstance(event, TextDoneEvent):
-                        text = event.text.strip()
-                        if event.finish_reason != FinishReason.STOP:
-                            return SummaryResult(reason="invalid")
-                        if len(text.encode("utf-8")) > MAX_SUMMARY_OUTPUT_BYTES:
-                            return SummaryResult(reason="too_long")
-                        if not text or result.text:
-                            return SummaryResult(reason="invalid")
-                        result = SummaryResult(text, "generated")
+            async with asyncio.timeout(SUMMARY_SECONDS):
+                result = await asyncio.shield(worker)
         except TimeoutError:
-            if owner is not None and owner.cancelling() > cancelling:
-                raise asyncio.CancelledError from None
             return SummaryResult(reason="timeout")
         except Exception:
             # Provider responses, credentials and errors never become seed text
             # or UI diagnostics. Cancellation deliberately propagates to the owner.
             return SummaryResult(reason="unavailable")
+        finally:
+            await finish_on_cancel(_close_summary(worker))
         if result.text:
             self._cache[key] = _CachedSummary(provider, result.text, time.monotonic() + SUMMARY_CACHE_SECONDS)
             self._cache.move_to_end(key)

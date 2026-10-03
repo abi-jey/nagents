@@ -28,12 +28,13 @@ pip install nagents
 
 ## ngn Terminal Client
 
-`ngn` is an optional terminal and headless coding harness. The published
-[v0.5.0 release](https://github.com/abi-jey/nagents/releases/tag/v0.5.0) includes
-the CLI and the `tui` extra. This README describes the **current source checkout**,
-which also contains changes after that release. See
-[release availability](docs/guide/ngn-installation.md#release-availability) before
-assuming a particular command or fix is in an installed distribution.
+`ngn` is an optional terminal and headless coding harness, available in published
+distributions with the `tui` extra. Published wheels also include `ngn serve`,
+the `web` extra, and built frontend assets, verified in
+[v0.15.0](https://github.com/abi-jey/nagents/releases/tag/v0.15.0). This README
+describes the **current source checkout**, which may include newer changes. See
+[release availability](docs/guide/ngn-installation.md#release-availability) when
+checking the commands and fixes in an installed distribution.
 
 Keep the existing Poetry workflow from the repository root:
 
@@ -113,9 +114,9 @@ These are separate applications, not interchangeable launch commands:
 | Command | Purpose | Installation |
 | --- | --- | --- |
 | `python -m nagents.server` | Legacy HTTP/SSE API server. The current source has no bundled chat UI. | Current checkout with `[server]`; see the [legacy API server guide](docs/guide/server.md) for token, bind, and deployment setup. |
-| `ngn serve` | Local React client for the ngn coding harness, sharing its workspace sessions and approvals. Also the Docker image's default command. | Current checkout with `[web]` and built frontend assets; not included in `v0.5.0`. See the [local web client guide](docs/guide/ngn-web.md). |
+| `ngn serve` | Local React client for the ngn coding harness, sharing its workspace sessions and approvals. Also the Docker image's default command. | Install `nagents[web]` for a published wheel with built frontend assets, or build an editable checkout. See the [local web client guide](docs/guide/ngn-web.md). |
 
-The new frontend source lives in `src/nagents/web-ui/`; its Vite build goes to
+The frontend source lives in `src/nagents/web-ui/`; its Vite build goes to
 `src/nagents/web/static/`. Plain `ngn serve` uses the bundled assets without
 building or reloading. Use `ngn serve --dev` in an editable checkout to build stale
 assets and reload after frontend or Python edits. Source build/check commands are in

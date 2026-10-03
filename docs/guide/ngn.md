@@ -4,15 +4,15 @@
 harness powers interactive and headless use. Python extensions change the agent's
 behavior, not just its appearance.
 
-The terminal and headless CLI are included in the published `v0.5.0` release.
-This guide describes the current checkout, including later fixes; it is not an
-OpenCode feature-parity claim. Read the limitations and trust model below before
+The terminal and headless CLI are included in published distributions.
+This guide describes the current checkout, which may include newer fixes; it is
+not an OpenCode feature-parity claim. Read the limitations and trust model below before
 using it on important workspaces, and check
 [release availability](ngn-installation.md#release-availability).
 
 Related pages: [installation and environment choices](ngn-installation.md),
-[complete configuration schema and recipes](ngn-configuration.md), and the new
-[local web client](ngn-web.md), which is not included in `v0.5.0`.
+[complete configuration schema and recipes](ngn-configuration.md), and the
+[local web client](ngn-web.md), available with the `web` extra and bundled assets.
 
 ## Shared provider connections
 

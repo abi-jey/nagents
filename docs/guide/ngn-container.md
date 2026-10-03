@@ -13,7 +13,7 @@ single-user workspace, not a multi-user service.
 
 For a mounted file, use flat, **secret-free** YAML. A complete Kubernetes
 ConfigMap + Deployment + ClusterIP Service is in
-[`examples/k8s/ngn-container-config.yaml`](../../examples/k8s/ngn-container-config.yaml).
+[`examples/k8s/ngn-container-config.yaml`](https://github.com/abi-jey/nagents/blob/main/examples/k8s/ngn-container-config.yaml).
 The deployment selects the projected file explicitly:
 
 ```text

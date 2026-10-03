@@ -6,10 +6,19 @@ per-call approvals. It does not use the older `nagents.server` application.
 
 ## Source Availability
 
-This guide describes the **current source checkout**, not the published `v0.5.0`
-release. That release includes the existing ngn CLI, Harness, TUI, and headless
-commands, but does **not** include `ngn serve` or the `web` extra. Install this
-feature from the checkout using the commands below.
+Published distributions include `ngn serve`, the `web` extra, and built
+frontend assets, verified in [v0.15.0](https://github.com/abi-jey/nagents/releases/tag/v0.15.0).
+To use a published wheel in your active virtual environment:
+
+```bash
+python -m pip install 'nagents[web]'
+ngn serve --demo --workspace /path/to/project
+```
+
+A published wheel does not need Node to serve its bundled frontend. This guide
+follows the **current source checkout** and may describe newer features; compare
+your installed version with the [release notes](https://github.com/abi-jey/nagents/releases).
+For development, use the editable source workflow below.
 
 ## Start From Source
 
@@ -1322,8 +1331,8 @@ revision, or browser draft, and it does not take over a running task or approval
 Selecting and saving a model remains a separate settings action. Manual model-ID
 entry continues to work when discovery fails or is unsupported. IDs do not prove
 capabilities or entitlement; a later generation request remains authoritative.
-This endpoint and the library method are source-checkout features, not part of
-the published `v0.5.0` web/API surface.
+The endpoint and library method are included in v0.15.0. Older installations
+may need an update; consult the release notes for your selected distribution.
 
 ## Development Checks
 

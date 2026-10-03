@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -179,7 +178,8 @@ async def test_summary_rejects_bad_or_oversize_sources_without_calling_provider(
 
 
 @pytest.mark.asyncio
-async def test_summary_cleanup_has_a_separate_grace_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("coalesced", [False, True])
+async def test_summary_cleanup_has_a_separate_grace_deadline(monkeypatch: pytest.MonkeyPatch, coalesced: bool) -> None:
     closed = asyncio.Event()
 
     class SlowCleanupProvider(SummaryProvider):
@@ -202,8 +202,74 @@ async def test_summary_cleanup_has_a_separate_grace_deadline(monkeypatch: pytest
 
     monkeypatch.setattr(live_summary, "SUMMARY_SECONDS", 0.01)
     monkeypatch.setattr(live_summary, "SUMMARY_CLEANUP_SECONDS", 0.02)
-    start = time.monotonic()
-    result = await prepare(VoiceContextSummarizer(), SlowCleanupProvider([]))
-    assert result.reason == "timeout"
-    assert closed.is_set()
-    assert time.monotonic() - start < 1.0
+    if coalesced:
+        timeout = asyncio.timeout
+
+        def due_in_same_turn(delay: float) -> asyncio.Timeout:
+            # Reproduce a coarse clock or delayed loop where all prearmed
+            # deadlines fire before the cancelled task gets its next turn.
+            return timeout(0)
+
+        monkeypatch.setattr(asyncio, "timeout", due_in_same_turn)
+    task = asyncio.create_task(prepare(VoiceContextSummarizer(), SlowCleanupProvider([])))
+    try:
+        done, _ = await asyncio.wait({task}, timeout=1.0)
+        assert task in done, "Summary cleanup exceeded its separate grace deadline"
+        assert task.result().reason == "timeout"
+        assert closed.is_set()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+@pytest.mark.parametrize("cleanup_error", [False, True])
+async def test_caller_cancellation_joins_the_provider_after_bounded_cleanup(
+    monkeypatch: pytest.MonkeyPatch, repeat_cancel: bool, cleanup_error: bool
+) -> None:
+    started, cleaning, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    workers: list[asyncio.Task[object]] = []
+
+    class BlockingCleanupProvider(SummaryProvider):
+        async def generate(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: GenerationConfig | None = None,
+            stream: bool = True,
+            verify_model: bool = False,
+        ) -> AsyncIterator[Event]:
+            worker = asyncio.current_task()
+            assert worker is not None
+            workers.append(worker)
+            try:
+                started.set()
+                await asyncio.Event().wait()
+                yield TextDoneEvent(text="Unused")
+            finally:
+                cleaning.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    closed.set()
+                    if cleanup_error:
+                        raise RuntimeError("Private provider cleanup failure")
+
+    monkeypatch.setattr(live_summary, "SUMMARY_SECONDS", 60)
+    monkeypatch.setattr(live_summary, "SUMMARY_CLEANUP_SECONDS", 0.02)
+    task = asyncio.create_task(prepare(VoiceContextSummarizer(), BlockingCleanupProvider([])))
+    try:
+        await started.wait()
+        task.cancel()
+        await cleaning.wait()
+        if repeat_cancel:
+            task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done, "Caller cancellation abandoned provider cleanup"
+        with pytest.raises(asyncio.CancelledError):
+            task.result()
+        assert closed.is_set() and all(worker.done() for worker in workers)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

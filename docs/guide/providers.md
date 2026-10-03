@@ -87,8 +87,7 @@ existing credential callback continues to work for application-owned OAuth.
 
 ### Explicit catalog discovery
 
-The current source checkout adds `await provider.get_model_list() -> list[str]`;
-the published `v0.5.0` release does not include this method. See the
+`await provider.get_model_list() -> list[str]` is included in v0.15.0. See the
 [Provider API example](../api/provider.md#explicit-model-discovery) for a complete
 async example using your own `OPENAI_API_KEY` environment variable.
 
