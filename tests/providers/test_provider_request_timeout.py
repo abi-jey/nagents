@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import cast
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import aiohttp
 import pytest
@@ -28,6 +29,7 @@ from nagents.harness.providers import ProviderRegistryStore
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.providers import validate_request_timeout
 from nagents.harness.runtime import Harness
+from nagents.harness.tools import CodingTools
 from nagents.live import LiveConfig
 from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
@@ -38,6 +40,7 @@ from tests.providers.test_openai_local import write_oauth_auth
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 
@@ -47,6 +50,19 @@ def no_external_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(OpenAIAuth, "logged_in", lambda self: False)
     monkeypatch.setattr(OpenAIAuth, "credentials", AsyncMock(side_effect=AssertionError("No credential read")))
     monkeypatch.setattr(aiohttp.ClientSession, "_request", AsyncMock(side_effect=AssertionError("No network request")))
+
+
+@pytest.fixture
+def portable_provider_harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # Provider lifecycle tests need real initialization and children, but no
+    # workspace instructions or skills. Keep guarded filesystem I/O unavailable
+    # on every host so these cases exercise the same portable path as Windows.
+    guarded = Mock(side_effect=OSError("Guarded workspace file tools currently require POSIX"))
+    monkeypatch.setattr(CodingTools, "directory", guarded)
+    monkeypatch.setattr(CodingTools, "instructions", lambda self, relative: "")
+    monkeypatch.setattr(CodingTools, "discover_skills", lambda self: None)
+    yield
+    guarded.assert_not_called()
 
 
 @pytest.mark.parametrize("value", [1, 19.5, 120, 0.001, 5e-324, 1e308])
@@ -204,6 +220,7 @@ def test_all_named_factories_preserve_selected_request_timeout(
     asyncio.run(check())
 
 
+@pytest.mark.usefixtures("portable_provider_harness")
 def test_scope_selection_children_and_timeout_only_rebuilds(tmp_path: Path) -> None:
     store = ScopedProviderRegistryStore(tmp_path)
     global_profile = ProviderProfile(kind="openai", auth="api-key", request_timeout=45)
@@ -266,6 +283,7 @@ def test_scope_selection_children_and_timeout_only_rebuilds(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("auth", ["chatgpt", "api-key"])
+@pytest.mark.usefixtures("portable_provider_harness")
 def test_named_chatgpt_login_rebuild_and_logout_keep_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
