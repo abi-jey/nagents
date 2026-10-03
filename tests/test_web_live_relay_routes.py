@@ -13,6 +13,7 @@ from aiortc import RTCSessionDescription
 
 from nagents.types import Message
 from nagents.web import live_login
+from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 from tests.test_web_live import SECRET
@@ -100,7 +101,7 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
             for cycle, restart in enumerate((False, True), start=1):
                 phase = "startup"
                 caption_count = 0
-                watchdog = asyncio.timeout(15)
+                watchdog = asyncio.timeout(HANG_GUARD)
                 try:
                     # Each complete lifecycle has its own watchdog; time spent
                     # in the first app must not consume the restarted app's guard.
