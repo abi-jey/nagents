@@ -22,8 +22,10 @@ function duration(seconds: number) {
 
 // Voice lives inside the composer. Captions use the same authenticated chat
 // event stream as typed messages; expanding settings never remounts the call.
-export function LiveDialog({ token, sessionId, close, configureConnection, autoStart = true }: {
+export function LiveDialog({ token, sessionId, close, configureConnection, autoStart = true,
+  openSettingsInitially = !autoStart, consumeStartIntent }: {
   token: string; sessionId: string; close: () => void; configureConnection?: () => void; autoStart?: boolean;
+  openSettingsInitially?: boolean; consumeStartIntent?: () => void;
 }) {
   const loadingRequest = useRef<AbortController | undefined>(undefined);
   const [controller] = useState(() => new LiveController({ ...liveApi(token), token, media: browserMedia }));
@@ -33,8 +35,8 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [settingsOpen, setSettingsOpen] = useState(!autoStart);
-  const [settingsVisited, setSettingsVisited] = useState(!autoStart);
+  const [settingsOpen, setSettingsOpen] = useState(openSettingsInitially);
+  const [settingsVisited, setSettingsVisited] = useState(openSettingsInitially);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [inspectionOpen, setInspectionOpen] = useState(false);
@@ -120,6 +122,9 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
   }
 
   useEffect(() => {
+    // Consume in the parent before any await. A new server token remounts this
+    // controller, and that remount must never replay a previous launch click.
+    consumeStartIntent?.();
     // Consume the explicit click intent once. Refresh/save/error recovery never
     // reopens the microphone, and an unmounted capability request cannot start it.
     void refresh().then(next => {

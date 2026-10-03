@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import type { ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
+import { useVoicePresence } from "../../app/useVoicePresence.js";
 import { LiveDialog } from "./LiveDialog.js";
 import { LiveController } from "./controller.js";
 import { readAudioDevices, saveAudioDevices } from "./devices.js";
@@ -29,11 +30,26 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = false }: {
+  token?: string; sessionId?: string; hold?: boolean;
+}) {
+  const voice = useVoicePresence();
+  return createElement("div", {},
+    createElement("button", { onClick: () => voice.show("start", token, sessionId) }, "Open voice"),
+    createElement("button", { onClick: () => voice.show("settings", token, sessionId) }, "Open voice settings"),
+    voice.open && !hold && createElement(LiveDialog, {
+      key: `${token}:${sessionId}`, token, sessionId, close: voice.close,
+      autoStart: voice.shouldStart(token, sessionId), openSettingsInitially: voice.intent === "settings",
+      consumeStartIntent: () => voice.consumeStart(voice.request),
+    }));
+}
+
 function view(options: { capability?: Promise<Response>; settings?: Promise<Response>; denied?: boolean; delegation?: boolean; voiceAuth?: LiveCapability["voice_auth"] } = {}) {
   const dom = new JSDOM("<footer class='composer-area'><div id='root'></div><form id='text-form'><textarea id='composer'></textarea><button type='submit'>Send</button></form></footer>", { url: "https://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   const frames = new Map<number, FrameRequestCallback>();
   let frameId = 0, captures = 0, creates = 0, closures = 0, sockets = 0, capabilityReads = 0, settingsReads = 0, dismissals = 0, submissions = 0;
+  let denied = !!options.denied, expectedToken = "fixture-token";
   let currentCapability: LiveCapability = { ...capability, voice_auth: options.voiceAuth || capability.voice_auth };
   const tracks: { enabled: boolean; readyState: string; stop(): void; addEventListener(): void }[] = [];
   const record: LiveDelegationRecord = {
@@ -74,7 +90,7 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     constructor(url: string, protocols: string[]) {
       sockets++;
       assert.equal(url, "wss://localhost/api/live/sessions/voice-one/audio");
-      assert.deepEqual(protocols, ["ngn.live.v1", "ngn.token.fixture-token"]);
+      assert.deepEqual(protocols, ["ngn.live.v1", `ngn.token.${expectedToken}`]);
       queueMicrotask(() => this.onopen());
     }
     send() {}
@@ -91,7 +107,7 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     navigator: { mediaDevices: {
       getUserMedia: async () => {
         captures++;
-        if (options.denied) throw new DOMException("Not allowed", "NotAllowedError");
+        if (denied) throw new DOMException("Not allowed", "NotAllowedError");
         const track = { enabled: true, readyState: "live", stop() { this.readyState = "ended"; }, addEventListener() {} };
         tracks.push(track);
         return { getTracks: () => [track], getAudioTracks: () => [track] };
@@ -131,6 +147,11 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     dom, container, textarea, tracks, button,
     counts: () => ({ captures, creates, closures, sockets, capabilityReads, dismissals, submissions }),
     capability: (next: LiveCapability) => { currentCapability = next; },
+    deny: (value: boolean) => { denied = value; },
+    renderParent: async (props: ComponentProps<typeof VoiceParent> = {}) => {
+      expectedToken = props.token || "fixture-token";
+      await act(async () => root.render(createElement(VoiceParent, props)));
+    },
     render: async (props: Partial<ComponentProps<typeof LiveDialog>> = {}) => act(async () => root.render(createElement(LiveDialog, {
       token: "fixture-token", sessionId: "ngn-one", close: () => { dismissals++; }, ...props,
       key: `${props.token || "fixture-token"}:${props.sessionId || "ngn-one"}`,
@@ -155,6 +176,90 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     },
   };
 }
+
+for (const phase of ["connected", "ended", "error"] as const) {
+  test(`new server token cannot replay a consumed launch after ${phase}`, async () => {
+    const ui = view({ denied: phase === "error" });
+    try {
+      await ui.renderParent();
+      await ui.click("Open voice");
+      assert.equal(ui.counts().captures, 1);
+      const priorCreates = phase === "error" ? 0 : 1;
+      assert.equal(ui.counts().creates, priorCreates);
+      if (phase === "ended") await ui.click("End voice");
+      await ui.renderParent({ token: "new-server-token" });
+      assert.equal(ui.counts().captures, 1, "credentials recovery must not reopen the microphone");
+      assert.equal(ui.counts().creates, priorCreates, "no new provider allocation without a fresh click");
+      assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, true);
+      assert.ok(ui.tracks.every(track => track.readyState === "ended"));
+      ui.deny(false);
+      await ui.click("Start voice");
+      assert.equal(ui.counts().captures, 2);
+      assert.equal(ui.counts().creates, priorCreates + 1, "explicit Start uses the fresh server token");
+    } finally { await ui.close(); }
+  });
+}
+
+test("token remount consumes a launch before its pending capability response", async () => {
+  const pending = deferred<Response>();
+  const ui = view({ capability: pending.promise });
+  try {
+    await ui.renderParent();
+    await ui.click("Open voice");
+    assert.equal(ui.counts().captures, 0);
+    await ui.renderParent({ token: "new-server-token" });
+    await act(async () => pending.resolve(Response.json(capability)));
+    assert.equal(ui.counts().captures, 0);
+    assert.equal(ui.counts().creates, 0);
+    await ui.click("Start voice");
+    assert.equal(ui.counts().creates, 1);
+  } finally { await ui.close(); }
+});
+
+for (const change of ["token", "session"] as const) {
+  test(`a ${change} replacement before child mount cannot inherit or revive an old click`, async () => {
+    const ui = view();
+    try {
+      await ui.renderParent({ hold: true });
+      await ui.click("Open voice");
+      await ui.renderParent(change === "token" ? { token: "new-server-token" } : { sessionId: "ngn-two" });
+      assert.equal(ui.counts().captures, 0);
+      await ui.renderParent();
+      assert.equal(ui.counts().captures, 0, "returning to the original identity cannot revive stale permission");
+      assert.equal(ui.counts().creates, 0);
+    } finally { await ui.close(); }
+  });
+}
+
+test("explicit Retry and a new parent launch still request a new call", async () => {
+  const ui = view({ denied: true });
+  try {
+    await ui.renderParent();
+    await ui.click("Open voice");
+    assert.equal(ui.counts().captures, 1);
+    ui.deny(false);
+    await ui.click("Reconnect voice");
+    assert.equal(ui.counts().captures, 2);
+    assert.equal(ui.counts().creates, 1);
+    await ui.click("End voice");
+    await ui.click("Close voice controls");
+    await ui.click("Open voice");
+    assert.equal(ui.counts().captures, 3);
+    assert.equal(ui.counts().creates, 2);
+  } finally { await ui.close(); }
+});
+
+test("parent settings intent survives token refresh without microphone access", async () => {
+  const ui = view();
+  try {
+    await ui.renderParent();
+    await ui.click("Open voice settings");
+    await ui.renderParent({ token: "new-server-token" });
+    assert.equal(ui.container.querySelector<HTMLElement>("#voice-inline-settings")?.hidden, false);
+    assert.equal(ui.counts().captures, 0);
+    assert.equal(ui.counts().creates, 0);
+  } finally { await ui.close(); }
+});
 
 test("settings-only entry and saving preferences never start microphone or provider media", async (t) => {
   const ui = view();
