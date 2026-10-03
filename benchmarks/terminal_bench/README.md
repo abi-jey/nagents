@@ -7,7 +7,7 @@ agent, add task-specific solving prompts, repair tool failures, or change ngn's
 production approval defaults. Harbor is not a nagents runtime dependency.
 
 [Development pilot observations](RESULTS.md) separate setup failures, harness
-failures, model completion, and verifier outcomes from the first two candidates.
+failures, model completion, and verifier outcomes from the recorded candidates.
 
 The pilot pins **Harbor 0.23.0** (`1e5c5c6db929a10a140d05e606882c671ae20729`) and
 **Terminal-Bench 4.0.0** (`452bf305c6daa62fc59061d22133a7cbc7c1572e`). Three CPU-only
@@ -140,6 +140,10 @@ separate `recoverable_errors` observations; successful recovery does not make th
 trial a Harness failure. Terminal errors, exhausted rounds, incomplete output,
 timeouts and cancellation remain distinct from completion. None of these statuses
 claims verifier success or changes the recorded results of earlier frozen pilots.
+A failure while closing the Harness or deleting its credential file is recorded
+separately; it makes an otherwise successful trial `cleanup_error` with a nonzero
+exit. Earlier failure, timeout, or cancellation status is retained, and adapter
+cleanup/Docker teardown still own the final removal of container credentials.
 
 Metric scope is explicit: `Harness.run` exposes the root tool stream plus native
 task lifecycle; child tool streams are private to the shipping subagent manager.

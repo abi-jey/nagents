@@ -31,7 +31,20 @@ pytestmark = pytest.mark.requires_posix
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "outcome", ["recovered", "fatal", "retry_then_fatal", "round_limit", "length", "cancelled", "timeout"]
+    "outcome",
+    [
+        "recovered",
+        "fatal",
+        "retry_then_fatal",
+        "round_limit",
+        "length",
+        "cancelled",
+        "timeout",
+        "recovered_close_failure",
+        "fatal_close_failure",
+        "cancelled_close_failure",
+        "credentials_cleanup_failure",
+    ],
 )
 async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
@@ -62,6 +75,23 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
         return config
 
     monkeypatch.setattr(runner, "configuration", configuration)
+    if outcome.endswith("_close_failure"):
+        close_provider = OpenAIProvider.close
+
+        async def fail_close(provider: OpenAIProvider) -> None:
+            await close_provider(provider)
+            raise RuntimeError("Synthetic cleanup failed: synthetic-access")
+
+        monkeypatch.setattr(OpenAIProvider, "close", fail_close)
+    original_unlink = type(credentials).unlink
+    if outcome == "credentials_cleanup_failure":
+
+        def fail_unlink(path: Path, missing_ok: bool = False) -> None:
+            if path == credentials:
+                raise PermissionError("Synthetic credential cleanup failure")
+            original_unlink(path, missing_ok=missing_ok)
+
+        monkeypatch.setattr(type(credentials), "unlink", fail_unlink)
     entered = asyncio.Event()
     calls = 0
     provider_instances: list[OpenAIProvider] = []
@@ -81,12 +111,13 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
         calls += 1
         provider_instances.append(provider)
         entered.set()
-        if outcome in {"cancelled", "timeout"}:
+        if outcome in {"cancelled", "cancelled_close_failure", "timeout"}:
             await asyncio.Event().wait()
         elif calls == 1 or outcome in {"retry_then_fatal", "round_limit"}:
             yield ErrorEvent(
                 message="Synthetic provider observation",
-                recoverable=outcome != "fatal" and (outcome != "retry_then_fatal" or calls == 1),
+                recoverable=outcome not in {"fatal", "fatal_close_failure"}
+                and (outcome != "retry_then_fatal" or calls == 1),
             )
         else:
             yield TextDoneEvent(
@@ -96,7 +127,7 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
     monkeypatch.setattr(OpenAIProvider, "verify_model", verify)
     monkeypatch.setattr(OpenAIProvider, "generate", generate)
     task = asyncio.create_task(runner.run(args))
-    if outcome == "cancelled":
+    if outcome in {"cancelled", "cancelled_close_failure"}:
         await entered.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -108,10 +139,24 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
         "recovered": "completed",
         "length": "incomplete",
         "cancelled": "cancelled",
+        "cancelled_close_failure": "cancelled",
+        "recovered_close_failure": "cleanup_error",
+        "credentials_cleanup_failure": "cleanup_error",
         "timeout": "agent_timeout",
     }.get(outcome, "harness_error")
     assert summary["status"] == expected
-    assert not credentials.exists()
+    if outcome == "credentials_cleanup_failure":
+        assert credentials.is_file()
+        original_unlink(credentials)
+    else:
+        assert not credentials.exists()
+    if "failure" in outcome:
+        failures = summary["failures"]
+        assert isinstance(failures, list)
+        assert any(
+            item["kind"] == "benchmark_exception" and item["event"].get("phase") == "cleanup" for item in failures
+        )
+        assert "synthetic-access" not in (tmp_path / "output/events.jsonl").read_text()
     assert provider_instances and all(type(provider) is OpenAIProvider for provider in provider_instances)
     counts = summary["counts"]
     assert isinstance(counts, dict)

@@ -210,13 +210,45 @@ async def run(args: argparse.Namespace) -> int:
                         {"event": "benchmark_task_history_error", "task_id": task.id, "class": type(exc).__name__}
                     )
         finally:
+
+            def cleanup_failed(resource: str, exc: Exception) -> None:
+                nonlocal status
+                # Do not erase the original failure/timeout/cancellation, but a
+                # successful model turn alone cannot certify a clean trial exit.
+                if status == "completed":
+                    status = "cleanup_error"
+                log.write(
+                    {
+                        "event": "benchmark_exception",
+                        "phase": "cleanup",
+                        "resource": resource,
+                        "class": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+
             try:
                 await harness.close()
+            except asyncio.CancelledError:
+                status = "cancelled"
+                log.write({"event": "benchmark_cancelled", "phase": "cleanup"})
+                raise
+            except Exception as exc:
+                cleanup_failed("harness", exc)
             finally:
-                credential_path.unlink(missing_ok=True)
-                log.write(
-                    {"event": "benchmark_end", "status": status, "saw_done": saw_done, "session_id": harness.session_id}
-                )
+                try:
+                    credential_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    cleanup_failed("credentials", exc)
+                finally:
+                    log.write(
+                        {
+                            "event": "benchmark_end",
+                            "status": status,
+                            "saw_done": saw_done,
+                            "session_id": harness.session_id,
+                        }
+                    )
     return 0 if status == "completed" else 1
 
 
