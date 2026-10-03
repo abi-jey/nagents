@@ -70,7 +70,7 @@ def test_tab_completes_without_executing_and_keeps_arguments(tmp_path: Path) -> 
             composer = app.query_one(Composer)
             assert composer.text == "/model "
             assert not app.query_one(SlashMenu).display
-            assert backend.config.model == "gpt-6-luna"
+            assert backend.config.model == "gpt-6-astra"
             await pilot.press(*"custom/model", "enter")
             await idle(app, pilot)
             assert backend.config.model == "custom/model"

@@ -9,6 +9,7 @@ import pytest
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness import Harness
 from nagents.tools.executor import ToolExecutor
 from nagents.tools.registry import ToolRegistry
 from nagents.types import ToolCall
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
 async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Unknown-tool suggestions are portable and do not discover workspace files.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         if len(provider.requests) == 1:
             yield ToolCallEvent(id="wrong", name="missing_tool", arguments={})

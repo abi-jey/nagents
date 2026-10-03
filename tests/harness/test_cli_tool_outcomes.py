@@ -41,6 +41,8 @@ def test_cli_reports_structured_shell_outcomes_without_reclassifying_the_run(
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    # Rendering uses synthetic tool events, not POSIX workspace-file discovery.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
     monkeypatch.setattr(Harness, "run", scripted)
     args = ["run", "--demo", "--workspace", str(tmp_path), *(["--json"] if json_mode else []), "fixture"]
     assert cli.main(args) == 0, "Process return codes do not become an assistant-run failure"

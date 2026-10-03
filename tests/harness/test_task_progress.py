@@ -35,6 +35,12 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
+@pytest.fixture(autouse=True)
+def portable_harness_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These lifecycle contracts do not read guarded workspace instructions.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True])
 async def test_completed_tasks_are_visible_at_next_core_event_without_early_model_notification(

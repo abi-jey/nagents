@@ -10,6 +10,7 @@ import pytest
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness.runtime import Harness
 from nagents.harness.subagents import SubagentManager
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskNotification
@@ -27,6 +28,12 @@ if TYPE_CHECKING:
     from nagents.harness.types import TaskMessage
     from nagents.types import Message
     from tests.support.providers import FakeProvider
+
+
+@pytest.fixture(autouse=True)
+def portable_harness_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These lifecycle contracts do not read guarded workspace instructions.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
 
 
 @pytest.mark.parametrize("nested", [False, True])

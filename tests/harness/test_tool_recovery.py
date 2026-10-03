@@ -10,6 +10,7 @@ from nagents.events import DoneEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness import Harness
 from nagents.types import ToolCall
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
+@pytest.mark.requires_posix
 @pytest.mark.asyncio
 async def test_misnamed_file_read_call_returns_actionable_schema_and_recovers_in_normal_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -68,6 +70,9 @@ async def test_misnamed_file_read_call_returns_actionable_schema_and_recovers_in
 
 @pytest.mark.asyncio
 async def test_unknown_tools_never_prompt_for_approval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Registry/validation behavior does not require POSIX instruction discovery.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         yield TextDoneEvent(text="Unused")
 
@@ -85,6 +90,7 @@ async def test_unknown_tools_never_prompt_for_approval(tmp_path: Path, monkeypat
         await harness.close()
 
 
+@pytest.mark.requires_posix
 @pytest.mark.asyncio
 async def test_tool_contracts_expose_current_limits_to_root_and_native_child(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -138,6 +144,9 @@ async def test_tool_contracts_expose_current_limits_to_root_and_native_child(
 async def test_limit_refresh_preserves_custom_replacement_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Registry/validation behavior does not require POSIX instruction discovery.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         yield TextDoneEvent(text="Unused")
 

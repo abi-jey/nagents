@@ -10,6 +10,7 @@ from nagents.events import DoneEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
+from nagents.harness import Harness
 from nagents.types import ToolCall
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
@@ -126,6 +127,8 @@ async def test_direct_file_search_keeps_discovery_and_snapshot_guards(
 async def test_actual_harness_wakeup_requires_advertised_reason_and_acknowledges_valid_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str
 ) -> None:
+    # Exercise the real scheduler contract without unrelated guarded-file reads.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
     scheduled: list[tuple[str, float, str]] = []
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
