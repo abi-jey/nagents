@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import math
 import os
 import re
 import secrets
@@ -153,6 +154,20 @@ def env_name(value: str) -> str:
     return value
 
 
+def validate_request_timeout(value: object) -> float:
+    """A model HTTP deadline, independent of shell or whole-run budgets."""
+    message = "request_timeout must be a positive finite number of seconds"
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(message)
+    try:
+        seconds = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(message) from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(message)
+    return seconds
+
+
 @dataclass(frozen=True)
 class ProviderProfile:
     kind: str
@@ -162,6 +177,7 @@ class ProviderProfile:
     api_key_env: str = ""
     api_version: str = ""
     scope: str = "https://ai.azure.com/.default"
+    request_timeout: float = 120.0
 
     def validate(self) -> None:
         if any(
@@ -169,6 +185,7 @@ class ProviderProfile:
             for name in ("kind", "auth", "base_url", "api", "api_key_env", "api_version", "scope")
         ):
             raise ValueError("Provider fields must be strings")
+        validate_request_timeout(self.request_timeout)
         spec = KINDS.get(self.kind)
         if spec is None or self.auth not in spec.auth or self.api not in spec.apis:
             raise ValueError("Unsupported provider, authentication mode, or API")

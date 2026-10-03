@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { request } from "../../api/client.js";
 import type { SettingsScope } from "./transport.js";
 
 type Profile = {
   kind: string; auth: string; base_url: string; api: string;
   api_key_env: string; api_version: string; scope: string;
+  request_timeout?: number;
   key_configured?: boolean; credential_source?: string; effective_endpoint?: string;
 };
+type ProfileDraft = Omit<Profile, "request_timeout"> & { request_timeout: string };
 type Kind = {
   label: string; auth: string[]; apis: string[]; env: string;
   endpoint_required: boolean; version_required: boolean; live: boolean;
@@ -17,17 +19,18 @@ type Registry = {
   inherited_active?: boolean; global_active?: string;
 };
 
-function defaultProfile(kind: string, specs: Record<string, Kind>): Profile {
+function defaultProfile(kind: string, specs: Record<string, Kind>): ProfileDraft {
   return {
     kind, auth: specs[kind].auth[0], base_url: "", api: specs[kind].apis[0],
     api_key_env: "", api_version: "", scope: "https://ai.azure.com/.default",
+    request_timeout: "120",
   };
 }
 
-function editable(profile: Profile): Profile {
+function editable(profile: Profile): ProfileDraft {
   return { kind: profile.kind, auth: profile.auth, base_url: profile.base_url,
     api: profile.api, api_key_env: profile.api_key_env, api_version: profile.api_version,
-    scope: profile.scope };
+    scope: profile.scope, request_timeout: String(profile.request_timeout ?? 120) };
 }
 
 export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onDraftChange, onBusyChange }: {
@@ -37,10 +40,12 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   const [registry, setRegistry] = useState<Registry>();
   const [name, setName] = useState("");
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Profile>();
+  const [draft, setDraft] = useState<ProfileDraft>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const timeoutHelpId = useId();
+  const timeoutErrorId = useId();
 
   const endpoint = `provider-scopes/${scope}/providers`;
   async function refresh() {
@@ -75,7 +80,9 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   }
   if (!registry) return <section className="settings-group" aria-label="Provider connections"><h3>Provider connections</h3><p role="status">{error || "Loading connections…"}</p></section>;
   const spec = draft ? registry.kinds[draft.kind] : undefined;
-  const edit = (change: Partial<Profile>) => setDraft(current => current && { ...current, ...change });
+  const edit = (change: Partial<ProfileDraft>) => setDraft(current => current && { ...current, ...change });
+  const timeout = Number(draft?.request_timeout);
+  const timeoutValid = Number.isFinite(timeout) && timeout > 0;
   const route = `${endpoint}/${encodeURIComponent(name)}`;
   const locallySaved = scope === "global" || registry.origins?.[name] === "workspace";
   return <section className="settings-group" aria-label="Provider connections">
@@ -104,7 +111,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
         {openGlobal && <button type="button" disabled={busy || blocked} onClick={openGlobal}>Switch to Global settings</button>}</>}
       <fieldset className="provider-fields" disabled={inherited || busy || blocked}>
       <label>Connection name <input value={name} disabled={editing} autoComplete="off" pattern="[a-z][a-z0-9_-]{0,63}" onChange={event => setName(event.target.value)} /></label>
-       <label>Provider type <select value={draft.kind} onChange={event => edit(defaultProfile(event.target.value, registry.kinds))}>
+       <label>Provider type <select value={draft.kind} onChange={event => edit({ ...defaultProfile(event.target.value, registry.kinds), request_timeout: draft.request_timeout })}>
         {Object.entries(registry.kinds).map(([id, kind]) => <option key={id} value={id}>{kind.label}</option>)}
       </select></label>
       <label>Authentication <select value={draft.auth} onChange={event => edit({ auth: event.target.value, api: draft.kind === "openai" && ["auto", "chatgpt", "codex"].includes(event.target.value) ? "auto" : draft.api, api_key_env: "" })}>
@@ -118,9 +125,16 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
       {spec.endpoint_required && <label>API prefix URL <input value={draft.base_url} type="url" autoComplete="off" placeholder="https://resource.example.com/openai/v1" onChange={event => edit({ base_url: event.target.value })} /></label>}
       {spec.version_required && <label>API version <input value={draft.api_version} onChange={event => edit({ api_version: event.target.value })} /></label>}
       {draft.auth === "entra" && <label>Entra token scope <input value={draft.scope} onChange={event => edit({ scope: event.target.value })} /></label>}
+      <label>Request timeout (seconds)
+        <input type="number" min="0" step="any" required value={draft.request_timeout}
+          aria-invalid={!timeoutValid} aria-describedby={`${timeoutHelpId}${timeoutValid ? "" : ` ${timeoutErrorId}`}`}
+          onInput={event => edit({ request_timeout: event.currentTarget.value })} />
+        <small id={timeoutHelpId}>Deadline for each model HTTP request, including ChatGPT/Codex. Default: 120 seconds. Shell commands use their own timeout.</small>
+        {!timeoutValid && <small id={timeoutErrorId} className="error-text" role="alert">Enter a finite number of seconds greater than zero.</small>}
+      </label>
       </fieldset>
       <div className="settings-model-controls">
-        {!inherited && <button type="button" disabled={busy || blocked || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: editable(draft) }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`, true)}>Save connection</button>}
+        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} YAML.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
           <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active)} onClick={() => void action(async () => (await (await request(`${route}/activate`, token, { revision: registry.revision })).json()) as Registry, `Using ${name} ${scope === "global" ? "globally" : "in this workspace"}.`)}>Make active</button>
           {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as Registry, `Deleted ${name}.`)}>Delete</button>}

@@ -10,6 +10,14 @@ a caller-owned sync or async Azure credential or an API key. See [Providers](../
 interface does not imply equal media, reasoning, retry, or batch capabilities
 across providers and HTTP contracts. This reference follows the current source.
 
+The library constructors `Provider`, `OpenAIProvider`, and `FoundryProvider`
+accept `timeout=120.0` for the total duration of each model HTTP request, including
+its streaming response. Named ngn connections expose this existing parameter as
+[`request_timeout`](../guide/ngn-configuration.md#shared-named-provider-connections),
+with the same default for API-key and ChatGPT/Codex authentication. Catalog
+requests retain their 30-second cap, and shell, whole-run, authentication, and
+Live session budgets remain separate. Retry policy is unchanged.
+
 ::: nagents.ProviderType
 
 ::: nagents.Provider

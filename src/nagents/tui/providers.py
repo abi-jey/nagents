@@ -50,6 +50,9 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 yield Static("Chat model: /model (workspace preference, independent of connection)", markup=False)
                 yield Static(f"Credential source: {value.credential_source}", markup=False)
                 yield Static(f"Effective endpoint: {value.effective_endpoint}", markup=False)
+                yield Static("Model HTTP request timeout (seconds; default 120)", markup=False)
+                yield Input(str(value.request_timeout), id="provider-request-timeout")
+                yield Static("This deadline does not change shell or whole-run limits.", markup=False)
                 yield Static("HTTP API", markup=False)
                 yield Select([(api, api) for api in KINDS[value.kind].apis], value=value.api, id="provider-api")
                 yield Static("API prefix URL", id="provider-url-help", markup=False)
@@ -119,6 +122,10 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
         assert isinstance(kind, str) and isinstance(auth, str) and isinstance(api, str)
         name = input_value("provider-name")
         try:
+            try:
+                request_timeout = float(input_value("provider-request-timeout"))
+            except ValueError:
+                raise ValueError("Request timeout must be a positive finite number of seconds") from None
             profile = ProviderProfile(
                 kind=kind,
                 auth=auth,
@@ -127,6 +134,7 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 api_key_env=input_value("provider-env") if auth in {"auto", "api-key"} or kind == "openai" else "",
                 api_version=input_value("provider-version"),
                 scope=input_value("provider-scope"),
+                request_timeout=request_timeout,
             )
             profile.validate()
         except ValueError as error:

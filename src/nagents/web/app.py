@@ -31,6 +31,7 @@ from starlette.staticfiles import StaticFiles
 from nagents.agent import Agent
 from nagents.harness import Harness
 from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import validate_request_timeout
 from nagents.provider import OpenAIProvider
 
 from . import built_assets
@@ -146,6 +147,7 @@ def _provider_profile(fields: dict[str, object]) -> ProviderProfile:
             api_key_env=text("api_key_env"),
             api_version=text("api_version"),
             scope=text("scope", "https://ai.azure.com/.default"),
+            request_timeout=validate_request_timeout(fields.get("request_timeout", 120.0)),
         )
         profile.validate()
         return profile
