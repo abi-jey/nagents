@@ -439,8 +439,12 @@ def test_focused_visible_header_survives_growth_without_chasing_scrollback(
             assert app.focused is title
 
             # Reading older scrollback, also without changing keyboard focus.
-            conversation.scroll_home(animate=False)
+            # Nonanimated scrolling is also deferred; wait for its completion.
+            scroll_complete = asyncio.Event()
+            conversation.scroll_home(animate=False, on_complete=scroll_complete.set)
             await pilot.pause()
+            async with asyncio.timeout(HANG_GUARD):
+                await scroll_complete.wait()
             assert title.region.y > conversation.content_region.bottom
             await app._event(
                 ToolResultEvent(id="growing", name="shell", error="failure", result={"diff": "+new\n" * 100})

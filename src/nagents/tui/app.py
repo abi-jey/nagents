@@ -27,6 +27,7 @@ from textual.widgets import Static
 from textual.widgets import TextArea
 
 from nagents._async import join_owned
+from nagents.error_presentation import transport_error_message
 from nagents.events import CompactionDoneEvent
 from nagents.events import CompactionStartedEvent
 from nagents.events import DoneEvent
@@ -961,7 +962,7 @@ class NagentsApp(App[None]):
         elif isinstance(event, Notice):
             await self._notice(event.text, error=event.level == "error", warning=event.level == "warning")
         elif isinstance(event, ErrorEvent):
-            await self._notice(event.message, error=True)
+            await self._notice(transport_error_message(event) or event.message, error=True)
         elif isinstance(event, RateLimitEvent):
             self._status(
                 event.message or f"Rate limited; retry {event.attempt}/{event.max_retries} in {event.retry_after:g}s",
