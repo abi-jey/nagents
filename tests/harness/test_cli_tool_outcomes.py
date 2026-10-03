@@ -37,7 +37,7 @@ def test_cli_reports_structured_shell_outcomes_without_reclassifying_the_run(
         yield ToolOutput("exit", "shell", "Original streamed output\n")
         for event in events:
             yield event
-        yield DoneEvent()
+        yield DoneEvent(session_id=harness.session_id)
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))

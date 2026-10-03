@@ -24,6 +24,7 @@ from .events import CompactionStartedEvent
 from .events import DoneEvent
 from .events import ErrorEvent
 from .events import Event
+from .events import FinishReason
 from .events import TextChunkEvent
 from .events import TextDoneEvent
 from .events import ToolCallEvent
@@ -406,20 +407,25 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
 
         harness.approval_handler = approve
         failed = False
+        completed = False
         streamed = False
         compacting = False
         async with aclosing(harness.run(prompt)) as events:
             async for event in events:
-                if isinstance(event, ErrorEvent):
+                if isinstance(event, ErrorEvent) and not event.recoverable:
                     failed = True
+                if isinstance(event, CompactionStartedEvent):
+                    compacting = True
+                elif isinstance(event, CompactionDoneEvent):
+                    compacting = False
+                elif isinstance(event, DoneEvent) and not compacting and event.session_id == harness.session_id:
+                    completed = event.finish_reason is FinishReason.STOP
                 if args.json:
                     print(json.dumps(_event_record(event), default=_json_default, ensure_ascii=False), flush=True)
                     continue
                 if isinstance(event, CompactionStartedEvent):
-                    compacting = True
                     print("[Compacting context]", file=sys.stderr)
                 elif isinstance(event, CompactionDoneEvent):
-                    compacting = False
                     print(
                         f"[Context: {event.original_message_count} -> {event.new_message_count} messages]",
                         file=sys.stderr,
@@ -462,7 +468,7 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 elif isinstance(event, DoneEvent) and not compacting:
                     print(flush=True)
                     print(_plain(f"Session: {harness.session_id}"), file=sys.stderr)
-        return 1 if failed else 0
+        return 0 if completed and not failed else 1
     finally:
         await harness.close()
 
