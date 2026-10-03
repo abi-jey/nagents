@@ -30,6 +30,7 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 from nagents.harness.auth import OpenAIAuth
+from nagents.harness.connection import codex_discovery_selected
 from nagents.harness.connection import live_auth_available
 from nagents.harness.providers import KINDS
 from nagents.harness.providers import ProviderProfile
@@ -347,7 +348,10 @@ class LiveSettings:
                 revision,
                 SecretStr(
                     os.environ.get(profile.key_env, "")
-                    if supported and profile is not None and voice_auth != "chatgpt"
+                    if supported
+                    and profile is not None
+                    and voice_auth != "chatgpt"
+                    and not codex_discovery_selected(profile)
                     else ""
                 ),
                 profile=profile,
