@@ -96,55 +96,74 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
         monkeypatch.setattr(live_login, "SIDEBAND_URL", origin + "/live/")
         ids: list[str] = []
         try:
-            async with asyncio.timeout(15):
-                for restart in (False, True):
-                    async with client_app(tmp_path, config=configuration(tmp_path)) as (
-                        app,
-                        client,
-                        headers,
-                        harnesses,
-                    ):
-                        revision = await configure(client, headers)
-                        response = await client.post(
-                            "/api/live/sessions",
-                            headers=headers,
-                            json={
-                                "revision": revision,
-                                "session_id": harnesses[0].session_id,
-                            },
-                        )
-                        assert response.status_code == 201, response.text
-                        created = response.json()
-                        assert set(created) == {"session_id", "model", "voice", "context"}
-                        assert created["model"] == "gpt-live-1-codex" and created["voice"] == "cove"
-                        assert SECRET not in response.text and "rtc_fixture" not in response.text
-                        identifier = created["session_id"]
-                        ids.append(identifier)
-                        snapshot = (await client.get(f"/api/live/sessions/{identifier}", headers=headers)).json()
-                        assert snapshot["status"] == "connected"
-                        # Media readiness does not wait for every sideband caption
-                        # to be persisted. Windows can observe the first caption
-                        # while the second is still behind that asynchronous write.
-                        async with asyncio.timeout(3):
-                            while True:
-                                captions = [
-                                    event["text"] for event in snapshot["events"] if event["type"] == "transcript"
-                                ]
-                                if len(captions) >= 2:
-                                    break
-                                await asyncio.sleep(0.01)
-                                snapshot = (
-                                    await client.get(f"/api/live/sessions/{identifier}", headers=headers)
-                                ).json()
-                                assert snapshot["status"] == "connected"
-                        assert captions == ["Hello", "Hi"]
-                        if not restart:
-                            ended = await client.post(
-                                f"/api/live/sessions/{identifier}/close", headers=headers, json={}
+            for cycle, restart in enumerate((False, True), start=1):
+                phase = "startup"
+                caption_count = 0
+                watchdog = asyncio.timeout(15)
+                try:
+                    # Each complete lifecycle has its own watchdog; time spent
+                    # in the first app must not consume the restarted app's guard.
+                    async with watchdog:
+                        async with client_app(tmp_path, config=configuration(tmp_path)) as (
+                            app,
+                            client,
+                            headers,
+                            harnesses,
+                        ):
+                            phase = "configure"
+                            revision = await configure(client, headers)
+                            phase = "provision"
+                            response = await client.post(
+                                "/api/live/sessions",
+                                headers=headers,
+                                json={
+                                    "revision": revision,
+                                    "session_id": harnesses[0].session_id,
+                                },
                             )
-                            assert ended.status_code == 200 and ended.json()["status"] == "closed"
-                        service: LiveService = app.state.live
-                    assert service._closed and not service.active_session_id
+                            assert response.status_code == 201, response.text
+                            created = response.json()
+                            assert set(created) == {"session_id", "model", "voice", "context"}
+                            assert created["model"] == "gpt-live-1-codex" and created["voice"] == "cove"
+                            assert SECRET not in response.text and "rtc_fixture" not in response.text
+                            identifier = created["session_id"]
+                            ids.append(identifier)
+                            phase = "snapshot"
+                            snapshot = (await client.get(f"/api/live/sessions/{identifier}", headers=headers)).json()
+                            assert snapshot["status"] == "connected"
+                            # Media readiness does not wait for every sideband caption
+                            # to be persisted. Windows can observe the first caption
+                            # while the second is still behind that asynchronous write.
+                            phase = "captions"
+                            async with asyncio.timeout(3):
+                                while True:
+                                    captions = [
+                                        event["text"] for event in snapshot["events"] if event["type"] == "transcript"
+                                    ]
+                                    caption_count = len(captions)
+                                    if caption_count >= 2:
+                                        break
+                                    await asyncio.sleep(0.01)
+                                    snapshot = (
+                                        await client.get(f"/api/live/sessions/{identifier}", headers=headers)
+                                    ).json()
+                                    assert snapshot["status"] == "connected"
+                            assert captions == ["Hello", "Hi"]
+                            if not restart:
+                                phase = "explicit_end"
+                                ended = await client.post(
+                                    f"/api/live/sessions/{identifier}/close", headers=headers, json={}
+                                )
+                                assert ended.status_code == 200 and ended.json()["status"] == "closed"
+                            service: LiveService = app.state.live
+                            phase = "shutdown"
+                        assert service._closed and not service.active_session_id
+                except TimeoutError as error:
+                    error.add_note(
+                        f"Relay fixture cycle={cycle} phase={phase} captions={caption_count} "
+                        f"cycle_watchdog_expired={watchdog.expired()}"
+                    )
+                    raise
             assert len(set(ids)) == 2
             assert commands == ["session.close", "session.close"]
             assert all(session["delegation"] == {"type": "client"} for session in sessions)
