@@ -223,6 +223,7 @@ def test_failure_after_stream_headers_keeps_tools_buffered_and_reports_only_obse
 ) -> None:
     async def scenario() -> None:
         release = asyncio.Event()
+        text_received = asyncio.Event()
         requests = 0
 
         async def handle(request: web.Request) -> web.StreamResponse:
@@ -254,6 +255,10 @@ def test_failure_after_stream_headers_keeps_tools_buffered_and_reports_only_obse
                 )
             )
             if failure == "reset":
+                # write() only queues bytes on Windows' Proactor transport.
+                # Reset after the client consumed text, so this is a midstream
+                # failure rather than a race that discards the queued payload.
+                await text_received.wait()
                 assert request.transport is not None
                 request.transport.abort()
             elif failure == "decode":
@@ -266,9 +271,16 @@ def test_failure_after_stream_headers_keeps_tools_buffered_and_reports_only_obse
             monkeypatch.setattr(openai, "CODEX_ENDPOINT", url + "/responses")
             async with provider(route, url=url, timeout=2) as client:
                 try:
-                    events = [event async for event in client.generate([Message(role="user", content="test")])]
+                    events = []
+                    async for event in client.generate([Message(role="user", content="test")]):
+                        events.append(event)
+                        if isinstance(event, TextChunkEvent):
+                            text_received.set()
                 finally:
                     release.set()
+                    # Also let fixture cleanup finish if no text was yielded;
+                    # the unchanged text assertion below still fails that case.
+                    text_received.set()
             error = events[-1]
             assert isinstance(error, ErrorEvent) and error.recoverable is False
             expected = {"timeout": "timeout", "reset": "response_payload", "decode": "protocol"}[failure]
