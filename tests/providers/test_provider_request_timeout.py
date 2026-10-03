@@ -22,6 +22,8 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.connection import build_live_provider
 from nagents.harness.connection import build_provider
+from nagents.harness.credentials import ProviderLoginError
+from nagents.harness.credentials import ProviderLoginStore
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
@@ -296,22 +298,39 @@ def test_named_chatgpt_login_rebuild_and_logout_keep_timeout(
         ),
         expected="0" * 64,
     )
-    monkeypatch.setattr(OpenAIAuth, "logout", lambda self: None)
+    # This tests provider replacement, not protected credential-file deletion.
+    # Keep the Windows storage boundary unavailable on every host; only the
+    # two credential-removal operations are faked, not Harness.logout itself.
+    guarded = Mock(side_effect=ProviderLoginError("Protected Provider credential storage currently requires POSIX."))
+    monkeypatch.setattr(ProviderLoginStore, "_directory", guarded)
+    auth_logout, remove_login = Mock(), Mock()
+    monkeypatch.setattr(OpenAIAuth, "logout", auth_logout)
+    monkeypatch.setattr(ProviderLoginStore, "remove", remove_login)
 
     async def check() -> None:
         harness = Harness(load_config(tmp_path))
         try:
             await harness.initialize(create_session=False)
+            before_login = harness.agent.provider
+            previous_session = await before_login._http._get_session()
             await harness._use_chatgpt()
+            assert previous_session.closed and harness.agent.provider is not before_login
             assert isinstance(harness.agent.provider, OpenAIProvider) and harness.agent.provider.uses_chatgpt_auth
             assert_timeout(harness.agent.provider, 77)
+            before_logout = harness.agent.provider
+            logged_in_session = await before_logout._http._get_session()
             await harness.logout()
+            assert logged_in_session.closed and harness.agent.provider is not before_logout
             assert_timeout(harness.agent.provider, 77)
             assert isinstance(harness.agent.provider, OpenAIProvider if auth == "chatgpt" else HarnessProvider)
+            remaining_session = await harness.agent.provider._http._get_session()
         finally:
             await harness.close()
+        assert remaining_session.closed
 
     asyncio.run(check())
+    auth_logout.assert_called_once_with()
+    remove_login.assert_called_once_with()
 
 
 @pytest.mark.parametrize("route", ["api-key", "openai_compatible", "foundry-key", "azure-v1-key"])
