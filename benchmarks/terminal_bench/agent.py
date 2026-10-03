@@ -13,9 +13,11 @@ import tempfile
 from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import Annotated
 
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.agents.options import InstalledAgentOptions
+from pydantic import Field
 
 if TYPE_CHECKING:
     from harbor.environments.base import BaseEnvironment
@@ -23,6 +25,7 @@ if TYPE_CHECKING:
 
 REMOTE = "/installed-agent/ngn-benchmark"
 CREDENTIALS = "/run/ngn-benchmark-creds.json"
+CODEX_CREDENTIALS = f"{REMOTE}/codex-access/auth.json"
 
 
 def installation_command(wheel: str) -> str:
@@ -63,6 +66,7 @@ class NgnOptions(InstalledAgentOptions):  # type: ignore[misc]
     bundle: str
     credentials_path: str
     timeout_seconds: int = 900
+    request_timeout: Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)] | None = None
 
 
 def validate_container(info: dict[str, object], trial: Path) -> dict[str, object]:
@@ -235,17 +239,20 @@ class NgnAgent(BaseInstalledAgent):  # type: ignore[misc]
                 prompt.write_text(instruction)
                 await environment.upload_file(prompt, f"{REMOTE}/instruction.txt")
             output = str(self.environment_logs_dir)
+            deadline = f" --request-timeout {options.request_timeout}" if options.request_timeout is not None else ""
             await self.exec_as_agent(
                 environment,
                 f"{REMOTE}/venv/bin/python {REMOTE}/runner.py "
                 f"--instruction {REMOTE}/instruction.txt --credentials {CREDENTIALS} "
                 f"--model {shlex.quote(self.model_name)} --output {shlex.quote(output)} "
-                f"--timeout {options.timeout_seconds} > {shlex.quote(output)}/process.log 2>&1",
+                f"--timeout {options.timeout_seconds}{deadline} > {shlex.quote(output)}/process.log 2>&1",
                 env={"NGN_BENCHMARK_ISOLATED": "1"},
             )
         finally:
             # Also covers setup inside run(), process failure, and Harbor cancellation.
-            await asyncio.shield(environment.exec(f"rm -f {CREDENTIALS}", user="root", timeout_sec=10))
+            await asyncio.shield(
+                environment.exec(f"rm -f {CREDENTIALS} {CODEX_CREDENTIALS}", user="root", timeout_sec=10)
+            )
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         from benchmarks.terminal_bench.summarize import summarize_events

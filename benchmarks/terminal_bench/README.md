@@ -72,6 +72,45 @@ distributions fail clearly. Setup collects `install.log`, Python version,
 available installed Python dependencies, and Debian Python package versions on
 success or failure; setup failure is not a model or task-verifier failure.
 
+## Optional named-connection deadline comparison
+
+The existing callback fixture keeps its 120-second request deadline when
+`--request-timeout` is omitted. An explicit positive finite number selects a
+normal named OpenAI/Codex connection with that `request_timeout`, for the root
+agent and native children. This explicit variant requires a runtime supporting
+named `request_timeout` profiles (0.18-compatible); older frozen runtimes retain
+the unchanged callback fixture when the flag is omitted. The 900-second agent budget, rounds, shell limits,
+model, task instruction, and retry policy stay separate.
+
+For a configuration comparison, reuse an already reviewed immutable runtime:
+
+```sh
+/tmp/ngn-harbor-venv/bin/python -m benchmarks.terminal_bench.prepare \
+  --runtime-bundle /tmp/ngn-reviewed-baseline-bundle \
+  --bundle /tmp/ngn-deadline-comparison-bundle \
+  --credentials /tmp/ngn-deadline-private/credentials.json \
+  --jobs /tmp/ngn-deadline-comparison-jobs \
+  --task data-anonymization --model gpt-6-astra --request-timeout 300
+```
+
+`--runtime-bundle` verifies and copies the earlier wheel and dependency constraints
+byte-for-byte without rebuilding. Provenance retains their original source and
+build records and adds a reference to the earlier provenance, current adapter Git
+state, and new runner/adapter/configuration hashes. Review the new bundle and run
+its dry-run before separately authorizing a fresh trial; earlier results stay intact.
+
+The explicit-deadline fixture creates `/installed-agent/ngn-benchmark/codex-access/auth.json` in a
+private container directory from the provisioned access token and account ID.
+It creates no refresh token, ID token, or Codex configuration file and copies no
+host home directory. The shipping resolver must recover exactly the provisioned
+account and residency (with `no_constraint` normalized); otherwise setup fails
+without logging their values. Both parent and children then use the normal named
+provider factory. This fixture change is recorded explicitly; the default
+callback fixture remains available. Runner cleanup covers setup/constructor
+failures and cancellation, and the adapter removes both access-only credential
+files as a fallback before Docker teardown. Credentials remain outside the task
+workspace but readable by shell-capable code inside the isolated container.
+
 ## Explicit temporary ChatGPT credentials
 
 Provision a fresh, access-only JSON file outside the repository and results

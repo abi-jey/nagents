@@ -16,6 +16,7 @@ import tempfile
 import time
 from contextlib import aclosing
 from dataclasses import asdict
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,12 +30,17 @@ from nagents.events import FinishReason
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
 from nagents.harness.auth import OpenAIAuth
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.provider.openai import CodexCredentials
+from nagents.provider.openai import _load_config
 
 if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
 
 PRIVATE_ROOT = Path("/installed-agent/ngn-benchmark")
+PRIVATE_CODEX_HOME = PRIVATE_ROOT / "codex-access"
 
 
 def configuration(workspace: Path, model: str, private_root: Path = PRIVATE_ROOT) -> HarnessConfig:
@@ -59,6 +65,41 @@ def configuration(workspace: Path, model: str, private_root: Path = PRIVATE_ROOT
         model=model,
         model_explicit=True,
     )
+
+
+def request_deadline(value: object) -> float:
+    # Older frozen runtimes remain usable with the unchanged callback fixture.
+    try:
+        from nagents.harness.providers import validate_request_timeout
+    except ImportError:
+        raise ValueError("A named request deadline requires a nagents 0.18-compatible runtime") from None
+    return validate_request_timeout(value)
+
+
+async def named_deadline(config: HarnessConfig, credentials: CodexCredentials, seconds: object) -> HarnessConfig:
+    """Exercise a real named profile using only the provisioned access identity."""
+    timeout = request_deadline(seconds)
+    path = PRIVATE_CODEX_HOME / "auth.json"
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+        json.dump(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {"access_token": credentials.access_token, "account_id": credentials.account_id},
+            },
+            stream,
+        )
+    os.environ["CODEX_HOME"] = str(PRIVATE_CODEX_HOME)
+    # Codex derives residency from token claims. Refuse any identity/routing
+    # difference instead of silently measuring another account or region.
+    resolved = await _load_config(home=PRIVATE_CODEX_HOME, model=config.model).credentials()
+    expected = replace(credentials, residency="" if credentials.residency == "no_constraint" else credentials.residency)
+    if resolved != expected:
+        raise ValueError("Private Codex access identity or routing differs from provisioned credentials")
+    profile = ProviderProfile(kind="openai", auth="codex", request_timeout=timeout)
+    ScopedProviderRegistryStore(config.workspace).workspace_store.save(
+        ProviderRegistry(active="benchmark", providers={"benchmark": profile}), expected="0" * 64
+    )
+    return replace(config, provider_id="benchmark", auth="codex")
 
 
 def container_gate(marker: Path = Path("/installed-agent/ngn-benchmark/isolated")) -> None:
@@ -136,35 +177,47 @@ async def run(args: argparse.Namespace) -> int:
     credential_path = Path(args.credentials)
     credentials = load_credentials(credential_path)
     log = EventLog(output / "events.jsonl", (credentials.access_token,))
-    config = configuration(Path.cwd(), args.model, PRIVATE_ROOT)
-    harness = Harness(config)
-    # Shipping initialize() and native child initialization consume this same
-    # auth object and construct their normal OpenAIProvider. No provider swap,
-    # profile mismatch or API-key fallback is introduced by the benchmark.
-    harness.openai_auth = AccessOnlyAuth(credentials, credential_path)
-    harness.approval_handler = log.approve
+    harness: Harness | None = None
+    request_timeout = getattr(args, "request_timeout", None)
+    codex_owned = False
     completed = False
     saw_done = False
     failed = False
     compacting = False
     status = "exception"
-    log.write(
-        {
-            "event": "benchmark_start",
-            "model": args.model,
-            "workspace": str(config.workspace),
-            "session_id": harness.session_id,
-            "approval_policy": "allow-within-reviewed-harbor-container",
-            "harness_config": {
-                "max_tool_rounds": config.max_tool_rounds,
-                "shell_timeout": config.shell_timeout,
-                "max_output": config.max_output,
-                "max_file_bytes": config.max_file_bytes,
-                "max_subagent_depth": config.max_subagent_depth,
-            },
-        }
-    )
     try:
+        config = configuration(Path.cwd(), args.model, PRIVATE_ROOT)
+        if request_timeout is not None:
+            request_deadline(request_timeout)
+            PRIVATE_CODEX_HOME.mkdir(mode=0o700)
+            codex_owned = True
+            config = await named_deadline(config, credentials, request_timeout)
+        harness = Harness(config)
+        # The default fixture shares this access-only callback. Explicit named
+        # deadlines use ordinary Codex discovery from the private access file;
+        # both routes retain shipping provider and native child construction.
+        harness.openai_auth = AccessOnlyAuth(credentials, credential_path)
+        harness.approval_handler = log.approve
+        log.write(
+            {
+                "event": "benchmark_start",
+                "model": args.model,
+                "workspace": str(config.workspace),
+                "session_id": harness.session_id,
+                "request_timeout": request_timeout if request_timeout is not None else 120.0,
+                "authentication_fixture": "private_named_codex"
+                if request_timeout is not None
+                else "access_only_callback",
+                "approval_policy": "allow-within-reviewed-harbor-container",
+                "harness_config": {
+                    "max_tool_rounds": config.max_tool_rounds,
+                    "shell_timeout": config.shell_timeout,
+                    "max_output": config.max_output,
+                    "max_file_bytes": config.max_file_bytes,
+                    "max_subagent_depth": config.max_subagent_depth,
+                },
+            }
+        )
         async with asyncio.timeout(args.timeout):
             await harness.initialize()
             async with aclosing(harness.run(Path(args.instruction).read_text())) as events:
@@ -193,7 +246,8 @@ async def run(args: argparse.Namespace) -> int:
         try:
             # Native child streams are intentionally private to SubagentManager.
             # Preserve the supported inspection view without changing that loop.
-            for task in harness.tasks.list():
+            for task in harness.tasks.list() if harness is not None else ():
+                assert harness is not None
                 try:
                     history = await harness.tasks.history(task.id, limit=200)
                     log.write(
@@ -228,7 +282,8 @@ async def run(args: argparse.Namespace) -> int:
                 )
 
             try:
-                await harness.close()
+                if harness is not None:
+                    await harness.close()
             except asyncio.CancelledError:
                 status = "cancelled"
                 log.write({"event": "benchmark_cancelled", "phase": "cleanup"})
@@ -237,16 +292,26 @@ async def run(args: argparse.Namespace) -> int:
                 cleanup_failed("harness", exc)
             finally:
                 try:
-                    credential_path.unlink(missing_ok=True)
-                except OSError as exc:
-                    cleanup_failed("credentials", exc)
+                    paths = [credential_path]
+                    if codex_owned:
+                        paths.append(PRIVATE_CODEX_HOME / "auth.json")
+                    for path in paths:
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError as exc:
+                            cleanup_failed("credentials", exc)
+                    if codex_owned and PRIVATE_CODEX_HOME.exists():
+                        try:
+                            PRIVATE_CODEX_HOME.rmdir()
+                        except OSError as exc:
+                            cleanup_failed("private_codex_directory", exc)
                 finally:
                     log.write(
                         {
                             "event": "benchmark_end",
                             "status": status,
                             "saw_done": saw_done,
-                            "session_id": harness.session_id,
+                            "session_id": harness.session_id if harness is not None else "",
                         }
                     )
     return 0 if status == "completed" else 1
@@ -268,4 +333,5 @@ if __name__ == "__main__":
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--timeout", type=float, required=True)
+    parser.add_argument("--request-timeout", type=float, default=None)
     raise SystemExit(asyncio.run(main(parser.parse_args())))

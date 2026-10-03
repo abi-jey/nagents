@@ -200,3 +200,62 @@ remain retained privately. No failed attempt was discarded, no hidden verifier
 was used to tune a new model run, and no complete child-token or billing total is
 inferred from root usage. Ephemeral credentials were removed and task containers
 were torn down after the job.
+
+## Fourth candidate: observed response-phase timeout
+
+One fresh `data-anonymization` trial used clean source commit
+`b238bc9912e4ceb2144ccc1d97f5b690efb927a9`, a pre-release 0.18.0 snapshot,
+and wheel SHA-256
+`5e297928d855cc9ff53f4cf7d3ea1cec8563f3681388a7c1bca2f0e726a98820`.
+It retained GPT-6 Astra, the pinned task and Harbor revisions, the normal
+120-second model request deadline, 900-second agent budget, 30-round limit,
+and zero Harbor retries.
+
+The Harness stopped after 187.616 seconds with a fatal `CODEX_CONNECTION`.
+Its new diagnostic metadata reported `category=timeout`, `phase=response`,
+and `generation_elapsed_ms=120578.331`. This observes a timeout after response
+headers had arrived, with roughly 120.6 seconds spent in that generation.
+It does not explain why the deadline was exhausted or retrospectively establish
+the cause of earlier trials.
+
+The run recorded eight root tool calls, no root `ToolResult.error` events,
+one nonzero shell-command exit, and two completed native child tasks.
+The verifier returned reward zero; its output reported eight setup errors,
+so functional test bodies did not run. These observations remain separate from
+Harness completion and do not measure a task-accuracy improvement.
+
+The whole job took 229.35 seconds. Its private traces and frozen provenance
+are retained separately from earlier candidates. Temporary host credentials and
+all owned containers were removed. No retry, hidden-verifier workaround, or
+production default change was made for this candidate.
+
+### Same frozen runtime, explicit 300-second named connection
+
+A separate one-attempt configuration comparison reused the exact pre-release
+`b238bc9912e4ceb2144ccc1d97f5b690efb927a9` wheel and dependency constraints above.
+Its frozen adapter was `d4f35c80fe806a6e22f32dbb53629b14001ec3f9`, with runner
+SHA-256 `10391b2ecb949d671588802eb44c025b964302099ba70ca0c9ad577fe8a67dc7`.
+The task revision, GPT-6 Astra, 900-second agent budget, normal tool limits, and
+zero Harbor retries stayed unchanged. This wheel predates the final 0.18.0 release;
+the result does not claim identity with every file in the final release.
+
+The explicit `request_timeout=300` used the ordinary named Codex provider factory.
+It also changed the credential fixture from the original callback to a private,
+access-only Codex file. The resolver checked account and residency consistency;
+offline native-request tests verified matching endpoint, headers, payload, and
+redirect policy for root and child providers, apart from their HTTP deadline.
+This fixture difference is part of the recorded configuration, not an unreported
+provider replacement.
+
+The Harness stopped after 552.451 seconds with `Max tool rounds (30) exceeded`.
+It recorded 30 root tool calls, no root `ToolResult.error` events, one nonzero
+shell-command exit, and three completed native child tasks. No provider failure
+was observed in this trial. The verifier ran functional checks: **six passed and
+two failed**, with no setup or teardown errors, in 271.63 seconds. Reward remained
+zero. Whole-job time was 865.63 seconds.
+
+Both configurations and all failure evidence are retained. Temporary host
+credentials and all owned containers were removed after the comparison.
+One attempt per configuration does not isolate a causal effect of the deadline
+or establish a task-accuracy improvement. No extra trial, prompt adjustment,
+hidden-verifier workaround, or production default change followed this result.
