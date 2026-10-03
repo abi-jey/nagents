@@ -109,9 +109,9 @@ of the media path that owns playback.
 
 ## Explicit Model Discovery
 
-`async def Provider.get_model_list(self) -> list[str]` is available in the current
-source checkout, not the published `v0.5.0` release. It fetches IDs on each call;
-there is no catalog cache, implicit generation, or change to the selected model.
+`async def Provider.get_model_list(self) -> list[str]` provides explicit model
+discovery and is included in v0.15.0. It fetches IDs on each call; there is no
+catalog cache, implicit generation, or change to the selected model.
 
 ```python
 import asyncio

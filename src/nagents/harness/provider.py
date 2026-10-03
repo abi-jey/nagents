@@ -38,14 +38,37 @@ class HarnessProvider(Provider):
         self.harness_config = config
         # A saved ngn login supplies the key only when the environment does not.
         self.login_store = login_store
+        # Astra uses Responses for tool calls. Respect an explicitly selected
+        # contract or compatible endpoint rather than rewriting custom routing.
+        self._automatic_model_api = (
+            config.provider in {"openai", "openai_compatible"} and config.api == "auto" and not config.base_url
+        )
+        # Resolve auto before constructing the HTTP client so later model
+        # changes keep the same bounded transport used by explicit Responses.
+        api = config.api
+        if self._automatic_model_api:
+            api = "responses" if config.model == "gpt-6-astra" else "chat_completions"
         super().__init__(
             provider_type=PROVIDERS[config.provider],
             api_key="deferred-until-live-request",
             model=config.model,
             base_url=config.base_url or None,
             api_version=config.api_version or None,
-            api=config.api,
+            api=api,
         )
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self._model = value
+        # Harness profiles, settings and model selection all assign this public
+        # attribute. Keep only the default OpenAI auto contract model-aware;
+        # explicit APIs and compatible endpoints retain their chosen contract.
+        if self._automatic_model_api:
+            self.api = "responses" if value == "gpt-6-astra" else "chat_completions"
 
     def credentials(self) -> None:
         if self.harness_config.demo:

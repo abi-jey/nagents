@@ -419,7 +419,7 @@ class SubagentManager:
                 name: tool for name, tool in child.tools.builtins.items() if name in _READ_ONLY_TOOLS
             }
         for name, tool in child.tools.builtins.items():
-            child.agent.register_tool(tool, name=name)
+            child.tools.register_builtin(tool, name=name)
         child.tasks.register()
         child.refresh_instructions()
         return child
@@ -447,7 +447,7 @@ class SubagentManager:
                 done: DoneEvent | None = None
                 async with aclosing(child._run(prompt, trigger=info.trigger, notifications=notifications)) as events:
                     async for event in events:
-                        if isinstance(event, ErrorEvent):
+                        if isinstance(event, ErrorEvent) and not event.recoverable:
                             info.error = "Subagent reported a provider or tool-loop error; its response is not a successful result."
                         elif isinstance(event, DoneEvent):
                             done = event
@@ -562,14 +562,24 @@ class SubagentManager:
             + json.dumps({"wakeups": [{"reason": prompt}], "tasks": [], "human_messages": []}, ensure_ascii=True)
         )
 
+    async def flush_observed(self) -> None:
+        """Emit already queued root lifecycle records without resuming a model.
+
+        Child managers do not own this root-wide observer queue. In particular,
+        a terminal child failure must leave sibling outcomes for the root.
+        This does not wait for workers or consume their parent-routed inboxes.
+        """
+        if self is self.root:
+            while self._observed:
+                await self.harness.emit(replace(self._observed.popleft()))
+
     async def notification(self, *, wait_for_tasks: bool = False) -> str | None:
         """Drain outcomes only at an outer Agent.run boundary, batching ready jobs."""
         if self.harness.session_id != self._session_id:
             raise RuntimeError("Subagent results cannot be delivered to another session")
         while True:
             if self is self.root:
-                while self._observed:
-                    await self.harness.emit(replace(self._observed.popleft()))
+                await self.flush_observed()
                 for parent_id in tuple(self._pending):
                     parent = self._children.get(parent_id)
                     worker = self._workers.get(parent_id)

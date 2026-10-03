@@ -128,6 +128,18 @@ def _validate(value: JsonValue, schema: JsonSchema | JsonSchemaProperty, label: 
             _validate(item, property_schema["items"], label)
 
 
+def _argument_failure(tool: ToolDefinition, error: Exception) -> str:
+    required = set(tool.parameters.get("required", []))
+    parameters = [
+        f"{name[:80]}: {value.get('type', 'value')[:32]} ({'required' if name in required else 'optional'})"
+        for name, value in list(tool.parameters.get("properties", {}).items())[:16]
+    ]
+    return (
+        f"Invalid arguments for {tool.name[:128]}: {str(error)[:500]}. "
+        f"Expected parameters: {', '.join(parameters) or 'none'}. No tool was executed."
+    )
+
+
 class HarnessExecutor(ToolExecutor):
     def __init__(self, harness: "Harness", tools: "CodingTools") -> None:
         super().__init__(harness.agent.tool_registry)
@@ -197,10 +209,15 @@ class HarnessExecutor(ToolExecutor):
                 raise PermissionError("Read-only mode denies edits, shell, and custom tools")
             if self.harness._is_subagent and not builtin and not self.harness.supports_child_custom_tools:
                 raise PermissionError("Subagents do not support custom plugin/tool execution")
-            if tool is not None:
+            if tool is None or tool.func is None:
+                # Preserve permission/depth denials above. An otherwise unknown
+                # tool cannot execute, so it needs correction, not approval.
+                return await super().execute(call)
+            try:
                 _validate(call.arguments, tool.parameters)
-                if tool.func is not None:
-                    inspect.signature(tool.func).bind(**call.arguments)
+                inspect.signature(tool.func).bind(**call.arguments)
+            except (TypeError, ValueError) as error:
+                raise ValueError(_argument_failure(tool, error)) from None
             if not builtin:
                 function = tool.func if tool is not None else None
                 parameters = copy.deepcopy(tool.parameters) if tool is not None else {}
@@ -246,6 +263,7 @@ class CodingTools:
         self.read_hashes: dict[str, str] = {}
         self.call_id: ContextVar[str] = ContextVar("harness_tool_call_id", default="")
         self.builtins: dict[str, Callable[..., object]] = {}
+        self._limit_definitions: dict[str, ToolDefinition] = {}
         self.skills: dict[str, tuple[str, str]] = {}
         self.workspace_skills: dict[str, tuple[str, str]] = {}
         self.skill_diagnostics: tuple[str, ...] = ()
@@ -264,13 +282,62 @@ class CodingTools:
             self.schedule_wakeup,
             self.compact_history,
         ):
-            self.harness.agent.register_tool(function)
-            self.builtins[function.__name__] = function
-        self.harness.agent.register_tool(self.schedule_wakeup, name="wake_up_in")
-        self.builtins["wake_up_in"] = self.schedule_wakeup
+            self.register_builtin(function)
+        self.register_builtin(self.schedule_wakeup, name="wake_up_in")
         if self.harness.config.demo:
-            self.harness.agent.register_tool(self.demo_preview)
-            self.builtins["demo_preview"] = self.demo_preview
+            self.register_builtin(self.demo_preview)
+
+    def register_builtin(self, function: Callable[..., object], *, name: str = "") -> ToolDefinition:
+        name = name or function.__name__
+        definition = self.harness.agent.register_tool(function, name=name)
+        self.builtins[name] = function
+        if function == self.schedule_wakeup and name in {"schedule_wakeup", "wake_up_in"}:
+            definition.parameters["required"] = ["reason"]
+        if name in {"read_file", "shell"}:
+            self._limit_definitions[name] = definition
+        return definition
+
+    def refresh_limits(self) -> None:
+        """Expose active limits to the model, including after settings/child setup."""
+        config = self.harness.config
+        descriptions = {
+            "read_file": (
+                "Read UTF-8 text with line numbers and a SHA-256 snapshot required for editing. "
+                f"The entire file must fit within {config.max_file_bytes} bytes, even when requesting a line slice. "
+                f"Returned content is capped at {config.max_output} bytes. Lines are 1-based. "
+                "Displayed separators are normalized to LF; newline_style and newline_counts describe the "
+                "original CR/LF terminators across the entire file. For exact edits, omit line-number prefixes "
+                "and preserve original terminators in old (JSON \\r\\n for CRLF, \\r for CR). "
+                "Mixed files have no single separator to substitute; use an exact, unique single-line snippet "
+                "when the required terminators are unknown."
+            ),
+            "shell": (
+                "Run a local POSIX shell in the workspace after approval. NOT SANDBOXED. "
+                f"Default and maximum execution time: {config.shell_timeout:g} seconds. "
+                f"Output is capped at {config.max_output} bytes; a timed-out command is killed."
+            ),
+        }
+        parameters = {
+            "read_file": {
+                "start_line": "First line to return, starting at 1. Defaults to 1.",
+                "limit": "Number of lines to return, from 1 through 1000. Defaults to 200; does not relax the whole-file size limit.",
+            },
+            "shell": {
+                "command": "Nonblank POSIX shell command, at most 16384 characters and without NUL characters.",
+                "timeout": (
+                    f"Seconds: omit or use 0 for the configured default of {config.shell_timeout:g}. "
+                    f"A positive value cannot exceed {config.shell_timeout:g}."
+                ),
+            },
+        }
+        for name, description in descriptions.items():
+            tool = self.harness.agent.tool_registry.get(name)
+            if tool is not None and tool is self._limit_definitions.get(name) and tool.func == self.builtins.get(name):
+                tool.description = description
+                for parameter, help_text in parameters[name].items():
+                    property_schema = tool.parameters.get("properties", {}).get(parameter)
+                    if property_schema is not None:
+                        property_schema["description"] = help_text
 
     async def compact_history(self) -> dict[str, JsonValue]:
         """Request history compaction in this conversation before the next model round, after pending tool calls finish."""
@@ -294,11 +361,18 @@ class CodingTools:
         reason: str = "",
     ) -> dict[str, str]:
         """Schedule this conversation to resume later, without waiting here.
-
-        Delays are additive, nonnegative, and total more than zero and at most
-        seven days. Supply a nonblank reason of at most 2000 characters. Requires
-        a lifecycle-owned scheduler; timers and child handles are process-local,
+        Supply a required nonblank reason of 1 to 2000 characters. Delays are
+        finite, nonnegative and additive; the total must be greater than zero
+        and at most seven days (604800 seconds). Omitted delays default to zero.
+        Requires a lifecycle-owned scheduler; timers and child handles are process-local,
         not restored after restart. Waking never grants tool approvals.
+
+        Args:
+            seconds: Optional nonnegative seconds to add to the total delay; defaults to zero.
+            minutes: Optional nonnegative minutes to add to the total delay; defaults to zero.
+            hours: Optional nonnegative hours to add to the total delay; defaults to zero.
+            days: Optional nonnegative days to add to the total delay; defaults to zero.
+            reason: Required nonblank reminder text, from 1 through 2000 characters.
         """
         values = (seconds, minutes, hours, days)
         for value in values:
@@ -407,7 +481,10 @@ class CodingTools:
                     raise PermissionError("Only regular, single-link files are allowed")
                 data = source.read(self.harness.config.max_file_bytes + 1)
                 if len(data) > self.harness.config.max_file_bytes:
-                    raise ValueError(f"File exceeds {self.harness.config.max_file_bytes} byte limit")
+                    raise ValueError(
+                        f"File exceeds {self.harness.config.max_file_bytes} byte limit. "
+                        "The limit applies to the entire file; requesting fewer lines will not reduce its size."
+                    )
                 if b"\x00" in data:
                     raise ValueError("Binary files are not supported")
                 data.decode("utf-8")
@@ -436,7 +513,7 @@ class CodingTools:
         return "\n\n".join(sections)
 
     async def read_file(self, path: str, start_line: int = 1, limit: int = 200) -> dict[str, JsonValue]:
-        """Read UTF-8 text with line numbers and a SHA-256 snapshot required for editing. Lines are 1-based."""
+        """Read numbered UTF-8 text, a SHA-256 snapshot and original CR/LF newline metadata for exact edits."""
         if not 1 <= limit <= 1000 or start_line < 1:
             raise ValueError("start_line must be >= 1 and limit must be 1..1000")
         relative = self.relative(path)
@@ -444,6 +521,14 @@ class CodingTools:
         data, _ = self.snapshot(path)
         digest = hashlib.sha256(data).hexdigest()
         self.read_hashes[str(relative)] = digest
+        crlf = data.count(b"\r\n")
+        newline_counts: dict[str, JsonValue] = {
+            "LF": data.count(b"\n") - crlf,
+            "CRLF": crlf,
+            "CR": data.count(b"\r") - crlf,
+        }
+        endings = [name for name, count in newline_counts.items() if count]
+        newline_style = "none" if not endings else endings[0] if len(endings) == 1 else "mixed"
         lines = data.decode("utf-8").splitlines()
         text = "\n".join(
             f"{index}: {line}" for index, line in enumerate(lines[start_line - 1 : start_line - 1 + limit], start_line)
@@ -453,6 +538,8 @@ class CodingTools:
             "path": str(relative),
             "sha256": digest,
             "content": bounded,
+            "newline_style": newline_style,
+            "newline_counts": newline_counts,
             "total_lines": len(lines),
             "truncated": len(bounded) < len(text) or start_line - 1 + limit < len(lines),
             "instructions": instructions,
@@ -545,14 +632,41 @@ class CodingTools:
         return {"paths": found, "truncated": truncated, "instructions": instructions}
 
     async def search(self, query: str, path: str = ".", limit: int = 100) -> dict[str, JsonValue]:
-        """Case-sensitive literal text search, not regex. Skips binary/oversized files and ignored paths."""
+        """Case-sensitive literal search in a workspace file or directory, not regex.
+        Skips binary/oversized files and ignored paths. Direct file targets also respect ignored parent directories.
+
+        Args:
+            query: Literal search text, from 1 through 1000 characters.
+            path: Workspace file or directory to search; defaults to the workspace root.
+            limit: Maximum matching lines to return, from 1 through 1000; defaults to 100.
+        """
         if not query or len(query) > 1000 or not 1 <= limit <= 1000:
             raise ValueError("query must be 1..1000 characters and limit must be 1..1000")
-        self.instructions(self.relative(path), directory=True)
+        relative = self.relative(path)
+        with self.directory(relative.parent) as parent_fd:
+            directory_target = stat.S_ISDIR(
+                os.stat(relative.name or ".", dir_fd=parent_fd, follow_symlinks=False).st_mode
+            )
+        if directory_target:
+            self.instructions(relative, directory=True)
+            entries = self.walk(path)
+        else:
+
+            def file_entries() -> Iterator[tuple[str, bool]]:
+                parent = Path()
+                for part in relative.parts:
+                    target = parent / part
+                    if not any(item == target.as_posix() for item, _ in self.walk(str(parent), recursive=False)):
+                        return
+                    parent = target
+                self.instructions(relative)
+                yield relative.as_posix(), False
+
+            entries = file_entries()
         matches: list[str] = []
         size = 0
         skipped = 0
-        for item, is_directory in self.walk(path):
+        for item, is_directory in entries:
             await asyncio.sleep(0)
             if is_directory:
                 continue
@@ -628,7 +742,31 @@ class CodingTools:
             raise ValueError("File was not read or has changed since read; read it again before editing")
         text = data.decode("utf-8")
         if not old or text.count(old) != 1:
-            raise ValueError("old must be nonempty and match exactly once; include more context")
+            crlf = data.count(b"\r\n")
+            endings = [
+                name
+                for name, count in (("LF", data.count(b"\n") - crlf), ("CRLF", crlf), ("CR", data.count(b"\r") - crlf))
+                if count
+            ]
+            style = "none" if not endings else endings[0] if len(endings) == 1 else "mixed"
+            if style == "mixed":
+                guidance = (
+                    "Mixed CR/LF terminators have no single separator to substitute. Match the exact original "
+                    "terminators in old, or use a unique snippet within one line."
+                )
+            else:
+                escape = {"LF": "\\n", "CRLF": "\\r\\n", "CR": "\\r"}.get(style)
+                guidance = (
+                    f"Use JSON {escape} for exact {style} boundaries in old."
+                    if escape
+                    else "The file contains no CR or LF terminators."
+                )
+            raise ValueError(
+                "old must be nonempty and match exactly once; include more context. "
+                f"Original CR/LF newline style: {style}. read_file displays LF separators and line-number "
+                f"prefixes; those prefixes are not file content. {guidance} "
+                "No newline conversion is performed; new is applied literally. No edit was made."
+            )
         replacement = text.replace(old, new, 1)
         encoded = replacement.encode("utf-8")
         if len(encoded) > self.harness.config.max_file_bytes or b"\x00" in encoded:
@@ -688,7 +826,10 @@ class CodingTools:
             raise ValueError("command must be nonempty, without NUL, and <= 16384 characters")
         seconds = timeout or self.harness.config.shell_timeout
         if not math.isfinite(seconds) or not 0 < seconds <= self.harness.config.shell_timeout:
-            raise ValueError(f"timeout must be > 0 and <= {self.harness.config.shell_timeout}")
+            raise ValueError(
+                f"timeout must be > 0 and <= {self.harness.config.shell_timeout}, "
+                "or omit it/use 0 for the configured default. No command was started."
+            )
         await self.harness.approve(
             "shell",
             {"command": command, "timeout": seconds},

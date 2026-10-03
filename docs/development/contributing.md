@@ -61,10 +61,11 @@ multiple tools manage it. The equivalent editable install is
 The build backend is Hatchling, regardless of the environment manager.
 
 !!! important "Test the checkout, not a release snapshot"
-    The published `v0.5.0` wheel includes the terminal/headless CLI, but not the
-    new `ngn serve` web client or later server hardening. Use this checkout for
-    development; matching version metadata alone does not prove matching code.
-    See [release availability](../guide/ngn-installation.md#release-availability).
+    Published wheels include the terminal/headless CLI and built `ngn serve`
+    frontend, verified in v0.15.0. Use an editable checkout for development; it
+    can contain changes beyond an installed release, and matching version
+    metadata alone does not prove matching code. See
+    [release availability](../guide/ngn-installation.md#release-availability).
 
 ### Web Client Development
 
@@ -404,13 +405,27 @@ flowchart TD
 
 ## Release Process
 
-Releases are automated via GitHub Actions when a tag is pushed:
+A version tag triggers the stable release workflow, including publication to
+PyPI. Update `[project].version` in `pyproject.toml` in the reviewed change first.
+Require the final PR commit to pass lint, every platform test job, and Build
+Distribution. After merging, verify the exact merge commit, its main-branch CI
+and documentation build, and the built wheel/sdist before tagging. The tag
+version must match the distribution metadata; never move or reuse a release tag.
+
+From a clean checkout of that verified merge commit, with its virtual environment
+active:
 
 ```bash
-# Create a new version tag
-git tag v0.2.0
-git push origin v0.2.0
+release_sha=$(git rev-parse HEAD)
+release_version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+git tag -a "v${release_version}" "$release_sha" -m "nagents ${release_version}"
+git push origin "refs/tags/v${release_version}"
 ```
+
+Wait for the tag workflow to finish, including both package publication and the
+container build. Verify the published version, tag commit, and distribution
+hashes against that workflow's artifacts. Documentation deployment is a separate
+workflow; package publication does not wait for it.
 
 Version numbering follows [Semantic Versioning](https://semver.org/):
 

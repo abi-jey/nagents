@@ -1,4 +1,5 @@
 export type LiveTransport = "websocket" | "webrtc";
+export type VoiceContextMode = "recent" | "summary" | "none";
 
 export interface AudioDeviceSelection {
   inputId: string;
@@ -21,6 +22,21 @@ export interface LiveCapability {
   active_session_id: string;
   transport?: LiveTransport;
   voice_auth?: "chatgpt" | "api-key" | "entra";
+  context_mode?: VoiceContextMode;
+}
+
+export interface VoiceContext {
+  mode: VoiceContextMode;
+  method: "recent" | "existing_summary" | "generated_summary" | "recent_fallback" | "none";
+  chat_session_id: string;
+  fingerprint: string;
+  message_count: number;
+  characters: number;
+  bytes: number;
+  summary_included: boolean;
+  omitted_messages: number;
+  omitted_content: boolean;
+  notice: string;
 }
 
 export interface LiveCreated {
@@ -28,6 +44,7 @@ export interface LiveCreated {
   model: string;
   voice: string;
   sdp?: string;
+  context?: VoiceContext;
 }
 
 export interface LiveSettingsValues {
@@ -39,10 +56,12 @@ export interface LiveSettingsValues {
   backend_model: string;
   voice: string;
   base_url: string;
+  instructions?: string;
+  context_mode?: VoiceContextMode;
 }
 
 export type VoiceScope = "global" | "workspace";
-export type VoicePreferences = Pick<LiveSettingsValues, "enabled" | "connection_id" | "backend_mode" | "model" | "backend_model" | "voice">;
+export type VoicePreferences = Pick<LiveSettingsValues, "enabled" | "connection_id" | "backend_mode" | "model" | "backend_model" | "voice" | "instructions" | "context_mode">;
 export type VoiceOverrides = Partial<VoicePreferences>;
 
 export interface LiveSettingsSnapshot {
@@ -75,7 +94,49 @@ export type LiveSettingsInput = {
   overrides: VoiceOverrides;
 };
 
-export interface LiveEvent {
+export type LiveDelegationStatus = "queued" | "working" | "completed" | "failed" | "cancelled";
+
+export interface LiveDelegationRecord {
+  seq: number;
+  delegation_id: string;
+  status: LiveDelegationStatus;
+  agent: string;
+  provider: string;
+  model: string;
+  run_id: string;
+  text: string;
+  voice_session_id: string;
+  chat_session_id: string;
+}
+
+export interface LiveDelegation {
+  id: string;
+  sessionId: string;
+  chatSessionId: string;
+  seq: number;
+  status: LiveDelegationStatus;
+  agent: string;
+  provider: string;
+  model: string;
+  runId: string;
+  text: string;
+}
+
+export interface DelegationText {
+  text: string;
+  truncated: boolean;
+  characters: number;
+}
+
+export interface LiveDelegationDetails extends LiveDelegationRecord {
+  source: "app_callback";
+  request: { transcript?: DelegationText; input?: DelegationText };
+  result?: DelegationText & { kind: "assistant_output" | "terminal_explanation" };
+  timeline: LiveDelegationRecord[];
+  timeline_truncated: boolean;
+}
+
+export interface LiveMessageEvent {
   seq: number;
   type: "transcript" | "error" | "status";
   speaker?: "user" | "assistant";
@@ -85,6 +146,8 @@ export interface LiveEvent {
   end_ms?: number;
 }
 
+export type LiveEvent = LiveMessageEvent | (LiveDelegationRecord & { type: "delegation" });
+
 export interface LiveSnapshot {
   session_id: string;
   status: "connecting" | "connected" | "closing" | "closed" | "error";
@@ -93,6 +156,8 @@ export interface LiveSnapshot {
   events: LiveEvent[];
   cursor: number;
   message?: string;
+  delegations?: LiveDelegationRecord[];
+  context?: VoiceContext;
 }
 
 export interface Caption {
@@ -113,9 +178,14 @@ export interface LiveState {
   micMuted: boolean;
   outputMuted: boolean;
   playbackBlocked: boolean;
+  inputLevel: number;
+  outputLevel: number;
   startedAt: number;
   endedAt: number;
   captions: Caption[];
+  delegations: LiveDelegation[];
+  devices: AudioDeviceSelection;
+  context?: VoiceContext;
 }
 
 export interface MediaHandlers {
@@ -123,6 +193,7 @@ export interface MediaHandlers {
   ended(): void;
   failed(message: string): void;
   playbackBlocked(blocked: boolean): void;
+  levels?(input: number, output: number): void;
 }
 
 export interface LiveMedia {
@@ -131,6 +202,8 @@ export interface LiveMedia {
   connect(sessionId: string, token: string, answer?: string): Promise<void>;
   muteInput(muted: boolean): void;
   muteOutput(muted: boolean): void;
+  setInputDevice(deviceId: string): Promise<void>;
+  setOutputDevice(deviceId: string): Promise<void>;
   play(): Promise<void>;
   stop?(): void;
   close(): void;

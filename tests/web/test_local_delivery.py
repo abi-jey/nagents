@@ -14,6 +14,7 @@ from nagents.designer.schema import STARTER
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.types import Message
 from nagents.web.local_delivery import MEDIA_TYPES
 from nagents.web.local_delivery import valid_media
 from tests.support.channels import site
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.types import Message
     from tests.support.channels import Site
     from tests.support.providers import FakeProvider
 
@@ -191,6 +191,8 @@ def test_executing_root_survives_selection_change(
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
         root = app.main
+        assert app.client.portal is not None
+        app.client.portal.call(app.state.history.add_message, root, Message(role="user", content="Existing chat"))
         other = app.client.post("/api/sessions/new", headers=app.headers, json={}).json()["session_id"]
         if designed:
             assert app.client.portal is not None

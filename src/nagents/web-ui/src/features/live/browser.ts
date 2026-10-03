@@ -1,7 +1,8 @@
 import type { AudioDeviceSelection, LiveMedia, LiveTransport, MediaHandlers } from "./types.js";
 import { readAudioDevices } from "./devices.js";
-import { captureMicrophone, selectAudioOutput, type AudioSink } from "./device-routing.js";
+import { captureMicrophone, DeviceChangeQueue, replaceMicrophone, selectAudioOutput, type AudioSink } from "./device-routing.js";
 import { webrtcMedia } from "./webrtc.js";
+import { audioLevels, type AudioLevels } from "./audio-levels.js";
 
 export function liveSupport(transport: LiveTransport = "websocket"): string {
   if (!globalThis.isSecureContext) return "Open ngn serve on localhost or HTTPS to use your microphone.";
@@ -18,25 +19,38 @@ export function browserMedia(handlers: MediaHandlers, transport: LiveTransport =
 
 function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): LiveMedia {
   let stream: MediaStream | undefined, context: AudioContext | undefined, capture: AudioWorkletNode | undefined, socket: WebSocket | undefined;
+  let captureSource: MediaStreamAudioSourceNode | undefined;
+  let meter: AudioLevels | undefined;
   let closed = false, inputMuted = false, outputMuted = false, playbackTime = 0;
+  let switchingInput = false, outputId = devices.outputId;
+  const inputs = new DeviceChangeQueue(), outputs = new DeviceChangeQueue();
   let abortSignal: AbortSignal | undefined, rejectConnection: ((cause: Error) => void) | undefined;
-  const playing = new Set<AudioBufferSourceNode>();
+  const playing = new Map<AudioBufferSourceNode, (() => void) | undefined>();
 
   const stopPlayback = () => {
-    for (const source of playing) { source.stop(); source.disconnect(); }
+    for (const [source, releaseLevel] of playing) { releaseLevel?.(); source.stop(); source.disconnect(); }
     playing.clear(); playbackTime = 0;
   };
 
   const close = () => {
     if (closed) return;
     closed = true;
+    meter?.close();
+    inputs.stop(); outputs.stop();
     abortSignal?.removeEventListener("abort", close);
     rejectConnection?.(new DOMException("Cancelled", "AbortError")); rejectConnection = undefined;
     stream?.getTracks().forEach((track) => track.stop());
+    captureSource?.disconnect();
     capture?.disconnect(); capture?.port.close();
     socket?.close();
     stopPlayback();
     if (context) { context.onstatechange = null; void context.close().catch(() => {}); }
+  };
+
+  const observeMicrophone = (source: MediaStream) => {
+    for (const track of source.getAudioTracks()) track.addEventListener("ended", () => {
+      if (!closed && !switchingInput && stream === source) handlers.failed("Your microphone was disconnected. Check it, then reconnect.");
+    });
   };
 
   const play = async () => {
@@ -57,8 +71,9 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     }
     const source = context.createBufferSource();
     source.buffer = buffer; source.connect(context.destination);
-    source.onended = () => { playing.delete(source); source.disconnect(); };
-    playing.add(source);
+    const releaseLevel = meter?.output(source);
+    source.onended = () => { playing.delete(source); releaseLevel?.(); source.disconnect(); };
+    playing.set(source, releaseLevel);
     const start = Math.max(context.currentTime + 0.02, playbackTime);
     source.start(start);
     playbackTime = start + buffer.duration;
@@ -73,24 +88,28 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
       // Resume during the explicit Start click, before an asynchronous permission
       // prompt consumes browser user activation. A blocked resume stays retryable.
       const audio = new AudioContext(); context = audio;
+      meter = audioLevels(audio, handlers.levels, () => [
+        !closed && !inputMuted && socket?.readyState === WebSocket.OPEN,
+        !closed && !outputMuted && playing.size > 0,
+      ]);
       audio.onstatechange = () => {
         if (closed) return;
         // A backgrounded tab or device change can suspend an already-running
         // context. Discard stale speech and expose the resume action again.
         if (audio.state !== "running") stopPlayback();
+        meter?.sync();
         handlers.playbackBlocked(audio.state !== "running");
       };
       void play();
       try {
         stream = await captureMicrophone(devices.inputId);
         if (closed || signal.aborted) { stream.getTracks().forEach((track) => track.stop()); throw new DOMException("Cancelled", "AbortError"); }
-        for (const track of stream.getAudioTracks())
-          track.addEventListener("ended", () => { if (!closed) handlers.failed("Your microphone was disconnected. Check it, then reconnect."); });
+        observeMicrophone(stream);
         await selectAudioOutput(audio as AudioContext & AudioSink, devices.outputId, signal);
         if (closed || signal.aborted) throw new DOMException("Cancelled", "AbortError");
         await audio.audioWorklet.addModule("/assets/live-capture.js");
         if (closed || signal.aborted) throw new DOMException("Cancelled", "AbortError");
-        const source = audio.createMediaStreamSource(stream);
+        const source = audio.createMediaStreamSource(stream); captureSource = source;
         const processor = new AudioWorkletNode(audio, "ngn-live-capture"); capture = processor;
         processor.onprocessorerror = () => { if (!closed) handlers.failed("Microphone audio processing stopped. Reconnect to try again."); };
         processor.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
@@ -102,6 +121,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         // Keep capture running without playing microphone audio locally.
         const silent = audio.createGain(); silent.gain.value = 0;
         source.connect(processor).connect(silent).connect(audio.destination);
+        meter?.input(source);
       } catch (error) { close(); throw error; }
     },
     async connect(sessionId, token) {
@@ -141,10 +161,45 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         };
       });
     },
-    muteInput(muted) { inputMuted = muted; stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); },
+    muteInput(muted) { inputMuted = muted; stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); meter?.sync(); },
     muteOutput(muted) {
       outputMuted = muted;
       if (muted) stopPlayback();
+      meter?.sync();
+    },
+    setInputDevice(deviceId) {
+      return inputs.run(async (signal) => {
+        if (closed || !context || !capture || !captureSource || !stream) throw new DOMException("Voice is not active", "AbortError");
+        const audio = context, processor = capture;
+        switchingInput = true;
+        try {
+          await replaceMicrophone(deviceId, signal, async (replacement) => {
+            signal.throwIfAborted();
+            const previous = stream!, previousSource = captureSource!;
+            let source: MediaStreamAudioSourceNode;
+            try { source = audio.createMediaStreamSource(replacement); }
+            catch { throw new Error("Could not switch microphones. Your previous microphone is still selected. Try another microphone or System default."); }
+            try { source.connect(processor); previousSource.disconnect(); }
+            catch { source.disconnect(); throw new Error("Could not switch microphones. Your previous microphone is still selected. Try another microphone or System default."); }
+            captureSource = source; stream = replacement; observeMicrophone(replacement);
+            meter?.input(source);
+            for (const track of replacement.getAudioTracks()) track.enabled = !inputMuted;
+            previous.getTracks().forEach((track) => track.stop());
+          });
+        } finally {
+          switchingInput = false;
+          if (!closed && stream?.getAudioTracks().every((track) => track.readyState === "ended"))
+            handlers.failed("Your microphone was disconnected. Check it, then reconnect.");
+        }
+      });
+    },
+    setOutputDevice(deviceId) {
+      return outputs.run(async (signal) => {
+        if (closed || !context) throw new DOMException("Voice is not active", "AbortError");
+        if (deviceId === outputId) return;
+        await selectAudioOutput(context as AudioContext & AudioSink, deviceId, signal, true);
+        signal.throwIfAborted(); outputId = deviceId;
+      });
     },
     play, close,
   };

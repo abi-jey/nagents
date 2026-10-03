@@ -26,7 +26,9 @@ from typing import cast
 
 import aiohttp
 
+from ..adapters._validation import json_values_equal
 from ..adapters._validation import list_data
+from ..adapters._validation import tool_arguments
 from ..events import ErrorEvent
 from ..events import FinishReason
 from ..events import ReasoningChunkEvent
@@ -56,6 +58,7 @@ if TYPE_CHECKING:
     from ..types import GenerationConfig
     from ..types import Message
     from ..types import RetryConfig
+    from ..types import ToolArguments
     from ..types import ToolDefinition
     from .auth import BearerTokenProvider
 
@@ -268,6 +271,17 @@ def _string(value: object) -> str:
     if not isinstance(value, str):
         raise _ProtocolError("Codex returned malformed response text; retry the request.")
     return value
+
+
+def _remember_completed_arguments(completed: dict[int, ToolArguments], index: int, value: object) -> None:
+    try:
+        arguments = tool_arguments(_string(value))
+    except (ValueError, UnicodeError, RecursionError):
+        raise _ProtocolError("Codex returned malformed tool arguments; no tool calls were released.") from None
+    if index in completed and not json_values_equal(completed[index], arguments):
+        raise _ProtocolError("Codex returned inconsistent completed tool arguments.")
+    # Repeated equivalent completion events retain one validated snapshot per item.
+    completed.setdefault(index, arguments)
 
 
 def _text(message: Message) -> str:
@@ -662,14 +676,16 @@ class OpenAIProvider(Provider):
                 items: dict[int, dict[str, object]] = {}
                 finished: set[int] = set()
                 arguments: dict[int, str] = {}
+                completed_arguments: dict[int, ToolArguments] = {}
                 texts: dict[tuple[int, int], str] = {}
+                texts_done: set[tuple[int, int]] = set()
                 completed = False
                 usage = Usage()
                 async for event in _sse(response):
                     kind = _string(event.get("type"))
-                    if kind in {"error", "response.failed", "response.incomplete"}:
+                    if kind in {"error", "response.failed", "response.incomplete", "response.cancelled"}:
                         raise _ProtocolError(
-                            "Codex response failed or was incomplete; no tool calls were released. Retry the request."
+                            "Codex response failed, was incomplete, or was cancelled; no tool calls were released. Retry the request."
                         )
                     if kind in {"response.output_item.added", "response.output_item.done"}:
                         index = _index(event.get("output_index"))
@@ -679,26 +695,50 @@ class OpenAIProvider(Provider):
                             if key in previous and key in item and previous[key] != item[key]:
                                 raise _ProtocolError("Codex returned inconsistent output item identities.")
                         items[index] = {**previous, **item}
+                        merged_item = items[index]
+                        if (
+                            merged_item.get("type") == "function_call"
+                            and "arguments" in merged_item
+                            and (kind == "response.output_item.done" or merged_item["arguments"] != "")
+                        ):
+                            _remember_completed_arguments(completed_arguments, index, merged_item["arguments"])
                         if kind == "response.output_item.done":
                             finished.add(index)
                     elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
                         index = _index(event.get("output_index"))
                         item = items.setdefault(index, {})
-                        if "item_id" in event and "id" in item and event["item_id"] != item["id"]:
-                            raise _ProtocolError("Codex returned inconsistent argument item identities.")
+                        if "item_id" in event:
+                            item_id = _string(event["item_id"])
+                            if not item_id or ("id" in item and item_id != item["id"]):
+                                raise _ProtocolError("Codex returned inconsistent argument item identities.")
+                            item["id"] = item_id
                         if kind.endswith(".delta"):
                             arguments[index] = arguments.get(index, "") + _string(event.get("delta"))
                         else:
                             item["arguments"] = _string(event.get("arguments"))
+                            _remember_completed_arguments(completed_arguments, index, item["arguments"])
                     elif kind in {"response.output_text.delta", "response.output_text.done"}:
                         text_key = (_index(event.get("output_index", 0)), _index(event.get("content_index", 0)))
+                        index = text_key[0]
+                        if "item_id" in event:
+                            item = items.setdefault(index, {})
+                            item_id = _string(event["item_id"])
+                            if not item_id or ("id" in item and item_id != item["id"]):
+                                raise _ProtocolError("Codex returned inconsistent text item identities.")
+                            item["id"] = item_id
+                        if text_key in texts_done or index in finished:
+                            raise _ProtocolError("Codex sent text after a content part finished.")
                         if kind.endswith(".delta"):
                             delta = _string(event.get("delta"))
                             texts[text_key] = texts.get(text_key, "") + delta
                             if stream:
                                 yield TextChunkEvent(chunk=delta)
                         else:
-                            texts[text_key] = _string(event.get("text"))
+                            text = _string(event.get("text"))
+                            if text_key in texts and texts[text_key] != text:
+                                raise _ProtocolError("Codex returned inconsistent completed text.")
+                            texts[text_key] = text
+                            texts_done.add(text_key)
                     elif kind == "response.reasoning_summary_text.delta":
                         delta = _string(event.get("delta"))
                         if stream:
@@ -736,6 +776,7 @@ class OpenAIProvider(Provider):
                     raise _ProtocolError("Codex stream ended before response.completed; no tool calls were released.")
                 calls: list[ToolCallEvent] = []
                 call_ids: set[str] = set()
+                final_texts: dict[tuple[int, int], str] = {}
                 for index, item in sorted(items.items()):
                     if item.get("type") == "function_call":
                         call_id, name = _string(item.get("call_id")), _string(item.get("name"))
@@ -749,32 +790,41 @@ class OpenAIProvider(Provider):
                             raise _ProtocolError("Codex returned an invalid or unfinished tool call.")
                         raw_arguments = _string(item.get("arguments", arguments.get(index, "")))
                         try:
-                            parsed_args = _object(json.loads(raw_arguments))
-                            # JSON serialization rejects non-finite values accepted by Python's decoder.
-                            json.dumps(parsed_args, allow_nan=False)
-                            if arguments.get(index) and _object(json.loads(arguments[index])) != parsed_args:
+                            parsed_args = tool_arguments(raw_arguments)
+                            if arguments.get(index) and not json_values_equal(
+                                tool_arguments(arguments[index]), parsed_args
+                            ):
                                 raise _ProtocolError("Codex returned inconsistent tool arguments.")
+                            if index in completed_arguments and not json_values_equal(
+                                completed_arguments[index], parsed_args
+                            ):
+                                raise _ProtocolError("Codex returned inconsistent completed tool arguments.")
                         except (ValueError, UnicodeError, RecursionError):
                             raise _ProtocolError(
                                 "Codex returned malformed tool arguments; no tool calls were released."
                             ) from None
                         call_ids.add(call_id)
                         calls.append(ToolCallEvent(id=call_id, name=name, arguments=parsed_args, usage=usage))
-                    elif index in arguments:
+                    elif index in arguments or index in completed_arguments:
                         raise _ProtocolError("Codex returned tool arguments without a complete tool call.")
                     elif item.get("type") == "message":
+                        if item.get("status") not in (None, "completed"):
+                            raise _ProtocolError("Codex returned an unfinished message.")
                         content = item.get("content")
                         if not isinstance(content, list):
                             raise _ProtocolError("Codex returned malformed message content.")
                         for part_index, raw_part in enumerate(content):
                             part = _object(raw_part)
                             if part.get("type") == "output_text":
-                                texts[(index, part_index)] = _string(part.get("text"))
+                                final_texts[(index, part_index)] = _string(part.get("text"))
                             elif part.get("type") == "refusal":
-                                texts[(index, part_index)] = _string(part.get("refusal"))
+                                final_texts[(index, part_index)] = _string(part.get("refusal"))
+                for text_key, text in texts.items():
+                    if final_texts.get(text_key) != text:
+                        raise _ProtocolError("Codex terminal output did not match streamed text.")
             # Finish network cleanup before releasing executable calls.
             yield TextDoneEvent(
-                text="".join(text for _, text in sorted(texts.items())),
+                text="".join(text for _, text in sorted(final_texts.items())),
                 usage=usage,
                 finish_reason=FinishReason.TOOL_CALLS if calls else FinishReason.STOP,
             )

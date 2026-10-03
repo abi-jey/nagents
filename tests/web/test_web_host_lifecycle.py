@@ -397,6 +397,9 @@ def test_unavailable_ack_survives_restart_while_other_work_runs_then_reenable_de
         root = app.bindings()["chat-a"]
         app.emit("accepted channel input", id="pending-model", thread="input-thread")
         main = app.main
+        app.client.portal.call(
+            app.state.history.add_message, main, Message(role="user", content="Keep this independent web conversation")
+        )
         if unavailable == "disabled":
             app.configure(enabled=False)
         elif unavailable == "deleted":

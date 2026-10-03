@@ -586,7 +586,7 @@ def test_settings_persist_fresh_lifespan_and_reset_clears_override(tmp_path: Pat
             )
             assert response.status_code == 200
             saved = response.json()
-        assert config.model == "gpt-6-luna" and config.agent == "assistant"
+        assert config.model == "gpt-6-astra" and config.agent == "assistant"
         if version != 4:
             async with aiosqlite.connect(db_path) as db:
                 await db.execute(

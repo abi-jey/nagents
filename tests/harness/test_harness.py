@@ -114,13 +114,13 @@ def test_config_ignores_entire_untrusted_project_and_does_not_import(config: Har
     with pytest.warns(UserWarning, match="Ignoring untrusted project"):
         loaded = load_config(config.workspace)
     assert loaded.provider == "openai"
-    assert loaded.model == "gpt-6-luna"
+    assert loaded.model == "gpt-6-astra"
     assert loaded.api_key_env == "OPENAI_API_KEY"
     assert not loaded.base_url and not loaded.plugins
     assert loaded.diagnostics and not marker.exists()
     (project / "config.yaml").write_text("not: [valid\n")
     with pytest.warns(UserWarning):
-        assert load_config(config.workspace).model == "gpt-6-luna"
+        assert load_config(config.workspace).model == "gpt-6-astra"
 
 
 def test_config_precedence_origins_profiles_and_xdg(
@@ -596,7 +596,7 @@ def test_post_plugin_validation_and_custom_tools_share_core_loop(config: Harness
             assert bad.error and "must be string" in bad.error
             unknown = await harness.agent.tool_executor.execute(ToolCall("unknown", "missing", {}))
             assert unknown.error and "does not exist" in unknown.error
-            assert requests[-1].tool == "missing"
+            assert [request.tool for request in requests] == ["custom"]
         finally:
             await harness.close()
 

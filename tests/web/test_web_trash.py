@@ -91,6 +91,11 @@ def test_soft_delete_preserves_all_history_and_restores_same_identity_without_se
             other = ""
             if selection != "last":
                 other = (await client.post("/api/sessions/new", headers=headers, json={})).json()["session_id"]
+                await state.channels.store._transaction(
+                    lambda db: db.execute(
+                        "UPDATE harness_sessions SET title = 'Other conversation' WHERE id = ?", (other,)
+                    )
+                )
                 if selection == "selected":
                     await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
             before = {table: await rows(state, f"SELECT * FROM {table}") for table in tables}

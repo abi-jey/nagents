@@ -6,34 +6,33 @@ development. Do not let Poetry and uv independently manage the same virtualenv.
 
 ## Release availability
 
-The stable [v0.5.0 release](https://github.com/abi-jey/nagents/releases/tag/v0.5.0),
-published September 7, 2026 from tag commit `01b5bde`, includes the `ngn` console
-entry point, terminal client, coding harness, and headless commands. Its released
-wheel contains `nagents/cli.py`, `nagents/harness/`, and `nagents/tui/`, with the
-`tui` and `voice` extras. A pinned PyPI wheel download matched the GitHub release
-wheel. The CLI is therefore not source-only.
+Published distributions provide the `ngn` console entry point, terminal client,
+coding harness, and headless commands. The verified
+[v0.15.0 wheel](https://pypi.org/project/nagents/0.15.0/) also includes `ngn serve`,
+the `web` extra, and built React assets under `nagents/web/static/`, alongside the
+`tui` and `voice` extras. The web client is not source-only.
 
-For that release, install into your chosen virtual environment:
+Install the terminal client into your chosen virtual environment:
 
 ```bash
-python -m pip install 'nagents[tui]==0.5.0'
+python -m pip install 'nagents[tui]'
 ngn --demo
 ```
 
-Omit `[tui]` for headless-only use. The instructions below primarily use editable
-source installs so changes in the checkout appear on the next launch.
+For the browser client, install `nagents[web]` and run `ngn serve`. Published
+wheels serve bundled frontend assets without requiring Node. Omit these extras
+for headless-only use. Pin a release with `==VERSION` when reproducibility is
+required, and consult the [release notes](https://github.com/abi-jey/nagents/releases).
 
-!!! important "Current checkout is not the release snapshot"
-    `ngn serve`, its `[web]` extra, and the React client are new source-checkout
-    features, absent from `v0.5.0`. The legacy server's token/loopback hardening
-    and removal of its old chat UI also postdate that release. Use the
-    [web client guide](ngn-web.md) or [legacy API server guide](server.md) for
-    the appropriate application, rather than assuming a published version has
-    the current behavior.
+!!! important "Documentation follows the checkout"
+    This guide can describe changes newer than your installed distribution.
+    Compare release notes and installed commands before relying on a particular
+    feature or fix. Use the [web client guide](ngn-web.md) for `ngn serve` and the
+    [legacy API server guide](server.md) for `python -m nagents.server`.
 
-Local development metadata can lag a published release or be reused while code
-changes. Check the selected environment's `ngn --help`, installed source, and
-release contents, not just `ngn --version`, when verifying feature availability.
+The editable workflows below are for development. Local version metadata can
+lag source changes; check `ngn --help`, installed source, and release contents as
+well as `ngn --version` when verifying feature availability.
 
 ## Requirements
 
@@ -47,8 +46,8 @@ release contents, not just `ngn --version`, when verifying feature availability.
 - A provider account/API key for live model requests, or eligible ChatGPT/Codex
   device login for the default OpenAI route. Neither is needed for `--demo`.
 
-The base runtime dependencies are `aiohttp>=3.9.0` and `aiosqlite>=0.20.0`;
-the TUI adds `textual>=8.2.8` and its dependencies. The project uses minimum
+The base runtime dependencies are `aiohttp>=3.9.0`, `aiosqlite>=0.20.0`, and
+`pyyaml>=6.0`; the TUI adds `textual>=8.2.8` and its dependencies. The project uses minimum
 version constraints, not a promise that one frozen dependency set is always the
 latest. A fresh uv pip install resolves versions satisfying those constraints;
 Poetry uses its lockfile. The CLI does not require the OpenAI or Anthropic SDK,
@@ -272,14 +271,14 @@ approval is a preview only; approving it does not edit a file.
 
 | Symptom | Check |
 | --- | --- |
-| `ngn` is missing or has different flags | Check the selected environment and [release availability](#release-availability). `v0.5.0` includes the CLI but not `serve`; use the current checkout for newer commands and fixes. |
-| TUI extra is missing | Install the local checkout with `[tui]`, or use the headless `run` subcommand. |
+| `ngn` is missing or has different flags | Check the selected environment, `ngn --version`, and [release availability](#release-availability). Upgrade or choose an editable checkout if the needed command postdates the installed release. |
+| TUI extra is missing | Install `nagents[tui]` (or an editable checkout with `[tui]`), or use the headless `run` subcommand. |
 | TUI needs a terminal | Use a real interactive terminal, or `ngn run --json "prompt"` in a script. |
 | uv tries to synchronize the project or use `uv.lock` | Use `uv pip install --python ...` and `uv run --no-project --python ...`; do not substitute `uv sync` or bare project-managed `uv run`. |
 | Changes do not appear in an isolated `uvx` run | It is non-editable. Use the local editable workflow for development, or `uvx --no-cache --isolated --from '/absolute/path/nagents[tui]' ngn --demo` for a fresh build. |
 | Missing API key | Configure an environment-variable **name** with `api_key_env`, set its value outside YAML, or use eligible OpenAI device login. `--demo` needs neither. |
 | A setting in the environment seems ignored | YAML has higher priority than `NGN_*` defaults. Check [precedence](ngn-configuration.md#precedence). |
-| New fields or extras are unavailable | Compare the installed distribution with the current source. `v0.5.0` includes `voice` and `tui`, but not the new `web` extra. |
+| New fields or extras are unavailable | Compare the installed distribution with its release notes and the current source. The verified v0.15.0 distribution includes `voice`, `tui`, and `web`; newer configuration fields can still require a later release or checkout. |
 
 Continue with the [usage guide](ngn.md) and the
 [complete configuration reference](ngn-configuration.md).

@@ -100,6 +100,12 @@ def isolated_theme_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NGN_ANIMATIONS", raising=False)
 
 
+@pytest.fixture
+def color_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Color-rendering checks must not inherit a developer's NO_COLOR setting.
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+
 def test_defaults_and_shared_theme_names(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert THEME_NAMES == ("terminal", "graphite", "ocean", "ember")
@@ -292,7 +298,9 @@ def test_theme_tokens_and_no_global_palette_changes(name: str, background: str) 
 @pytest.mark.parametrize("name", THEME_NAMES)
 @pytest.mark.parametrize("background", THEME_BACKGROUNDS)
 @pytest.mark.parametrize("size", [(60, 20), (80, 24), (132, 38)])
-def test_theme_css_renders_native_defaults_and_modal_states(name: str, background: str, size: tuple[int, int]) -> None:
+def test_theme_css_renders_native_defaults_and_modal_states(
+    name: str, background: str, size: tuple[int, int], color_rendering: None
+) -> None:
     async def scenario() -> None:
         app = ThemePreview(name, background)
         async with app.run_test(size=size) as pilot:
@@ -483,7 +491,7 @@ def test_native_message_surfaces_stay_painted_and_readable(name: str) -> None:
 
 @pytest.mark.parametrize("name", THEME_NAMES)
 @pytest.mark.parametrize("background", ["theme", "terminal"])
-def test_semantic_colors_reach_real_widgets_and_syntax(name: str, background: str) -> None:
+def test_semantic_colors_reach_real_widgets_and_syntax(name: str, background: str, color_rendering: None) -> None:
     async def scenario() -> None:
         app = ThemePreview(name, background)
         async with app.run_test(size=(132, 45)) as pilot:

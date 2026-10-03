@@ -20,9 +20,9 @@ from nagents.harness import HarnessConfig
 from nagents.harness import load_config
 from nagents.harness import runtime
 from nagents.harness.auth import DeviceAuthorization
+from nagents.harness.config import DEFAULT_HARNESS_MODEL
 from nagents.harness.provider import HarnessProvider
 from nagents.provider import openai as openai_module
-from nagents.provider.openai import DEFAULT_CODEX_MODEL
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import OpenAIProvider
 from tests.support.hang_guard import HANG_GUARD
@@ -91,7 +91,7 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             assert shown == ["TEST-CODE"]
             assert fake.saved
             assert harness.config.auth == "chatgpt"
-            assert harness.config.model == DEFAULT_CODEX_MODEL
+            assert harness.config.model == DEFAULT_HARNESS_MODEL
             assert isinstance(harness.agent.provider, OpenAIProvider)
             assert await harness.history() == []
             assert "TEST-CODE" not in harness.describe()
@@ -101,12 +101,12 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             assert (selection.provider, selection.auth, selection.model) == (
                 "openai",
                 "chatgpt",
-                DEFAULT_CODEX_MODEL,
+                DEFAULT_HARNESS_MODEL,
             )
             await harness.logout()
             assert not fake.saved
             assert harness.config.auth == "api-key"
-            assert harness.config.model == "gpt-6-luna"
+            assert harness.config.model == "gpt-6-astra"
             assert isinstance(harness.agent.provider, HarnessProvider)
             assert harness.login_store.selection() is None
         finally:
@@ -293,7 +293,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
     monkeypatch.setenv("XDG_DATA_HOME", "")
     monkeypatch.chdir(project)
     config = load_config(project)
-    assert config.model == "gpt-6-luna"
+    assert config.model == "gpt-6-astra"
     assert config.data_dir == home / ".local/share/ngn"
     harness = Harness(HarnessConfig(workspace=home, data_dir=tmp_path / "separate-state", demo=True))
     with pytest.raises(PermissionError, match="OAuth credential"):

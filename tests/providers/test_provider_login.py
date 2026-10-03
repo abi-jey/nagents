@@ -152,7 +152,7 @@ def test_invalid_saved_login_is_ignored_with_a_diagnostic(tmp_path: Path) -> Non
         )
     )
     config = load_config(tmp_path)
-    assert config.provider == "openai" and config.model == "gpt-6-luna"
+    assert config.provider == "openai" and config.model == "gpt-6-astra"
     assert any("Ignored" in note for note in config.diagnostics)
 
 
@@ -349,7 +349,7 @@ def test_cli_login_stores_key_from_stdin_without_rendering(
     assert "Signed in to openai" in output and SECRET not in output
     assert store().key_for("openai") == SECRET
     config = load_config(tmp_path)
-    assert (config.provider, config.model) == ("openai", "gpt-6-luna")
+    assert (config.provider, config.model) == ("openai", "gpt-6-astra")
 
 
 @pytest.mark.requires_posix

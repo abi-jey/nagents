@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { revealAncestors } from "../../components/disclosures.js";
 import { capability, liveApi } from "./api.js";
 import { browserMedia, liveSupport } from "./browser.js";
-import { LiveController } from "./controller.js";
-import { LiveDock } from "./LiveDock.js";
-import { LiveSettings, providerLabel } from "./LiveSettings.js";
+import { currentLiveDelegation, LiveController } from "./controller.js";
+import { DelegationInspector } from "./DelegationInspector.js";
+import { LiveComposer } from "./LiveComposer.js";
+import { AudioDeviceSettings } from "./AudioDeviceSettings.js";
+import { VoiceContextDetails } from "./VoiceContextDetails.js";
+import { OutputDeviceNotice } from "./OutputDeviceNotice.js";
+import { LiveSettings } from "./LiveSettings.js";
 import type { LiveCapability, LivePhase, LiveSettingsSnapshot } from "./types.js";
-import "./live.css";
-import "./dock.css";
 
 const labels: Record<LivePhase, string> = {
   idle: "Ready for voice", permission: "Allow your microphone", connecting: "Connecting",
@@ -17,10 +20,10 @@ function duration(seconds: number) {
   return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
 
-// Voice is a nonmodal layer over the current chat. Captions arrive through the
-// same authenticated chat event stream as normal messages and saved history.
-export function LiveDialog({ token, sessionId, close, configureConnection }: {
-  token: string; sessionId: string; close: () => void; configureConnection?: () => void;
+// Voice lives inside the composer. Captions use the same authenticated chat
+// event stream as typed messages; expanding settings never remounts the call.
+export function LiveDialog({ token, sessionId, close, configureConnection, autoStart = true }: {
+  token: string; sessionId: string; close: () => void; configureConnection?: () => void; autoStart?: boolean;
 }) {
   const loadingRequest = useRef<AbortController | undefined>(undefined);
   const [controller] = useState(() => new LiveController({ ...liveApi(token), token, media: browserMedia }));
@@ -30,10 +33,16 @@ export function LiveDialog({ token, sessionId, close, configureConnection }: {
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsVisited, setSettingsVisited] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(!autoStart);
+  const [settingsVisited, setSettingsVisited] = useState(!autoStart);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [inspectionOpen, setInspectionOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  const [inspectedId, setInspectedId] = useState("");
+  const inspected = state.delegations.find(item => item.id === inspectedId) || currentLiveDelegation(state.delegations);
   const firstLoad = useRef(true);
+  const startIntent = useRef(autoStart);
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const connected = state.phase === "connected";
   const main = config?.backend_mode === "assistant";
@@ -43,9 +52,8 @@ export function LiveDialog({ token, sessionId, close, configureConnection }: {
     || (occupied ? "Another voice conversation is active. End it there, then refresh." : "")
     || (main && !sessionId ? "Select a chat before starting voice." : "");
   const elapsed = state.startedAt ? Math.max(0, Math.floor(((state.endedAt || now) - state.startedAt) / 1000)) : 0;
-  const status = state.phase === "idle" ? loading ? "Checking voice" : unavailable ? "Setup needed" : labels.idle : labels[state.phase];
-  const backend = main ? `${config.assistant.agent} · ${config.assistant.model}` : config?.backend_model || "Hosted Responses";
-  const provider = config?.voice_auth === "chatgpt" ? "ChatGPT login" : providerLabel(config?.provider || "OpenAI");
+  const status = state.phase === "idle" ? loading ? "Checking voice" : unavailable ? "Setup needed" : labels.idle
+    : state.phase === "connecting" && !state.sessionId && config?.context_mode === "summary" ? "Preparing chat brief" : labels[state.phase];
 
   async function refresh() {
     loadingRequest.current?.abort();
@@ -70,46 +78,63 @@ export function LiveDialog({ token, sessionId, close, configureConnection }: {
     const next = await refresh();
     if (next?.available) {
       setSettingsOpen(false);
-      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#live-voice-dock .live-dock-start")?.focus());
+      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#voice-session .voice-start")?.focus());
     }
   }
   function configure() {
-    setSettingsVisited(true); setSettingsOpen(!settingsOpen);
-    if (!settingsOpen) requestAnimationFrame(() => document.getElementById("live-settings-title")?.focus({ preventScroll: true }));
+    startIntent.current = false;
+    setContextOpen(false);
+    if (settingsOpen) { closeSettings(); return; }
+    setInspectionOpen(false); setSettingsVisited(true); setSettingsOpen(true);
+    requestAnimationFrame(() => document.querySelector<HTMLSelectElement>("#voice-inline-settings select")?.focus({ preventScroll: true }));
+  }
+  function closeInspection() {
+    setInspectionOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".voice-request-trigger")?.focus({ preventScroll: true }));
+  }
+  function inspect() {
+    setContextOpen(false);
+    if (inspectionOpen) { closeInspection(); return; }
+    setSettingsOpen(false); setInspectedId(currentLiveDelegation(state.delegations)?.id || ""); setInspectionOpen(true);
   }
   function closeSettings() {
     setSettingsOpen(false);
-    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#live-voice-dock [aria-label='Voice settings']")?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#voice-session .voice-settings-trigger")?.focus());
+  }
+  function showContext() {
+    if (contextOpen) {
+      setContextOpen(false);
+      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".voice-context-trigger")?.focus({ preventScroll: true }));
+      return;
+    }
+    setSettingsOpen(false); setInspectionOpen(false); setContextOpen(true);
+    requestAnimationFrame(() => document.getElementById("voice-context-title")?.focus({ preventScroll: true }));
+  }
+  function viewChat(runId: string) {
+    const feed = document.querySelector<HTMLElement>(".conversation");
+    if (!feed) return;
+    const target = [...feed.querySelectorAll<HTMLElement>("[data-run-id]")].filter(element => element.dataset.runId === runId).at(-1);
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
+    if (target) { revealAncestors(target, feed); target.scrollIntoView({ block: "nearest", behavior }); target.focus({ preventScroll: true }); }
+    else { feed.scrollTo({ top: feed.scrollHeight, behavior }); feed.focus({ preventScroll: true }); }
   }
 
   useEffect(() => {
-    document.getElementById("live-dock-title")?.focus({ preventScroll: true });
-    void refresh();
-    const leave = () => { void controller.end(); };
+    // Consume the explicit click intent once. Refresh/save/error recovery never
+    // reopens the microphone, and an unmounted capability request cannot start it.
+    void refresh().then(next => {
+      const shouldStart = startIntent.current; startIntent.current = false;
+      if (shouldStart && next?.available && !next.active_session_id && !liveSupport(next.transport) && sessionId)
+        void controller.start(next.voice, next.revision, sessionId, next.transport);
+    });
+    const leave = () => { startIntent.current = false; void controller.end(); };
     window.addEventListener("pagehide", leave);
     return () => {
       window.removeEventListener("pagehide", leave);
+      startIntent.current = false;
       loadingRequest.current?.abort(); controller.dispose();
     };
   }, [controller]);
-  useEffect(() => {
-    const dock = document.getElementById("live-voice-dock");
-    const surface = dock?.querySelector<HTMLElement>(".live-dock-surface");
-    const shell = dock?.closest<HTMLElement>(".app-shell");
-    if (!dock || !surface || !shell) return;
-    const composer = shell.querySelector<HTMLElement>(".composer-area");
-    const measure = () => {
-      const bottom = composer?.getBoundingClientRect().top ?? window.innerHeight;
-      shell.style.setProperty("--live-dock-max-height", `${Math.max(96, Math.floor(bottom - shell.getBoundingClientRect().top - dock.offsetTop - 12))}px`);
-      shell.style.setProperty("--live-dock-clearance", `${Math.ceil(surface.getBoundingClientRect().height) + 28}px`);
-    };
-    measure();
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : undefined;
-    observer?.observe(surface);
-    if (composer) observer?.observe(composer);
-    window.addEventListener("resize", measure);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); shell.style.removeProperty("--live-dock-clearance"); shell.style.removeProperty("--live-dock-max-height"); };
-  }, []);
   useEffect(() => {
     if (!connected) return;
     setNow(Date.now());
@@ -117,25 +142,33 @@ export function LiveDialog({ token, sessionId, close, configureConnection }: {
     return () => clearInterval(timer);
   }, [connected]);
   useEffect(() => { if (state.phase === "ended" || state.phase === "error") void refresh(); }, [state.phase]);
+  useEffect(() => {
+    if (settingsOpen) document.querySelector<HTMLSelectElement>("#voice-inline-settings select")?.focus({ preventScroll: true });
+  }, [settingsOpen]);
 
-  const subtitle = state.phase === "permission" ? "Allow microphone access to speak in this chat."
-    : state.phase === "connecting" ? "Bringing your voice into the conversation."
-      : connected ? state.micMuted ? "Microphone muted. You can still listen." : "Speak freely. You can keep typing, too."
-        : state.phase === "ending" ? "Microphone off. Finishing the connection."
-          : state.phase === "ended" ? "Your conversation stays right here."
-            : state.phase === "error" ? "Your microphone is off. Reconnect when ready."
-              : "Same conversation. Now with your voice.";
-
-  return <LiveDock state={state} status={status} elapsed={duration(elapsed)} subtitle={subtitle}
+  return <LiveComposer state={state} status={status} elapsed={duration(elapsed)}
     disabled={settingsOpen || settingsSaving || loading || !config?.available || !!unavailable}
-    unavailable={unavailable} loading={loading} voice={voice} provider={provider} backend={backend}
-    settingsOpen={settingsOpen} settingsSaving={settingsSaving}
-    start={() => { if (config) void controller.start(voice, config.revision, sessionId, config.transport); }}
-    end={() => void controller.end()} close={() => { if (!settingsSaving) close(); }} configure={configure}
+    unavailable={unavailable} loading={loading} voice={voice}
+    settingsOpen={settingsOpen} settingsSaving={settingsSaving} inspectionOpen={inspectionOpen} inspect={inspect}
+    contextOpen={contextOpen} showContext={showContext}
+    audioNotice={<OutputDeviceNotice connected={connected} outputId={state.devices.outputId} hidden={settingsOpen}
+      useDefault={() => controller.switchDevice("output", "")} />}
+    contextDetails={contextOpen && state.context && <VoiceContextDetails context={state.context} close={showContext} />}
+    inspector={inspectionOpen && inspected && <DelegationInspector token={token} delegation={inspected} delegations={state.delegations} select={setInspectedId} close={closeInspection} viewChat={viewChat} />}
+    start={() => { setInspectionOpen(false); setContextOpen(false); if (config) void controller.start(voice, config.revision, sessionId, config.transport); }}
+    end={() => { startIntent.current = false; void controller.end(); }} close={() => { if (!settingsSaving) { startIntent.current = false; close(); } }} configure={configure}
     muteInput={() => controller.muteInput()} muteOutput={() => controller.muteOutput()}
-    play={() => void controller.play()} refresh={() => void refresh()}>
-    {settingsVisited && <LiveSettings token={token} assistant={config?.assistant} transport={config?.transport}
-      hidden={!settingsOpen} onSavingChange={setSettingsSaving} configureConnection={configureConnection}
-      blocked={active || !!config?.active_session_id} saved={snapshot => void saved(snapshot)} back={closeSettings} />}
-  </LiveDock>;
+    play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat}>
+    {settingsVisited && <>
+      <div className="voice-quick-devices live-settings-form"><AudioDeviceSettings transport={config?.transport || "webrtc"}
+        disabled={["permission", "connecting", "ending"].includes(state.phase)} active={connected} activeSelection={state.devices}
+        applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined} /></div>
+      <details className="voice-preferences" open={preferencesOpen} onToggle={event => setPreferencesOpen(event.currentTarget.open)}>
+        <summary>Voice &amp; connection</summary>
+        <LiveSettings token={token} assistant={config?.assistant} transport={config?.transport} showDevices={false}
+          hidden={!settingsOpen || !preferencesOpen} onSavingChange={setSettingsSaving} configureConnection={configureConnection}
+          blocked={active || !!config?.active_session_id} saved={snapshot => void saved(snapshot)} back={closeSettings} />
+      </details>
+    </>}
+  </LiveComposer>;
 }

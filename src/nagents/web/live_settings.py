@@ -39,7 +39,10 @@ from nagents.provider.auth import validate_prefix
 from ._async import join_owned
 from .live_auth import LOGIN_VOICES
 from .live_auth import resolve_voice_auth
+from .voice_preferences import MAX_VOICE_BYTES
+from .voice_preferences import ContextMode
 from .voice_preferences import Scope
+from .voice_preferences import VoiceInstructions
 from .voice_preferences import VoiceOverrides
 from .voice_preferences import VoicePreferenceStore
 from .voice_preferences import VoicePreferences
@@ -58,7 +61,7 @@ LIVE_VOICES = ("marin", "cedar")
 LIVE_PROVIDERS = ("openai", "openai_compatible", "azure_openai_compatible_v1")
 NAMED_LIVE_PROVIDERS = (*LIVE_PROVIDERS, "foundry")
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
-MAX_SETTINGS_BYTES = 8192
+MAX_SETTINGS_BYTES = MAX_VOICE_BYTES
 MAX_KEY_BYTES = 4096
 T = TypeVar("T")
 Revision = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -75,6 +78,8 @@ class LiveValues(BaseModel):
     model: ModelId
     backend_model: ModelId
     voice: Literal["marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"]
+    instructions: VoiceInstructions = ""
+    context_mode: ContextMode = "recent"
     base_url: str = Field(max_length=2048)
 
     @field_validator("base_url")
@@ -225,7 +230,15 @@ class LiveConnection:
 
 
 def _public_values(values: LiveValues, *keys: SecretStr) -> None:
-    strings = (values.provider, values.model, values.backend_model, values.voice, values.base_url, values.connection_id)
+    strings = (
+        values.provider,
+        values.model,
+        values.backend_model,
+        values.voice,
+        values.base_url,
+        values.connection_id,
+        values.instructions,
+    )
     for key in keys:
         secret = key.get_secret_value()
         if secret and any(secret in value for value in strings):

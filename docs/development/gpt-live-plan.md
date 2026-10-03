@@ -2,7 +2,7 @@
 
 Research date: 2026-09-21. Status: **implementation approved; examples and native support being verified**.
 
-The runnable index is now in [examples/live/README.md](../../examples/live/README.md).
+The runnable index is now in [examples/live/README.md](https://github.com/abi-jey/nagents/blob/main/examples/live/README.md).
 The feature map below records the design and its acceptance criteria.
 
 This map comes from visiting OpenAI's guides in the shared browser, following

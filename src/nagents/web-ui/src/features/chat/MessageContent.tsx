@@ -1,7 +1,8 @@
 import { CodeBlock } from "../../components/CodeBlock.js";
+import { TextLinks } from "../../components/TextLinks.js";
 
 export function MessageContent({ text }: { text: string }) {
-  // Recognize fenced code only. Everything else remains literal, escaped text.
+  // Code stays literal. Prose recognizes safe source links without parsing HTML.
   const parts = text.split(/(^```[^\n]*(?:\n|$))/m);
   let code = false;
   let language = "";
@@ -22,7 +23,7 @@ export function MessageContent({ text }: { text: string }) {
           />
         ) : (
           <div key={index} className="entry-content">
-            {part}
+            <TextLinks text={part} />
           </div>
         );
       })}

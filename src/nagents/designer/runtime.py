@@ -179,7 +179,7 @@ class DesignedHarness(Harness):
         self.agent.plugins.append(ExecutionEvents())
         for selected in self.definition.tools:
             name = selected.ref.removeprefix("builtin.")
-            self.agent.register_tool(self.tools.builtins[name], name=name)
+            self.tools.register_builtin(self.tools.builtins[name], name=name)
         self.tools.builtins.pop("delegate", None)
         if self.definition.invokes:
             self.tools.builtins["delegate"] = self.delegate
@@ -211,6 +211,7 @@ class DesignedHarness(Harness):
         return DesignedHarness(self.config, self.design, name, self.recorder)
 
     def refresh_instructions(self) -> None:
+        self.tools.refresh_limits()
         self.agent.system_prompt = self.definition.instructions.text
         if self.definition.invokes:
             self.agent.system_prompt += "\n\n" + self.delegation_description()

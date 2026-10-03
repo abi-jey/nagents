@@ -4,15 +4,15 @@
 harness powers interactive and headless use. Python extensions change the agent's
 behavior, not just its appearance.
 
-The terminal and headless CLI are included in the published `v0.5.0` release.
-This guide describes the current checkout, including later fixes; it is not an
-OpenCode feature-parity claim. Read the limitations and trust model below before
+The terminal and headless CLI are included in published distributions.
+This guide describes the current checkout, which may include newer fixes; it is
+not an OpenCode feature-parity claim. Read the limitations and trust model below before
 using it on important workspaces, and check
 [release availability](ngn-installation.md#release-availability).
 
 Related pages: [installation and environment choices](ngn-installation.md),
-[complete configuration schema and recipes](ngn-configuration.md), and the new
-[local web client](ngn-web.md), which is not included in `v0.5.0`.
+[complete configuration schema and recipes](ngn-configuration.md), and the
+[local web client](ngn-web.md), available with the `web` extra and bundled assets.
 
 ## Shared provider connections
 
@@ -192,6 +192,13 @@ available, and a running, complete, failed, or cancelled label. Completed calls
 show their reported duration when available. Long names and hints are shortened
 to keep the outcome visible on narrow terminals.
 
+Native shell results with a nonzero exit code or timeout show **exit 7** (with
+the actual code) or **timed out** in the card and headless text output. This
+process outcome does not change the enclosing task's status or CLI exit code;
+the agent may recover and finish the requested work. Saved result strings are
+not parsed to infer a process outcome, and JSON events retain their original
+structured result and framework error fields.
+
 Press **F6** to switch from the composer to the conversation without changing
 your scroll position, or back to your draft. In the conversation, PageUp/PageDown
 scroll and Tab/Shift+Tab navigate tool headers and other controls. Tab in the
@@ -286,6 +293,14 @@ with a final `done` only after the group settles. Task lifecycle events include
 parent/child session IDs, parent task ID, depth, profile, follow-up number,
 activation number, and trigger. Notification records identify the actual source
 and recipient; they do not themselves assert that another execution completed.
+
+Queued completion events reach the UI before the next core model or tool-result
+event, even while the parent keeps working. Waiting for a tool result or a model
+event can delay that update; streamed shell output alone does not trigger it.
+Model notifications still wait for the parent turn boundary. If a parent hits a
+terminal error, already queued lifecycle events are emitted before cleanup, but
+no new model turn starts. A child that recovers from a recoverable provider error
+and finishes successfully returns its result normally.
 
 Nested completion notifications target the **immediate parent**. Main can observe
 all task lifecycle events without receiving every grandchild result as a separate
@@ -418,7 +433,7 @@ ngn logout
 | --- | --- | --- |
 | `chatgpt` | `openai` | ChatGPT/Codex device login; subscription access, not general API access. |
 | `openrouter` | `openrouter` | Headless PKCE: open the printed link, approve ngn, and paste the single-use code shown by OpenRouter (valid for 10 minutes). ngn exchanges it for a user-controlled API key. |
-| `openai` | `openai` | OpenAI Platform API key with usage-based billing. Default model `gpt-6-luna`. |
+| `openai` | `openai` | OpenAI Platform API key with usage-based billing. Default model `gpt-6-astra`. |
 | `anthropic` | `anthropic` | Anthropic API key; enter a model ID when prompted. |
 | `gemini` | `gemini` | Google AI Studio API key; enter a model ID when prompted. |
 | `custom` | `openai_compatible` | Your own gateway, Ollama, or another compatible service; requires a base URL and model. `--api` selects the HTTP contract, and `--provider` accepts any advanced provider name. |
@@ -478,10 +493,10 @@ use an OpenAI Platform API key instead; device login does not bypass account
 restrictions or turn a ChatGPT subscription into general API access.
 
 ChatGPT sign-in uses `https://chatgpt.com/backend-api/codex/responses`, not the
-ordinary API-key chat-completions endpoint. The initial default `gpt-6-luna` is
-switched to `gpt-5.6-terra` for this route unless you selected a model explicitly;
-use `/model` to select another model available to your account. The underlying
-`OpenAIProvider` lives in the library; interactive login, token refresh/storage,
+ordinary API-key chat-completions endpoint. The Harness preserves your selected
+model (default `gpt-6-astra`) for this route; use `/model` to select another model
+available to your account. The underlying `OpenAIProvider` lives in the library;
+interactive login, token refresh/storage,
 and route selection live in the harness.
 
 The `auth` configuration field and `--auth` accept:

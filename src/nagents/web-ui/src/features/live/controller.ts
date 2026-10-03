@@ -1,7 +1,9 @@
-import type { Caption, LiveCreated, LiveEvent, LiveMedia, LiveSnapshot, LiveState, LiveTransport, MediaHandlers } from "./types.js";
+import type { AudioDeviceSelection, Caption, LiveCreated, LiveDelegation, LiveDelegationStatus, LiveEvent, LiveMedia, LiveSnapshot, LiveState, LiveTransport, MediaHandlers } from "./types.js";
+import { readAudioDevices } from "./devices.js";
+import { readVoiceContext } from "./context.js";
 
 interface Dependencies {
-  media(handlers: MediaHandlers, transport: LiveTransport): LiveMedia;
+  media(handlers: MediaHandlers, transport: LiveTransport, devices: AudioDeviceSelection): LiveMedia;
   create(voice: string, signal: AbortSignal, revision: string, sessionId: string, sdp?: string): Promise<LiveCreated>;
   token: string;
   read(id: string, after: number, signal: AbortSignal): Promise<LiveSnapshot>;
@@ -11,8 +13,57 @@ interface Dependencies {
 
 const initial = (): LiveState => ({
   phase: "idle", sessionId: "", error: "", notice: "", micMuted: false, outputMuted: false,
-  playbackBlocked: false, startedAt: 0, endedAt: 0, captions: [],
+  playbackBlocked: false, startedAt: 0, endedAt: 0, captions: [], delegations: [], devices: readAudioDevices(),
+  inputLevel: 0, outputLevel: 0, context: undefined,
 });
+
+const delegationStatuses: readonly LiveDelegationStatus[] = ["queued", "working", "completed", "failed", "cancelled"];
+const activeDelegation = (value: LiveDelegation) => value.status === "queued" || value.status === "working";
+
+export function currentLiveDelegation(delegations: readonly LiveDelegation[]): LiveDelegation | undefined {
+  return delegations.reduce<LiveDelegation | undefined>((current, next) =>
+    !current || (activeDelegation(next) && !activeDelegation(current)) ||
+      (activeDelegation(next) === activeDelegation(current) && next.seq > current.seq) ? next : current, undefined);
+}
+
+function delegationRecord(value: unknown, sessionId: string, chatSessionId: string, cursor: number): LiveDelegation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(cursor) || cursor < 0 ||
+      typeof record.seq !== "number" || !Number.isSafeInteger(record.seq) || record.seq < 1 || record.seq > cursor ||
+      typeof record.delegation_id !== "string" || !record.delegation_id.trim() ||
+      record.voice_session_id !== sessionId || !sessionId ||
+      record.chat_session_id !== chatSessionId || !chatSessionId ||
+      (record.type !== undefined && record.type !== "delegation") ||
+      typeof record.status !== "string" || !delegationStatuses.some((status) => status === record.status) ||
+      typeof record.agent !== "string" || !record.agent.trim() || typeof record.provider !== "string" ||
+      typeof record.model !== "string" || typeof record.run_id !== "string" || typeof record.text !== "string") return undefined;
+  if ((record.status === "working" || record.status === "completed") && !record.run_id.trim()) return undefined;
+  return { id: record.delegation_id, sessionId, chatSessionId, seq: record.seq, status: record.status as LiveDelegationStatus,
+    agent: record.agent, provider: record.provider, model: record.model, runId: record.run_id, text: record.text };
+}
+
+function mergeDelegations(previous: LiveDelegation[], snapshot: LiveSnapshot, events: LiveEvent[], chatSessionId: string): LiveDelegation[] {
+  const states = new Map(previous.map((value) => [value.id, value]));
+  // Current states recover handoffs whose lifecycle events fell out of the
+  // bounded event window. Event-only snapshots remain backwards compatible.
+  const records: unknown[] = [...(Array.isArray(snapshot.delegations) ? snapshot.delegations : []),
+    ...events.filter((event) => event.type === "delegation")];
+  for (const record of records) {
+    const next = delegationRecord(record, snapshot.session_id, chatSessionId, snapshot.cursor);
+    if (!next) continue;
+    const current = states.get(next.id);
+    if (current && (next.seq <= current.seq || !activeDelegation(current) ||
+        next.chatSessionId !== current.chatSessionId || (!!current.runId && next.runId !== current.runId) ||
+        (current.status === "working" && next.status === "queued"))) continue;
+    states.set(next.id, next);
+  }
+  const ordered = [...states.values()].sort((left, right) => left.seq - right.seq);
+  // Keep ongoing work even while recent terminal handoffs rotate out.
+  const active = ordered.filter(activeDelegation), terminal = ordered.filter((value) => !activeDelegation(value));
+  const result = [...terminal.slice(-32), ...active].sort((left, right) => left.seq - right.seq);
+  return result.length === previous.length && result.every((value, index) => value === previous[index]) ? previous : result;
+}
 
 export function liveFailure(cause: unknown): string {
   if (cause instanceof Error) {
@@ -50,6 +101,7 @@ export class LiveController {
   private timer?: ReturnType<typeof setTimeout>;
   private connectionTimer?: ReturnType<typeof setTimeout>;
   private cursor = 0;
+  private chatSessionId = "";
   private endingDeadline = 0;
   private disposed = false;
 
@@ -64,6 +116,7 @@ export class LiveController {
     clearTimeout(this.connectionTimer);
     const media = this.media; this.media = undefined;
     media?.close();
+    if (this.state.inputLevel || this.state.outputLevel) this.update({ inputLevel: 0, outputLevel: 0 });
   }
   private release() {
     clearTimeout(this.timer);
@@ -74,6 +127,7 @@ export class LiveController {
     clearTimeout(this.connectionTimer);
     if (this.media?.stop) this.media.stop();
     else this.stopMedia();
+    if (this.state.inputLevel || this.state.outputLevel) this.update({ inputLevel: 0, outputLevel: 0 });
   }
   private async closeRemote(id: string): Promise<{ snapshot?: LiveSnapshot; notice: string }> {
     if (!id) return { notice: "" };
@@ -84,10 +138,13 @@ export class LiveController {
     } catch { return { notice: "Microphone and playback stopped. Server closure could not be confirmed; the abandoned session will expire automatically." }; }
   }
   private consume(snapshot: LiveSnapshot) {
+    const stale = snapshot.cursor < this.cursor;
     const events = snapshot.events.filter((event) => event.seq > this.cursor);
     this.cursor = Math.max(this.cursor, snapshot.cursor);
     const warning = events.filter((event) => event.type === "error").at(-1);
-    this.update({ captions: appendCaptions(this.state.captions, events), ...(warning ? { notice: warning.message || warning.text || "A Live command was rejected." } : {}) });
+    this.update({ captions: appendCaptions(this.state.captions, events), delegations: stale ? this.state.delegations : mergeDelegations(this.state.delegations, snapshot, events, this.chatSessionId),
+      context: stale ? this.state.context : readVoiceContext(snapshot.context, this.chatSessionId) || this.state.context,
+      ...(warning?.type === "error" ? { notice: warning.message || warning.text || "A Live command was rejected." } : {}) });
   }
   private terminal(snapshot: LiveSnapshot): boolean {
     if (snapshot.status !== "closed" && snapshot.status !== "error") return false;
@@ -118,6 +175,7 @@ export class LiveController {
     if (this.disposed || ["permission", "connecting", "connected", "ending"].includes(this.state.phase)) return;
     const epoch = ++this.epoch;
     const abort = new AbortController(); this.abort = abort; this.cursor = 0; this.endingDeadline = 0;
+    this.chatSessionId = sessionId;
     this.update({ ...initial(), phase: "permission" });
     try {
       const media = this.deps.media({
@@ -128,8 +186,16 @@ export class LiveController {
         },
         ended: () => { if (epoch === this.epoch) void this.end(); },
         failed: (message) => { if (epoch === this.epoch) this.fail(message); },
-        playbackBlocked: (blocked) => { if (epoch === this.epoch) this.update({ playbackBlocked: blocked }); },
-      }, transport);
+        playbackBlocked: (blocked) => { if (epoch === this.epoch) this.update({ playbackBlocked: blocked, ...(blocked ? { outputLevel: 0 } : {}) }); },
+        levels: (input, output) => {
+          if (epoch !== this.epoch || this.state.phase !== "connected" || this.disposed) return;
+          const level = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+          const inputLevel = this.state.micMuted ? 0 : level(input);
+          const outputLevel = this.state.outputMuted || this.state.playbackBlocked ? 0 : level(output);
+          if (inputLevel !== this.state.inputLevel || outputLevel !== this.state.outputLevel)
+            this.update({ inputLevel, outputLevel });
+        },
+      }, transport, this.state.devices);
       this.media = media;
       await media.prepare(abort.signal);
       if (epoch !== this.epoch) return;
@@ -138,7 +204,7 @@ export class LiveController {
       // be explicitly closed. The server lease covers a lost HTTP response.
       const session = await this.deps.create(voice, AbortSignal.timeout(70_000), revision, sessionId, media.offer?.());
       if (epoch !== this.epoch) { await this.closeRemote(session.session_id); return; }
-      this.update({ sessionId: session.session_id });
+      this.update({ sessionId: session.session_id, context: readVoiceContext(session.context, sessionId) });
       this.connectionTimer = setTimeout(() => {
         if (epoch === this.epoch) this.fail("The voice connection timed out. Check your network, then try again.");
       }, 25_000);
@@ -190,20 +256,33 @@ export class LiveController {
     }
   }
 
+  async switchDevice(kind: "input" | "output", id: string): Promise<void> {
+    const media = this.media, epoch = this.epoch;
+    if (this.disposed || this.state.phase !== "connected" || !media)
+      throw new Error("Voice is not connected. Choose your device before starting again.");
+    const key = kind === "input" ? "inputId" : "outputId";
+    if (this.state.devices[key] === id) return;
+    if (kind === "input") await media.setInputDevice(id);
+    else await media.setOutputDevice(id);
+    if (this.disposed || epoch !== this.epoch || this.media !== media || this.state.phase !== "connected")
+      throw new DOMException("Voice ended while the device was changing.", "AbortError");
+    this.update({ devices: { ...this.state.devices, [key]: id } });
+  }
+
   muteInput() {
     if (this.state.phase !== "connected") return;
     const muted = !this.state.micMuted;
-    this.media?.muteInput(muted); this.update({ micMuted: muted });
+    this.media?.muteInput(muted); this.update({ micMuted: muted, ...(muted ? { inputLevel: 0 } : {}) });
   }
   muteOutput() {
     if (this.state.phase !== "connected") return;
     const muted = !this.state.outputMuted;
-    this.media?.muteOutput(muted); this.update({ outputMuted: muted });
+    this.media?.muteOutput(muted); this.update({ outputMuted: muted, ...(muted ? { outputLevel: 0 } : {}) });
   }
   async play() {
     const epoch = this.epoch;
     try { await this.media?.play(); }
-    catch { if (epoch === this.epoch) this.update({ playbackBlocked: true }); }
+    catch { if (epoch === this.epoch) this.update({ playbackBlocked: true, outputLevel: 0 }); }
   }
   dispose() {
     if (this.disposed) return;

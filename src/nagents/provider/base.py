@@ -867,6 +867,9 @@ class Provider:
             if len(choices) != 1:
                 raise ProtocolError("Provider returned multiple choices for a single-choice request.")
             choice = object_data(choices[0])
+            index = choice.get("index", 0)
+            if type(index) is not int or index != 0:
+                raise ProtocolError("Provider returned an unexpected choice index; no tools were released.")
             delta = object_data(choice.get("delta") or {})
             if text_only:
                 if delta or choice.get("tool_calls") or choice.get("message"):
@@ -973,6 +976,9 @@ class Provider:
         message = choice.get("message") or {}
         if len(choices) != 1:
             raise ProtocolError("Provider returned multiple choices for a single-choice request.")
+        index = choice.get("index", 0)
+        if type(index) is not int or index != 0:
+            raise ProtocolError("Provider returned an unexpected choice index; no tools were released.")
         if text_only:
             if message or choice.get("tool_calls"):
                 raise ProtocolError("The completions endpoint returned non-text output.")
@@ -1232,7 +1238,7 @@ class Provider:
         usage_data: dict[str, Any] = {}
         finish_reason = FinishReason.UNKNOWN
         completed = False
-        open_blocks: set[int] = set()
+        open_blocks: dict[int, str] = {}
         seen_blocks: set[int] = set()
 
         async for data in self._http.post_stream(url, body, headers):
@@ -1251,10 +1257,10 @@ class Provider:
                 if type(index) is not int or not 0 <= index < 1024 or index in seen_blocks:
                     raise ProtocolError("Messages returned a duplicate or invalid content block index.")
                 current_block_index = index
-                open_blocks.add(index)
                 seen_blocks.add(index)
                 content_block = object_data(chunk.get("content_block", {}))
-                block_type = content_block.get("type")
+                block_type = string_data(content_block.get("type", ""))
+                open_blocks[index] = block_type
 
                 if block_type == "tool_use":
                     # Start of a tool call
@@ -1273,7 +1279,7 @@ class Provider:
                 index = chunk.get("index")
                 if type(index) is not int or index not in open_blocks:
                     raise ProtocolError("Messages stopped an unknown content block.")
-                open_blocks.remove(index)
+                del open_blocks[index]
 
             elif event_type == "content_block_delta":
                 index = chunk.get("index", 0)
@@ -1281,7 +1287,20 @@ class Provider:
                     raise ProtocolError("Messages returned a delta outside an open content block.")
                 current_block_index = index
                 delta = object_data(chunk.get("delta", {}))
-                delta_type = delta.get("type")
+                delta_type = string_data(delta.get("type", ""))
+                expected_block = {
+                    "text_delta": "text",
+                    "input_json_delta": "tool_use",
+                    "thinking_delta": "thinking",
+                    "signature_delta": "thinking",
+                    "citations_delta": "text",
+                }.get(delta_type)
+                if (expected_block is not None and open_blocks[index] != expected_block) or (
+                    open_blocks[index] == "tool_use" and delta_type != "input_json_delta"
+                ):
+                    raise ProtocolError(
+                        "Messages returned a delta for the wrong content block; no tools were released."
+                    )
 
                 if delta_type == "text_delta":
                     # Text content

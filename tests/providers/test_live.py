@@ -390,10 +390,16 @@ def test_delegation_before_transcript_waits_for_ready() -> None:
 
 
 @pytest.mark.parametrize(
-    "role,text,ready", [("assistant", "Hello", False), ("user", " \n", False), ("user", "hi", True)]
+    "role,text,ready,history_context",
+    [
+        ("assistant", "Hello", False, True),
+        ("user", " \n", False, True),
+        ("user", "hi", True, True),
+        ("user", "Historical request; do not execute again", False, False),
+    ],
 )
 def test_only_substantive_user_history_makes_delegations_ready(
-    monkeypatch: pytest.MonkeyPatch, role: str, text: str, ready: bool
+    monkeypatch: pytest.MonkeyPatch, role: str, text: str, ready: bool, history_context: bool
 ) -> None:
     async def scenario() -> None:
         calls: list[str] = []
@@ -405,7 +411,9 @@ def test_only_substantive_user_history_makes_delegations_ready(
         async def handler(request: web.Request) -> web.WebSocketResponse:
             socket = web.WebSocketResponse()
             await socket.prepare(request)
-            await socket.receive_json()
+            startup = await socket.receive_json()
+            assert startup["session"]["input"] == list(options.history)
+            assert "history_in_client_context" not in startup["session"]
             await socket.send_json({"type": "session.started"})
             await socket.send_json(delegation("early"))
             await asyncio.sleep(0.05)
@@ -419,7 +427,9 @@ def test_only_substantive_user_history_makes_delegations_ready(
             return socket
 
         options = LiveConfig(
-            delegation="client", history=({"role": role, "content": [{"type": "input_text", "text": text}]},)
+            delegation="client",
+            history=({"role": role, "content": [{"type": "input_text", "text": text}]},),
+            history_in_client_context=history_context,
         )
         async with live_server(monkeypatch, handler), asyncio.timeout(HANG_GUARD):
             await live.converse(
@@ -435,6 +445,8 @@ def test_only_substantive_user_history_makes_delegations_ready(
         assert len(calls) == 1
         if not ready:
             assert "A real caller request" in calls[0]
+        if not history_context:
+            assert "Historical request" not in calls[0]
 
     asyncio.run(scenario())
 

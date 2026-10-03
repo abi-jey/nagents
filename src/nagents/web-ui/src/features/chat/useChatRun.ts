@@ -128,16 +128,16 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   }
   async function cancel(id: string) {
     if (!id || cancelling.current) return;
-    cancelling.current = true; setStopping(true); setStatus("Cancelling and waiting for tools to stop");
+    cancelling.current = true; setStopping(true); setStatus("Cancelling the run…");
     try { await request("cancel", token, { run_id: id }); }
     finally { cancelling.current = false; setStopping(false); }
   }
   return {
-    entries: view.entries, prompt, setPrompt, runId: view.activeRun?.id || "", connected,
+    entries: view.entries, prompt, setPrompt, drafts, runId: view.activeRun?.id || "", connected,
     submitting, stopping,
     contextRevision,
     backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,
-    transcriptVersion: 0, status: stopping ? "Cancelling and waiting for tools to stop" : status,
+    transcriptVersion: 0, status: stopping ? "Cancelling the run…" : status,
     setStatus, approval, loadHistory, forgetSession, submit, cancel,
     pause: () => { stopSubscription.current?.(); setSuspended(true); setConnected(false); },
     reconnect: () => { setSuspended(false); setConnectionVersion((version) => version + 1); },

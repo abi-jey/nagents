@@ -1,0 +1,68 @@
+/* A transparent, compact hit target. The composer owns position and spacing. */
+.live-sphere {
+  --voice-pointer-x: 0;
+  --voice-pointer-y: 0;
+  --voice-pressed: 0;
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--sphere-size, 92px);
+  height: var(--sphere-size, 92px);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  isolation: isolate;
+  overflow: visible;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: width 260ms ease, height 260ms ease;
+}
+.live-sphere:hover:not(:disabled), .live-sphere:active:not(:disabled), .live-sphere:disabled { background: transparent; border: 0; box-shadow: none; }
+.live-sphere:disabled { opacity: 1; cursor: default; }
+.live-sphere:focus-visible { outline: 2px solid var(--focus, #bcdccc); outline-offset: 2px; }
+.live-sphere-scene { position: absolute; inset: 0; display: block; pointer-events: none; }
+.live-sphere-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 180ms ease; }
+.live-sphere[data-renderer="webgl"] .live-sphere-canvas { opacity: 1; }
+.live-sphere-shadow {
+  position: absolute;
+  inset: auto 21% 6%;
+  height: 9%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, #09141870, #31474721 42%, transparent 73%);
+  filter: blur(3px);
+}
+/* No GPU support/context loss still leaves a real, operable voice button. */
+.live-sphere-fallback {
+  position: absolute;
+  inset: 13%;
+  display: block;
+  border-radius: 47% 53% 51% 49% / 49% 47% 53% 51%;
+  background:
+    radial-gradient(ellipse at 31% 24%, #d1e8d2c4, transparent 50%),
+    radial-gradient(ellipse at 79% 59%, #827fa082, transparent 61%),
+    radial-gradient(ellipse at 42% 41%, #729d96, #426777 65%, #233e53);
+  box-shadow: inset 1px 2px 5px #ddffed32, inset -2px -4px 9px #09243053;
+  transform: translate(calc(var(--voice-pointer-x) * 2px), calc(var(--voice-pointer-y) * 2px))
+    scaleX(calc(1 + var(--voice-pressed) * .07)) scaleY(calc(1 - var(--voice-pressed) * .07));
+  transition: opacity 180ms ease, transform 240ms cubic-bezier(.2, 1.3, .4, 1), filter 240ms ease;
+}
+.live-sphere[data-renderer="webgl"] .live-sphere-fallback { opacity: 0; }
+.live-sphere[data-mic-muted="true"] .live-sphere-fallback { filter: saturate(.6); }
+.live-sphere[data-phase="error"] .live-sphere-fallback { filter: saturate(.6) hue-rotate(35deg); }
+.live-sphere:disabled:is([data-phase="idle"], [data-phase="ended"], [data-phase="error"]) .live-sphere-scene { opacity: .6; }
+@media (max-width: 760px) { .live-sphere { width: var(--sphere-size, 64px); height: var(--sphere-size, 64px); } }
+@media (prefers-reduced-motion: reduce) {
+  .live-sphere, .live-sphere * { transition: none !important; }
+  .live-sphere-fallback { transform: none; }
+}
+@media (forced-colors: active) {
+  .live-sphere { outline: 1px solid ButtonText; outline-offset: 1px; }
+  .live-sphere:focus-visible { outline: 3px solid Highlight; outline-offset: 2px; }
+  .live-sphere-fallback { forced-color-adjust: none; }
+}

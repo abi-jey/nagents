@@ -42,6 +42,7 @@ class LoginVoiceConfig:
     voice: str
     instructions: str
     handler: Callable[[str], Awaitable[str]]
+    history: tuple[Payload, ...] = ()
 
 
 class LoginVoiceError(RuntimeError):
@@ -91,7 +92,7 @@ def normalize_event(event: Payload) -> Payload:
         if not isinstance(item, dict) or item.get("target") != "client":
             return {}
         identifier = item.get("id")
-        if not isinstance(identifier, str) or not identifier or len(identifier) > 256:
+        if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 256:
             raise LoginVoiceError("ChatGPT voice returned an invalid delegation event.")
         return {"type": "session.delegation.created", "delegation": {"id": identifier, "target": "client"}}
     if kind in {"session.closed", "session.usage.updated"}:
@@ -141,7 +142,7 @@ class ChatGPTLiveConnection:
             "instructions": self.config.instructions,
             "audio": {"output": {"voice": self.config.voice}},
             "delegation": {"type": "client"},
-            "initial_items": [],
+            "initial_items": list(self.config.history),
         }
         try:
             async with (
@@ -181,14 +182,22 @@ class ChatGPTLiveConnection:
             await self._sockets[0].send_json(event)
 
     async def _result(self, event: Payload) -> None:
-        # The first-party appendSpeech operation uses session-wide speakable
-        # context, including after a delegation. Assistant tasks remain serialized
-        # by ClientDelegations and their authoritative outcome stays in the chat.
+        # Native v3 automatic handoffs use delegation.context.append in the
+        # default thinking channel. appendSpeech's session-wide speakable context
+        # is a different operation and does not resolve the requesting handoff.
+        identifier, content = event.get("delegation_id"), event.get("content")
+        if (
+            not isinstance(identifier, str)
+            or not identifier.strip()
+            or len(identifier) > 256
+            or not isinstance(content, str)
+        ):
+            raise LoginVoiceError("ChatGPT voice returned an invalid delegation result.")
         await self._send(
             {
-                "type": "session.context.append",
-                "channel": "speakable",
-                "content": [{"type": "input_text", "text": event["content"]}],
+                "type": "delegation.context.append",
+                "delegation_item_id": identifier,
+                "content": [{"type": "input_text", "text": content}],
             }
         )
 

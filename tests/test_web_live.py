@@ -64,6 +64,7 @@ class FakeLiveService:
         self.snapshots: list[tuple[str, int]] = []
         self.closes: list[str] = []
         self.agents: list[Agent] = []
+        self.delegations: list[dict[str, object]] = []
         self.shutdown_calls = 0
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
@@ -97,6 +98,9 @@ class FakeLiveService:
             "cursor": 38,
         }
 
+    def delegation_reporter(self, session_id: str) -> Callable[[dict[str, object]], None]:
+        return self.delegations.append
+
     async def close(self, session_id: str) -> dict[str, object]:
         self.closes.append(session_id)
         for agent in self.agents:
@@ -128,8 +132,9 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[FakeLiveService]:
         *,
         login_factory: Callable[[str], LoginVoiceConfig | None] | None = None,
         caption_factory: object = None,
+        context_factory: object = None,
     ) -> FakeLiveService:
-        del login_factory, caption_factory
+        del login_factory, caption_factory, context_factory
         service = FakeLiveService(agent_factory)
         instances.append(service)
         return service
@@ -455,11 +460,14 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
                     assert created.status_code == 201 and SECRET not in created.text
                     identifier = str(created.json()["session_id"])
                     session_ids.append(identifier)
-                    assert created.json() == {
+                    assert {key: created.json()[key] for key in ("session_id", "model", "voice")} == {
                         "session_id": identifier,
                         "model": "voice-ui-model",
                         "voice": "cedar",
                     }
+                    assert created.json()["context"]["mode"] == "none"
+                    assert created.json()["context"]["bytes"] == 0
+                    assert created.json()["context"]["chat_session_id"] == harnesses[0].session_id
                     assert identifier not in [f"native-{i}" for i in range(1, len(started) + 1)]
                     assert (await client.get("/api/live", headers=headers)).json()["active_session_id"] == identifier
                     async with asyncio.timeout(HANG_GUARD):
@@ -599,6 +607,7 @@ def test_all_live_routes_retain_auth_origin_and_fetch_guards(tmp_path: Path, ser
                 ("POST", "/api/live/settings"),
                 ("POST", "/api/live/sessions"),
                 ("GET", f"/api/live/sessions/{SESSION}?after=0"),
+                ("GET", f"/api/live/sessions/{SESSION}/delegations/task"),
                 ("POST", f"/api/live/sessions/{SESSION}/close"),
             ):
                 for changed in (

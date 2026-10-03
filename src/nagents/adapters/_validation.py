@@ -56,6 +56,26 @@ def tool_arguments(value: object) -> ToolArguments:
     return cast("ToolArguments", result)
 
 
+def json_values_equal(left: object, right: object) -> bool:
+    """Compare validated JSON values without treating booleans as numbers."""
+    pending = [(left, right)]
+    while pending:
+        left, right = pending.pop()
+        if isinstance(left, dict) and isinstance(right, dict):
+            if left.keys() != right.keys():
+                return False
+            pending.extend((left[key], right[key]) for key in left)
+        elif isinstance(left, list) and isinstance(right, list):
+            if len(left) != len(right):
+                return False
+            pending.extend(zip(left, right, strict=True))
+        elif (
+            type(left) is not type(right) and not (type(left) in (int, float) and type(right) in (int, float))
+        ) or left != right:
+            return False
+    return True
+
+
 def token_usage(value: object, api: str) -> Usage:
     data = object_data(value) if value is not None else {}
 

@@ -34,6 +34,7 @@ from nagents.live import LiveAPI
 from nagents.live import LiveEvent
 
 from ._async import join_owned
+from .live_context import LiveSeed
 from .live_login import ChatGPTLiveConnection
 from .live_login import LoginVoiceError
 
@@ -53,6 +54,10 @@ SILENCE_FRAME = bytes(960)
 MAX_EVENTS = 256
 MAX_TEXT_CHARACTERS = 4096
 MAX_COMPLETED = 8
+MAX_COMPLETED_DELEGATIONS = 32
+MAX_DELEGATION_REQUEST = 32768
+MAX_DELEGATION_RESULT = 16384
+MAX_DELEGATION_TIMELINE = 8
 LEASE_SECONDS = 40.0
 PROVISION_SECONDS = 25.0
 ATTACH_SECONDS = 10.0
@@ -63,6 +68,55 @@ Status = Literal["connecting", "connected", "closing", "closed", "error"]
 Payload = dict[str, object]
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 _CONTROLS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_DELEGATION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_CHAT_ID = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")
+_DELEGATION_STATES = {"queued", "working", "completed", "failed", "cancelled"}
+_DELEGATION_TERMINAL = {"completed", "failed", "cancelled"}
+
+
+def _bounded_text(text: str, limit: int) -> Payload:
+    return {"text": text[:limit], "truncated": len(text) > limit, "characters": len(text)}
+
+
+@dataclass
+class _DelegationDetails:
+    request: dict[str, Payload] = field(default_factory=dict)
+    result: Payload = field(default_factory=dict)
+    timeline: deque[Payload] = field(default_factory=lambda: deque(maxlen=MAX_DELEGATION_TIMELINE))
+    timeline_truncated: bool = False
+
+    def capture(self, update: Payload, status: str, explanation: str) -> bool:
+        changed = False
+        for field_name, wire_name in (("transcript", "request_transcript"), ("input", "request_input")):
+            value = update.get(wire_name)
+            if (
+                field_name not in self.request
+                and isinstance(value, str)
+                and (field_name == "transcript" or status == "working")
+            ):
+                self.request[field_name] = _bounded_text(value, MAX_DELEGATION_REQUEST)
+                changed = True
+        output = update.get("result_text")
+        if status == "completed" and isinstance(output, str):
+            self.result = {"kind": "assistant_output", **_bounded_text(output, MAX_DELEGATION_RESULT)}
+            changed = True
+        elif status in {"failed", "cancelled"}:
+            self.result = {"kind": "terminal_explanation", **_bounded_text(explanation, MAX_DELEGATION_RESULT)}
+            changed = True
+        return changed
+
+    def remember(self, event: Payload) -> None:
+        self.timeline_truncated |= len(self.timeline) == MAX_DELEGATION_TIMELINE
+        self.timeline.append(dict(event))
+
+    def snapshot(self) -> Payload:
+        return {
+            "source": "app_callback",
+            "request": {name: dict(value) for name, value in self.request.items()},
+            **({"result": dict(self.result)} if self.result else {}),
+            "timeline": [dict(event) for event in self.timeline],
+            "timeline_truncated": self.timeline_truncated,
+        }
 
 
 @dataclass
@@ -75,6 +129,9 @@ class _Record:
     events: deque[Payload] = field(default_factory=lambda: deque(maxlen=MAX_EVENTS))
     cursor: int = 0
     caption_keys: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_EVENTS), repr=False)
+    delegations: dict[str, Payload] = field(default_factory=dict)
+    delegation_details: dict[str, _DelegationDetails] = field(default_factory=dict, repr=False)
+    context: Payload = field(default_factory=dict)
 
     def append(self, kind: str, text: str, **fields: object) -> None:
         self.cursor += 1
@@ -83,6 +140,77 @@ class _Record:
     def transition(self, status: Status, message: str) -> None:
         self.status, self.message = status, message
         self.append("status", message)
+
+    def delegation(self, update: Payload) -> None:
+        """Accept app-owned task state without conflating task and voice closure."""
+        identifier, status = update.get("delegation_id"), update.get("status")
+        run_id, root = update.get("run_id", ""), update.get("chat_session_id")
+        if (
+            not isinstance(identifier, str)
+            or not _DELEGATION_ID.fullmatch(identifier)
+            or not isinstance(status, str)
+            or status not in _DELEGATION_STATES
+            or not isinstance(run_id, str)
+            or (run_id and not _DELEGATION_ID.fullmatch(run_id))
+            or (status in {"working", "completed"} and not run_id)
+            or not isinstance(root, str)
+            or not _CHAT_ID.fullmatch(root)
+            or update.get("voice_session_id") != self.identifier
+        ):
+            return
+        previous = self.delegations.get(identifier)
+        if previous is None:
+            if status != "queued" or run_id:
+                return
+        elif (
+            previous["status"] in _DELEGATION_TERMINAL
+            or previous["chat_session_id"] != root
+            or (previous["run_id"] and previous["run_id"] != run_id)
+            or (previous["status"] == "working" and status == "queued")
+            or (previous["status"] == "queued" and status in _DELEGATION_TERMINAL and run_id)
+            or (status == "completed" and previous["status"] != "working")
+        ):
+            return
+        metadata: dict[str, str] = {}
+        for key in ("agent", "provider", "model", "text"):
+            value = update.get(key)
+            if not isinstance(value, str):
+                return
+            metadata[key] = " ".join(_CONTROLS.sub("", value).split())[: 256 if key == "text" else 128]
+        if not metadata["agent"] or not metadata["text"]:
+            return
+        fields: Payload = {
+            **metadata,
+            "delegation_id": identifier,
+            "status": status,
+            "voice_session_id": self.identifier,
+            "chat_session_id": root,
+            "run_id": run_id,
+            "has_details": True,
+        }
+        details = self.delegation_details.get(identifier, _DelegationDetails())
+        detail_changed = details.capture(update, status, metadata["text"])
+        if (
+            not detail_changed
+            and previous is not None
+            and all(previous.get(key) == value for key, value in fields.items())
+        ):
+            return
+        text = str(fields.pop("text"))
+        self.append("delegation", text, **fields)
+        self.delegations[identifier] = dict(self.events[-1])
+        details.remember(self.events[-1])
+        self.delegation_details[identifier] = details
+        # Keep every admitted/pending task. Only completed history is disposable;
+        # a long task may finish after many later requests have come and gone.
+        terminal = sorted(
+            (item for item in self.delegations.values() if item["status"] in _DELEGATION_TERMINAL),
+            key=lambda item: cast("int", item["seq"]),
+        )
+        for item in terminal[:-MAX_COMPLETED_DELEGATIONS]:
+            removed = str(item["delegation_id"])
+            self.delegations.pop(removed)
+            self.delegation_details.pop(removed, None)
 
     def snapshot(self, after: int = 0) -> Payload:
         return {
@@ -93,6 +221,10 @@ class _Record:
             "events": [dict(event) for event in self.events if cast("int", event["seq"]) > after],
             "cursor": self.cursor,
             "message": self.message,
+            "context": dict(self.context),
+            "delegations": [
+                dict(item) for item in sorted(self.delegations.values(), key=lambda item: cast("int", item["seq"]))
+            ],
         }
 
 
@@ -114,6 +246,7 @@ class _Call:
     audio_out: _BrowserOutput | None = None
     browser: bool = False
     captions: Callable[[Payload], Awaitable[None]] | None = field(default=None, repr=False)
+    seed: LiveSeed = field(default_factory=LiveSeed, repr=False)
 
     def fail(self, message: str, status: int = 502) -> None:
         if not self.failure:
@@ -232,10 +365,12 @@ class LiveService:
         *,
         login_factory: Callable[[str], LoginVoiceConfig | None] | None = None,
         caption_factory: Callable[[str], Awaitable[Callable[[Payload], Awaitable[None]]]] | None = None,
+        context_factory: Callable[[str], Awaitable[LiveSeed]] | None = None,
     ) -> None:
         self._factory = factory
         self._login_factory = login_factory
         self._caption_factory = caption_factory
+        self._context_factory = context_factory
         self._active: dict[str, _Call] = {}
         self._records: dict[str, _Record] = {}
         self._closed = False
@@ -244,6 +379,36 @@ class LiveService:
     def active_session_id(self) -> str:
         """Discover the owned reservation, including provisioning and teardown."""
         return next(iter(self._active), "")
+
+    def delegation_reporter(self, session_id: str) -> Callable[[Payload], None]:
+        """Pin lifecycle observations to the original call, including after End."""
+        record = self._lookup(session_id)
+
+        def report(update: Payload) -> None:
+            record.delegation(update)
+            self._prune_records()
+
+        return report
+
+    async def delegation_details(self, session_id: str, delegation_id: str) -> Payload:
+        """Explicit inspector read; ordinary polling contains metadata only."""
+        record = self._lookup(session_id)
+        state = record.delegations.get(delegation_id)
+        details = record.delegation_details.get(delegation_id)
+        if state is None or details is None:
+            raise HTTPException(404, "Unknown Live delegation.")
+        return {**state, **details.snapshot()}
+
+    def _prune_records(self) -> None:
+        completed = [
+            key
+            for key, record in self._records.items()
+            if key not in self._active
+            and record.status in {"closed", "error"}
+            and all(item["status"] in _DELEGATION_TERMINAL for item in record.delegations.values())
+        ]
+        for key in completed[:-MAX_COMPLETED]:
+            del self._records[key]
 
     async def create(self, sdp: str, voice: str = "") -> Payload:
         if self._closed:
@@ -274,6 +439,7 @@ class LiveService:
                 "sdp": call.answer,
                 "model": call.record.model,
                 "voice": call.record.voice,
+                **({"context": dict(call.record.context)} if call.record.context else {}),
             }
         except asyncio.CancelledError:
             call.request_stop("Live session creation was cancelled.")
@@ -301,7 +467,12 @@ class LiveService:
             if call.stop.is_set() or call.failure or call.task.done():
                 await join_owned(call.task)
                 raise HTTPException(call.http_status, call.failure or "Live session creation was stopped.")
-            return {"session_id": identifier, "model": call.record.model, "voice": call.record.voice}
+            return {
+                "session_id": identifier,
+                "model": call.record.model,
+                "voice": call.record.voice,
+                **({"context": dict(call.record.context)} if call.record.context else {}),
+            }
         except asyncio.CancelledError:
             call.request_stop("Live session creation was cancelled.")
             await join_owned(call.task)
@@ -390,6 +561,7 @@ class LiveService:
 
     async def _run_created(self, call: _Call, sdp: str, voice: str) -> None:
         try:
+            await self._seed(call)
             if self._caption_factory is not None:
                 call.captions = await self._caption_factory(call.record.identifier)
             login = self._login_factory(voice) if self._login_factory is not None else None
@@ -397,15 +569,18 @@ class LiveService:
             call.fail("ChatGPT voice configuration is unavailable. Check your selected connection.", 503)
             call.record.transition("error", call.failure)
             self._active.pop(call.record.identifier, None)
-            completed = [key for key in self._records if key not in self._active]
-            for key in completed[:-MAX_COMPLETED]:
-                del self._records[key]
+            self._prune_records()
             call.ready.set()
             return
         if login is not None:
-            await self._run_login(call, sdp, login)
+            await self._run_login(call, sdp, replace(login, history=call.seed.history))
         else:
             await self._run(call, sdp, voice)
+
+    async def _seed(self, call: _Call) -> None:
+        if self._context_factory is not None:
+            call.seed = await self._context_factory(call.record.identifier)
+            call.record.context = call.seed.report()
 
     async def _run_login(self, call: _Call, sdp: str, config: LoginVoiceConfig) -> None:
         connection = ChatGPTLiveConnection(config)
@@ -462,9 +637,7 @@ class LiveService:
                 "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
             )
             self._active.pop(call.record.identifier, None)
-            completed = [key for key in self._records if key not in self._active]
-            for key in completed[:-MAX_COMPLETED]:
-                del self._records[key]
+            self._prune_records()
             call.ready.set()
 
     async def _run(self, call: _Call, sdp: str, voice: str) -> None:
@@ -473,6 +646,10 @@ class LiveService:
                 return
             try:
                 agent = self._factory(voice)
+                if self._context_factory is not None and agent.provider.live_config is not None:
+                    agent.provider.live_config = replace(
+                        agent.provider.live_config, history=call.seed.history, history_in_client_context=False
+                    )
             except HTTPException as error:
                 if error.status_code in {400, 422}:
                     call.fail("Invalid Live voice.", 422)
@@ -544,18 +721,23 @@ class LiveService:
                 "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
             )
             self._active.pop(call.record.identifier, None)
-            completed = [key for key in self._records if key not in self._active]
-            for key in completed[:-MAX_COMPLETED]:
-                del self._records[key]
+            self._prune_records()
             call.ready.set()
 
     async def _run_stream(self, call: _Call, voice: str) -> None:
         agent: Agent | None = None
         try:
             try:
+                await self._seed(call)
                 if self._caption_factory is not None:
                     call.captions = await self._caption_factory(call.record.identifier)
+                if call.stop.is_set():
+                    return
                 agent = self._factory(voice)
+                if self._context_factory is not None and agent.provider.live_config is not None:
+                    agent.provider.live_config = replace(
+                        agent.provider.live_config, history=call.seed.history, history_in_client_context=False
+                    )
                 config = agent.provider.live_config
                 if (
                     config is None
@@ -607,9 +789,7 @@ class LiveService:
                 "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
             )
             self._active.pop(call.record.identifier, None)
-            completed = [key for key in self._records if key not in self._active]
-            for key in completed[:-MAX_COMPLETED]:
-                del self._records[key]
+            self._prune_records()
             call.ready.set()
 
     async def _connected(self, call: _Call, observer: asyncio.Task[None]) -> None:

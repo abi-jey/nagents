@@ -16,6 +16,7 @@ from ..types import TextContent
 from ..types import ToolCall
 from ..types import ToolDefinition
 from ._validation import ProtocolError
+from ._validation import json_values_equal
 from ._validation import string_data
 from ._validation import tool_arguments
 
@@ -307,7 +308,7 @@ class StreamingToolCallAccumulator:
             if not tc["id"] or not tc["name"] or any(call.id == tc["id"] for call in result):
                 raise ProtocolError("Provider returned invalid or duplicate tool identities; no tools were released.")
             arguments = tool_arguments(tc["arguments"]) if tc["arguments"] else tc["initial_input"]
-            if tc["initial_input"] and arguments != tc["initial_input"]:
+            if tc["initial_input"] and not json_values_equal(arguments, tc["initial_input"]):
                 raise ProtocolError("Provider returned inconsistent tool block arguments.")
             result.append(
                 ToolCall(

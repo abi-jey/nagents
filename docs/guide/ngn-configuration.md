@@ -1,9 +1,9 @@
 # ngn configuration reference
 
 This page describes the current source-checkout `ngn` harness, which can differ
-from a published release or another coding assistant. The CLI is available in
-`v0.5.0`; see [release availability and installation](ngn-installation.md) before
-assuming every current field or behavior is present in that snapshot.
+from an installed release or another coding assistant. See
+[release availability and installation](ngn-installation.md) and the installed
+release notes before assuming every current field or behavior is available.
 
 ## Quick example
 
@@ -12,7 +12,7 @@ mapping. Named agent profiles are the only nested mapping:
 
 ```yaml
 provider: openai
-model: gpt-6-luna
+model: gpt-6-astra
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -231,7 +231,7 @@ or authentication-route selection. String choices are case-sensitive.
 | --- | --- | --- | --- |
 | `provider` | string | `"openai"` | A provider name or alias from the table below. |
 | `provider_id` | string | `""` | Optional named connection from `providers.yaml`; its endpoint, auth and key reference take precedence over flat provider fields. |
-| `model` | string | `"gpt-6-luna"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
+| `model` | string | `"gpt-6-astra"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
 | `api` | string | `"auto"` | `"auto"`, `"chat_completions"`, `"responses"`, `"messages"`, or `"completions"`. Selects the request protocol, not the authentication method. |
 | `base_url` | string | `""` | Empty selects the provider default. Otherwise an HTTP(S) API-prefix URL with a hostname, no whitespace, user/password, query parameters, or fragment. Do not include a generation-route suffix. Required explicitly for LiteLLM and Azure. |
 | `api_key_env` | string | `"OPENAI_API_KEY"` | Environment-variable name matching `[A-Za-z_][A-Za-z0-9_]*`, never a literal key. Changing provider does not automatically change this default. |
@@ -481,7 +481,7 @@ in these files, URLs, or command arguments.
 
 ```yaml
 provider: openai
-model: gpt-6-luna
+model: gpt-6-astra
 api: auto
 auth: api-key
 api_key_env: OPENAI_API_KEY
@@ -489,7 +489,9 @@ api_key_env: OPENAI_API_KEY
 
 For eligible ChatGPT/Codex access instead, leave `base_url` unset, use
 `auth: auto` or `"chatgpt"`, and follow [device login](ngn.md#openai-device-login).
-That route can select a different account-supported default model.
+New harness selections default to Astra on both routes; explicitly configured
+models stay selected. The default OpenAI endpoint uses Responses for Astra when
+`api: auto`; explicit API choices and custom endpoints retain their routing.
 
 ### OpenRouter
 

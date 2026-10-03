@@ -87,17 +87,17 @@ button:disabled {
   min-height: 0;
 }
 .app-shell.rail-collapsed { --live-chat-inset: 56px; }
-@media (min-width: 1120px) { main.voice-open > .conversation { padding-right: 304px; } }
-@media (max-width: 1119px) { main.voice-open > .conversation { padding-top: var(--live-dock-clearance, 150px); } }
 @media (max-width: 760px) { .app-shell { --live-chat-inset: 0px; } }
 .live-launch.is-open { background: #30473e; border-color: var(--accent-teal); }
-.entry.live_caption { position: relative; padding: 12px 16px; margin-block: 12px; border-left: 2px solid var(--accent-teal); border-radius: 0 12px 12px 0; background: color-mix(in srgb, var(--accent-teal) 5%, var(--surface-reading)); }
-.entry.live_caption[data-speaker="user"] { border-left-color: var(--accent-violet); background: color-mix(in srgb, var(--accent-violet) 5%, var(--surface-reading)); }
+.entry.live_caption { position: relative; padding: 14px 17px; margin-block: 12px; border: 1px solid color-mix(in srgb, var(--accent-teal) 12%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--accent-teal) 3%, var(--surface-reading)); }
+.entry.live_caption[data-speaker="user"] { border-color: color-mix(in srgb, var(--accent-violet) 12%, transparent); background: color-mix(in srgb, var(--accent-violet) 3%, var(--surface-reading)); }
 .chat-live-caption-label { display: flex; align-items: center; gap: 9px; }
-.chat-live-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent); border-radius: 10px; color: var(--accent-teal); font-size: 10px; font-weight: 500; letter-spacing: .04em; }
+.chat-live-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--accent-teal) 24%, transparent); border-radius: 10px; color: var(--accent-teal); font-size: 11px; font-weight: 500; }
 .live_caption[data-speaker="user"] .chat-live-badge { color: var(--accent-violet); border-color: color-mix(in srgb, var(--accent-violet) 30%, transparent); }
 .chat-live-caption-label time { color: var(--text-secondary); margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; opacity: .8; }
 .chat-live-caption-text { margin: 7px 0 0; color: var(--text-reading); font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.entry-content a, .chat-live-caption-text a { color: var(--accent-teal); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--accent-teal) 55%, transparent); overflow-wrap: anywhere; }
+.entry-content a:hover, .chat-live-caption-text a:hover { color: var(--text-reading); text-decoration-color: currentColor; }
 .chat-live-caption-anchor { position: absolute; top: 0; width: 1px; height: 1px; pointer-events: none; }
 main {
   position: relative;
@@ -940,7 +940,7 @@ code {
   white-space: nowrap;
   flex: 1;
 }
-.composer-area form {
+.composer-area > form {
   border: 1px solid var(--border-group);
   border-radius: 8px;
   background: var(--surface-reading);
@@ -948,7 +948,7 @@ code {
   box-shadow: none;
   transition: none;
 }
-.composer-area form:focus-within {
+.composer-area > form:focus-within {
   outline: none;
   border-color: var(--focus);
   box-shadow: 0 0 0 1px var(--focus);
@@ -1339,5 +1339,23 @@ button.deny:hover:not(:disabled) {
 .upload-drafts { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0; }
 .upload-draft { display: flex; flex-direction: column; gap: 0.25rem; max-width: 12rem; overflow-wrap: anywhere; font-size: 0.8rem; }
 .upload-draft img { max-width: 10rem; max-height: 6rem; object-fit: contain; }
-.attachment-picker { font-size: 0.8rem; max-width: 12rem; }
-.attachment-picker input { max-width: 100%; }
+.composer-tools { display: flex; align-items: center; gap: 6px; margin-right: auto; }
+.composer-tools:empty { display: none; }
+.attachment-picker, .composer-tools .live-launch { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 7px 11px; border: 1px solid #827a7040; border-radius: 12px; background: #ffffff03; color: var(--text-secondary); font-size: 13px; line-height: 1.3; white-space: nowrap; cursor: pointer; transition: background 140ms, border-color 140ms, color 140ms; }
+.attachment-picker:hover, .composer-tools .live-launch:hover:not(:disabled) { color: var(--text-reading); background: #ffffff09; border-color: #b8b2a760; }
+.attachment-picker:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.attachment-picker:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.attachment-picker input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.composer-tools .live-launch.is-open { color: #c6e6d4; border-color: #a9d9c45c; background: #a3dcc514; }
+.composer-tools .live-launch > span { display: inline; }
+@media (max-width: 760px) { .attachment-picker, .composer-tools .live-launch { min-height: 44px; padding-inline: 10px; } }
+.draft-recovery { margin-bottom: 10px; padding: 12px 14px; border: 1px solid var(--border-group); border-radius: 12px; background: var(--surface-reading); color: var(--text-reading); font-size: 13px; }
+.draft-recovery > p { margin: 0 0 10px; line-height: 1.5; }
+.draft-recovery-item { display: flex; align-items: flex-start; gap: 12px; }
+.draft-recovery-item + .draft-recovery-item { margin-top: 10px; }
+.draft-recovery-item details { min-width: 0; flex: 1; }
+.draft-recovery-item summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.draft-recovery-item summary span { display: block; margin: 4px 0 0 16px; font-weight: 400; color: var(--text-secondary); }
+.draft-recovery-item textarea { width: 100%; box-sizing: border-box; margin-top: 8px; resize: vertical; padding: 10px; border: 1px solid var(--border-control); border-radius: 8px; background: var(--surface-control); color: var(--text-reading); font: inherit; }
+.draft-recovery-item > button { flex: 0 0 auto; font-size: 12px; }
+@media (max-width: 520px) { .draft-recovery-item { flex-direction: column; gap: 8px; } .draft-recovery-item details { width: 100%; } }

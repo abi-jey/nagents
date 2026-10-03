@@ -6,9 +6,9 @@ import { LiveSettingsController, settingsApi, settingsValidation } from "./setti
 import type { LiveSettingsInput, LiveSettingsSnapshot } from "./types.js";
 
 const settings: LiveSettingsSnapshot = {
-  values: { enabled: false, backend_mode: "assistant", provider: "openai", model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", base_url: "" },
+  values: { enabled: false, backend_mode: "assistant", provider: "openai", model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", base_url: "", instructions: "", context_mode: "recent" },
   revision: "a".repeat(64), key_configured: false, providers: ["openai", "openai_compatible", "azure_openai_compatible_v1"], voices: ["marin", "cedar"],
-  scope: "workspace", global_preferences: { enabled: false, backend_mode: "assistant", model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin" },
+  scope: "workspace", global_preferences: { enabled: false, backend_mode: "assistant", model: "gpt-live-1", backend_model: "gpt-5.6-luna", voice: "marin", instructions: "", context_mode: "recent" },
   overrides: {}, origins: { enabled: "global", backend_mode: "global", model: "global", backend_model: "global", voice: "global" },
 };
 function deferred<T>() {
@@ -87,6 +87,59 @@ test("invalid voice model stops before a settings write", async () => {
   let writes = 0;
   const controller = new LiveSettingsController({ read: async () => settings, save: async () => { writes++; return settings; } });
   await controller.load(); controller.override("model", true); controller.edit({ model: "bad model" }); await controller.save(); assert.equal(writes, 0);
+  controller.dispose();
+});
+
+test("voice instructions and starting context save as independent scoped overrides", async () => {
+  const writes: LiveSettingsInput[] = [];
+  const inherited: LiveSettingsSnapshot = { ...settings, values: { ...settings.values, instructions: "Speak calmly.", context_mode: "summary" }, global_preferences: { ...settings.global_preferences, instructions: "Speak calmly.", context_mode: "summary" } };
+  const controller = new LiveSettingsController({ read: async () => inherited, save: async body => { writes.push(body); return inherited; } });
+  await controller.load();
+  controller.override("instructions", true);
+  controller.edit({ instructions: "Keep it brief.\nParlez doucement. 🌍" });
+  controller.override("context_mode", true);
+  controller.edit({ context_mode: "none" });
+  await controller.save();
+  assert.deepEqual(writes[0], { scope: "workspace", revision: settings.revision, overrides: { instructions: "Keep it brief.\nParlez doucement. 🌍", context_mode: "none" } });
+  controller.override("instructions", true); controller.edit({ instructions: "" });
+  controller.override("context_mode", true); controller.edit({ context_mode: "none" });
+  controller.override("instructions", false); controller.override("context_mode", false);
+  assert.equal(controller.getSnapshot().values?.instructions, "Speak calmly.");
+  assert.equal(controller.getSnapshot().values?.context_mode, "summary");
+  await controller.save();
+  assert.deepEqual(writes[1], { scope: "workspace", revision: settings.revision, overrides: {} });
+  controller.dispose();
+});
+
+test("voice instruction validation counts Unicode code points and enforces the UTF-8 budget before saving", async () => {
+  assert.equal(settingsValidation({ ...settings.values, instructions: "é".repeat(6000) }), "");
+  assert.equal(settingsValidation({ ...settings.values, instructions: "🌍".repeat(3000) }), "");
+  assert.match(settingsValidation({ ...settings.values, instructions: "x".repeat(6001) }), /6,000 characters/);
+  assert.match(settingsValidation({ ...settings.values, instructions: "🌍".repeat(3001) }), /12 KB/);
+  assert.match(settingsValidation({ ...settings.values, instructions: "\ud800" }), /valid Unicode/);
+  let writes = 0;
+  const controller = new LiveSettingsController({ read: async () => settings, save: async () => { writes++; return settings; } });
+  await controller.load(); controller.override("instructions", true); controller.edit({ instructions: "🌍".repeat(3001) });
+  assert.equal(await controller.save(), undefined);
+  assert.equal(writes, 0);
+  assert.match(controller.getSnapshot().error, /12 KB/);
+  assert.equal(controller.getSnapshot().values?.instructions, "🌍".repeat(3001), "invalid text remains available for editing");
+  controller.dispose();
+});
+
+test("older settings snapshots acquire additive behavior defaults without changing saved model choices", async () => {
+  const values = { ...settings.values }, global_preferences = { ...settings.global_preferences };
+  delete values.instructions; delete values.context_mode;
+  delete global_preferences.instructions; delete global_preferences.context_mode;
+  const older = { ...settings, values, global_preferences };
+  const controller = new LiveSettingsController({ read: async () => older, save: async () => older });
+  await controller.load();
+  assert.equal(controller.getSnapshot().values?.instructions, "");
+  assert.equal(controller.getSnapshot().values?.context_mode, "recent");
+  assert.equal(controller.getSnapshot().values?.backend_model, "gpt-5.6-luna");
+  controller.override("instructions", true); controller.edit({ instructions: "Temporary" });
+  controller.override("instructions", false);
+  assert.equal(controller.getSnapshot().values?.instructions, "");
   controller.dispose();
 });
 

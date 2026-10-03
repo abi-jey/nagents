@@ -18,6 +18,7 @@ from nagents.tui.screens import ApprovalModal
 from nagents.tui.widgets import OUTPUT_LIMIT
 from nagents.tui.widgets import Composer
 from nagents.tui.widgets import ToolCard
+from nagents.tui.widgets import format_value
 from nagents.types import Message
 from nagents.types import ToolCall
 from tests.support.hang_guard import HANG_GUARD
@@ -30,6 +31,51 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.types import ToolArguments
+
+
+@pytest.mark.parametrize(
+    "name,result,error,label,failed",
+    [
+        ("shell", {"output": "check", "exit_code": 7, "timed_out": False}, None, "exit 7", True),
+        ("shell", {"output": "partial", "exit_code": -15, "timed_out": True}, None, "timed out", True),
+        ("shell", {"output": "ok", "exit_code": 0, "timed_out": False}, None, "complete", False),
+        ("shell", {"timed_out": True}, "Framework failure", "failed", True),
+        ("shell", "{'exit_code': 7, 'timed_out': True}", None, "complete", False),
+        ("read_file", {"exit_code": 7, "timed_out": True}, None, "complete", False),
+    ],
+)
+def test_structured_command_outcomes_preserve_inspection_and_raw_evidence(
+    tmp_path: Path, name: str, result: dict[str, object] | str, error: str | None, label: str, failed: bool
+) -> None:
+    async def scenario() -> None:
+        backend = FakeHarness(tmp_path)
+        app = make_app(backend)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await idle(app, pilot)
+            await app._event(ToolCallEvent(id="outcome", name=name, arguments={"command": "check"}))
+            await pilot.pause()
+            card = app.query_one(ToolCard)
+            title = card.query_one("CollapsibleTitle", Static)
+            title.focus()
+            card.collapsed = False
+            await app._event(ToolOutput("outcome", name, "Original streamed output\n"))
+            await app._event(ToolResultEvent(id="outcome", name=name, result=result, error=error, duration_ms=1250))
+            await pilot.pause()
+            assert f"/  {label}  1.25s" in str(title.content)
+            assert card.has_class("failed") is failed
+            assert card.has_class("complete") is not failed
+            assert not card.collapsed
+            assert app.focused is title
+            assert "Original streamed output\n" in card.output_text
+            if error:
+                assert error in card.output_text
+            elif isinstance(result, str):
+                assert result in card.output_text
+            else:
+                assert format_value(result) in card.output_text
+            assert not backend.running and not backend.cancelled
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("outcome", ["complete", "failed", "cancelled"])

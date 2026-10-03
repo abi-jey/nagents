@@ -36,6 +36,10 @@ export function executionStatus(entry: Entry): { label: string; tone: string } {
   const saved = entry.state === "Recorded result";
   if (entry.error) return { label: saved ? "Saved error" : "Error", tone: "error" };
   if (saved) return { label: "Saved result", tone: "neutral" };
+  if (entry.kind === "tool" && entry.title === "shell" && entry.state === "Completed" && entry.commandOutcome) {
+    if (entry.commandOutcome.kind === "timed_out") return { label: "Timed out", tone: "error" };
+    if (entry.commandOutcome.exitCode !== 0) return { label: `Exit ${entry.commandOutcome.exitCode}`, tone: "error" };
+  }
   const state = entry.state || "Recorded activity";
   if (state === "Waiting for approval") return { label: "Needs approval", tone: "pending" };
   if (["Error", "Failed", "Interrupted"].includes(state)) return { label: state, tone: "error" };
@@ -47,6 +51,14 @@ export function executionStatus(entry: Entry): { label: string; tone: string } {
   };
   const pending = ["Waiting for approval", "Approval denied", "Awaiting execution result", "No result recorded", "Disconnected", "Cancelled"].includes(state);
   return { label: state === "Awaiting execution result" ? "Awaiting result" : state, tone: pending ? "pending" : "neutral" };
+}
+
+export function commandOutcomeDescription(entry: Entry): string {
+  if (entry.kind !== "tool" || entry.title !== "shell" || entry.error || entry.state !== "Completed" || !entry.commandOutcome) return "";
+  const outcome = entry.commandOutcome;
+  return outcome.kind === "timed_out"
+    ? `Command timed out${outcome.exitCode === undefined ? "" : ` (exit code ${outcome.exitCode})`}`
+    : `Command exited with code ${outcome.exitCode}`;
 }
 
 export function executionDuration(ms: number): string {

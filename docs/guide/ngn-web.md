@@ -6,10 +6,19 @@ per-call approvals. It does not use the older `nagents.server` application.
 
 ## Source Availability
 
-This guide describes the **current source checkout**, not the published `v0.5.0`
-release. That release includes the existing ngn CLI, Harness, TUI, and headless
-commands, but does **not** include `ngn serve` or the `web` extra. Install this
-feature from the checkout using the commands below.
+Published distributions include `ngn serve`, the `web` extra, and built
+frontend assets, verified in [v0.15.0](https://github.com/abi-jey/nagents/releases/tag/v0.15.0).
+To use a published wheel in your active virtual environment:
+
+```bash
+python -m pip install 'nagents[web]'
+ngn serve --demo --workspace /path/to/project
+```
+
+A published wheel does not need Node to serve its bundled frontend. This guide
+follows the **current source checkout** and may describe newer features; compare
+your installed version with the [release notes](https://github.com/abi-jey/nagents/releases).
+For development, use the editable source workflow below.
 
 ## Start From Source
 
@@ -66,7 +75,7 @@ can use a global connection or its own connection; **Use global default** remove
 the workspace selection. Choosing another switches chat's
 provider; trusted agent profiles may also bind to a named provider. Voice
 models, backend mode and voice are separate Global/Workspace preferences in
-**GPT-Live → Voice settings**. Select a voice connection there or follow the active
+the settings icon beside **Voice**. Select a voice connection there or follow the active
 chat connection. ChatGPT/Codex login supports browser voice through WebRTC;
 API-key and Foundry connections use the server audio relay. The **Main assistant**
 voice backend delegates reasoning to the selected workspace agent; **Separate hosted
@@ -168,15 +177,24 @@ still stored locally in the Harness data directory.
 ### Workspace Navigation
 
 The sidebar keeps **New session** above an independently scrolling session list.
+Repeated **New session** clicks reuse the selected unused draft. `ngn serve`
+discards abandoned, unnamed drafts that have no messages, captions, uploads,
+queued input, task activity, or other session references. Drafts with an active browser subscription are protected while the server
+is running. `--continue` prefers meaningful history over an abandoned
+blank draft; an explicit session ID is still honored. Used conversations and
+named sessions remain available.
 **Settings**, **Channels**, **Tools**, **Agent Designer**, **Trash**, and the workspace information overlay stay
 in the bottom section, so they remain reachable with a long conversation history. On narrow
 screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
 it and returns focus to the navigation toggle. Dialogs opened from the drawer
 return to their controls without losing the open navigation.
 
-Unsent text belongs to its session. Switching conversations or creating a new one
-shows that conversation's own draft, and switching back recovers the text. Drafts
-are held in this browser tab's memory; reloading or closing the tab discards them.
+Unsent text belongs to its session. Switching conversations shows that
+conversation's own draft. If an unused session is discarded while this tab still
+has unsent text for it, **Recover draft** opens a blank conversation and restores
+the text without sending it. The original remains readable if recovery fails or
+another draft occupies the destination; existing text is never overwritten.
+Drafts are held in this browser tab's memory; reloading or closing the tab discards them.
 The composer stays editable while a message is being admitted. A late server
 acknowledgement clears only the unchanged submitted draft, preserving newer typing.
 Message badges distinguish **Sending…**, confirmed **Queued**, and **Delivery
@@ -319,6 +337,10 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   recognized, the observed state, and measured duration when available. Channel
   sends show the channel and destination. On narrow screens the target moves
   beneath the name. Full tool names and exact inputs remain in the inspector.
+  Structured shell results show **Exit 7** (with the actual nonzero code) or
+  **Timed out** when appropriate. These describe the command's outcome; the
+  enclosing task can continue and recover. Saved result strings are not parsed
+  to infer an exit status.
   Opening a tool uses a single tabbed inspector: **Result**, **Output** (when
   distinct streamed output exists), **Inputs**, and **Details**. Results are
   selected first when available; inspecting an in-progress call keeps the reader's
@@ -451,9 +473,10 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
-| `POST live/sessions` | `{voice?: string, revision, session_id, sdp?: string}` starts a GPT-Live call. ChatGPT login requires an SDP offer and returns an SDP answer. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, sdp?}`. |
+| `POST live/sessions` | `{voice?: string, revision, session_id, sdp?: string}` starts a GPT-Live call. ChatGPT login requires an SDP offer and returns an SDP answer. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, sdp?, context?}`. |
 | `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
+| `GET live/sessions/{session_id}/delegations/{delegation_id}` | On-demand request, dispatched input, result, and application event timeline for one delegation; authenticated and bounded. |
 | `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
 
 The run stream uses the CLI's normalized `schema_version: 1` event names and
@@ -813,15 +836,77 @@ offline demo/custom persistence adapters are outside this input path. See
 
 ### GPT-Live Voice Conversations
 
-The **GPT-Live** button opens a floating voice control beside the current chat,
-with an animated orb and a compact layout on smaller screens. The conversation
-and composer remain usable while it is open. Start voice explicitly and grant
-microphone access when prompted. Microphone mute and speaker mute are independent;
-muting either does not end the call. Use **End voice** to finish.
+The **Voice** button beside **Attach** starts voice in the current chat. Grant
+microphone access when prompted. A floating, interactive sphere sits beside the
+composer controls, responding to microphone and playback levels. Click it to mute
+or unmute your microphone; its glow and shape reflect the connection state.
+The chat stays visible and typing remains available.
 
+Status, elapsed time, microphone mute, speaker mute, **Audio**, and **Stop** live
+in the composer. Mute controls are independent and do not end voice. **Stop**
+finishes the connection. The settings icon beside **Voice** opens device and voice
+preferences inline without starting the microphone. Device pickers stay compact;
+voice defaults and connection options expand under **Voice & connection**. During
+voice, **Audio** expands
+the same settings in the composer; expanding or collapsing them keeps voice connected.
+Reduced-motion preferences disable the sphere's motion.
 Speech captions appear in the same chat, marked **Live** with their speaker and
 call-relative time. Ordinary messages and assistant work retain their usual
 presentation. Captions remain visible after ending the call or reloading the page.
+A composer status line shows the handoff when the main assistant takes a request:
+queued, working, completed, stopped, or failed.
+**View in chat** opens the associated run's progress and result. Muting or ending
+voice does not imply that an admitted assistant task has stopped.
+**Request & events** expands inline with the received voice payload, the
+actual input dispatched to the assistant, its result, and a processing timeline.
+A request picker appears when there is more than one request. Individual event
+payloads and request identifiers can be expanded. These details
+load only while the inspector is open; they are not included in every status poll.
+
+#### Chat Context And Voice Instructions
+
+Voice receives a bounded text handoff from the selected chat. It never copies the
+entire model context, tool outputs, attachments, or private reasoning. Open
+**Audio → Voice & connection** to choose **Starting context**:
+
+- **Recent chat + saved summary** (default) includes recent user/assistant text,
+  any existing compaction summary, and saved speech captions after the current
+  compaction boundary. Startup history is separate from new caller speech, so
+  starting voice does not replay old tasks.
+- **Prepare a concise summary** asks the selected main assistant's provider for a
+  read-only brief with no tools. It uses a bounded source snapshot, then includes
+  the brief and recent turns. Generation has a 15-second deadline and a separate
+  2-second cleanup grace. Failure falls back to recent text and a saved summary,
+  with the fallback shown in **Chat context**. Briefs are cached in memory for up
+  to five minutes against the exact chat snapshot, provider identity, and model.
+- **Start without chat context** sends no saved history at startup. The main
+  assistant can still consult its conversation when the caller requests help.
+
+The final seed contains at most 14 items and 7,000 UTF-8 bytes of text, leaving
+headroom under GPT-Live's startup-input limit. The optional summary source uses
+at most 128 messages plus 512 saved caption fragments, bounded together to
+96,000 UTF-8 bytes. It explicitly marks missing, compacted, or clipped material;
+a generated brief is never presented as the complete conversation. **Chat brief**
+or **Chat context** beside the voice timer explains what was included.
+
+GPT-Live can ask the main assistant for an earlier detail or a fuller recap through
+its existing client-delegation path. That assistant keeps the authoritative
+history, tools, and approval rules. The voice frontend receives the concise result;
+it does not gain direct tool execution. Hosted voice remains separate and does
+not receive the workspace chat's seed.
+
+**Voice instructions** configures speaking style and behavior, independently of
+the main assistant's instructions. The text is saved with the existing Global or
+Workspace preferences; uncustomized workspace fields inherit the global value.
+It is combined with the application's voice/delegation instructions at the next
+voice start. Active conversations keep their startup instructions. Instructions
+are limited to 6,000 Unicode characters and 12,000 UTF-8 bytes; oversized input
+is rejected rather than silently truncated. History remains data, separate from
+these trusted, explicitly configured instructions.
+
+The public transport uses `session.input`; ChatGPT login uses its verified
+`initial_items` contract. See OpenAI's [session context guide](https://developers.openai.com/api/docs/guides/live-conversations)
+and [delegation guide](https://developers.openai.com/api/docs/guides/live-delegation).
 
 #### Voice Settings
 
@@ -830,7 +915,7 @@ presentation. Captions remain visible after ending the call or reloading the pag
    connection, including ChatGPT login, Anthropic or Gemini, active.
 3. For an OpenAI connection, choose **ChatGPT login** or **Local Codex login** to
    use your existing account. API-key connections and Foundry Entra ID remain
-   supported. Open **GPT-Live → Voice settings**.
+   supported. Use the settings icon beside **Voice**, or **Audio** during voice.
 4. Select **Global** for defaults shared by workspaces or **This workspace** to
    override only chosen fields. Select the **Voice connection**, or leave it set
    to follow the active provider connection. Set **Enable GPT-Live**, **GPT-Live model**,
@@ -841,24 +926,33 @@ presentation. Captions remain visible after ending the call or reloading the pag
    and approvals remain in charge, and the Live service handles speech only.
    **Hosted Responses** remains an option for an independent voice conversation;
    its hosted backend model is used only in that mode.
-5. Select the chat you want to talk to, then connect when the panel reports ready.
+5. Select the chat you want to talk to, then choose **Voice** to start.
 
 Provider endpoint and authentication are edited in **Provider connections**.
 Defaults are disabled, voice model `gpt-live-1`, the library's
-`LiveConfig.backend_model` (`gpt-5.6-luna`), and voice `marin` for API-key calls.
+`LiveConfig.backend_model` (`gpt-6-astra`), and voice `marin` for API-key calls.
 ChatGPT login uses `gpt-live-1-codex` for the default voice model and defaults to
 `cove`; its available voices are shown in the selector. The selected connection's
 supported voice is resolved without changing your saved defaults for other
-connections. Voice settings survive server restarts and apply to new calls.
+connections. Voice, model, and connection settings survive server restarts and
+apply to new sessions.
 
-**Voice settings → On this device** selects the microphone and speaker. Both start
+**Audio** in the composer selects the microphone and speaker. Both start
 at **System default**, allowing the browser to use your device's default input and
-output. Explicit choices are saved only in this browser and apply to the next
-call. **Show devices** requests microphone permission to reveal device names;
+output. During voice, device changes apply immediately without starting another
+GPT-Live session. Microphone swaps preserve mute and release the old microphone
+after the replacement succeeds; a failed switch retains the previous device.
+Choosing **System default** restores default routing. Successful choices are
+saved only in this browser. Before voice starts, choices apply to the next session.
+**Show devices** requests microphone permission to reveal device names;
 opening settings alone does not capture audio. Refresh the list after connecting
-hardware. Speaker selection depends on browser support; unsupported browsers use
+hardware. Refreshing during voice never starts an extra microphone capture.
+Speaker selection depends on browser support; unsupported browsers use
 the system output. A saved device that is unavailable must be changed or reset to
-**System default** before starting a call.
+**System default** before starting a call. If an explicitly selected speaker
+disappears during voice, a notice offers **Use system default** for the current
+call; output is never silently rerouted. Losing the active microphone stops
+voice with a reconnect message. Choose a working microphone before retrying.
 
 ChatGPT voice uses the signed-in account through browser WebRTC and a server-owned
 Live control connection. It requires **Main assistant** mode. Local Codex login
@@ -938,7 +1032,7 @@ All Live routes use the existing same-origin, Host, fetch-metadata, and
 `X-Ngn-Token` checks. Writes require the Origin and JSON content-type headers.
 `GET /api/live` returns `{available, reason, provider, model, backend_model,
 backend_mode, assistant, voice, voices, active_session_id, revision, enabled,
-key_configured, voice_auth, transport}`; `voice_auth` identifies `chatgpt`,
+key_configured, voice_auth, transport, context_mode}`; `voice_auth` identifies `chatgpt`,
 `api-key` or `entra`, and `transport` is `webrtc` or `websocket`.
 `key_configured` indicates available authentication, including a login; it does
 not imply an API key is stored. `assistant` contains the selected chat provider/model/profile,
@@ -949,7 +1043,8 @@ when locally ready and the active ID is empty when there is no active call.
 `global_preferences`, the workspace `overrides`, per-field `origins`, connection
 reference and a 64-character hexadecimal revision. The workspace's missing
 override fields inherit global values. Voice preferences are `{enabled,
-connection_id, backend_mode, model, backend_model, voice}`; an empty `connection_id`
+connection_id, backend_mode, model, backend_model, voice, instructions,
+context_mode}`; an empty `connection_id`
 follows the active chat connection. An explicit ID selects a voice connection
 without changing the assistant. `backend_model` is used in hosted
 mode only. The provider and base URL in `values` describe the selected connection
@@ -993,13 +1088,49 @@ disconnect ends and finalizes the call. Session creation accepts no connection
 override, arbitrary command, or tool configuration input; connection changes
 go through the revisioned settings route.
 
-Snapshots contain `{session_id, status, model, voice, events, cursor}` and may
-include a safe `message`. Status is `connecting`, `connected`, `closing`, `closed`,
-or `error`. Events have `seq` and a normalized `type` (`transcript`, `status`, or
+Snapshots contain `{session_id, status, model, voice, events, cursor, delegations}` and may
+include a safe `message` and startup `context` metadata. The context reports its
+mode and method, bound chat ID, source fingerprint, included text counts/bytes,
+and omission indicators; it does not return the seed text. Status is `connecting`,
+`connected`, `closing`, `closed`,
+or `error`. Events have `seq` and a normalized `type` (`transcript`, `delegation`, `status`, or
 `error`); transcript records include `speaker`, `text`, and timing when available.
 Pass the last cursor as `after`, an integer in `0..9007199254740991`. This is the
 only allowed Live query parameter; duplicate cursors and tokens in URLs are
 rejected. Polling returns bounded retained observations, not a durable replay log.
+
+Delegation details use the same call/chat/run identities and explicitly identify
+`source: "app_callback"`. Request and dispatched-input previews are capped at
+32,768 characters each; result previews at 16,384. Each preview includes its
+original character count and a truncation flag. The inspector retains the most
+recent eight application events per request, with a timeline truncation flag.
+Provider authentication, SDP, and raw transport traffic are not part of this
+endpoint. Details may expire with the bounded ended-session cache; durable
+assistant results remain in normal chat history.
+
+Main-assistant delegation records contain `delegation_id`, `voice_session_id`,
+`chat_session_id`, `run_id`, `status`, `agent`, `provider`, `model`, `text`, and
+`seq`. The bridge issues an application delegation ID when it receives each handler
+request. It binds that ID to the original call and chat; `run_id` becomes available
+when the main assistant accepts the work. The lifecycle is `queued` → `working`
+→ `completed`, `failed`, or `cancelled`; a queued request can also end before
+admission. Terminal state comes from the actual assistant task, never caption
+timing or audio playback. Snapshots retain all active requests and the most recent
+32 terminal records independently of the bounded event stream.
+
+The voice layer owns media and spoken delivery; the normal web assistant owns
+reasoning, tools, approvals, and durable outcomes. The bridge waits up to 60 seconds
+for an available assistant and up to 300 seconds for a spoken result, within the
+outer voice timeout. If speech stops waiting while an admitted task continues,
+it directs the caller to chat rather than reporting task failure. After a call
+ends, the UI points to chat for further progress; live delegation observations
+are not durable task history. Hosted Responses does not emit this main-assistant
+handoff lifecycle.
+
+These IDs correlate work; they do not provide business-action idempotency.
+Duplicate upstream delegation IDs are suppressed, but distinct IDs have no
+authoritative speech-turn boundary. Assistant completion confirms the task's
+outcome, not that its spoken answer reached the speaker.
 
 The **Context compaction** section in Settings selects the automatic trigger:
 the provider default, a token window, a message count, or off. The choice is a
@@ -1200,8 +1331,8 @@ revision, or browser draft, and it does not take over a running task or approval
 Selecting and saving a model remains a separate settings action. Manual model-ID
 entry continues to work when discovery fails or is unsupported. IDs do not prove
 capabilities or entitlement; a later generation request remains authoritative.
-This endpoint and the library method are source-checkout features, not part of
-the published `v0.5.0` web/API surface.
+The endpoint and library method are included in v0.15.0. Older installations
+may need an update; consult the release notes for your selected distribution.
 
 ## Development Checks
 
