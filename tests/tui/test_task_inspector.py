@@ -163,7 +163,8 @@ def test_large_tree_scrolls_without_losing_completed_agents() -> None:
             assert len(tree.task_nodes) == 30
             tree.focus()
             await pilot.press("end")
-            await pilot.pause()
+            # End animates scrolling; CPU idle does not guarantee completion.
+            await pilot.wait_for_scheduled_animations()
             assert tree.cursor_node is not None and tree.cursor_node.data == "29"
             assert tree.scroll_y > 0
             await pilot.press("enter")

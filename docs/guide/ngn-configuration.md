@@ -127,7 +127,28 @@ providers:
     base_url: https://resource.openai.azure.com/openai/v1
     api: responses
     auth: entra
+    request_timeout: 120.0
 ```
+
+`request_timeout` is the total deadline, in seconds, for each ngn-issued model
+HTTP request on this named connection, including connection setup and streaming
+response reads. It accepts positive finite integers or decimals; omission keeps
+the existing **120-second** default. Booleans, numeric strings, zero, negative
+values, and nonfinite values are rejected. There is no additional upper cap.
+
+The same setting applies to API-key, ChatGPT/Codex, and Foundry/Entra model
+requests, including agents and native children selecting this connection.
+Editing an active connection replaces its HTTP client so the new deadline takes
+effect on subsequent requests. Global and workspace connection scope works as
+for its other fields. Model catalogs retain their separate cap of
+`min(request_timeout, 30)` seconds.
+
+This field does not change shell limits, whole-run or child deadlines, Live
+session duration, Live backend waiting limits, or authentication SDK deadlines.
+Existing retries remain unchanged; retries and backoff can make a generation
+last longer than one request deadline. There is no top-level Harness YAML field
+or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's YAML,
+web provider editor, or TUI `/provider` editor.
 
 The UI generates a fresh revision on save. Workspace YAML uses the same schema:
 its `active` may reference a global connection, and an empty `active` inherits

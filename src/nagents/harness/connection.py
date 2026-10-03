@@ -48,6 +48,7 @@ class _EntraFoundryProvider(FoundryProvider):
             scope=profile.scope,
             api="responses" if profile.api == "auto" else profile.api,
             live_config=live,
+            timeout=profile.request_timeout,
         )
 
     async def close(self) -> None:
@@ -67,6 +68,7 @@ class _EnvFoundryProvider(FoundryProvider):
             model=model,
             api_key="deferred-until-live-request",
             api="responses" if profile.api == "auto" else profile.api,
+            timeout=profile.request_timeout,
         )
 
     def _key(self) -> None:
@@ -105,7 +107,7 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
     """Use the library's provider-specific discovery and keep Azure SDK optional."""
     profile.validate()
     if config.demo:
-        return HarnessProvider(config)
+        return HarnessProvider(config, request_timeout=profile.request_timeout)
     if profile.auth == "entra":
         try:
             from azure.identity.aio import DefaultAzureCredential
@@ -115,16 +117,16 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
     if profile.kind in {"foundry", "azure_openai_compatible_v1"}:
         return _EnvFoundryProvider(profile, config.model)
     if profile.kind == "openai" and profile.auth == "chatgpt":
-        return OpenAIProvider(auth.credentials, model=config.model)
+        return OpenAIProvider(auth.credentials, model=config.model, timeout=profile.request_timeout)
     if profile.kind == "openai" and profile.auth in {"codex", "auto"}:
         if profile.auth == "auto" and auth.logged_in():
-            return OpenAIProvider(auth.credentials, model=config.model)
+            return OpenAIProvider(auth.credentials, model=config.model, timeout=profile.request_timeout)
         if profile.auth == "codex" and not _codex_files_exist():
             raise CodexConfigError("Local Codex configuration was not found; sign in with Codex first")
         if profile.auth == "auto" and not _codex_files_exist():
-            return HarnessProvider(replace(config, auth="api-key"), None)
+            return HarnessProvider(replace(config, auth="api-key"), None, request_timeout=profile.request_timeout)
         try:
-            return OpenAIProvider(model=config.model)
+            return OpenAIProvider(model=config.model, timeout=profile.request_timeout)
         except CodexConfigError:
             if profile.auth == "codex":
                 raise
@@ -135,7 +137,7 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
             # No usable Codex login: use the named environment variable lazily.
     # No fallback to the legacy single-login key for named connections.
     selected = replace(config, auth="api-key") if config.auth != "api-key" else config
-    return HarnessProvider(selected, None)
+    return HarnessProvider(selected, None, request_timeout=profile.request_timeout)
 
 
 def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str, model: str) -> Provider:
@@ -152,12 +154,13 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str,
             model=model,
             api_key=key,
             live_config=options,
+            timeout=profile.request_timeout,
             retry_config=RetryConfig(max_retries=0),
         )
     if profile.kind not in {"openai", "openai_compatible"}:
         raise ValueError("This provider does not support GPT-Live")
     if profile.kind == "openai" and profile.auth in {"codex", "auto"} and not key:
-        return OpenAIProvider(model=model, live_config=options)
+        return OpenAIProvider(model=model, live_config=options, timeout=profile.request_timeout)
     return Provider(
         ProviderType.OPENAI_COMPATIBLE,
         api_key=key,
@@ -165,6 +168,7 @@ def build_live_provider(profile: ProviderProfile, options: LiveConfig, key: str,
         base_url=profile.base_url or None,
         api="responses",
         live_config=options,
+        timeout=profile.request_timeout,
         retry_config=RetryConfig(max_retries=0),
     )
 

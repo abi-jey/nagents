@@ -29,7 +29,13 @@ if TYPE_CHECKING:
 
 
 class HarnessProvider(Provider):
-    def __init__(self, config: "HarnessConfig", login_store: "ProviderLoginStore | None" = None) -> None:
+    def __init__(
+        self,
+        config: "HarnessConfig",
+        login_store: "ProviderLoginStore | None" = None,
+        *,
+        request_timeout: float = 120.0,
+    ) -> None:
         if config.api == "completions":
             raise ValueError(
                 "The coding harness requires conversation roles and tools; the legacy completions API is text-only. "
@@ -55,6 +61,7 @@ class HarnessProvider(Provider):
             base_url=config.base_url or None,
             api_version=config.api_version or None,
             api=api,
+            timeout=request_timeout,
         )
 
     @property

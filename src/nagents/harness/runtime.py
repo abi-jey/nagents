@@ -188,7 +188,7 @@ class Harness:
         self.agent = Agent(
             provider=(
                 build_provider(self.providers.providers[config.provider_id], config, self.openai_auth)
-                if config.provider_id and not config.demo
+                if config.provider_id
                 else HarnessProvider(config, self.login_store if not config.provider_id else None)
             ),
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
@@ -706,7 +706,11 @@ class Harness:
         changing = any(getattr(config, name) != getattr(self.config, name) for name in identity)
         if config.provider_id and self._built_provider_profile is not None:
             current = self.provider_store.load().providers.get(config.provider_id)
-            changing = changing or (current is not None and current.scope != self._built_provider_profile.scope)
+            changing = changing or (
+                current is not None
+                and (current.scope, current.request_timeout)
+                != (self._built_provider_profile.scope, self._built_provider_profile.request_timeout)
+            )
         if changing:
             replacement: Provider
             if config.provider_id:
@@ -856,7 +860,10 @@ class Harness:
     async def _use_chatgpt(self) -> None:
         if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
             self._api_model = self.agent.provider.model
-        replacement = OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
+        profile = self.provider_store.load().providers.get(self.config.provider_id) if self.config.provider_id else None
+        replacement = OpenAIProvider(
+            self.openai_auth.credentials, model=self.config.model, timeout=profile.request_timeout if profile else 120.0
+        )
         try:
             await self.agent.close()
         finally:
@@ -940,11 +947,7 @@ class Harness:
                 profile = self.provider_store.load().providers[self.config.provider_id]
                 self.config.auth = profile.auth
                 if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
-                    replacement = (
-                        build_provider(profile, self.config, self.openai_auth)
-                        if profile.auth != "chatgpt"
-                        else OpenAIProvider(self.openai_auth.credentials, model=self.config.model)
-                    )
+                    replacement = build_provider(profile, self.config, self.openai_auth)
                     try:
                         await self.agent.close()
                     finally:

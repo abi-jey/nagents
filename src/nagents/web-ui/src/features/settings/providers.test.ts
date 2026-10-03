@@ -32,6 +32,7 @@ test("provider editors expose scoped credential/endpoint metadata without a chat
       assert.deepEqual(body.profile, {
         kind: "openai", auth: "codex", base_url: "", api: "auto", api_key_env: "OPENAI_API_KEY",
         api_version: "", scope: "https://ai.azure.com/.default",
+        request_timeout: 120,
       });
       return Response.json({ ...registry, scope: "global", path: "/home/user/.config/ngn/providers.yaml" });
     }
