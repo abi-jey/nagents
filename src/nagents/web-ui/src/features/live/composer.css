@@ -33,7 +33,8 @@
 .voice-composer-actions .voice-settings-trigger[aria-expanded="true"] { color: var(--voice-accent); background: #b2e5cc0c; border-color: #b2e5cc38; }
 .voice-composer-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .voice-composer :is(button, summary, select, [tabindex]):focus-visible { outline: 2px solid var(--voice-accent); outline-offset: 3px; }
-.voice-delegation { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 4px 8px 8px; font-size: 11px; color: var(--text-secondary); }
+.voice-delegation { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 7px; padding: 3px 8px 6px; font-size: 11px; color: var(--text-secondary); }
+.voice-event-type { padding: 1px 5px; border: 1px solid var(--border-group); border-radius: 4px; font: 10px/1.5 ui-monospace, monospace; color: var(--text-secondary); }
 .voice-delegation > svg { color: #c7baa4; }
 .voice-delegation > span { margin-right: auto; }
 .voice-delegation button { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; border: 0; background: transparent; color: #b7d6c9; padding: 3px 5px; font-size: 11px; }

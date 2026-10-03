@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from .live_handoff import MAX_HANDOFF_TEXT
 from .live_handoff import LoginHandoff
+from .live_inspection import model_requests
 from .service import Run
 
 if TYPE_CHECKING:
@@ -208,11 +209,23 @@ class MainAgentBridge:
 
                 async def execute() -> None:
                     try:
-                        async with state.history.voice_request(
-                            self.session_id, run.id, display, voice_session_id=self.voice_session_id
-                        ):
-                            status("working", "The request was sent to the assistant.", run.id, request_input=prompt)
-                            await state.produce_session(run, prompt)
+
+                        def captured(request: dict[str, object]) -> None:
+                            text = (
+                                "Model request capture limit reached."
+                                if request.get("capture_limited")
+                                else "Assistant model request captured."
+                            )
+                            status("working", text, run.id, model_request=request)
+
+                        with model_requests(self.session_id, state.harness.agent.provider, captured):
+                            async with state.history.voice_request(
+                                self.session_id, run.id, display, voice_session_id=self.voice_session_id
+                            ):
+                                status(
+                                    "working", "The request was sent to the assistant.", run.id, request_input=prompt
+                                )
+                                await state.produce_session(run, prompt)
                     except asyncio.CancelledError:
                         run.outcome = "cancelled"
                         raise

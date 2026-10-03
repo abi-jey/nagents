@@ -18,7 +18,7 @@ test("context metadata remains bound to the selected chat and the advertised byt
 });
 
 test("context details explain omissions and summary fallback without exposing a raw payload", () => {
-  const document = new JSDOM(renderToStaticMarkup(createElement(VoiceContextDetails, { context, close() {} }))).window.document;
+  const document = new JSDOM(renderToStaticMarkup(createElement(VoiceContextDetails, { context, token: "fixture-token", sessionId: "voice-one", close() {} }))).window.document;
   assert.match(document.body.textContent || "", /Prepared brief and recent conversation/);
   assert.match(document.body.textContent || "", /Some history or non-text content was left out/);
   assert.match(document.body.textContent || "", /main assistant uses this chat’s saved history and summaries/);

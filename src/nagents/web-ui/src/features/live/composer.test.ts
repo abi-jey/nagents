@@ -64,7 +64,6 @@ test("connected controls expose microphone and speaker state with separate playb
 
 test("connection cancellation, recoverable errors and settings remain explicit and independently accessible", async () => {
   const ui = view();
-  ui.props.children = createElement("section", { "aria-label": "Voice preferences" }, "Device settings");
   ui.props.state.phase = "permission";
   try {
     await ui.render();
@@ -73,18 +72,17 @@ test("connection cancellation, recoverable errors and settings remain explicit a
     assert.deepEqual(ui.actions, ["end"]);
     Object.assign(ui.props.state, { phase: "error", error: "Your microphone disconnected." });
     ui.props.settingsOpen = true; await ui.render();
-    assert.equal(ui.container.querySelector<HTMLElement>(".voice-inline-expansion")?.hidden, false);
+    assert.equal(ui.container.querySelector("#voice-inline-settings"), null);
+    assert.equal(ui.container.querySelector(".voice-settings-trigger")?.getAttribute("aria-haspopup"), "dialog");
     assert.equal(ui.container.querySelector('.voice-settings-trigger')?.getAttribute("aria-expanded"), "true");
     assert.equal(ui.container.querySelector<HTMLButtonElement>(".voice-start")?.disabled, true);
     assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /microphone disconnected/);
     await ui.click(".voice-feedback button");
     assert.equal(ui.actions.at(-1), "refresh");
-    await act(async () => ui.container.querySelector("#voice-session")!.dispatchEvent(new ui.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    assert.equal(ui.actions.at(-1), "configure", "Escape dismisses settings, not the voice dock or call");
     ui.props.settingsSaving = true; await ui.render();
     const beforeEscape = ui.actions.length;
     await act(async () => ui.container.querySelector("#voice-session")!.dispatchEvent(new ui.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    assert.equal(ui.actions.length, beforeEscape, "Escape does not dismiss a pending save");
+    assert.equal(ui.actions.length, beforeEscape, "Background Escape does not dismiss the settings overlay");
     assert.equal(ui.container.querySelector<HTMLButtonElement>('[aria-label="Close voice controls"]')?.disabled, true);
   } finally { await ui.close(); }
 });

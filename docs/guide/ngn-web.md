@@ -850,11 +850,12 @@ The chat stays visible and typing remains available.
 
 Status, elapsed time, microphone mute, speaker mute, **Audio**, and **Stop** live
 in the composer. Mute controls are independent and do not end voice. **Stop**
-finishes the connection. The settings icon beside **Voice** opens device and voice
-preferences inline without starting the microphone. Device pickers stay compact;
-voice defaults and connection options expand under **Voice & connection**. During
-voice, **Audio** expands
-the same settings in the composer; expanding or collapsing them keeps voice connected.
+finishes the connection. The settings icon beside **Voice** opens a complete
+**Voice settings** overlay without starting the microphone. Devices, voice defaults,
+instructions, context, and connection options share one scrollable form, with its
+header and Save controls always visible. The overlay fills the screen on phones.
+During voice, **Audio** opens the same overlay; opening and closing it keeps voice
+connected, and device changes remain available during the call.
 Reduced-motion preferences disable the sphere's motion.
 Speech captions appear in the same chat, marked **Live** with their speaker and
 call-relative time. Ordinary messages and assistant work retain their usual
@@ -864,16 +865,16 @@ queued, working, completed, stopped, or failed.
 **View in chat** opens the associated run's progress and result. Muting or ending
 voice does not imply that an admitted assistant task has stopped.
 **Request & events** expands inline with the received voice payload, the
-actual input dispatched to the assistant, its result, and a processing timeline.
+actual input dispatched to the assistant, its result, and a compact processing timeline.
 A request picker appears when there is more than one request. Individual event
-payloads and request identifiers can be expanded. These details
+types, captured model inputs, provider body chunks, and request identifiers can be expanded. These details
 load only while the inspector is open; they are not included in every status poll.
 
 #### Chat Context And Voice Instructions
 
 Voice receives a bounded text handoff from the selected chat. It never copies the
 entire model context, tool outputs, attachments, or private reasoning. Open
-**Audio → Voice & connection** to choose **Starting context**:
+**Voice settings** to choose **Starting context**:
 
 - **Recent chat + saved summary** (default) includes recent user/assistant text,
   any existing compaction summary, and saved speech captions after the current
@@ -1112,10 +1113,24 @@ Delegation details use the same call/chat/run identities and explicitly identify
 `source: "app_callback"`. Request and dispatched-input previews are capped at
 32,768 characters each; result previews at 16,384. Each preview includes its
 original character count and a truncation flag. The inspector retains the most
-recent eight application events per request, with a timeline truncation flag.
-Provider authentication, SDP, and raw transport traffic are not part of this
-endpoint. Details may expire with the bounded ended-session cache; durable
+recent 96 lifecycle and model-capture events per request, with a timeline truncation flag.
+Expanded model requests distinguish post-plugin messages, tools, and generation
+settings from observed provider request body chunks. Chunks are identified by their
+actual model-call and HTTP-attempt IDs; a captured chunk is not proof that the
+provider received a complete request. Up to 32 captures are retained, with a
+64 KiB limit per payload and 256 KiB total per delegation. Truncation is explicit;
+when serialization stops early, the original total size is unavailable.
+Transport authentication headers and URLs, HTTP responses, SDP, and unrelated
+requests are not captured.
+Details may expire with the bounded ended-session cache; durable
 assistant results remain in normal chat history.
+
+`GET /api/live/sessions/{session_id}/context` returns startup instructions and
+the actual text-only seed messages captured when preparing provider dispatch.
+This is a record of prepared input, not confirmation of provider acceptance.
+It retains at most 16 messages / 32 KiB and 16 KiB of instructions, with omission
+flags. These details use the same authentication and bounded session retention
+as delegation inspection; routine polling and creation responses remain metadata-only.
 
 Main-assistant delegation records contain `delegation_id`, `voice_session_id`,
 `chat_session_id`, `run_id`, `status`, `agent`, `provider`, `model`, `text`, and

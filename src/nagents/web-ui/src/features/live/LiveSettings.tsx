@@ -18,7 +18,6 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
   showDevices?: boolean;
 }) {
   const [controller] = useState(() => new LiveSettingsController(settingsApi(token)));
-  const advanced = useRef<HTMLDetailsElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const { values, snapshot, overrides, scope, loading, saving, dirty, error, needsRefresh } = state;
@@ -40,17 +39,18 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
     heading.current?.focus({ preventScroll: true });
   }, [hidden]);
   useEffect(() => { onSavingChange?.(saving); }, [saving, onSavingChange]);
-  useEffect(() => {
-    if (advanced.current && (error || (snapshot && (!snapshot.values.enabled || !snapshot.key_configured || snapshot.live_supported === false || (snapshot.voice_auth === "chatgpt" && snapshot.values.backend_mode === "hosted"))))) advanced.current.open = true;
-  }, [snapshot, error]);
   async function save() { if (blocked) return; const result = await controller.save(); if (result) saved(result); }
 
   return <section className="live-settings-panel" hidden={hidden} aria-labelledby="live-settings-title">
     <header><div><Icon name="settings" size={17} /><h3 id="live-settings-title" ref={heading} tabIndex={-1}>Voice settings</h3></div><button type="button" disabled={saving} onClick={back} aria-label="Back to conversation" title="Back to conversation"><Icon name="close" size={16} /></button></header>
     <form className="live-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <p className="live-settings-description">Choose your default voice, behavior, and starting context.</p>
+      <div className="live-settings-body">
+      <p id="live-settings-description" className="live-settings-description">Microphone, playback, and conversation preferences.</p>
       {showDevices && <AudioDeviceSettings transport={transport || "websocket"} disabled={audioDisabled} active={audioActive} activeSelection={audioSelection} applyDevice={applyDevice} />}
       {loading && <p role="status">Loading Voice settings…</p>}
+      <label className="live-settings-scope">Apply voice preferences to<select value={scope} disabled={disabled || dirty} onChange={event => controller.setScope(event.target.value as "global" | "workspace")}><option value="global">Global · all workspaces</option><option value="workspace">This workspace · customize defaults</option></select></label>
+      {dirty && <small className="live-settings-draft-note" role="status">Save or reload these changes before switching scope.</small>}
+      {blocked && <p className="live-settings-feedback" role="status">Audio devices can change during voice. End the active conversation before changing voice behavior, starting context, connection, or model.</p>}
       {values && snapshot && <fieldset className="live-voice-defaults" disabled={disabled}>
           <legend className="sr-only">Voice defaults</legend>
           <div className="live-settings-group-heading"><h4>Your voice</h4><span>Next conversation</span></div>
@@ -66,10 +66,8 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
           </select>)}
           <small>{values.backend_mode === "hosted" ? "Starting context applies to Main assistant. Hosted voice starts without the workspace chat's history." : values.context_mode === "none" ? "Voice starts fresh. Delegated requests still use your saved chat." : values.context_mode === "summary" ? "Prepare a short briefing of this chat before voice starts." : "Use recent messages and any saved summary from this chat."}</small>
       </fieldset>}
-      <label className="live-settings-scope">Apply settings to<select value={scope} disabled={disabled || dirty} onChange={event => controller.setScope(event.target.value as "global" | "workspace")}><option value="global">Global · all workspaces</option><option value="workspace">This workspace · customize defaults</option></select></label>
-      {dirty && <small className="live-settings-draft-note" role="status">Save or reload these changes before switching scope.</small>}
-      {values && snapshot && <details className="live-settings-advanced" ref={advanced}>
-          <summary><span>Connection &amp; model</span><Icon name="chevron" size={15} /></summary>
+      {values && snapshot && <section className="live-settings-connection" aria-labelledby="live-connection-title">
+          <div className="live-settings-group-heading"><h4 id="live-connection-title">Connection &amp; model</h4><span>Next conversation</span></div>
           <fieldset disabled={disabled}>
             <legend className="sr-only">Connection and model preferences</legend>
         {preference("enabled", "Enable GPT-Live", <input type="checkbox" role="switch" checked={values.enabled} disabled={scope === "workspace" && !Object.hasOwn(overrides, "enabled")} onChange={event => controller.edit({ enabled: event.target.checked })} />)}
@@ -92,9 +90,9 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
           {configureConnection && <button type="button" disabled={dirty} onClick={configureConnection}>Manage provider connections</button>}
         </div>
           </fieldset>
-      </details>}
-      {blocked && <p className="live-settings-feedback" role="status">End the active conversation before changing voice behavior, starting context, connection, or model.</p>}
+      </section>}
       {error && <p className="live-settings-feedback" role="alert">{error}</p>}
+      </div>
       <footer><button type="button" disabled={saving || loading} onClick={() => void controller.load()}>{needsRefresh ? "Reload saved settings" : "Reload"}</button><button type="submit" className="live-save" disabled={disabled || !values || needsRefresh}>{saving ? "Saving…" : "Save settings"}</button></footer>
     </form>
   </section>;

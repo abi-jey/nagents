@@ -11,6 +11,7 @@ from aiortc import RTCConfiguration
 from aiortc import RTCPeerConnection
 from aiortc import RTCSessionDescription
 
+from nagents.types import Message
 from nagents.web import live_login
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
@@ -111,7 +112,24 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                             harnesses,
                         ):
                             phase = "configure"
-                            revision = await configure(client, headers)
+                            await harnesses[0].agent.session.add_message(
+                                harnesses[0].session_id, Message(role="user", content="A saved startup detail")
+                            )
+                            await configure(client, headers)
+                            preferences = (
+                                await client.get("/api/live/settings?scope=workspace", headers=headers)
+                            ).json()
+                            configured = await client.post(
+                                "/api/live/settings",
+                                headers=headers,
+                                json={
+                                    "scope": "workspace",
+                                    "revision": preferences["revision"],
+                                    "overrides": {**preferences["overrides"], "instructions": "Use brief replies."},
+                                },
+                            )
+                            assert configured.status_code == 200
+                            revision = configured.json()["revision"]
                             phase = "provision"
                             response = await client.post(
                                 "/api/live/sessions",
@@ -127,6 +145,17 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                             assert created["model"] == "gpt-live-1-codex" and created["voice"] == "sol"
                             assert SECRET not in response.text and "rtc_fixture" not in response.text
                             identifier = created["session_id"]
+                            context_response = await client.get(
+                                f"/api/live/sessions/{identifier}/context", headers=headers
+                            )
+                            assert context_response.status_code == 200
+                            context = context_response.json()
+                            assert context["available"] and context["chat_session_id"] == harnesses[0].session_id
+                            assert context["instructions"]["text"] == sessions[-1]["instructions"]
+                            assert "Use brief replies." in context["instructions"]["text"]
+                            assert context["history"] == sessions[-1]["initial_items"]
+                            assert "A saved startup detail" in str(context["history"])
+                            assert "instructions" not in created["context"] and "history" not in created["context"]
                             ids.append(identifier)
                             phase = "snapshot"
                             snapshot = (await client.get(f"/api/live/sessions/{identifier}", headers=headers)).json()
