@@ -122,10 +122,22 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                         ids.append(identifier)
                         snapshot = (await client.get(f"/api/live/sessions/{identifier}", headers=headers)).json()
                         assert snapshot["status"] == "connected"
-                        assert [event["text"] for event in snapshot["events"] if event["type"] == "transcript"] == [
-                            "Hello",
-                            "Hi",
-                        ]
+                        # Media readiness does not wait for every sideband caption
+                        # to be persisted. Windows can observe the first caption
+                        # while the second is still behind that asynchronous write.
+                        async with asyncio.timeout(3):
+                            while True:
+                                captions = [
+                                    event["text"] for event in snapshot["events"] if event["type"] == "transcript"
+                                ]
+                                if len(captions) >= 2:
+                                    break
+                                await asyncio.sleep(0.01)
+                                snapshot = (
+                                    await client.get(f"/api/live/sessions/{identifier}", headers=headers)
+                                ).json()
+                                assert snapshot["status"] == "connected"
+                        assert captions == ["Hello", "Hi"]
                         if not restart:
                             ended = await client.post(
                                 f"/api/live/sessions/{identifier}/close", headers=headers, json={}

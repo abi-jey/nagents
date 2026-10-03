@@ -315,13 +315,17 @@ class _BrowserInput:
 
     audio_format = AudioFormat()
 
-    def __init__(self) -> None:
+    def __init__(self, *, fill_gaps: bool = True) -> None:
         self.frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=50)
         self.connected = asyncio.Event()
+        self.fill_gaps = fill_gaps
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         await self.connected.wait()
         while True:
+            if not self.fill_gaps:
+                yield await self.frames.get()
+                continue
             try:
                 async with asyncio.timeout(0.02):
                     frame = await self.frames.get()
@@ -597,6 +601,11 @@ class LiveService:
             if self._caption_factory is not None:
                 call.captions = await self._caption_factory(call.record.identifier)
             assert call.audio_in is not None and call.audio_out is not None
+            # The RTP track owns the continuous 20 ms clock. Padding this input
+            # too would add silence between slightly delayed browser frames and
+            # overfeed a correctly paced sender. Primary provider WebSockets
+            # retain their existing gap padding above.
+            call.audio_in.fill_gaps = False
             media = ChatGPTMediaRelay(call.audio_in, call.audio_out)
         except ImportError:
             call.fail("Install nagents[web] on the server to enable ChatGPT voice audio.", 503)

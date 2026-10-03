@@ -92,9 +92,11 @@ class ChatGPTMediaRelay:
         self._track = _MicrophoneTrack()
         # Provider candidates are supplied by the native SDP answer. Avoid
         # aiortc's default third-party STUN service; browser egress is never used.
-        self._peer = RTCPeerConnection(RTCConfiguration(iceServers=[], bundlePolicy=RTCBundlePolicy.MAX_BUNDLE))
-        # aiortc serializes audio before application in SDP. Create the audio
-        # transport first as well so MAX_BUNDLE retains the negotiated master.
+        # Gather separate transports, then let the answer select the BUNDLE
+        # master. Native Codex answers advertise candidates only on that master;
+        # aiortc MAX_BUNDLE otherwise overwrites them with the empty application
+        # section before connectivity checks can start (especially with ICE-lite).
+        self._peer = RTCPeerConnection(RTCConfiguration(iceServers=[], bundlePolicy=RTCBundlePolicy.BALANCED))
         self._peer.addTrack(self._track)
         self._channel = self._peer.createDataChannel("oai-events")
         self._ready = asyncio.Event()

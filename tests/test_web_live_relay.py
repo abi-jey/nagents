@@ -25,6 +25,7 @@ from nagents.web.live_relay import MAX_BUFFER_BYTES
 from nagents.web.live_relay import ChatGPTMediaRelay
 from nagents.web.live_relay import _MicrophoneTrack
 from nagents.web.live_runtime import LiveService
+from nagents.web.live_runtime import _BrowserInput
 from tests.test_web_live_login import ANSWER
 from tests.test_web_live_login import OFFER
 from tests.test_web_live_login import config
@@ -172,7 +173,11 @@ def test_cancelled_login_creation_collects_delayed_call_id_and_finalizes_once(
     asyncio.run(scenario())
 
 
-def test_local_provider_peer_exchanges_real_encoded_audio_and_quiet_keeps_peer_alive() -> None:
+@pytest.mark.parametrize("master_candidates_only", [False, True])
+def test_local_provider_peer_exchanges_real_encoded_audio_and_quiet_keeps_peer_alive(
+    master_candidates_only: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def scenario() -> None:
         source, output = Source(), Output()
         relay = ChatGPTMediaRelay(source, output)
@@ -201,9 +206,28 @@ def test_local_provider_peer_exchanges_real_encoded_audio_and_quiet_keeps_peer_a
                 offer = await relay.offer()
                 assert "m=audio" in offer and "m=application" in offer
                 await provider.setRemoteDescription(RTCSessionDescription(sdp=offer, type="offer"))
+                if master_candidates_only:
+                    # An ICE-lite provider answers checks instead of rescuing a
+                    # missing candidate list by initiating its own connectivity
+                    # checks. Retain real UDP/STUN/DTLS/audio in this fixture.
+                    transport = provider.getTransceivers()[0].receiver.transport.transport
+                    ice = transport._connection
+                    monkeypatch.setattr(ice, "check_periodic", lambda: not ice._check_list_done)
                 await provider.setLocalDescription(await provider.createAnswer())
                 assert provider.localDescription is not None
-                await relay.connect(provider.localDescription.sdp)
+                answer = provider.localDescription.sdp
+                if master_candidates_only:
+                    # The actual native Codex answer advertises candidates only
+                    # on the BUNDLE master; application shares that transport.
+                    application = False
+                    lines: list[str] = []
+                    for line in answer.splitlines():
+                        if line.startswith("m="):
+                            application = line.startswith("m=application ")
+                        if not (application and line.startswith(("a=candidate:", "a=end-of-candidates"))):
+                            lines.append(line)
+                    answer = ("\r\n".join(lines) + "\r\n").replace("t=0 0\r\n", "t=0 0\r\na=ice-lite\r\n")
+                await relay.connect(answer)
                 source.frames.put_nowait(pcm(3000, 12000))
                 await heard.wait()
                 await output.received.wait()
@@ -242,6 +266,54 @@ def test_relay_reports_remote_media_failure_and_closes_blocked_input() -> None:
     asyncio.run(scenario())
 
 
+def test_rtp_clock_handles_browser_jitter_without_adding_a_second_silence_stream() -> None:
+    async def scenario() -> None:
+        source = _BrowserInput(fill_gaps=False)
+        source.connected.set()
+        relay = ChatGPTMediaRelay(source, Output())
+        produced = 0
+        peak = 0
+
+        async def browser() -> None:
+            nonlocal produced
+            # The correct 24 kHz input rate, arriving in 40 ms batches. A second
+            # 20 ms padding clock overflows the unchanged 1-second cap in ~2s.
+            for _ in range(65):
+                await asyncio.sleep(0.04)
+                for _ in range(2):
+                    source.frames.put_nowait(bytes(FRAME_BYTES))
+                    produced += FRAME_BYTES
+
+        async def sender() -> None:
+            nonlocal peak
+            while True:
+                peak = max(peak, len(relay._track.buffer))
+                await relay._track.recv()
+
+        feeding = asyncio.create_task(browser())
+        pumping = asyncio.create_task(relay._microphone())
+        sending = asyncio.create_task(sender())
+        try:
+            async with asyncio.timeout(5):
+                done, _ = await asyncio.wait({feeding, pumping}, return_when=asyncio.FIRST_COMPLETED)
+                if pumping in done:
+                    pumping.result()
+                    pytest.fail("Microphone input ended before the browser producer")
+                await feeding
+                await asyncio.sleep(0.05)
+                assert not pumping.done()
+                assert produced > MAX_BUFFER_BYTES * 2
+                assert peak <= FRAME_BYTES * 4
+                assert len(relay._track.buffer) <= FRAME_BYTES * 2
+        finally:
+            for task in (feeding, pumping, sending):
+                task.cancel()
+            await asyncio.gather(feeding, pumping, sending, return_exceptions=True)
+            await relay.aclose()
+
+    asyncio.run(scenario())
+
+
 async def eventually(predicate: Callable[[], bool]) -> None:
     async with asyncio.timeout(2):
         while not predicate():
@@ -263,6 +335,7 @@ def test_login_stream_owns_media_until_finalization_and_cleans_cancelled_setup(
         class Media:
             def __init__(self, source: AudioInput, output: AudioOutput) -> None:
                 assert source.audio_format == output.audio_format == AudioFormat()
+                assert isinstance(source, _BrowserInput) and not source.fill_gaps
 
             async def offer(self) -> str:
                 timeline.append("offer")
