@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import type { ComponentProps, ReactNode, Ref } from "react";
+import { Icon } from "../../components/Icon.js";
 
 function ComposerInput({ inputRef, ...props }: ComponentProps<"textarea"> & { inputRef: Ref<HTMLTextAreaElement> }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -46,6 +47,7 @@ export function Composer({
   attachmentsDisabled = disabled,
   submitting = false,
   stopping = false,
+  voiceControl,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -64,6 +66,7 @@ export function Composer({
   attachmentsDisabled?: boolean;
   submitting?: boolean;
   stopping?: boolean;
+  voiceControl?: ReactNode;
 }) {
   return (
     <form
@@ -108,10 +111,13 @@ export function Composer({
       />
       {attachments}
       <div className="composer-bottom">
-        {!!attachmentTypes.length && <label className="attachment-picker">Attach
-          <input type="file" aria-label="Attach images or PDFs" multiple accept={attachmentTypes.join(",")} disabled={attachmentsDisabled}
+        <div className="composer-tools">
+        {!!attachmentTypes.length && <label className="attachment-picker"><Icon name="paperclip" size={17} /><span>Attach</span>
+          <input type="file" aria-label="Attach files" multiple accept={attachmentTypes.join(",")} disabled={attachmentsDisabled}
             onChange={(event) => { addAttachments?.([...event.currentTarget.files || []]); event.currentTarget.value = ""; }} />
         </label>}
+        {voiceControl}
+        </div>
         {status}
         <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.</span>
         {running && (

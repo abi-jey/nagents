@@ -1,5 +1,5 @@
 import { ExecutionEvidence } from "./ExecutionEvidence.js";
-import { executionDuration, executionTarget } from "./executionPresentation.js";
+import { commandOutcomeDescription, executionDuration, executionTarget } from "./executionPresentation.js";
 import { ToolExecution } from "./ToolExecution.js";
 import type { Entry } from "./transcript.js";
 
@@ -20,9 +20,9 @@ export function ExecutionRecord({
     ? entry.trigger || (entry.recorded ? "Recorded trigger unavailable" : entry.followup ? "human" : "delegation")
     : entry.title || "Tool call";
   const target = executionTarget(entry);
-  const state = entry.state === "Completed" && entry.title === "delegate" ? "Delegation request completed"
+  const state = commandOutcomeDescription(entry) || (entry.state === "Completed" && entry.title === "delegate" ? "Delegation request completed"
     : entry.state === "Completed" && ["schedule_wakeup", "wake_up_in"].includes(entry.title || "") ? "Scheduling request completed"
-    : entry.state || "Recorded activity";
+    : entry.state || "Recorded activity");
   const evidence = (slot: string, label: string, text: string) => (
     <ExecutionEvidence key={`${slot}:${entry.id}`} label={label} text={text} disclosureKey={`${slot}:${entry.id}`}
       open={disclosures.get(`${slot}:${entry.id}`)}

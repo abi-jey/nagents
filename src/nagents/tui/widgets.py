@@ -19,6 +19,8 @@ from textual.widgets import Static
 from textual.widgets import TextArea
 from textual.widgets.markdown import MarkdownFence
 
+from nagents.tool_outcomes import shell_outcome
+
 from .themes import CodeTheme
 
 if TYPE_CHECKING:
@@ -276,13 +278,15 @@ class ToolCard(Collapsible):
 
     def finish(self, result: object, error: str | None, duration_ms: float) -> None:
         self._preserve_inspection_position()
-        state = "failed" if error else "complete"
+        process_outcome = "" if error else shell_outcome(self.tool, result)
+        failed = bool(error or process_outcome)
+        state = "failed" if error else process_outcome or "complete"
         duration = f"  {duration_ms / 1000:.2f}s" if duration_ms > 0 else ""
         self._outcome = f"{state}{duration}"
         self._update_summary()
         self.remove_class("running", "cancelled")
-        self.set_class(bool(error), "failed")
-        self.set_class(not error, "complete")
+        self.set_class(failed, "failed")
+        self.set_class(not failed, "complete")
         if isinstance(result, dict) and isinstance(result.get("diff"), str):
             self.diff.update(highlight(bounded(result["diff"]), language="diff", theme=CodeTheme))
             self.diff.display = True

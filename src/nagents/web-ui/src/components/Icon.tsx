@@ -1,4 +1,4 @@
-type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "phone-end";
+type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip";
 
 const paths: Record<IconName, string> = {
   plus: "M10 4v12M4 10h12",
@@ -17,7 +17,8 @@ const paths: Record<IconName, string> = {
   "mic-off": "m2 2 16 16M7 7v3a3 3 0 0 0 5 2M8 2.7A3 3 0 0 1 13 5v3M4 9v1a6 6 0 0 0 10 4M16 9v1M10 16v3M7 19h6",
   volume: "M3 7h3l4-4v14l-4-4H3ZM13 6a6 6 0 0 1 0 8M15 3a10 10 0 0 1 0 14",
   "volume-off": "M3 7h3l4-4v14l-4-4H3Zm10 0 5 6M18 7l-5 6",
-  "phone-end": "M2 10a13 13 0 0 1 16 0v4h-4v-3a9 9 0 0 0-8 0v3H2Z",
+  stop: "M5 5h10v10H5Z",
+  paperclip: "m7 10 5.5-5.5a2.5 2.5 0 0 1 3.5 3.5l-7 7a4 4 0 0 1-5.7-5.7l7-7M6.2 11.8l5.7-5.7",
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {

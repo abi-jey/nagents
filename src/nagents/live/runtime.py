@@ -97,11 +97,14 @@ class LiveConfig:
     """
 
     delegation: Literal["responses", "client"] = "responses"
-    backend_model: str = "gpt-5.6-luna"
+    backend_model: str = "gpt-6-astra"
     backend_instructions: str = "Return concise verified facts and status."
     web_search: bool = False
     voice: str | dict[str, str] = "marin"
     history: tuple[dict[str, object], ...] = ()
+    # Standalone callers may delegate startup history. Web voice seeds are
+    # background only: its main-assistant handler must wait for fresh speech.
+    history_in_client_context: bool = True
     store: bool | None = None
     attach_to: str = ""
     fork_from: str = ""
@@ -424,7 +427,7 @@ async def converse(
             await on_event(started)
             raise RuntimeError("Live did not start; inspect the startup event")
         delegations = ClientDelegations(backend, send)
-        for index, message in enumerate(options.history):
+        for index, message in enumerate(options.history if options.history_in_client_context else ()):
             parts = message.get("content")
             assert isinstance(parts, list)
             delegations.fragments.append(

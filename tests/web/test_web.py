@@ -454,6 +454,7 @@ def test_session_history_and_workspace_membership(tmp_path: Path) -> None:
             await harnesses[0].agent.session.add_message(first, SessionMessage(role="user", content="hello"))
             second = (await client.post("/api/sessions/new", json={}, headers=headers)).json()["session_id"]
             assert first != second
+            await harnesses[0].agent.session.add_message(second, SessionMessage(role="user", content="another chat"))
             response = await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)
             assert response.json()["history"][0]["content"] == "hello"
             # A raw DB session, such as a child conversation, is not picker membership.

@@ -202,7 +202,7 @@ def test_provider_key_sign_in_stores_key_without_rendering(tmp_path: Path, monke
             await idle(app, pilot)
             assert len(backend.api_logins) == 1
             login = backend.api_logins[0]
-            assert (login.provider, login.model, login.api_key) == ("openai", "gpt-6-luna", PROVIDER_KEY)
+            assert (login.provider, login.model, login.api_key) == ("openai", "gpt-6-astra", PROVIDER_KEY)
             assert backend.config.provider == "openai"
             assert not isinstance(app.screen, ProviderKeyModal)
             rendered = app.export_screenshot()

@@ -43,6 +43,7 @@ from .harness.types import TaskMessage
 from .harness.types import TaskNotification
 from .harness.types import TaskStarted
 from .harness.types import ToolOutput
+from .tool_outcomes import shell_outcome
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -450,6 +451,8 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
                 elif isinstance(event, ToolResultEvent):
                     if event.error:
                         print(_plain(f"[{event.name}: {event.error}]"), file=sys.stderr)
+                    elif outcome := shell_outcome(event.name, event.result):
+                        print(_plain(f"[{event.name}: {outcome} in {event.duration_ms:.0f} ms]"), file=sys.stderr)
                     else:
                         print(_plain(f"[{event.name} completed in {event.duration_ms:.0f} ms]"), file=sys.stderr)
                 elif isinstance(event, ErrorEvent):

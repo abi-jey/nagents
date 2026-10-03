@@ -15,6 +15,20 @@ export type LiveCaption = {
   fragmentIds?: string[];
 };
 
+export type CommandOutcome =
+  | { kind: "exited"; exitCode: number }
+  | { kind: "timed_out"; exitCode?: number };
+
+function commandOutcome(value: unknown): CommandOutcome | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result = value as Record<string, unknown>;
+  const exitCode = Object.hasOwn(result, "exit_code") && typeof result.exit_code === "number" && Number.isSafeInteger(result.exit_code)
+    ? result.exit_code : undefined;
+  if (Object.hasOwn(result, "timed_out") && result.timed_out === true)
+    return { kind: "timed_out", ...(exitCode === undefined ? {} : { exitCode }) };
+  return exitCode === undefined ? undefined : { kind: "exited", exitCode };
+}
+
 export type Entry = {
   id: string;
   kind:
@@ -39,6 +53,7 @@ export type Entry = {
   streaming?: boolean;
   inputs?: string;
   result?: string;
+  commandOutcome?: CommandOutcome;
   error?: string;
   state?: string;
   durationMs?: number;
@@ -384,6 +399,11 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     } else {
       entry.resultHistoryId = historyId || previous?.resultHistoryId;
       entry.historyId ||= historyId;
+      // Preserve structured process evidence before formatting the result. A
+      // saved string is not proof of an execution outcome and is never parsed.
+      const outcome = event.saved ? undefined : commandOutcome(event.result);
+      entry.commandOutcome = outcome && previous?.commandOutcome?.kind === outcome.kind && previous.commandOutcome.exitCode === outcome.exitCode
+        ? previous.commandOutcome : outcome;
       entry.result = preview(event.result);
       entry.error = text(event, "error");
       entry.state = event.saved

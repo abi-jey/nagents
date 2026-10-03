@@ -7,6 +7,7 @@ import secrets
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Annotated
@@ -33,6 +34,7 @@ from nagents.harness.providers import ProviderProfile
 from nagents.provider import OpenAIProvider
 
 from . import built_assets
+from . import empty_sessions
 from . import is_loopback_host
 from . import local_authority
 from ._async import finish_on_cancel
@@ -46,8 +48,12 @@ from .live import create_agent as create_live_agent
 from .live import create_login_config
 from .live import register as register_live
 from .live_bridge import MainAgentBridge
+from .live_context import LiveSeed
+from .live_context import read_seed
+from .live_context import with_summary
 from .live_runtime import LiveService
 from .live_settings import LiveSettings
+from .live_summary import VoiceContextSummarizer
 from .provider_setup import provider_setup
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
@@ -177,6 +183,7 @@ def create_app(
             config.demo,
         )
         state = WebState(harness)
+        voice_summaries = VoiceContextSummarizer()
         live_settings = LiveSettings(
             harness.agent.session.db_path,
             demo=config.demo,
@@ -188,7 +195,12 @@ def create_app(
         def voice_agent(voice: str) -> Agent:
             connection = live_settings.admitted()
             handler = (
-                MainAgentBridge(state, live_settings.admitted_session(), voice_session_id=live.active_session_id).handle
+                MainAgentBridge(
+                    state,
+                    live_settings.admitted_session(),
+                    voice_session_id=live.active_session_id,
+                    report=live.delegation_reporter(live.active_session_id),
+                ).handle
                 if connection.values.backend_mode == "assistant"
                 else None
             )
@@ -199,9 +211,46 @@ def create_app(
             if connection.voice_auth != "chatgpt":
                 return None
             handler = MainAgentBridge(
-                state, live_settings.admitted_session(), voice_session_id=live.active_session_id
+                state,
+                live_settings.admitted_session(),
+                voice_session_id=live.active_session_id,
+                report=live.delegation_reporter(live.active_session_id),
             ).handle
             return create_login_config(connection, voice, handler)
+
+        async def voice_context(identifier: str) -> LiveSeed:
+            connection = live_settings.admitted()
+            if connection.values.backend_mode != "assistant":
+                return LiveSeed(
+                    chat_session_id=live_settings.admitted_session() or state.selected_session_id,
+                    notice="Hosted voice has no access to saved chat context.",
+                )
+            root = live_settings.admitted_session()
+            active = state.active
+            task_state = (
+                "The main assistant already has an active run. Its final result is not yet confirmed."
+                if active is not None and active.session_id == root
+                else ""
+            )
+            seed = await read_seed(
+                harness.agent.session.db_path, root, connection.values.context_mode, task_state=task_state
+            )
+            if seed.mode == "summary" and seed.summary_source:
+                brief = await voice_summaries.prepare(
+                    source=seed.summary_source,
+                    fingerprint=seed.fingerprint,
+                    session_id=root,
+                    provider=harness.agent.provider,
+                )
+                seed = (
+                    with_summary(seed, brief.text)
+                    if brief.text
+                    else replace(
+                        seed,
+                        notice="A fresh summary could not be prepared. Recent text and any existing summary were used instead.",
+                    )
+                )
+            return seed
 
         live = LiveService(
             voice_agent,
@@ -209,6 +258,7 @@ def create_app(
             caption_factory=lambda identifier: state.bind_live_captions(
                 live_settings.admitted_session() or state.selected_session_id, identifier
             ),
+            context_factory=voice_context,
         )
         state.approval_timeout = lambda: APPROVAL_TIMEOUT
         app.state.web = state
@@ -247,13 +297,16 @@ def create_app(
             if resume_session:
                 await harness.resume(resume_session)
             elif continue_session:
-                sessions = await harness.list_sessions()
-                if sessions:
-                    await harness.resume(sessions[0].id)
+                await empty_sessions.continue_session(state)
             state.selected_session_id = harness.session_id
             await state.channels.start()
             state.wakeups.start()
             await state.trash.start()
+            # Startup inbox recovery may already own a mutation. Draft cleanup
+            # can wait for the next idle listing; it must not abort startup.
+            if not state.mutating:
+                with state.idle(allow_running=True):
+                    await empty_sessions.prune(state, live.active_session_id)
             logger.info(
                 "ngn serve ready: session=%s provider=%s model=%s",
                 harness.session_id,
@@ -625,6 +678,7 @@ def create_app(
         if state.active is not None and state.active.server_owned:
             return await state.snapshot()
         with state.idle():
+            await empty_sessions.prune(state, live.active_session_id)
             return await state.snapshot()
 
     @app.get("/api/sessions/{session_id}")
@@ -660,9 +714,8 @@ def create_app(
     @app.post("/api/sessions/new")
     async def new_session(body: Input) -> dict[str, object]:
         with state.idle():
-            await state.harness.new_session()
-            state.selected_session_id = state.harness.session_id
-            logger.info("Session created: id=%s", state.harness.session_id)
+            await empty_sessions.new_session(state, live.active_session_id)
+            logger.info("Session ready: id=%s", state.harness.session_id)
             return await state.snapshot()
 
     @app.post("/api/sessions/resume")
@@ -678,6 +731,7 @@ def create_app(
                 raise HTTPException(404, "Session not found in this workspace.")
             await state.harness.resume(body.session_id)
             state.selected_session_id = body.session_id
+            await empty_sessions.prune(state, live.active_session_id)
             return await state.snapshot()
 
     @app.post("/api/run")

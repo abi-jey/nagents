@@ -140,7 +140,7 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
             assert root not in {item["id"] for item in refreshed["sessions"]}
             assert (
                 await client.post("/api/sessions/resume", headers=headers, json={"session_id": selected})
-            ).status_code == 200
+            ).status_code == (404 if selection == "last" else 200)
 
     asyncio.run(run())
 

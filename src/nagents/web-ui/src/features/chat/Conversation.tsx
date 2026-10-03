@@ -6,6 +6,8 @@ import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
 import { Icon } from "../../components/Icon.js";
+import { TextLinks } from "../../components/TextLinks.js";
+import { commandOutcomeDescription } from "./executionPresentation.js";
 import { captionTime, conversationEntries } from "./captionPresentation.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import type { Bootstrap } from "../../types.js";
@@ -124,6 +126,8 @@ export function TranscriptItems({
         data-record-key={entry.id}
         data-level={entry.level}
         data-speaker={entry.liveCaption?.speaker}
+        data-run-id={entry.runId}
+        tabIndex={-1}
       >
         {entry.liveCaption ? <>
           <div className="entry-label chat-live-caption-label">
@@ -132,7 +136,7 @@ export function TranscriptItems({
             <time aria-label={`Voice time ${captionTime(entry.liveCaption.start)}`}>{captionTime(entry.liveCaption.start)}</time>
           </div>
           {entry.liveCaption.fragmentIds?.filter(id => id !== entry.id).map(id => <span key={id} data-record-key={id} className="chat-live-caption-anchor" aria-hidden="true" />)}
-          <p className="chat-live-caption-text">{entry.text}</p>
+          <p className="chat-live-caption-text"><TextLinks text={entry.text} /></p>
         </> : entry.delivery ? <LocalDeliveryCard delivery={entry.delivery} /> : entry.kind === "tool" ||
         entry.kind === "task" ||
         entry.kind === "context" ? (
@@ -199,8 +203,10 @@ export function Conversation({
   token?: string;
 }) {
   const feed = useRef<HTMLDivElement>(null);
+  const contents = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const anchor = useRef<{ key: string; offset: number } | undefined>(undefined);
+  const layout = useRef<{ width: number; height: number; contentHeight: number; top: number } | undefined>(undefined);
   const [newActivity, setNewActivity] = useState(false);
   const [usageTip] = useState(() => usageTips[Math.floor(Math.random() * usageTips.length)]);
   const [announcement, setAnnouncement] = useState("");
@@ -269,6 +275,19 @@ export function Conversation({
           offset: visible.getBoundingClientRect().top - top,
         }
       : undefined;
+    layout.current = { width: element.clientWidth, height: element.clientHeight, contentHeight: element.scrollHeight, top: element.scrollTop };
+  }
+  function restorePosition() {
+    const element = feed.current;
+    if (!element) return;
+    if (stickToBottom.current && !inspectingTool()) element.scrollTop = element.scrollHeight;
+    else if (anchor.current) {
+      const previous = anchor.current;
+      const target = [...element.querySelectorAll<HTMLElement>("[data-record-key]")]
+        .find((item) => item.dataset.recordKey === previous.key);
+      if (target) element.scrollTop += target.getBoundingClientRect().top - element.getBoundingClientRect().top - previous.offset;
+    }
+    rememberPosition();
   }
   useLayoutEffect(() => {
     stickToBottom.current = true;
@@ -284,21 +303,21 @@ export function Conversation({
       stickToBottom.current = true;
       lastUser.current = last.id;
     }
-    if (stickToBottom.current && !inspectingTool() && feed.current)
-      feed.current.scrollTop = feed.current.scrollHeight;
-    else if (feed.current && anchor.current) {
-      const previous = anchor.current;
-      const target = [
-        ...feed.current.querySelectorAll<HTMLElement>("[data-record-key]"),
-      ].find((item) => item.dataset.recordKey === previous.key);
-      if (target)
-        feed.current.scrollTop +=
-          target.getBoundingClientRect().top -
-          feed.current.getBoundingClientRect().top -
-          previous.offset;
-    }
-    rememberPosition();
+    restorePosition();
   }, [entries]);
+  useLayoutEffect(() => {
+    const element = feed.current, view = element?.ownerDocument.defaultView;
+    if (!element || !view) return;
+    let disposed = false;
+    const resize = () => { if (!disposed) restorePosition(); };
+    const observer = typeof view.ResizeObserver === "function" ? new view.ResizeObserver(resize) : undefined;
+    // Composer panels resize the viewport without changing entries. Observe
+    // content too, for width reflow and attachments that finish loading later.
+    observer?.observe(element);
+    if (contents.current) observer?.observe(contents.current);
+    view.addEventListener("resize", resize);
+    return () => { disposed = true; observer?.disconnect(); view.removeEventListener("resize", resize); };
+  }, []);
   useEffect(() => {
     if (activity <= lastActivity.current) {
       lastActivity.current = activity;
@@ -314,6 +333,8 @@ export function Conversation({
         ? `Notification delivered from ${latestActivity.sourceName} to ${latestActivity.taskName}.`
         : latestActivity?.level === "warning"
           ? latestActivity.text
+          : latestActivity && commandOutcomeDescription(latestActivity)
+            ? `${commandOutcomeDescription(latestActivity)}.`
           : `${latestActivity?.title || "Task activity"}: ${latestActivity?.state || "updated"}.`,
     );
     if (!activityVisible()) setNewActivity(true);
@@ -349,15 +370,22 @@ export function Conversation({
       }}
       onScroll={() => {
         const element = feed.current;
-        if (element)
+        if (!element) return;
+        const previous = layout.current;
+        const resized = previous && (previous.width !== element.clientWidth || previous.height !== element.clientHeight || previous.contentHeight !== element.scrollHeight);
+        const layoutScroll = resized && (element.scrollTop === previous.top ||
+          (element.scrollTop < previous.top && element.scrollTop === Math.max(0, element.scrollHeight - element.clientHeight)));
+        // A resize can emit a scroll before ResizeObserver runs. Keep the
+        // existing intent and anchor for an unchanged/clamped layout offset.
+        if (!layoutScroll)
           stickToBottom.current =
             element.scrollHeight - element.scrollTop - element.clientHeight <
             100 && !inspectingTool();
         if (activityVisible()) setNewActivity(false);
-        rememberPosition();
+        if (!layoutScroll) rememberPosition();
       }}
     >
-      <div className="conversation-inner">
+      <div className="conversation-inner" ref={contents}>
         <h2 className="sr-only">Conversation</h2>
         <div
           className="activity-announcement"

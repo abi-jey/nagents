@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -61,12 +62,20 @@ async def upstream(
         await runner.cleanup()
 
 
-def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("seeded", [False, True])
+def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
+    monkeypatch: pytest.MonkeyPatch, seeded: bool
+) -> None:
     async def scenario() -> None:
         requests: list[str] = []
         commands: list[Payload] = []
         transcripts: list[str] = []
         replied = asyncio.Event()
+        history: tuple[Payload, ...] = (
+            ({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Old saved request"}]},)
+            if seeded
+            else ()
+        )
 
         async def backend(transcript: str) -> str:
             transcripts.append(transcript)
@@ -86,7 +95,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(monkeyp
                         "instructions": "Use the selected assistant.",
                         "audio": {"output": {"voice": "cove"}},
                         "delegation": {"type": "client"},
-                        "initial_items": [],
+                        "initial_items": list(history),
                     },
                 }
                 return web.Response(status=201, text=ANSWER, headers={"Location": "/calls/rtc_fixture"})
@@ -98,6 +107,8 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(monkeyp
             notice = {"type": "delegation.created", "item": {"id": "delegation-1", "target": "client"}}
             await socket.send_json(notice)
             await socket.send_json(notice)
+            await asyncio.sleep(0.02)
+            assert not transcripts, "startup history must not satisfy the fresh caller-speech gate"
             await socket.send_json(
                 {"type": "output_transcript.added", "item": {"text": "Go ahead."}, "start_ms": 0, "end_ms": 20}
             )
@@ -107,7 +118,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(monkeyp
             async for message in socket:
                 event = message.json()
                 commands.append(event)
-                if event["type"] == "session.context.append":
+                if event["type"] == "delegation.context.append":
                     replied.set()
                 elif event["type"] == "session.close":
                     await socket.send_json(
@@ -117,7 +128,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(monkeyp
             return socket
 
         async with upstream(monkeypatch, handle):
-            connection = ChatGPTLiveConnection(config(backend))
+            connection = ChatGPTLiveConnection(replace(config(backend), history=history))
             assert await connection.provision(OFFER) == ANSWER
             events: list[Payload] = []
 
@@ -142,13 +153,107 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(monkeyp
             assert [part["speaker"] for part in json.loads(transcripts[0])] == ["assistant", "user"]
             assert commands == [
                 {
-                    "type": "session.context.append",
-                    "channel": "speakable",
+                    "type": "delegation.context.append",
+                    "delegation_item_id": "delegation-1",
                     "content": [{"type": "input_text", "text": "Four."}],
                 },
                 {"type": "session.close"},
             ]
             assert events[-1]["usage"] == {"audio_duration_ms": 1000, "seconds": 1.0}
+
+    asyncio.run(scenario())
+
+
+def test_login_results_keep_each_requesting_delegation_item_id_across_chunks_and_duplicate_notices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        expected = {"item-first": "First result. " * 90, "item-second": "Second result."}
+        results = {identifier: "" for identifier in expected}
+        order: list[str] = []
+        calls: list[str] = []
+        replied = asyncio.Event()
+
+        async def backend(transcript: str) -> str:
+            calls.append(transcript)
+            return expected["item-first" if len(calls) == 1 else "item-second"]
+
+        async def handle(request: web.Request) -> web.StreamResponse:
+            if request.method == "POST":
+                return web.Response(status=201, text=ANSWER, headers={"Location": "/calls/rtc_fixture"})
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            await socket.send_json(
+                {
+                    "type": "input_transcript.added",
+                    "item": {"text": "Current caller request"},
+                    "start_ms": 10,
+                    "end_ms": 20,
+                }
+            )
+            for identifier in ("item-first", "item-first", "item-second"):
+                await socket.send_json(
+                    {
+                        "type": "delegation.created",
+                        "offset_ms": 20,
+                        "item": {
+                            "id": identifier,
+                            "type": "delegation",
+                            "target": "client",
+                            "handoff_id": "different-handoff-id",
+                            "content": [{"type": "input_text", "text": "Current caller request"}],
+                        },
+                    }
+                )
+            async for message in socket:
+                event = message.json()
+                if event["type"] == "session.close":
+                    await socket.send_json({"type": "session.closed"})
+                    break
+                assert event["type"] == "delegation.context.append"
+                assert "channel" not in event and "delegation_id" not in event
+                identifier = event["delegation_item_id"]
+                assert identifier in expected and identifier != "different-handoff-id"
+                assert len(event["content"]) == 1 and event["content"][0]["type"] == "input_text"
+                results[identifier] += event["content"][0]["text"]
+                order.append(identifier)
+                if results == expected:
+                    replied.set()
+            return socket
+
+        async with upstream(monkeypatch, handle):
+            connection = ChatGPTLiveConnection(config(backend))
+            await connection.provision(OFFER)
+
+            async def read() -> None:
+                async for _ in connection.events():
+                    pass
+
+            reader = asyncio.create_task(read())
+            try:
+                async with asyncio.timeout(5):
+                    await replied.wait()
+                    await connection.close()
+                    await reader
+            finally:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+                await connection.aclose()
+            assert len(calls) == 2 and all("Current caller request" in text for text in calls)
+            assert order.count("item-first") > 1 and order[-1] == "item-second"
+            assert results == expected and connection.finalized
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("identifier", [None, True, "", " ", "x" * 257])
+def test_login_result_without_a_valid_provider_delegation_id_never_uses_unbound_speech(identifier: object) -> None:
+    async def scenario() -> None:
+        connection = ChatGPTLiveConnection(config())
+        with pytest.raises(LoginVoiceError, match="invalid delegation event"):
+            normalize_event({"type": "delegation.created", "item": {"id": identifier, "target": "client"}})
+        with pytest.raises(LoginVoiceError, match="invalid delegation result"):
+            await connection._result({"delegation_id": identifier, "content": "An answer"})
 
     asyncio.run(scenario())
 

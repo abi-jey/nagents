@@ -9,6 +9,7 @@ import { useSessionActions } from "../features/sessions/useSessionActions";
 import { useUploads } from "../features/chat/useUploads";
 import { useOperations } from "./useOperations";
 import { availability } from "./availability";
+import { recoverOrphanDraft } from "../features/chat/draftRecovery.js";
 
 export function useClient() {
   const sessions = useSessions();
@@ -23,6 +24,7 @@ export function useClient() {
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
   const [liveOpen, setLiveOpen] = useState(false);
+  const [liveIntent, setLiveIntent] = useState<"start" | "settings">("start");
   const busy = operating || !!chat.runId || sessions.globalBusy;
 
   // The UI rejects competing operations immediately, matching the backend's 409 policy.
@@ -120,6 +122,20 @@ export function useClient() {
     });
   }
 
+  async function recoverDraft(sourceId: string): Promise<boolean> {
+    if (!access().create) return false;
+    return operate(async () => {
+      setLiveOpen(false); chat.pause();
+      try {
+        await recoverOrphanDraft(sourceId, { drafts: chat.drafts,
+          openBlank: () => sessions.select(""), selected: () => sessions.currentSelection().id,
+          load: chat.loadHistory,
+        });
+        chat.setStatus("Draft recovered. Review it before sending.");
+      } finally { chat.reconnect(); }
+    });
+  }
+
   async function cancel() {
     try {
       await chat.cancel(chat.runId || sessions.externalRun);
@@ -138,9 +154,10 @@ export function useClient() {
     available: access(),
     panel,
     liveOpen,
+    liveIntent,
     showTools: () => { if (access().tools) setPanel("tools"); },
     showDesigner: () => { if (access().designer) { setLiveOpen(false); setPanel("designer"); } },
-    showLive: () => { if (access().live) setLiveOpen(true); },
+    showLive: (intent: "start" | "settings" = "start") => { if (access().live) { setLiveIntent(intent); setLiveOpen(true); } },
     closeLive: () => setLiveOpen(false),
     closePanel: () => { setPanel("none"); void connect(); },
     dismissError: () => setError(""),
@@ -154,11 +171,14 @@ export function useClient() {
     busy,
     operating,
     error,
+    orphanedDrafts: sessions.config && sessions.sessionId ? chat.drafts.orphaned(sessions.sessions.map((session) => session.id)) : [],
+    recoverDraft,
     connect,
     select,
     submit,
     cancel,
   };
+
 }
 
 export type Client = ReturnType<typeof useClient>;

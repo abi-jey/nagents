@@ -80,6 +80,10 @@ class RoutedLiveService:
         self.browser_calls: list[tuple[str, str]] = []
         self.relay_calls: list[str] = []
         self.configs: list[LoginVoiceConfig] = []
+        self.delegations: list[dict[str, object]] = []
+
+    def delegation_reporter(self, session_id: str) -> Callable[[dict[str, object]], None]:
+        return self.delegations.append
 
     async def create(self, offer: str, voice: str = "") -> dict[str, object]:
         config = self.login_factory(voice)
@@ -113,8 +117,9 @@ def services(monkeypatch: pytest.MonkeyPatch) -> list[RoutedLiveService]:
         *,
         login_factory: Callable[[str], LoginVoiceConfig | None],
         caption_factory: object = None,
+        context_factory: object = None,
     ) -> RoutedLiveService:
-        del caption_factory
+        del caption_factory, context_factory
         instance = RoutedLiveService(factory, login_factory=login_factory)
         instances.append(instance)
         return instance

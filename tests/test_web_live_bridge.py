@@ -15,9 +15,11 @@ from aiohttp import web
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
+from nagents.types import Message
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.live_bridge import voice_display
 from nagents.web.live_bridge import voice_prompt
@@ -32,7 +34,6 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import GenerationConfig
-    from nagents.types import Message
     from nagents.types import ToolDefinition
 
 
@@ -269,6 +270,7 @@ def test_voice_keeps_its_original_chat_when_another_tab_selects_a_new_one(tmp_pa
         async with client_app(tmp_path, config=_config(tmp_path)) as (app, client, headers, harnesses):
             state = app.state.web
             root = state.selected_session_id
+            await state.history.add_message(root, Message(role="user", content="Existing conversation"))
             new = await client.post("/api/sessions/new", headers=headers, json={})
             assert new.status_code == 200
             selected = state.selected_session_id
@@ -297,6 +299,7 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
         entered = asyncio.Event()
         stopped = asyncio.Event()
         release = asyncio.Event()
+        reports: list[dict[str, object]] = []
 
         async def generate(
             provider: HarnessProvider,
@@ -321,7 +324,9 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, harnesses):
                 state = app.state.web
                 work = asyncio.create_task(
-                    MainAgentBridge(state, state.selected_session_id).handle(speech("A long task"))
+                    MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(
+                        speech("A long task")
+                    )
                 )
                 async with asyncio.timeout(5):
                     await entered.wait()
@@ -331,6 +336,8 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
                 assert (await asyncio.gather(work, return_exceptions=True))[0].__class__ is asyncio.CancelledError
                 assert not stopped.is_set() and not run.finished and state.active is run
                 assert not run.task.done() and harnesses[0]._busy
+                assert [report["status"] for report in reports] == ["queued", "working", "working"]
+                assert reports[-1]["run_id"] == run.id
                 if outcome == "complete":
                     release.set()
                     async with asyncio.timeout(5):
@@ -349,6 +356,106 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
             assert stopped.is_set() and run.finished
             assert run.outcome == ("completed" if outcome == "complete" else "cancelled")
             assert state.active is None and harnesses[0]._busy == ""
+            assert [report["status"] for report in reports] == [
+                "queued",
+                "working",
+                "working",
+                "completed" if outcome == "complete" else "cancelled",
+            ]
+            assert len({str(report["delegation_id"]) for report in reports}) == 1
+            assert reports[-1]["chat_session_id"] == run.session_id
+            assert reports[0]["request_transcript"] == speech("A long task")
+            assert reports[2]["request_input"] == voice_prompt(speech("A long task"))
+            if outcome == "complete":
+                assert reports[-1]["result_text"] == "Completed after voice ended"
+            else:
+                assert "result_text" not in reports[-1]
+
+    asyncio.run(scenario())
+
+
+def test_voice_request_cancelled_before_admission_has_no_assistant_run(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        reports: list[dict[str, object]] = []
+        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
+            state = app.state.web
+            with state.idle():
+                waiting = asyncio.create_task(
+                    MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(speech("Wait"))
+                )
+                await asyncio.sleep(0.02)
+                assert [report["status"] for report in reports] == ["queued"]
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+            assert [report["status"] for report in reports] == ["queued", "cancelled"]
+            assert all(report["run_id"] == "" for report in reports)
+            assert all("request_input" not in report for report in reports)
+            assert state.active is None and await state.harness.history() == []
+
+    asyncio.run(scenario())
+
+
+def test_voice_reply_timeout_keeps_working_status_until_actual_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nagents.web.live_bridge.VOICE_REPLY_SECONDS", 0.02)
+
+    async def scenario() -> None:
+        release = asyncio.Event()
+        entered = asyncio.Event()
+        reports: list[dict[str, object]] = []
+
+        async def produce(run: Run, prompt: str) -> None:
+            entered.set()
+            await release.wait()
+            run.final_text = "Completed after the voice wait timed out"
+
+        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
+            state = app.state.web
+            with patch.object(state, "produce_session", produce):
+                bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
+                result = await bridge.handle(speech("Long request"))
+                assert "still working" in result and "chat" in result
+                async with asyncio.timeout(5):
+                    await entered.wait()
+                run = state.active
+                assert run is not None and not run.task.done()
+                assert [report["status"] for report in reports] == ["queued", "working", "working"]
+                release.set()
+                await run.task
+                assert state.active is None and run.outcome == "completed"
+                assert [report["status"] for report in reports] == ["queued", "working", "working", "completed"]
+                assert reports[-1]["run_id"] == run.id
+
+    asyncio.run(scenario())
+
+
+def test_delegation_target_uses_resolved_agent_profile_model(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        configuration = _config(tmp_path)
+        configuration.profiles = {"auditor": AgentProfile(mode="reviewer", model="profile-model")}
+        reports: list[dict[str, object]] = []
+
+        async def produce(run: Run, prompt: str) -> None:
+            run.final_text = "Profile answer"
+
+        async with client_app(tmp_path, config=configuration) as (app, _, _, _):
+            state = app.state.web
+            await state.harness.set_agent("auditor")
+            assert state.settings.values.model != state.harness.agent.provider.model
+            with patch.object(state, "produce_session", produce):
+                assert (
+                    await MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(
+                        speech("Review it")
+                    )
+                    == "Profile answer"
+                )
+            assert all(
+                report["agent"] == "auditor"
+                and report["model"] == "profile-model"
+                and report["provider"] == "anthropic"
+                for report in reports
+            )
 
     asyncio.run(scenario())
 
@@ -490,6 +597,26 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
                 assert spoken == ["Reply 1 from the selected assistant", "Reply 2 from the selected assistant"]
                 assert seen[0][:2] == seen[1][:2] == ("anthropic", "chat-model")
                 assert seen[1][2] > seen[0][2]  # One persistent chat conversation.
+                snapshot = (
+                    await client.get(f"/api/live/sessions/{created.json()['session_id']}", headers=headers)
+                ).json()
+                assert [event["status"] for event in snapshot["events"] if event["type"] == "delegation"] == [
+                    "queued",
+                    "working",
+                    "working",
+                    "completed",
+                    "queued",
+                    "working",
+                    "working",
+                    "completed",
+                ]
+                assert len(snapshot["delegations"]) == 2
+                assert len({item["delegation_id"] for item in snapshot["delegations"]}) == 2
+                assert len({item["run_id"] for item in snapshot["delegations"]}) == 2
+                assert all(
+                    item["chat_session_id"] == root and item["status"] == "completed"
+                    for item in snapshot["delegations"]
+                )
                 history = await harnesses[0].history()
                 assert any("First question" in str(message.content) for message in history)
                 assert any("Follow-up" in str(message.content) for message in history)

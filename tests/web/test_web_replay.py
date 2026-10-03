@@ -14,6 +14,7 @@ from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskStarted
 from nagents.harness.types import ToolOutput
 from nagents.web.replay import RunReplay
+from nagents.web.routing import RoutingStore
 from nagents.web.service import Run
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
@@ -169,7 +170,13 @@ def test_busy_read_selection_restoration_and_strict_emission_cursors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
-        target = app.client.post("/api/sessions/new", headers=app.headers, json={}).json()["session_id"]
+        assert app.client.portal is not None
+
+        async def named_target() -> str:
+            return await app.state.channels.store._transaction(lambda db: RoutingStore.new_root(db, "Replay target"))
+
+        target = app.client.portal.call(named_target)
+        assert target != app.main
         assert (
             app.client.post("/api/sessions/resume", headers=app.headers, json={"session_id": app.main}).status_code
             == 200

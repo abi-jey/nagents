@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { act, createElement } from "react";
+import type { ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AudioDeviceSettings } from "./AudioDeviceSettings.js";
@@ -27,6 +28,7 @@ function view({ output = true, mediaAvailable = true } = {}) {
   for (const [key, value] of Object.entries({
     window: dom.window, document: dom.window.document, navigator: mediaAvailable ? { mediaDevices: media } : {},
     localStorage: dom.window.localStorage, AudioContext, IS_REACT_ACT_ENVIRONMENT: true,
+    addEventListener: dom.window.addEventListener.bind(dom.window), removeEventListener: dom.window.removeEventListener.bind(dom.window),
   })) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   saveAudioDevices({ inputId: "", outputId: "" });
   const container = dom.window.document.getElementById("root")!;
@@ -39,7 +41,7 @@ function view({ output = true, mediaAvailable = true } = {}) {
     permissionCalls: () => permissionCalls, stops: () => stops,
     inventory: (next: typeof inventory) => { inventory = next; },
     permission: (next: typeof permission) => { permission = next; },
-    render: async () => act(async () => root.render(createElement(AudioDeviceSettings))),
+    render: async (props: ComponentProps<typeof AudioDeviceSettings> = {}) => act(async () => root.render(createElement(AudioDeviceSettings, props))),
     change: async (name: string, value: string) => act(async () => {
       const field = picker(name); field.value = value; field.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     }),
@@ -47,7 +49,7 @@ function view({ output = true, mediaAvailable = true } = {}) {
     async close() {
       if (mounted) await act(async () => root.unmount());
       dom.window.close();
-      for (const key of ["window", "document", "navigator", "localStorage", "AudioContext", "IS_REACT_ACT_ENVIRONMENT"]) {
+      for (const key of ["window", "document", "navigator", "localStorage", "AudioContext", "IS_REACT_ACT_ENVIRONMENT", "addEventListener", "removeEventListener"]) {
         if (original[key]) Object.defineProperty(globalThis, key, original[key]); else Reflect.deleteProperty(globalThis, key);
       }
     },
@@ -168,5 +170,140 @@ test("storage failure explains that device choices still apply in the current br
     assert.match(ui.container.textContent!, /Saved for this tab only/);
     t.mock.restoreAll();
     saveAudioDevices({ inputId: "", outputId: "" });
+  } finally { await ui.close(); }
+});
+
+test("active device changes wait for successful routing before saving and serialize input/output selections", async () => {
+  const ui = view();
+  const calls: [string, string][] = [];
+  let complete!: () => void;
+  const applyDevice = (kind: "input" | "output", id: string) => {
+    calls.push([kind, id]);
+    return new Promise<void>(resolve => { complete = resolve; });
+  };
+  try {
+    await ui.render({ active: true, applyDevice });
+    assert.equal(ui.picker("Microphone").disabled, false);
+    assert.equal(ui.picker("Speaker").disabled, false);
+    assert.match(ui.container.textContent!, /Applies immediately/);
+    await ui.change("Microphone", "mic-one");
+    assert.deepEqual(calls, [["input", "mic-one"]]);
+    assert.equal(ui.picker("Microphone").value, "");
+    assert.equal(ui.picker("Microphone").disabled, true);
+    assert.equal(ui.picker("Speaker").disabled, true);
+    assert.equal(ui.container.querySelector("section")?.getAttribute("aria-busy"), "true");
+    assert.deepEqual(readAudioDevices(), { inputId: "", outputId: "" });
+    await ui.change("Speaker", "speaker-one");
+    assert.equal(calls.length, 1, "a second change cannot race the pending microphone route");
+    await act(async () => complete());
+    assert.equal(ui.picker("Microphone").value, "mic-one");
+    assert.deepEqual(readAudioDevices(), { inputId: "mic-one", outputId: "" });
+    await ui.change("Speaker", "speaker-one");
+    assert.deepEqual(calls[1], ["output", "speaker-one"]);
+    await act(async () => complete());
+    assert.equal(ui.picker("Speaker").disabled, false);
+    assert.deepEqual(readAudioDevices(), { inputId: "mic-one", outputId: "speaker-one" });
+  } finally { await ui.close(); }
+});
+
+test("a failed live device switch keeps the prior selection and preference and reports an inline error", async () => {
+  const ui = view();
+  saveAudioDevices({ inputId: "mic-one", outputId: "speaker-one" });
+  try {
+    await ui.render({ active: true, applyDevice: async () => { throw new Error("The selected microphone is no longer available."); } });
+    await ui.change("Microphone", "");
+    assert.equal(ui.picker("Microphone").value, "mic-one");
+    assert.deepEqual(readAudioDevices(), { inputId: "mic-one", outputId: "speaker-one" });
+    assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /no longer available/);
+    assert.equal(ui.picker("Microphone").disabled, false);
+    assert.equal(ui.picker("Speaker").disabled, false);
+  } finally { await ui.close(); }
+});
+
+test("active settings only enumerate devices even when microphone labels are missing", async () => {
+  const ui = view();
+  ui.inventory([{ kind: "audioinput", deviceId: "mic-one", label: "" }]);
+  try {
+    await ui.render({ active: true });
+    assert.equal(ui.button("Show devices"), undefined);
+    await act(async () => ui.button("Refresh devices").click());
+    assert.equal(ui.permissionCalls(), 0);
+    assert.match(ui.container.textContent!, /Ready to change during voice/);
+    assert.doesNotMatch(ui.container.textContent!, /microphone turns off/);
+  } finally { await ui.close(); }
+});
+
+test("native speaker selection during voice applies routing and retains the current speaker on failure", async () => {
+  const ui = view();
+  saveAudioDevices({ inputId: "", outputId: "speaker-one" });
+  Object.assign(ui.media, { selectAudioOutput: async () => ({ deviceId: "new-speaker", label: "Meeting room speaker" }) });
+  const calls: [string, string][] = [];
+  try {
+    await ui.render({ active: true, applyDevice: async (kind, id) => { calls.push([kind, id]); throw new Error("Speaker permission expired."); } });
+    await act(async () => ui.button("Choose speaker…").click());
+    assert.deepEqual(calls, [["output", "new-speaker"]]);
+    assert.equal(ui.picker("Speaker").value, "speaker-one");
+    assert.equal(readAudioDevices().outputId, "speaker-one");
+    assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /Speaker permission expired/);
+    assert.equal(ui.permissionCalls(), 0);
+  } finally { await ui.close(); }
+});
+
+test("unmounting during an active switch does not save a late result", async () => {
+  const ui = view();
+  let complete!: () => void;
+  try {
+    await ui.render({ active: true, applyDevice: () => new Promise<void>(resolve => { complete = resolve; }) });
+    await ui.change("Microphone", "mic-one");
+    await ui.unmount();
+    await act(async () => complete());
+    assert.deepEqual(readAudioDevices(), { inputId: "", outputId: "" });
+  } finally { await ui.close(); }
+});
+
+test("active pickers follow the live route rather than another tab's saved defaults", async () => {
+  const ui = view();
+  const activeSelection = { inputId: "mic-one", outputId: "speaker-one" };
+  const calls: [string, string][] = [];
+  const applyDevice = async (kind: "input" | "output", id: string) => { calls.push([kind, id]); };
+  try {
+    await ui.render({ active: true, activeSelection, applyDevice });
+    assert.equal(ui.picker("Microphone").value, "mic-one");
+    assert.equal(ui.picker("Speaker").value, "speaker-one");
+    saveAudioDevices({ inputId: "other-tab-mic", outputId: "other-tab-speaker" });
+    await act(async () => ui.dom.window.dispatchEvent(new ui.dom.window.StorageEvent("storage")));
+    assert.equal(ui.picker("Microphone").value, "mic-one");
+    assert.equal(ui.picker("Speaker").value, "speaker-one");
+    assert.deepEqual(calls, []);
+    await ui.change("Microphone", "");
+    assert.deepEqual(calls, [["input", ""]]);
+    assert.deepEqual(readAudioDevices(), { inputId: "", outputId: "other-tab-speaker" });
+    await ui.render({ active: true, activeSelection: { ...activeSelection, inputId: "" }, applyDevice });
+    assert.equal(ui.picker("Microphone").value, "");
+    assert.equal(ui.picker("Speaker").value, "speaker-one");
+    await ui.render();
+    assert.equal(ui.picker("Speaker").value, "other-tab-speaker", "idle settings reflect saved defaults again");
+  } finally { await ui.close(); }
+});
+
+for (const outcome of ["success", "failure", "moved", "hidden"] as const) test(`device switch focus recovery respects ${outcome}`, async () => {
+  const ui = view();
+  let complete!: () => void;
+  try {
+    await ui.render({ active: true, applyDevice: () => new Promise<void>((resolve, reject) => {
+      complete = outcome === "failure" ? () => reject(new Error("Device disconnected")) : resolve;
+    }) });
+    const picker = ui.picker("Microphone");
+    picker.focus();
+    await ui.change("Microphone", "mic-one");
+    // Chrome drops focus to body when a focused select becomes disabled.
+    ui.dom.window.document.body.tabIndex = -1;
+    ui.dom.window.document.body.focus();
+    const elsewhere = ui.dom.window.document.createElement("button");
+    ui.dom.window.document.body.append(elsewhere);
+    if (outcome === "moved") { elsewhere.focus(); elsewhere.blur(); }
+    if (outcome === "hidden") ui.container.hidden = true;
+    await act(async () => complete());
+    assert.equal(ui.dom.window.document.activeElement, outcome === "success" || outcome === "failure" ? picker : ui.dom.window.document.body);
   } finally { await ui.close(); }
 });

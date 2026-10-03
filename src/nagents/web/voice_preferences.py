@@ -8,9 +8,11 @@ import secrets
 import sqlite3
 from contextlib import closing
 from typing import TYPE_CHECKING
+from typing import Annotated
 from typing import Literal
 from typing import TypeVar
 
+from pydantic import AfterValidator
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
@@ -23,10 +25,28 @@ if TYPE_CHECKING:
 
     from nagents.harness.providers import ScopedProviderRegistryStore
 
-MAX_VOICE_BYTES = 4096
+MAX_VOICE_INSTRUCTION_CHARACTERS = 6000
+MAX_VOICE_INSTRUCTION_BYTES = 12000
+# JSON can escape each control character to six bytes. Leave room for those
+# escapes and the remaining preferences while staying below the HTTP body cap.
+MAX_VOICE_BYTES = 40 * 1024
 ModelId = str
 Scope = Literal["global", "workspace"]
+ContextMode = Literal["recent", "summary", "none"]
 T = TypeVar("T")
+
+
+def _instructions(value: str) -> str:
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeError:
+        raise ValueError("Voice instructions must contain valid Unicode text.") from None
+    if size > MAX_VOICE_INSTRUCTION_BYTES:
+        raise ValueError("Voice instructions exceed the 12,000-byte UTF-8 size limit.")
+    return value
+
+
+VoiceInstructions = Annotated[str, Field(max_length=MAX_VOICE_INSTRUCTION_CHARACTERS), AfterValidator(_instructions)]
 
 
 class VoicePreferences(BaseModel):
@@ -47,6 +67,8 @@ class VoicePreferences(BaseModel):
     voice: Literal[
         "marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
     ] = "marin"
+    instructions: VoiceInstructions = ""
+    context_mode: ContextMode = "recent"
 
 
 class VoiceOverrides(VoicePreferences):

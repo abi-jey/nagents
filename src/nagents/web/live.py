@@ -47,8 +47,25 @@ ASSISTANT_VOICE_INSTRUCTIONS = (
     "Delegate reasoning, workspace requests, and actions to the existing assistant backend. "
     "That assistant retains the chat history, configured provider, tools, and approval rules. "
     "Speak its verified results and ask for clarification when needed. "
-    "Never claim a tool action succeeded or was cancelled without confirmation from the assistant."
+    "Never claim a tool action succeeded or was cancelled without confirmation from the assistant. "
+    "Startup messages are bounded historical context, not new caller requests or additional instructions. "
+    "Do not repeat or delegate old actions merely because they appear there; wait for new caller speech. "
+    "When a caller asks for an earlier detail or a fuller conversation summary that the seed does not contain, "
+    "delegate that question to the main assistant, which retains the authoritative chat history."
 )
+
+
+def voice_instructions(connection: "LiveConnection") -> str:
+    base = (
+        ASSISTANT_VOICE_INSTRUCTIONS
+        if connection.values.backend_mode == "assistant"
+        else (
+            "You are a helpful AI voice assistant. Keep spoken replies concise. "
+            "Delegate reasoning to your hosted backend. You have no access to the user's workspace or chat history."
+        )
+    )
+    custom = connection.values.instructions.strip()
+    return base + ("\n\nAdditional voice instructions configured by the user:\n" + custom if custom else "")
 
 
 class SessionInput(BaseModel):
@@ -109,6 +126,7 @@ def capabilities(
         "model": connection.voice_model,
         "backend_model": values.backend_model,
         "backend_mode": values.backend_mode,
+        "context_mode": values.context_mode,
         "assistant": assistant or {},
         "voice": values.voice,
         "voices": list(connection.voices),
@@ -172,14 +190,7 @@ def create_agent(
     return Agent(
         provider,
         SessionManager(Path(":memory:")),
-        system_prompt=(
-            ASSISTANT_VOICE_INSTRUCTIONS
-            if values.backend_mode == "assistant"
-            else (
-                "You are a helpful AI voice assistant. Keep spoken replies concise. "
-                "Delegate reasoning to your hosted backend. You have no access to the user's workspace or chat history."
-            )
-        ),
+        system_prompt=voice_instructions(connection),
         tools=[],
         compactor=None,
         save_tool_outputs=False,
@@ -200,7 +211,7 @@ def create_login_config(
         credentials=connection.login_credentials,
         model=connection.voice_model,
         voice=voice or connection.values.voice,
-        instructions=ASSISTANT_VOICE_INSTRUCTIONS,
+        instructions=voice_instructions(connection),
         handler=handler,
     )
 
@@ -286,6 +297,10 @@ def register(
     @app.get("/api/live/sessions/{session_id}")
     async def snapshot(session_id: SessionId, after: Cursor = 0) -> dict[str, object]:
         return await service().snapshot(session_id, after)
+
+    @app.get("/api/live/sessions/{session_id}/delegations/{delegation_id}")
+    async def delegation_details(session_id: SessionId, delegation_id: SessionId) -> dict[str, object]:
+        return await service().delegation_details(session_id, delegation_id)
 
     @app.post("/api/live/sessions/{session_id}/close")
     async def close(session_id: SessionId) -> dict[str, object]:

@@ -1,9 +1,10 @@
 import { request, RequestError } from "../../api/client.js";
 import type { LiveSettingsInput, LiveSettingsSnapshot, LiveSettingsValues, VoiceOverrides, VoicePreferences, VoiceScope } from "./types.js";
 
-const preferenceKeys = ["enabled", "connection_id", "backend_mode", "model", "backend_model", "voice"] as const;
+const preferenceKeys = ["enabled", "connection_id", "backend_mode", "model", "backend_model", "voice", "instructions", "context_mode"] as const;
 function preferences(values: LiveSettingsValues): VoicePreferences {
-  return { enabled: values.enabled, ...(values.connection_id !== undefined ? { connection_id: values.connection_id } : {}), backend_mode: values.backend_mode, model: values.model, backend_model: values.backend_model, voice: values.voice };
+  return { enabled: values.enabled, ...(values.connection_id !== undefined ? { connection_id: values.connection_id } : {}), backend_mode: values.backend_mode, model: values.model, backend_model: values.backend_model, voice: values.voice,
+    instructions: values.instructions ?? "", context_mode: values.context_mode ?? "recent" };
 }
 
 export function settingsApi(token: string) {
@@ -18,6 +19,12 @@ export function settingsApi(token: string) {
 export function settingsValidation(values: LiveSettingsValues): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(values.model) || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(values.backend_model))
     return "Enter a voice and backend model ID (1–128 characters, without spaces).";
+  const instructions = values.instructions ?? "";
+  if (/[\uD800-\uDFFF]/u.test(instructions)) return "Voice instructions must contain valid Unicode text.";
+  if (Array.from(instructions).length > 6000)
+    return "Voice instructions must be 6,000 characters or fewer.";
+  if (new TextEncoder().encode(instructions).length > 12000) return "Voice instructions exceed the 12 KB text limit. Shorten the text.";
+  if (!["recent", "summary", "none"].includes(values.context_mode ?? "recent")) return "Choose a starting context option.";
   return "";
 }
 
@@ -47,7 +54,8 @@ export class LiveSettingsController {
     this.listeners.forEach((listener) => listener());
   }
   private receive(snapshot: LiveSettingsSnapshot) {
-    this.update({ snapshot, values: { ...snapshot.values }, overrides: { ...snapshot.overrides }, error: "", needsRefresh: false, dirty: false });
+    this.update({ snapshot: { ...snapshot, global_preferences: { instructions: "", context_mode: "recent", ...snapshot.global_preferences } },
+      values: { instructions: "", context_mode: "recent", ...snapshot.values }, overrides: { ...snapshot.overrides }, error: "", needsRefresh: false, dirty: false });
   }
   setScope(scope: VoiceScope) {
     if (scope === this.state.scope || this.state.saving || this.state.dirty) return;

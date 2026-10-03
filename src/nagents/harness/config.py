@@ -34,7 +34,7 @@ PROVIDERS.update(
 )
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
-DEFAULT_HARNESS_MODEL = "gpt-6-luna"
+DEFAULT_HARNESS_MODEL = "gpt-6-astra"
 API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 THEME_BACKGROUNDS: tuple[str, ...] = ("auto", "terminal", "theme")
 

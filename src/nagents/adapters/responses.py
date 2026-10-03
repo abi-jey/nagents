@@ -14,6 +14,7 @@ from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
 from ._validation import ProtocolError
+from ._validation import json_values_equal
 from ._validation import list_data
 from ._validation import object_data
 from ._validation import string_data
@@ -139,12 +140,13 @@ class ResponseAccumulator:
     def _merge(self, index: int, item: dict[str, object]) -> None:
         previous = self.items.get(index, {})
         for key in ("id", "call_id", "name", "type"):
-            if previous.get(key) and item.get(key) and previous[key] != item[key]:
+            if key in previous and key in item and previous[key] != item[key]:
                 raise ProtocolError("Responses returned inconsistent output identities.")
         if (
-            previous.get("arguments")
-            and item.get("arguments")
-            and tool_arguments(previous["arguments"]) != tool_arguments(item["arguments"])
+            "arguments" in previous
+            and previous["arguments"] != ""
+            and "arguments" in item
+            and not json_values_equal(tool_arguments(previous["arguments"]), tool_arguments(item["arguments"]))
         ):
             raise ProtocolError("Responses returned inconsistent completed tool arguments.")
         self.items[index] = {**previous, **item}
@@ -155,21 +157,28 @@ class ResponseAccumulator:
             raise ProtocolError("Responses generation failed; no tools were released.")
         if kind in {"response.output_item.added", "response.output_item.done"}:
             index = _index(event.get("output_index"))
-            self._merge(index, object_data(event.get("item")))
+            item = object_data(event.get("item"))
+            self._merge(index, item)
             if kind.endswith(".done"):
+                if self.items[index].get("type") == "function_call" and "arguments" in item:
+                    tool_arguments(item["arguments"])
                 self.finished.add(index)
         elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
             index = _index(event.get("output_index"))
-            item = self.items.setdefault(index, {})
-            if event.get("item_id"):
-                self._merge(index, {"id": event["item_id"]})
-                item = self.items[index]
+            self.items.setdefault(index, {})
+            if "item_id" in event:
+                item_id = string_data(event["item_id"])
+                if not item_id:
+                    raise ProtocolError("Responses returned an empty argument item identity.")
+                self._merge(index, {"id": item_id})
             if index in self.finished or index in self.arguments_done:
                 raise ProtocolError("Responses sent arguments after an output item finished.")
             if kind.endswith(".delta"):
                 self.arguments[index] = self.arguments.get(index, "") + string_data(event.get("delta"))
             else:
-                item["arguments"] = string_data(event.get("arguments"))
+                arguments = string_data(event.get("arguments"))
+                tool_arguments(arguments)
+                self._merge(index, {"arguments": arguments})
                 self.arguments_done.add(index)
         elif kind in {
             "response.output_text.delta",
@@ -179,8 +188,11 @@ class ResponseAccumulator:
         }:
             index = _index(event.get("output_index"))
             key = (index, _index(event.get("content_index")))
-            if event.get("item_id"):
-                self._merge(index, {"id": event["item_id"]})
+            if "item_id" in event:
+                item_id = string_data(event["item_id"])
+                if not item_id:
+                    raise ProtocolError("Responses returned an empty text item identity.")
+                self._merge(index, {"id": item_id})
             if key in self.texts_done or index in self.finished:
                 raise ProtocolError("Responses sent text after a content part finished.")
             if kind.endswith(".delta"):
@@ -244,11 +256,11 @@ class ResponseAccumulator:
                         "Responses returned an invalid or incomplete tool call; no tools were released."
                     )
                 args = tool_arguments(item.get("arguments", self.arguments.get(index, "")))
-                if index in self.arguments and tool_arguments(self.arguments[index]) != args:
+                if index in self.arguments and not json_values_equal(tool_arguments(self.arguments[index]), args):
                     raise ProtocolError("Responses returned inconsistent streamed tool arguments.")
                 calls.append(ToolCallEvent(id=call_id, name=name, arguments=args, usage=usage, extra=extra))
                 call_ids.add(call_id)
-            elif index in self.arguments:
+            elif index in self.arguments or index in self.arguments_done:
                 raise ProtocolError("Responses returned arguments without a function call.")
             elif kind == "message":
                 if status == "completed" and item.get("status") not in {None, "completed"}:
