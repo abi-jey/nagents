@@ -327,7 +327,7 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
                 assert response.status_code == 201 and response.json() == {
                     "session_id": SESSION,
                     "model": "gpt-live-1-codex",
-                    "voice": voice or "cove",
+                    "voice": voice or "sol",
                 }
                 assert (await client.get("/api/live", headers=headers)).json()["active_session_id"] == SESSION
                 for query, after in (("", 0), ("?after=0", 0), ("?after=37", 37)):

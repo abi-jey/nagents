@@ -66,7 +66,7 @@ class VoicePreferences(BaseModel):
     )
     voice: Literal[
         "marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
-    ] = "marin"
+    ] = "sol"
     instructions: VoiceInstructions = ""
     context_mode: ContextMode = "recent"
 

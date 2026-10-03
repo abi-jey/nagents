@@ -189,7 +189,7 @@ def test_login_readiness_uses_saved_auth_without_api_keys_or_secret_disclosure(
             assert capability.json()["model"] == settings.json()["values"]["model"] == "gpt-live-1-codex"
             assert settings.json()["global_preferences"]["model"] == "gpt-live-1"
             assert capability.json()["voices"] == settings.json()["voices"] == list(LOGIN_VOICES)
-            assert capability.json()["voice"] == "cove"
+            assert capability.json()["voice"] == "sol"
             assert capability.json()["assistant"]["provider"] == "anthropic"
             assert login.reads == 0, "Discovery must not refresh or expose bearer credentials"
             connection = await app.state.live_settings.connection()
@@ -292,6 +292,56 @@ def test_explicit_api_key_voice_uses_provider_relay_even_with_saved_login(
             )
             assert response.status_code == 201
             assert services[0].relay_calls == [""] and not services[0].browser_calls and login.reads == 0
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    "saved_voice,native_voice,api_voice",
+    [
+        ("", "sol", "marin"),
+        ("cove", "cove", "marin"),
+        ("ember", "ember", "marin"),
+        ("marin", "sol", "marin"),
+        ("cedar", "sol", "cedar"),
+    ],
+)
+def test_voice_defaults_follow_auth_without_overwriting_saved_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    login: LoginState,
+    services: list[RoutedLiveService],
+    saved_voice: str,
+    native_voice: str,
+    api_voice: str,
+) -> None:
+    monkeypatch.setenv("TEST_LOGIN_VOICE_KEY", KEY_SECRET)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "absent-codex"))
+
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path, "auto")) as (_, client, headers, harnesses):
+            await configure(client, headers, **({"voice": saved_voice} if saved_voice else {}))
+            before = (await client.get("/api/live/settings", headers=headers)).json()
+            for available, expected_voice in [(True, native_voice), (False, api_voice), (True, native_voice)]:
+                login.available = available
+                current = (await client.get("/api/live/settings", headers=headers)).json()
+                assert current["voice_auth"] == ("chatgpt" if available else "api-key")
+                assert current["values"]["voice"] == expected_voice
+                assert current["global_preferences"] == before["global_preferences"]
+                assert current["overrides"] == before["overrides"]
+                response = await client.post(
+                    "/api/live/sessions",
+                    headers=headers,
+                    json={"revision": current["revision"], "session_id": harnesses[0].session_id},
+                )
+                assert response.status_code == 201, response.text
+                assert response.json()["voice"] == expected_voice
+                if available:
+                    assert services[0].configs[-1].voice == expected_voice
+                closed = await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
+                assert closed.status_code == 200
+            assert login.reads == 2
+            assert services[0].relay_calls == ["", "", ""]
 
     asyncio.run(check())
 

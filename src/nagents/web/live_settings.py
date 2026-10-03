@@ -339,7 +339,7 @@ class LiveSettings:
                     else preferences.model,
                     "voice": preferences.voice
                     if preferences.voice in voices
-                    else ("cove" if voice_auth == "chatgpt" else "marin"),
+                    else ("sol" if voice_auth == "chatgpt" else "marin"),
                 }
             )
             supported = profile is not None and profile.kind in NAMED_LIVE_PROVIDERS

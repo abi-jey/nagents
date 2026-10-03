@@ -168,20 +168,28 @@ def test_invalid_voice_behavior_preferences_are_rejected(values: dict[str, objec
             model.model_validate(values)
 
 
-def test_old_saved_preferences_add_behavior_defaults_without_overwriting_explicit_models(tmp_path: Path) -> None:
+@pytest.mark.parametrize("saved_voice", ["", "marin", "cedar", "cove"])
+def test_old_saved_preferences_add_defaults_without_overwriting_saved_choices(tmp_path: Path, saved_voice: str) -> None:
     named(tmp_path)
 
     async def check() -> None:
         owner = settings(tmp_path)
         await owner.load()
         payload = json.dumps(
-            {"enabled": True, "model": "saved-live", "backend_model": "saved-backend", "voice": "marin"}
+            {
+                "enabled": True,
+                "model": "saved-live",
+                "backend_model": "saved-backend",
+                **({"voice": saved_voice} if saved_voice else {}),
+            }
         )
         with closing(sqlite3.connect(owner.voice.global_db)) as db, db:
             db.execute("UPDATE ngn_voice_preferences SET payload = ?", (payload,))
         current = voice(await owner.snapshot("global"))
         assert current["values"]["instructions"] == "" and current["values"]["context_mode"] == "recent"
         assert current["values"]["model"] == "saved-live" and current["values"]["backend_model"] == "saved-backend"
+        assert current["global_preferences"]["voice"] == (saved_voice or "sol")
+        assert current["values"]["voice"] == (saved_voice if saved_voice in {"marin", "cedar"} else "marin")
         with closing(sqlite3.connect(owner.voice.global_db)) as db:
             assert db.execute("SELECT payload FROM ngn_voice_preferences").fetchone()[0] == payload
         await owner.shutdown()

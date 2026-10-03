@@ -937,9 +937,9 @@ and [delegation guide](https://developers.openai.com/api/docs/guides/live-delega
 Provider endpoint and authentication are edited in **Provider connections**.
 Defaults are disabled, voice model `gpt-live-1`, the library's
 `LiveConfig.backend_model` (`gpt-6-astra`), and voice `marin` for API-key calls.
-ChatGPT login uses `gpt-live-1-codex` for the default voice model and defaults to
-`cove`; its available voices are shown in the selector. The selected connection's
-supported voice is resolved without changing your saved defaults for other
+ChatGPT/Codex login uses `gpt-live-1-codex` for the default voice model and defaults to
+`sol`; its available voices are shown in the selector. Saved voice choices are preserved.
+The selected connection's supported voice is resolved without changing your saved defaults for other
 connections. Voice, model, and connection settings survive server restarts and
 apply to new sessions.
 
