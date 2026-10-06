@@ -43,8 +43,8 @@ export function executionStatus(entry: Entry): { label: string; tone: string } {
   const state = entry.state || "Recorded activity";
   if (state === "Waiting for approval") return { label: "Needs approval", tone: "pending" };
   if (["Error", "Failed", "Interrupted"].includes(state)) return { label: state, tone: "error" };
-  if (["Requested", "Running", "Receiving output"].includes(state))
-    return { label: state === "Receiving output" ? "Running" : state, tone: "active" };
+  if (["Preparing", "Starting", "Requested", "Running", "Receiving output", "Awaiting execution result"].includes(state))
+    return { label: state === "Receiving output" ? "Running" : state === "Awaiting execution result" ? "Awaiting result" : state, tone: "active" };
   if (state === "Completed") return {
     label: ["delegate", "schedule_wakeup", "wake_up_in"].includes(entry.title || "") ? "Request completed" : "Completed",
     tone: "complete",

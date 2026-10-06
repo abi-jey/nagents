@@ -117,9 +117,11 @@ export type Approval = {
   task_name: string;
   depth: number;
   activation: number;
+  allow_tool?: boolean;
+  allow_tool_persistent?: boolean;
 };
 
-export type Decision = "allow" | "deny";
+export type Decision = "allow" | "allow_tool" | "deny";
 export type WireEvent = { event: string; [key: string]: unknown };
 
 export type PendingWakeup = {

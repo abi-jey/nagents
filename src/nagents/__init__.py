@@ -170,6 +170,8 @@ from .events import TextChunkEvent
 from .events import TextDoneEvent
 from .events import TokenUsage
 from .events import ToolCallEvent
+from .events import ToolCallProgressEvent
+from .events import ToolExecutionStartedEvent
 from .events import ToolResultEvent
 from .events import ToolResultType
 from .events import Usage
@@ -385,7 +387,9 @@ __all__ = [
     "ToolCall",
     "ToolCallEvent",
     "ToolCallFunction",
+    "ToolCallProgressEvent",
     "ToolDefinition",
+    "ToolExecutionStartedEvent",
     "ToolExecutor",
     "ToolHallucinationError",
     "ToolRegistry",

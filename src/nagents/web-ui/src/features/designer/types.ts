@@ -26,7 +26,7 @@ export interface ConversationReply { session_id: string; messages: ChatMessage[]
 export interface TraceReply extends RunSummary {
   channel_session?: boolean;
   design: string; events: TraceRecord[];
-  approval: { approval_id?: string; id?: string; description?: string; preview?: string };
+  approval: { approval_id?: string; id?: string; description?: string; preview?: string; allow_tool?: boolean; allow_tool_persistent?: boolean; allow_tool_reason?: string };
 }
 
 export function newAgent(): AgentDefinition {

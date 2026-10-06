@@ -25,6 +25,7 @@ function compatible(saved: Entry, previous: Entry): boolean {
   if (saved.kind === "live_caption" || previous.kind === "live_caption") return sameLiveCaption(saved, previous);
   if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
   if (saved.abandoned || previous.abandoned) return false;
+  if (saved.toolProgress || previous.toolProgress) return false;
   if (saved.callPosition !== undefined && previous.callPosition !== undefined && saved.callPosition !== previous.callPosition) return false;
   if (saved.kind !== previous.kind || previous.taskId || (previous.recorded && previous.kind !== "context")) return false;
   return saved.kind !== "tool" || saved.callId === previous.callId;
@@ -138,7 +139,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
           streaming: entry.kind === "assistant" ? false : old.streaming,
           result: entry.result ?? old.result, queued: false });
     if (entry.kind === "tool" && entry.result !== undefined &&
-        ["Requested", "Running", "Receiving output", "Waiting for approval", "Awaiting execution result", "No result recorded", "Disconnected", "Interrupted", "Cancelled"].includes(old.state || ""))
+        ["Requested", "Starting", "Running", "Receiving output", "Waiting for approval", "Awaiting execution result", "No result recorded", "Disconnected", "Interrupted", "Cancelled"].includes(old.state || ""))
       next[next.length - 1] = { ...next[next.length - 1], state: entry.state };
     used.add(old.id); after = Math.max(after, index + 1);
   }
@@ -171,7 +172,8 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
       const owner = replayOwners.get(entry);
       const scoped = entries.find((item) => !claimed.has(item.id) && item.runId === entry.runId && item.taskId === entry.taskId &&
         item.activation === entry.activation && (item.followup || 0) === (entry.followup || 0) &&
-        item.kind === entry.kind && item.callId === entry.callId && !conflictingRows(entry, item) &&
+        item.kind === entry.kind && (entry.generationId && item.generationId
+          ? entry.generationId === item.generationId && entry.toolIndex === item.toolIndex : item.callId === entry.callId) && !conflictingRows(entry, item) &&
         (!entry.streaming || !!item.streaming) &&
         (entry.kind !== "user" || sameTranscriptUser(entry, item)) &&
         (!owner || !oldOwners.has(item) || sameTurn(owner, oldOwners.get(item))));
@@ -207,6 +209,10 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
   // a full event log. Replace only those streams, retaining observed tool/task
   // evidence, provisional approvals and earlier activations in this connection.
   for (const record of run?.records || []) {
+    if (!run?.events && ["tool_call_progress", "tool_call", "tool_execution_started"].includes(record.event)) {
+      entries = appendEvent(entries, { ...record, run_id: record.run_id || run?.id });
+      continue;
+    }
     if (record.event !== "text_chunk") continue;
     const event = { ...record, run_id: record.run_id || run?.id, event: "text_done", text: record.chunk };
     entries = appendEvent(entries, event);

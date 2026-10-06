@@ -13,6 +13,7 @@ import math
 import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from dataclasses import replace
 from enum import Enum
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -21,6 +22,7 @@ from typing import cast
 from urllib.parse import urlsplit
 
 from ..adapters import openai as openai_adapter
+from ..adapters._tool_progress import ToolCallProgressTracker
 from ..adapters._validation import ProtocolError
 from ..adapters._validation import list_data
 from ..adapters._validation import load_object
@@ -38,6 +40,7 @@ from ..events import ReasoningChunkEvent
 from ..events import TextChunkEvent
 from ..events import TextDoneEvent
 from ..events import ToolCallEvent
+from ..events import ToolCallProgressEvent
 from ..events import Usage
 from ..exceptions import ModelListError
 from ..http import HTTPClient
@@ -603,12 +606,26 @@ class Provider:
 
         for attempt in range(max_retries + 1):
             emitted = False
+            pending: dict[tuple[str, int], ToolCallProgressEvent] = {}
             try:
                 async for event in self._dispatch(messages, tools, config, stream):
-                    emitted = True
+                    if isinstance(event, ToolCallProgressEvent):
+                        key = (event.generation_id, event.index)
+                        if event.status == "streaming":
+                            pending[key] = event
+                        else:
+                            pending.pop(key, None)
+                    else:
+                        emitted = True
                     yield event
                 return  # Success — exit retry loop
-            except HTTPError as e:
+            except Exception as e:
+                # A preview never authorizes execution. Retire it before an
+                # error or retry so the client cannot leave a stale skeleton.
+                for snapshot in pending.values():
+                    yield replace(snapshot, status="abandoned")
+                if not isinstance(e, HTTPError):
+                    raise
                 is_last_attempt = attempt >= max_retries
                 if emitted or not e.is_retryable() or is_last_attempt:
                     if attempt > 0:
@@ -932,6 +949,8 @@ class Provider:
             # Handle tool calls
             if "tool_calls" in delta:
                 tool_accumulator.add_delta(delta)
+                for preview in tool_accumulator.previews():
+                    yield preview
 
         if not completed or finish_reason == FinishReason.UNKNOWN:
             raise ProtocolError("Provider stream ended before completion; no tools were released.")
@@ -952,7 +971,7 @@ class Provider:
         )
         if tool_calls:
             for tc in tool_calls:
-                yield ToolCallEvent(
+                call = ToolCallEvent(
                     id=tc.id,
                     name=tc.name,
                     arguments=tc.arguments,
@@ -961,6 +980,8 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
+                yield tool_accumulator.ready(call)
+                yield call
 
     async def _non_stream_openai(
         self,
@@ -1088,6 +1109,7 @@ class Provider:
 
         full_text = ""
         all_tool_calls: list[ToolCall] = []
+        progress = ToolCallProgressTracker()
         latest_usage = Usage()
         finish_reason = FinishReason.UNKNOWN
         extra: dict[str, Any] = {}
@@ -1110,7 +1132,15 @@ class Provider:
                 yield TextChunkEvent(chunk=text, usage=latest_usage, extra=extra)
 
             if tool_calls:
-                all_tool_calls.extend(tool_calls)
+                for parsed_call in tool_calls:
+                    for preview in progress.preview(
+                        len(all_tool_calls),
+                        parsed_call.id,
+                        parsed_call.name,
+                        json.dumps(parsed_call.arguments, allow_nan=False),
+                    ):
+                        yield preview
+                    all_tool_calls.append(parsed_call)
 
         if finish_reason == FinishReason.UNKNOWN:
             raise ProtocolError("Gemini stream ended before completion; no tools were released.")
@@ -1123,8 +1153,8 @@ class Provider:
             extra=extra,
         )
         if all_tool_calls:
-            for tc in all_tool_calls:
-                yield ToolCallEvent(
+            for index, tc in enumerate(all_tool_calls):
+                call = ToolCallEvent(
                     id=tc.id,
                     name=tc.name,
                     arguments=tc.arguments,
@@ -1133,6 +1163,8 @@ class Provider:
                     extra=extra,
                     metadata=tc.metadata,
                 )
+                yield progress.ready(index, call)
+                yield call
 
     async def _non_stream_gemini(
         self,
@@ -1277,6 +1309,8 @@ class Provider:
                         name=string_data(content_block.get("name", "")),
                         initial_input=content_block.get("input"),
                     )
+                    for preview in tool_accumulator.previews():
+                        yield preview
                 elif block_type == "text" and content_block.get("text"):
                     text = string_data(content_block["text"])
                     full_text += text
@@ -1320,6 +1354,8 @@ class Provider:
                     # Tool call argument fragment
                     partial_json = string_data(delta.get("partial_json", ""))
                     tool_accumulator.add_input_delta(current_block_index, partial_json)
+                    for preview in tool_accumulator.previews():
+                        yield preview
 
             elif event_type == "message_delta":
                 # Message-level update (contains usage info at end)
@@ -1357,7 +1393,7 @@ class Provider:
         yield TextDoneEvent(text=full_text, usage=latest_usage, finish_reason=finish_reason)
         if tool_calls:
             for tc in tool_calls:
-                yield ToolCallEvent(
+                call = ToolCallEvent(
                     id=tc.id,
                     name=tc.name,
                     arguments=tc.arguments,
@@ -1365,6 +1401,8 @@ class Provider:
                     finish_reason=FinishReason.TOOL_CALLS,
                     metadata=tc.metadata,
                 )
+                yield tool_accumulator.ready(call)
+                yield call
 
     async def _non_stream_anthropic(
         self,
@@ -1438,7 +1476,7 @@ class Provider:
             headers.update(await self.auth_headers(url))
         if self.provider_type == ProviderType.OPENROUTER:
             headers["HTTP-Referer"] = "https://github.com/nagents"
-        accumulator = ResponseAccumulator()
+        accumulator = ResponseAccumulator(streaming=stream)
         if stream:
             async with aclosing(
                 cast("AsyncGenerator[str, None]", self._http.post_stream(url, body, headers))

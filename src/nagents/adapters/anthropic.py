@@ -4,8 +4,11 @@ Anthropic Claude format adapters.
 Handles conversion between our internal types and Anthropic Claude API format.
 """
 
+import json
 from typing import Any
 
+from ..events import ToolCallEvent
+from ..events import ToolCallProgressEvent
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import AudioContent
 from ..types import ContentPart
@@ -15,6 +18,7 @@ from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
 from ..types import ToolDefinition
+from ._tool_progress import ToolCallProgressTracker
 from ._validation import ProtocolError
 from ._validation import json_values_equal
 from ._validation import string_data
@@ -275,6 +279,26 @@ class StreamingToolCallAccumulator:
     def __init__(self) -> None:
         self._tool_calls: dict[int, dict[str, Any]] = {}
         self._current_index: int = 0
+        self.progress = ToolCallProgressTracker()
+
+    def previews(self) -> list[ToolCallProgressEvent]:
+        """Publish partial JSON without treating it as executable arguments."""
+        return [
+            event
+            for index, call in sorted(self._tool_calls.items())
+            for event in self.progress.preview(
+                index,
+                call["id"],
+                call["name"],
+                call["arguments"]
+                or (json.dumps(call["initial_input"], allow_nan=False) if call["initial_input"] else ""),
+            )
+        ]
+
+    def ready(self, call: ToolCallEvent) -> ToolCallProgressEvent:
+        """Link a validated call to its original content block index."""
+        index = next(index for index, value in self._tool_calls.items() if value["id"] == call.id)
+        return self.progress.ready(index, call)
 
     def start_tool_call(self, index: int, tool_id: str, name: str, initial_input: object = None) -> None:
         """Start a new tool call block."""
@@ -323,3 +347,4 @@ class StreamingToolCallAccumulator:
         """Clear accumulated tool calls."""
         self._tool_calls.clear()
         self._current_index = 0
+        self.progress = ToolCallProgressTracker()

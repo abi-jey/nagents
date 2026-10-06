@@ -136,9 +136,11 @@ directories into this workload.
 The template also creates `/state/channel-plugins` and sets
 `NGN_CHANNEL_PLUGIN_PATH` to it. Python packages installed there through the
 application's approved shell are retained by the PVC and become discoverable with
-**Channels → Refresh**. The image's Python/pip installation remains on its
-read-only root filesystem; package installation targets the writable plugin
-directory explicitly. Channel configuration, secret values, and chat/session
+**Channels → Refresh**. Approved shell tools can also install system packages in
+the writable container filesystem. Those installations disappear when the
+container is replaced; use a derived image for permanent system dependencies.
+Channel plugins target the writable plugin directory explicitly to survive
+replacement. Channel configuration, secret values, and chat/session
 bindings are private application state and belong in protected backups with the
 session database. Do not put bot tokens in the public manifest or shell prompts.
 
@@ -156,9 +158,15 @@ kept at 0700/0600; there is deliberately no `fsGroup` that could relax them. A
 missing seed and missing destination fail clearly at startup. Existing refreshed
 contents are never overwritten by the seed on restart; the seed volume is optional
 to allow its later deletion. Running as root is what lets the container own and
-mode the hostPath without a privileged init container; keep the container's other
-hardening (read-only root filesystem, dropped capabilities, no privilege
-escalation, no service-account token, a dedicated `/tmp` `emptyDir`).
+mode its dedicated state volume without a privileged init container. Root also
+lets approved shell tools install dependencies inside the container. The root
+filesystem is writable and the only added capabilities are `CHOWN`,
+`DAC_OVERRIDE`, `FOWNER`, `SETUID`, and `SETGID`, for package management and file
+ownership. Keep the default seccomp profile, no privilege escalation, no
+service-account token, and the dedicated `/tmp` `emptyDir`; do not enable a
+privileged container or add host access. The migration notes in
+[ngn container](ngn-container.md#root-access-inside-the-container) explain how
+to preserve a credential store when changing an existing container's UID.
 
 `replicas: 1` plus `Recreate` avoids overlapping owners in ordinary rollouts;
 ReadWriteOnce is not a single-process lock. Do not autoscale, force-delete/recreate

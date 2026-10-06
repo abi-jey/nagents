@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-export function ExecutionValue({ label, text }: { label: string; text: string }) {
+export function ExecutionValue({ label, text, emptyText = "No content returned." }: { label: string; text: string; emptyText?: string }) {
   const [copy, setCopy] = useState({ text: "", status: "idle" });
   const format = useMemo(() => {
     try {
@@ -22,7 +22,7 @@ export function ExecutionValue({ label, text }: { label: string; text: string })
             } catch { setCopy({ text, status: "failed" }); }
           }}>{status === "copied" ? "Copied" : "Copy"}</button>
       </div>
-      <pre tabIndex={0} role="region" aria-label={label}><code>{text || "No content returned."}</code></pre>
+      <pre tabIndex={0} role="region" aria-label={label}><code>{text || emptyText}</code></pre>
       <span role="status" className={status === "failed" ? "tool-copy-error" : "sr-only"}>
         {status === "failed" ? "Could not copy. Select the text to copy it manually." : status === "copied" ? `${label} copied.` : ""}
       </span>

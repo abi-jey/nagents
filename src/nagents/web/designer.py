@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import uuid
 from contextlib import aclosing
 from contextlib import suppress
@@ -218,18 +219,64 @@ class Designer:
         finished = asyncio.Event()
 
         async def approve(request: ApprovalRequest) -> bool:
+            binding = self.state.tool_approvals.requested_binding(harness, request)
+            try:
+                allowed = binding is not None and self.state.tool_approvals.allowed(binding)
+            except sqlite3.Error:
+                allowed = False
+            if allowed:
+                recorder(
+                    "approval_automatic",
+                    {
+                        **asdict(request),
+                        "policy": "workspace_tool_allow",
+                        "decision": "allow_tool",
+                    },
+                )
+                return True
             pending = Pending(uuid.uuid4().hex, request.id, asyncio.get_running_loop().create_future())
-            pending.record = {**asdict(request), "approval_id": pending.id, "run_id": run.id}
+            pending.binding = binding
+            pending.request = replace(request)
+            pending.harness = harness
+            pending.record = {
+                **asdict(request),
+                "approval_id": pending.id,
+                "run_id": run.id,
+                "allow_tool": binding is not None,
+                "allow_tool_persistent": binding.persistent if binding else False,
+                "allow_tool_reason": ""
+                if binding
+                else (
+                    "Demo approvals apply to this call only."
+                    if harness.config.demo
+                    else "This setup request has no registered tool definition. Allow it once."
+                ),
+            }
             run.pending = pending
             recorder("approval", pending.record)
+            approved = False
+            expired = False
             try:
-                return await asyncio.wait_for(pending.answer, 300)
+                approved = await asyncio.wait_for(pending.answer, 300)
+                return approved
             except TimeoutError:
+                expired = True
                 return False
             finally:
                 if not pending.answer.done():
                     pending.answer.set_result(False)
                 run.pending = None
+                recorder(
+                    "approval_closed",
+                    {
+                        "approval_id": pending.id,
+                        "call_id": request.id,
+                        "task_id": request.task_id,
+                        "activation": request.activation,
+                        "decision": (pending.decision or "allow") if approved else "deny",
+                        "expired": expired,
+                    },
+                )
 
         async def persist() -> None:
             while not finished.is_set():

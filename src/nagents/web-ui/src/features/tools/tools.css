@@ -33,3 +33,14 @@
 .tools-dialog footer small { display: block; margin-top: 4px; font-size: 11px; color: var(--text-secondary); }
 .tools-feedback, .tools-empty { padding: 0 24px; font-size: 12px; }
 @media (max-width: 600px) { .tools-toolbar { flex-wrap: wrap; padding-inline: 14px; } .tools-search { min-width: 180px; } .tools-summary { flex-wrap: wrap; padding-inline: 14px; } .tools-summary > span { flex-basis: 100%; } .tools-list { padding-inline: 14px; } .tools-dialog > header, .tools-dialog > footer { padding-inline: 14px; } .tool-switch > span { display: none; } }
+
+.tool-saved-approvals { padding: 14px 16px; border: 1px solid var(--border-group); border-radius: 8px; }
+.tool-saved-approvals h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.tool-saved-approvals p, .tool-saved-approvals small { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.tool-saved-approvals p { margin: 8px 0; }
+.tool-saved-approvals ul { list-style: none; margin: 12px 0 0; padding: 0; }
+.tool-saved-approvals li { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border-group); }
+.tool-saved-approvals li > div { flex: 1; min-width: 0; }
+.tool-saved-approvals code { overflow-wrap: anywhere; font-size: 12px; }
+.tool-saved-approvals small { display: block; font-size: 11px; }
+.tool-saved-approvals button { flex-shrink: 0; font-size: 12px; }

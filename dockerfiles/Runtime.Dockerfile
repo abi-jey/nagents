@@ -39,7 +39,10 @@ RUN groupadd -g ${DOCKER_GID} docker-host && \
     useradd -m -u 1000 -G docker-host agent && \
     install -d -o agent -g agent /home/agent/workspace && \
     chown -R agent:agent /opt/playwright-browsers
-USER agent
+# The single-owner web workspace permits approved shell tools to install system
+# packages inside this container. Keep the agent account for deployments that
+# explicitly choose --user 1000:1000; no sudo or privileged container is needed.
+USER root
 WORKDIR /home/agent/workspace
 
 ENV PYTHONUNBUFFERED=1
