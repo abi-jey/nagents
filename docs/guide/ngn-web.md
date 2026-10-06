@@ -1177,8 +1177,8 @@ channel `/compact` command) always remain available.
 Open **Tools** in the sidebar to inspect registered built-in, channel, and extension
 tools. Select a default agent/profile, search or filter tools, and use the switches
 to enable or disable them. Tool descriptions and parameter schemas are read-only.
-These registered descriptions and schemas are sent to the selected model for enabled
-tools; they guide tool selection and argument construction, while the executor still
+These registered descriptions and schemas are sent to the selected model for enabled,
+currently available tools; they guide tool selection and argument construction, while the executor still
 enforces permissions and input validation. The catalog shows registered definitions:
 a trusted `before_model` plugin may change a particular request, so its captured
 model context/request is the source for that invocation. Search and category filters
@@ -1200,6 +1200,11 @@ the Tools selector. Unspecified tools are enabled by default. Selections are per
 both `ngn serve` and the terminal harness. Disabled tools are omitted from model
 requests and rejected by the executor, including when a configuration change
 occurs during approval. Profile restrictions and tool approval rules still apply.
+Saved selections are intersected with the current profile's permissions, delegation
+depth, and client capabilities before model requests. For example, read-only profiles
+do not receive modifying or custom tools, and native wake-up tools require a client
+scheduler. The complete registered catalog remains editable even when a tool is
+unavailable; changing these capabilities does not replace its registered definition.
 Disabling `schedule_wakeup` also disables its `wake_up_in` alias. **Reset agent**
 removes that agent's overrides when saved. Changes use revision checks and atomic
 file replacement; no credentials are written to this configuration.
