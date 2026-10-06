@@ -6,7 +6,7 @@ import { JSDOM } from "jsdom";
 import type { Snapshot, WireEvent } from "../../types.js";
 import { ExecutionRecord } from "./ExecutionRecord.js";
 import { executionStatus } from "./executionPresentation.js";
-import { applyFrame, applySnapshot, type LiveTranscript } from "./liveTranscript.js";
+import { applyFrame, applySnapshot, pendingApprovals, type LiveTranscript } from "./liveTranscript.js";
 import { appendEvent, type Entry } from "./transcript.js";
 
 const progress = (extra: Partial<WireEvent> = {}): WireEvent => ({
@@ -68,6 +68,146 @@ test("call promotion, invocation, approval, output and result preserve identity 
   assert.equal(entries[0].state, "Completed");
   assert.equal(entries[0].text, "first\nsecond\n");
   assert.equal(entries[0].approval, "Allowed once");
+});
+
+test("direct approval before queued previews or calls keeps one exact card and never rolls back the decision", () => {
+  for (const before of ["preview", "ready", "call", "decision"]) {
+    let entries: Entry[] = [];
+    const request = { event: "approval", run_id: "run", generation_id: "generation", index: 0, id: "call",
+      tool: "shell", approval_id: "nonce", arguments: { command: "check", timeout: 30 } };
+    const send = (event: WireEvent) => { entries = appendEvent(entries, event); };
+    if (before !== "preview") send(progress());
+    const first = entries[0]?.id;
+    if (before === "call") send(progress({ id: "call", status: "ready" }));
+    send(request);
+    const id = entries[0].id;
+    if (first) assert.equal(id, first);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].state, "Waiting for approval");
+    if (before === "decision") send({ event: "approval_closed", run_id: "run", approval_id: "nonce", decision: "allow_tool" });
+    for (const event of [progress(), progress({ id: "call", status: "ready", arguments_text: "queued preview" }), canonical(),
+      { event: "tool_execution_started", run_id: "run", id: "call", extra: { generation_id: "generation", index: 0 } }]) send(event);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].id, id);
+    assert.equal(entries[0].approvalId, "nonce");
+    assert.equal(entries[0].state, before === "decision" ? "Awaiting execution result" : "Waiting for approval");
+    assert.equal(entries[0].inputs, JSON.stringify(request.arguments, null, 2), "Late model arguments cannot overwrite the executor's approved inputs");
+    if (before === "decision") assert.equal(entries[0].approval, "Always allowed in workspace");
+    else send({ event: "approval_closed", run_id: "run", approval_id: "nonce", decision: "allow" });
+    send({ event: "tool_output", run_id: "run", call_id: "call", text: "running" });
+    send({ event: "tool_result", run_id: "run", id: "call", result: "done" });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].state, "Completed");
+    assert.equal(entries[0].approvalId, "nonce");
+  }
+});
+
+test("early approval binds only its generation, task, activation and followup when IDs are reused", () => {
+  let entries = appendEvent([], progress({ id: "call" }));
+  entries = appendEvent(entries, progress({ id: "call", status: "abandoned" }));
+  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { task_id: "child", activation: 2, followup: 1 } }));
+  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { task_id: "child", activation: 2, followup: 2 } }));
+  entries = appendEvent(entries, progress({ generation_id: "retry", extra: { task_id: "other", activation: 2, followup: 1 } }));
+  const target = entries[2].id;
+  entries = appendEvent(entries, { event: "approval", run_id: "run", task_id: "child", activation: 2, followup: 2,
+    generation_id: "retry", index: 0, id: "call", tool: "shell", approval_id: "current" });
+  entries = appendEvent(entries, canonical({ extra: { generation_id: "retry", index: 0, task_id: "child", activation: 2, followup: 2 } }));
+  assert.equal(entries.length, 4);
+  assert.deepEqual(entries.map(entry => entry.state), ["Not run", "Preparing", "Waiting for approval", "Preparing"]);
+  assert.equal(entries[2].id, target);
+  assert.equal(entries.filter(entry => entry.approvalId === "current").length, 1);
+  assert.equal(entries[0].approvalId, undefined);
+});
+
+test("saved automatic approval can precede every queued provider event without duplicate cards", () => {
+  let entries = appendEvent([], { event: "notice", policy: "workspace_tool_allow", run_id: "run",
+    generation_id: "generation", index: 0, call_id: "call", tool: "shell", text: "Allowed by saved policy" });
+  const id = entries.find(entry => entry.kind === "tool")!.id;
+  entries = appendEvent(entries, progress());
+  entries = appendEvent(entries, canonical());
+  const calls = entries.filter(entry => entry.kind === "tool");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].id, id);
+  assert.equal(calls[0].approval, "Always allowed in workspace");
+  assert.equal(calls[0].state, "Awaiting execution result");
+  assert.equal(calls[0].inputs, JSON.stringify({ command: "check" }, null, 2));
+});
+
+test("legacy early approvals and saved grants cannot overwrite a completed call reusing its ID", () => {
+  for (const automatic of [false, true]) {
+    let entries = appendEvent([], canonical({ extra: {} }));
+    entries = appendEvent(entries, { event: "tool_result", run_id: "run", id: "call", result: "old result" });
+    const old = entries[0];
+    entries = appendEvent(entries, automatic
+      ? { event: "notice", policy: "workspace_tool_allow", run_id: "run", call_id: "call", tool: "shell", text: "Saved policy" }
+      : { event: "approval", run_id: "run", id: "call", tool: "shell", approval_id: "new", arguments: { command: "new command" } });
+    entries = appendEvent(entries, canonical({ extra: {}, arguments: { command: "new command" } }));
+    const calls = entries.filter(entry => entry.kind === "tool");
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0], old);
+    assert.equal(calls[1].state, automatic ? "Awaiting execution result" : "Waiting for approval");
+    assert.equal(calls[1].inputs, JSON.stringify({ command: "new command" }, null, 2));
+  }
+});
+
+test("a later direct approval cannot steal an earlier generation's queued output or result", () => {
+  let entries = appendEvent([], canonical());
+  entries = appendEvent(entries, { event: "approval", run_id: "run", generation_id: "generation", index: 0,
+    id: "call", tool: "shell", approval_id: "old" });
+  entries = appendEvent(entries, { event: "approval_closed", run_id: "run", approval_id: "old", decision: "allow" });
+  entries = appendEvent(entries, { event: "approval", run_id: "run", generation_id: "new-generation", index: 0,
+    id: "call", tool: "shell", approval_id: "new" });
+  entries = appendEvent(entries, { event: "tool_output", run_id: "run", call_id: "call", text: "old output", extra: { generation_id: "generation", index: 0 } });
+  entries = appendEvent(entries, { event: "tool_result", run_id: "run", id: "call", result: "old result", extra: { generation_id: "generation", index: 0 } });
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].result, "old result");
+  assert.equal(entries[0].text, "old output");
+  assert.equal(entries[1].result, undefined);
+  assert.equal(entries[1].state, "Waiting for approval");
+  assert.equal(entries[1].approvalId, "new");
+  entries = appendEvent(entries, { event: "tool_output", run_id: "run", call_id: "call", text: " late old tail",
+    extra: { generation_id: "generation", index: 0 } });
+  assert.equal(entries[0].text, "old output late old tail");
+  assert.equal(entries[0].state, "Completed");
+  assert.equal(entries[1].text, "");
+  entries = appendEvent(entries, canonical({ extra: { generation_id: "new-generation", index: 0 } }));
+  entries = appendEvent(entries, { event: "tool_result", run_id: "run", id: "call", result: "new result",
+    extra: { generation_id: "new-generation", index: 0 } });
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].result, "old result");
+  assert.equal(entries[1].result, "new result");
+});
+
+test("ambiguous legacy output stays inspectable without completing either reused-ID call", () => {
+  let entries = appendEvent([], canonical());
+  entries = appendEvent(entries, { event: "approval", run_id: "run", generation_id: "new-generation", index: 0,
+    id: "call", tool: "shell", approval_id: "new" });
+  entries = appendEvent(entries, { event: "tool_output", run_id: "run", call_id: "call", text: "unbound output" });
+  entries = appendEvent(entries, { event: "tool_result", run_id: "run", id: "call", result: "unbound result" });
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0].result, undefined);
+  assert.equal(entries[1].result, undefined);
+  assert.equal(entries[1].state, "Waiting for approval");
+  assert.equal(entries[2].unattributed, true);
+  assert.equal(entries[2].state, "Unattributed result");
+  assert.equal(entries[2].text, "unbound output");
+  assert.equal(entries[2].result, "unbound result");
+  assert.equal(executionStatus(entries[2]).tone, "neutral");
+});
+
+test("cold replay preserves an early pending approval and its exact card through later call hydration", () => {
+  const approval: WireEvent = { event: "approval", run_id: "run", generation_id: "generation", index: 0,
+    id: "call", tool: "shell", approval_id: "nonce", arguments: { command: "check", timeout: 30 } };
+  const events = [progress(), approval, progress({ status: "ready", id: "call" }), canonical()];
+  let current = applySnapshot({ entries: [] }, snapshot(events));
+  const id = current.entries[0].id;
+  current = applySnapshot(current, snapshot(events));
+  assert.equal(current.entries.length, 1);
+  assert.equal(current.entries[0].id, id);
+  assert.equal(current.entries[0].state, "Waiting for approval");
+  assert.equal(current.entries[0].approvalId, "nonce");
+  assert.equal(current.entries[0].inputs, JSON.stringify(approval.arguments, null, 2));
+  assert.equal(pendingApprovals(current.activeRun)[0].approval_id, "nonce");
 });
 
 test("abandoned attempts and task scopes cannot absorb a later call reusing the provider ID", () => {

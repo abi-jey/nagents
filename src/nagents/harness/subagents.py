@@ -173,8 +173,8 @@ class SubagentManager:
     async def delegate(self, prompt: str, agent: str = "assistant") -> dict[str, str]:
         """Start a general-purpose child and immediately return task_id, name, status.
         Continue your own work; its bounded result arrives as untrusted background
-        data after your turn. Children inherit your permission ceiling and need
-        human approval for writes and shell. The whole tree shares 3 concurrent
+        data after your turn. Children inherit your permission ceiling; writes
+        and shell pass through the host approval policy. The whole tree shares 3 concurrent
         slots and 8 executions per root run; full quotas fail immediately.
 
         Args:

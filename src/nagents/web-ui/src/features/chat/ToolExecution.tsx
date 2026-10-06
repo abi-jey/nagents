@@ -41,6 +41,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
     </>,
   });
   panels.push({ key: "metadata", label: "Details", content: <div className="tool-metadata">
+    {entry.unattributed && <p className="record-note">This event has no unique invocation identity. It has not been attributed to either call sharing this ID.</p>}
     {entry.state === "Recorded result" && <p className="record-note">Result saved in conversation history. Original execution status and timing may be unavailable.</p>}
     {entry.delegatedTaskId && <p className="record-note">Delegated to <a href={`#${encodeURIComponent(`task-${entry.delegatedTaskId}`)}`}>{entry.delegatedTaskId}</a>. The task has its own execution state.</p>}
     {["schedule_wakeup", "wake_up_in"].includes(name) && <p className="record-note">This is the scheduling request, not evidence that a wake-up fired.</p>}

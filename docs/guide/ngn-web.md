@@ -1177,6 +1177,14 @@ channel `/compact` command) always remain available.
 Open **Tools** in the sidebar to inspect registered built-in, channel, and extension
 tools. Select a default agent/profile, search or filter tools, and use the switches
 to enable or disable them. Tool descriptions and parameter schemas are read-only.
+These registered descriptions and schemas are sent to the selected model for enabled
+tools; they guide tool selection and argument construction, while the executor still
+enforces permissions and input validation. The catalog shows registered definitions:
+a trusted `before_model` plugin may change a particular request, so its captured
+model context/request is the source for that invocation. Search and category filters
+only affect this list; **Enable visible**/**Disable visible** change selections that
+apply after saving. Choosing an agent here edits that profile's selections without
+switching the active conversation's agent.
 **Save tools** writes `.ngn/tools.yaml` in the workspace, for example:
 
 ```yaml

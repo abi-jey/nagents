@@ -26,6 +26,7 @@ from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.extensions import AgentPlugin
+from nagents.observation import scope as observation_scope
 from nagents.provider.openai import OpenAIProvider
 from nagents.session import SessionManager
 from nagents.types import ContentPart
@@ -60,6 +61,7 @@ from .types import Notice
 from .types import SessionInfo
 from .types import TaskCompleted
 from .types import TaskMessage
+from .types import ToolOutput
 
 if TYPE_CHECKING:
     from nagents.context_stats import ContextStats
@@ -441,6 +443,18 @@ class Harness:
 
     async def emit(self, event: HarnessEvent) -> None:
         if self._queue is not None:
+            if isinstance(event, ToolOutput):
+                invocation = observation_scope.get()
+                generation, index = invocation.get("tool_generation_id"), invocation.get("tool_index")
+                if (
+                    invocation.get("tool_call_id") == event.call_id
+                    and invocation.get("tool_name") == event.tool
+                    and isinstance(generation, str)
+                    and generation
+                    and type(index) is int
+                    and 0 <= index < 1024
+                ):
+                    event = replace(event, extra={**event.extra, "generation_id": generation, "index": index})
             observe_host_event(self, event)
             await self._queue.put(event)
 
@@ -1030,8 +1044,9 @@ class Harness:
                 *self.tools.skill_diagnostics,
                 f"Instructions: {', '.join(self.instructions) or 'none'}",
                 f"Session database: {self.agent.session.db_path}",
-                "Policy: read-only reviewer; build edits and other custom tools require approval; "
-                "host-managed interactive channel_send does not; shell always asks and is NOT SANDBOXED.",
+                "Policy: read-only reviewer; build edits, shell, and custom tools pass through the host approval policy "
+                "(one-call decision or a saved matching tool allowance); "
+                "host-managed interactive channel_send does not; shell is NOT SANDBOXED.",
                 "File tools: bounded UTF-8, no symlinks/credentials/.git; create parents with an explicitly approved shell command.",
                 *self.diagnostics,
             ]

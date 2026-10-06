@@ -32,6 +32,7 @@ from nagents.events import ToolResultEvent
 from nagents.harness.execution import bind_channel_send
 from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
+from nagents.observation import scope as observation_scope
 
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
@@ -144,6 +145,9 @@ class Run:
         generation = record.get("generation_id", extra.get("generation_id", ""))
         index = record.get("index", extra.get("index", ""))
         progress_key = f"{scope}:progress:{generation}:{index}"
+        correlated = isinstance(generation, str) and bool(generation) and type(index) is int and 0 <= index < 1024
+        call_id = record.get("call_id", record.get("id", ""))
+        tool_slot = json.dumps([call_id, generation if correlated else "", index if correlated else -1])
         if not record.get("task_id", extra.get("task_id", "")):
             if event == "text_chunk" and not any(key.startswith(f"{scope}:call:") for key in self.drafts):
                 self._context_reply_live = True
@@ -160,9 +164,9 @@ class Run:
                 self.retain(progress_key, record)
         elif event == "tool_call":
             self.forget(progress_key)
-            self.retain(f"{scope}:call:{record.get('id', '')}", record)
+            self.retain(f"{scope}:call:{tool_slot}", record)
         elif event == "tool_execution_started":
-            self.retain(f"{scope}:started:{record.get('id', '')}", record)
+            self.retain(f"{scope}:started:{tool_slot}", record)
         elif event == "transcript_anchor":
             calls = record.get("calls", [])
             if isinstance(calls, list):
@@ -184,13 +188,34 @@ class Run:
                                 },
                             )
         elif event == "tool_output":
-            key = f"{scope}:output:{record.get('call_id', '')}"
+            key = f"{scope}:output:{tool_slot}"
             old = self.drafts.get(key, {})
             self.retain(key, {**record, "text": (str(old.get("text", "")) + str(record.get("text", "")))[-262144:]})
         elif event == "tool_result":
-            self.forget(f"{scope}:call:{record.get('id', '')}")
-            self.forget(f"{scope}:started:{record.get('id', '')}")
-            self.forget(f"{scope}:output:{record.get('id', '')}")
+            if correlated:
+                for kind in ("call", "started", "output"):
+                    self.forget(f"{scope}:{kind}:{tool_slot}")
+            else:
+                # Legacy uncorrelated results may clear one unambiguous call,
+                # never a newer generation that happens to reuse the same ID.
+                matches: list[str] = []
+                identities: set[str] = set()
+                for key, draft in self.drafts.items():
+                    if (
+                        not key.startswith(f"{scope}:")
+                        or draft.get("event") not in {"tool_call", "tool_execution_started", "tool_output"}
+                        or draft.get("call_id", draft.get("id", "")) != call_id
+                    ):
+                        continue
+                    metadata = draft.get("extra", {})
+                    metadata = metadata if isinstance(metadata, dict) else {}
+                    identity = draft.get("generation_id", metadata.get("generation_id", ""))
+                    if identity:
+                        identities.add(str(identity))
+                    matches.append(key)
+                if len(identities) <= 1:
+                    for key in matches:
+                        self.forget(key)
         elif event in {"text_done", "done", "task_completed"}:
             self.forget(f"{scope}:text_chunk")
             self.forget(f"{scope}:reasoning_chunk")
@@ -380,6 +405,21 @@ class WebState:
         run = self.active
         if run is None or run.pending is not None or run.finished or run.task.done() or run.task.cancelling():
             return False
+        # Display correlation only. The nonce and the real executor request
+        # remain the authority for approving an operation.
+        identity: dict[str, object] = {}
+        invocation = observation_scope.get()
+        generation = invocation.get("tool_generation_id")
+        index = invocation.get("tool_index")
+        if (
+            invocation.get("tool_call_id") == request.id
+            and invocation.get("tool_name") == request.tool
+            and isinstance(generation, str)
+            and generation
+            and type(index) is int
+            and 0 <= index < 1024
+        ):
+            identity = {"generation_id": generation, "index": index}
         binding = self.tool_approvals.requested_binding(self.running_harness, request)
         try:
             allowed = binding is not None and self.tool_approvals.allowed(binding)
@@ -392,6 +432,7 @@ class WebState:
                     "event": "notice",
                     "automatic": True,
                     "policy": "workspace_tool_allow",
+                    **identity,
                     "text": f"{request.tool} is always allowed in this workspace.",
                     "task_id": request.task_id,
                     "activation": request.activation,
@@ -407,6 +448,7 @@ class WebState:
                     "event": "notice",
                     "automatic": True,
                     "policy": "channel_auto_reply",
+                    **identity,
                     "text": "Automatic approval for this session's permanently owned chat under its connection's automatic-message policy.",
                     "task_id": request.task_id,
                     "activation": request.activation,
@@ -444,6 +486,7 @@ class WebState:
         pending.record = {
             "event": "approval",
             **asdict(request),
+            **identity,
             "approval_id": pending.id,
             "run_id": run.id,
             "allow_tool": binding is not None,
@@ -471,6 +514,7 @@ class WebState:
                     run,
                     {
                         "event": "approval_closed",
+                        **identity,
                         "approval_id": pending.id,
                         "task_id": request.task_id,
                         "activation": request.activation,

@@ -1,7 +1,11 @@
 # Tools API
 
 Pass Python callables to `Agent(tools=[...])`. `ToolRegistry` extracts schemas
-and supports explicit name, description, and parameter overrides. Its
+and supports explicit name, description, and parameter overrides. Nonempty explicit
+`description` strings are preserved verbatim, including paragraphs and hard line
+breaks. `None` or an empty string uses the first docstring paragraph; a function
+without a docstring falls back to `Call <tool name>`. Parameter schemas are
+unchanged by description overrides. Its
 `register()` method returns a `ToolDefinition`, not a wrapper to pass back into
 `Agent(tools=...)`. See [Tool Usage](../examples/tool-usage.md).
 
