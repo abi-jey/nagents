@@ -8,6 +8,10 @@ production approval defaults. Harbor is not a nagents runtime dependency.
 
 [Development pilot observations](RESULTS.md) separate setup failures, harness
 failures, model completion, and verifier outcomes from the recorded candidates.
+The [0.20.0 release report](RESULTS.md#release-0200-evaluation) records a controlled
+Agent-core description comparison and a separate three-model Harness matrix.
+The latter separates the ngn-owned diagnostic's 3/3 passes from the selected
+Terminal-Bench tasks' 1/9 passes; neither is a full leaderboard score.
 
 The pilot pins **Harbor 0.23.0** (`1e5c5c6db929a10a140d05e606882c671ae20729`) and
 **Terminal-Bench 4.0.0** (`452bf305c6daa62fc59061d22133a7cbc7c1572e`). Three CPU-only
