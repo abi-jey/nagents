@@ -248,6 +248,10 @@ class ToolCard(Collapsible):
     def _watch_collapsed(self, collapsed: bool) -> None:
         # Keep Collapsible's state and notifications, but target its header
         # rather than starting a scroll animation toward the entire large card.
+        if self.is_mounted and not collapsed and isinstance(self.parent, VerticalScroll):
+            # Release bottom-follow before exposing the contents. A deferred
+            # header scroll can run before layout updates the scroll bounds.
+            self.parent.release_anchor()
         self._update_collapsed(collapsed)
         self.post_message(self.Collapsed(self) if collapsed else self.Expanded(self))
         if self.is_mounted:
