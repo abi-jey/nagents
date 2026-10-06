@@ -22,6 +22,24 @@ const snapshot = (events?: WireEvent[], records?: WireEvent[]): Snapshot => ({
   active_run: { id: "run", status: "running", events, records },
 });
 
+test("a recoverable child delivery warning preserves the root's Preparing tool preview", () => {
+  let entries = appendEvent([], progress({ arguments_text: '{"command":"root' }));
+  const root = entries[0];
+  entries = appendEvent(entries, progress({ task_id: "child", activation: 1, followup: 2, arguments_text: "child draft" }));
+  entries = appendEvent(entries, {
+    event: "error", run_id: "run", code: "TASK_DELIVERY_SKIPPED", recoverable: true,
+    task_id: "child", activation: 1, followup: 2,
+    message: "The immediate parent stopped; its descendant result was not forwarded to Main.",
+  });
+  const remaining = entries.find(entry => entry.id === root.id);
+  assert.equal(remaining, root);
+  assert.equal(remaining?.state, "Preparing");
+  assert.equal(remaining?.toolProgress, "streaming");
+  assert.equal(remaining?.inputs, '{"command":"root');
+  assert.equal(entries.find(entry => entry.kind === "tool" && entry.taskId === "child")?.state, "Interrupted");
+  assert.equal(entries.find(entry => entry.kind === "error")?.taskId, "child");
+});
+
 test("parallel proposed calls appear before complete JSON and late provider IDs retain their cards", () => {
   let entries = appendEvent([], progress({ arguments_text: '{"command":"' }));
   const first = entries[0].id;

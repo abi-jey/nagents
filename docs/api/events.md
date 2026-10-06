@@ -43,6 +43,20 @@ A native child that reaches its limit remains failed, retains its history, and
 reports a fixed budget explanation to its parent. These diagnostics do not change
 the library, Harness, or child round limits or their cleanup behavior.
 
+If a descendant finishes while its immediate parent is stopping or cancelled,
+the Harness keeps the descendant's `TaskCompleted` outcome and withholds delivery.
+It emits the host-owned `TaskDeliveryWarning` subtype of `ErrorEvent`, with code
+`TASK_DELIVERY_SKIPPED` and `recoverable=True`. Recoverable refers to the root run:
+it may continue or delegate replacement work, but descendant data is never routed
+directly to Main and the failed/cancelled child outcomes are not changed.
+
+This diagnostic carries `task_id`, `task_name`, `parent_task_id`,
+`parent_session_id`, `child_session_id`, `depth`, `activation`, and `followup`.
+The web client retains only these owned scope fields and fixed safe text, so a
+child warning does not clear Main's tool preview or mark its run failed. Ordinary
+provider errors cannot gain this scope by copying the code or adding metadata.
+Missing or mismatched parent identities remain fatal errors.
+
 Built-in text providers attach safe diagnostics to caught generation failures in
 `ErrorEvent.extra["transport"]`. Existing `code`, `message`, and `recoverable`
 values keep their meaning; diagnostics do not enable retries or change deadlines.
