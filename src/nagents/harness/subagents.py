@@ -28,6 +28,7 @@ from nagents.provider.openai import OpenAIProvider
 from .provider import HarnessProvider
 from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
 from .types import TaskCompleted
+from .types import TaskDeliveryWarning
 from .types import TaskMessage
 from .types import TaskNotification
 from .types import TaskStarted
@@ -556,8 +557,15 @@ class SubagentManager:
                 )
             ):
                 self.root._observed.append(
-                    ErrorEvent(
-                        message="Immediate parent is stopping or cancelled; descendant result was not forwarded to Main."
+                    TaskDeliveryWarning(
+                        task_id=info.id,
+                        task_name=info.name,
+                        parent_task_id=info.parent_task_id,
+                        parent_session_id=info.parent_session_id,
+                        child_session_id=info.child_session_id,
+                        depth=info.depth,
+                        activation=info.activation,
+                        followup=info.followups,
                     )
                 )
                 return

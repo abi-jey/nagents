@@ -32,6 +32,7 @@ from nagents.events import ToolResultEvent
 from nagents.harness.execution import bind_channel_send
 from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
+from nagents.harness.types import TaskDeliveryWarning
 from nagents.observation import scope as observation_scope
 
 from ._async import finish_on_cancel
@@ -591,9 +592,34 @@ class WebState:
                         if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
                             run.final_text = event.final_text
                         if isinstance(event, ErrorEvent):
-                            reason, message = provider_error(event)
+                            if type(event) is TaskDeliveryWarning:
+                                # Only this host-owned type carries trusted task
+                                # scope. Provider codes and arbitrary extra fields
+                                # cannot impersonate it or leak into web records.
+                                reason, message = "task_delivery_skipped", TaskDeliveryWarning.message
+                                record = {
+                                    "event": "error",
+                                    "message": message,
+                                    "code": "TASK_DELIVERY_SKIPPED",
+                                    "recoverable": True,
+                                    "task_id": event.task_id,
+                                    "task_name": event.task_name,
+                                    "parent_task_id": event.parent_task_id,
+                                    "parent_session_id": event.parent_session_id,
+                                    "child_session_id": event.child_session_id,
+                                    "depth": event.depth,
+                                    "activation": event.activation,
+                                    "followup": event.followup,
+                                }
+                            else:
+                                reason, message = provider_error(event)
+                                record = {
+                                    "event": "error",
+                                    "message": message,
+                                    "recoverable": event.recoverable,
+                                }
                             logger.warning(
-                                "Provider run error: session=%s run=%s reason=%s recoverable=%s",
+                                "Run error: session=%s run=%s reason=%s recoverable=%s",
                                 run.session_id,
                                 run.id,
                                 reason,
@@ -601,11 +627,6 @@ class WebState:
                             )
                             if not event.recoverable:
                                 run.outcome = "failed"
-                            record = {
-                                "event": "error",
-                                "message": message,
-                                "recoverable": event.recoverable,
-                            }
                         else:
                             if isinstance(event, ToolCallEvent):
                                 known = (

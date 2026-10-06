@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Literal
 
+from nagents.events import ErrorEvent
 from nagents.events import Event
 from nagents.events import ToolCallEvent
 from nagents.types import ToolArguments
@@ -94,6 +95,31 @@ class TaskCompleted:
     status: Literal["running", "completed", "failed", "cancelled"] = "completed"
     activation: int = 0
     trigger: str = "delegation"
+
+
+@dataclass(kw_only=True)
+class TaskDeliveryWarning(ErrorEvent):
+    """Host-owned diagnostic: a stopped parent cannot receive this task's data.
+
+    This is recoverable for the root run, not permission to retry delivery or
+    forward descendant data elsewhere. The distinct Python type lets web clients
+    recognize trusted task metadata without trusting an upstream error code.
+    """
+
+    message: str = field(
+        default="The immediate parent stopped or was cancelled; this descendant result was not forwarded to Main.",
+        init=False,
+    )
+    code: str = field(default="TASK_DELIVERY_SKIPPED", init=False)
+    recoverable: bool = field(default=True, init=False)
+    task_id: str
+    task_name: str
+    parent_task_id: str
+    parent_session_id: str
+    child_session_id: str
+    depth: int
+    activation: int
+    followup: int
 
 
 @dataclass
