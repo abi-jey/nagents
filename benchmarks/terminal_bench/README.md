@@ -99,6 +99,12 @@ build records and adds a reference to the earlier provenance, current adapter Gi
 state, and new runner/adapter/configuration hashes. Review the new bundle and run
 its dry-run before separately authorizing a fresh trial; earlier results stay intact.
 
+The runner accepts both released YAML-backed Harness configuration and the
+local JSON/named-provider configuration API. It selects that schema from the
+measured runtime and keeps both registries inside fresh private XDG stores;
+reusing a released wheel does not silently select the local checkout's provider
+factory or configuration.
+
 The explicit-deadline fixture creates `/installed-agent/ngn-benchmark/codex-access/auth.json` in a
 private container directory from the provisioned access token and account ID.
 It creates no refresh token, ID token, or Codex configuration file and copies no
@@ -129,7 +135,7 @@ an access-only `OpenAIAuth` subclass, also shared by normal native subagents.
 Refresh the host file through the authorized resolver before a new trial if its
 access token expires. The adapter never writes back to the user's login store.
 
-The runner uses the released YAML/provider configuration API with an explicit
+The runner uses the measured runtime's provider configuration API with an explicit
 OpenAI/ChatGPT connection and model. Each trial creates fresh private
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` directories below its installed-agent
 directory. Both global and workspace provider registries therefore start empty;

@@ -97,6 +97,12 @@ jobs:
       - name: Run tests
         run: pytest tests/ -n auto -v --cov=nagents --cov-report=xml --cov-report=term-missing
 
+      - name: Check offline harness diagnostics
+        if: matrix.python-version == '3.12'
+        run: >-
+          pytest -q benchmarks/terminal_bench/tests/test_runner.py
+          benchmarks/diagnostics/tests/test_diagnostic.py
+
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@v5

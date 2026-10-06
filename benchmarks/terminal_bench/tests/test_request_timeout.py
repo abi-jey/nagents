@@ -144,7 +144,12 @@ def test_older_runtime_keeps_callback_fixture_and_rejects_named_option_clearly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delattr(providers, "validate_request_timeout")
-    assert runner.configuration(tmp_path, "gpt-6-astra", tmp_path / "private").auth == "chatgpt"
+    config = runner.configuration(tmp_path, "gpt-6-astra", tmp_path / "private")
+    if hasattr(config, "providers"):
+        assert config.provider_profile().auth == "chatgpt"
+    else:
+        assert hasattr(config, "auth")
+        assert config.auth == "chatgpt"
     with pytest.raises(ValueError, match=r"0\.18-compatible runtime"):
         runner.request_deadline(300)
     assert not runner.PRIVATE_CODEX_HOME.exists()
