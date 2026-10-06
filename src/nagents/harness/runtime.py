@@ -1030,8 +1030,9 @@ class Harness:
                 *self.tools.skill_diagnostics,
                 f"Instructions: {', '.join(self.instructions) or 'none'}",
                 f"Session database: {self.agent.session.db_path}",
-                "Policy: read-only reviewer; build edits and other custom tools require approval; "
-                "host-managed interactive channel_send does not; shell always asks and is NOT SANDBOXED.",
+                "Policy: read-only reviewer; build edits, shell, and custom tools pass through the host approval policy "
+                "(one-call decision or a saved matching tool allowance); "
+                "host-managed interactive channel_send does not; shell is NOT SANDBOXED.",
                 "File tools: bounded UTF-8, no symlinks/credentials/.git; create parents with an explicitly approved shell command.",
                 *self.diagnostics,
             ]

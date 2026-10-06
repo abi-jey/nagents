@@ -251,7 +251,7 @@ class ChannelHost:
     async def channel_action(
         self, channel: str, action: str, arguments: dict[str, ChannelValue]
     ) -> dict[str, ChannelValue]:
-        """Perform an explicit advertised channel action once, under normal human approval."""
+        """Perform an explicit advertised channel action once, through the host approval policy."""
         try:
             if self.dispatcher is None:
                 raise ChannelError("No connected channels")
