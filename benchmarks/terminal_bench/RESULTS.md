@@ -268,12 +268,13 @@ hidden-verifier workaround, or production default change followed this result.
 
 ## Release 0.20.0 evaluation
 
-The 2026-10-06 description comparison used the same published **nagents 0.20.0**
-wheel for both variants. Its frozen identities were:
+The 2026-10-06 description comparison and subsequent Harness matrix used the
+published **nagents 0.20.0** wheel. Both description variants shared that fixed
+runtime. Its frozen identities were:
 
 - Source commit: `5a620104613b71936f02eaf9266bf85f9332b345`.
 - Wheel SHA-256: `fe2b37323902edf83b3854fb904beac01375a2d343d6fa2b19b68e6543ae06e8`.
-- Evaluation script SHA-256: `fe9ee02388d3662b08617af1436f1c20ab01edfbcf5836f8936fb4ea78649bcb`.
+- Agent-core comparison script SHA-256: `fe9ee02388d3662b08617af1436f1c20ab01edfbcf5836f8936fb4ea78649bcb`.
 
 ### Agent-core description comparison
 
@@ -384,3 +385,150 @@ Frozen scripts, per-run provenance, request captures, and raw outcomes remain
 private. The published tables contain sanitized measurements and fixture
 descriptions; they contain no credentials, user workspace data, or raw model
 responses. Aggregation performed no new inference or retries.
+
+### Harness workflow and selected Terminal-Bench tasks
+
+A separate matrix ran the shipping `Harness.run` and native tools with each of
+the same three requested model IDs. It contained **12 attempts**: one independent
+`review-followthrough` diagnostic and three selected Terminal-Bench tasks per
+model. The diagnostic passed **3/3 attempts**; the Terminal-Bench subset passed
+**1/9 attempts**. These are separate results, not a full Terminal-Bench score or
+a statistically supported model ranking. This matrix did not repeat the
+description A/B experiment.
+
+All attempts used the source commit and wheel above, with frozen runner SHA-256
+`10391b2ecb949d671588802eb44c025b964302099ba70ca0c9ad577fe8a67dc7`.
+Harbor was pinned to 0.23.0 (`1e5c5c6db929a10a140d05e606882c671ae20729`);
+Terminal-Bench was pinned to 4.0.0
+(`452bf305c6daa62fc59061d22133a7cbc7c1572e`). The ngn-owned diagnostic used its
+separate version-2 task and frozen workflow audit. Independent aggregation
+checked every bundle's recorded provenance and job hashes, runtime identity,
+requested model, and reported root/child counts.
+
+Each model/task pair received one attempt, one trial at a time, with no Harbor
+retry or model substitution. The normal named ChatGPT/Codex connection used an
+explicit **300-second request deadline**, a **900-second agent budget**, and the
+shipping **30-round limit per `Agent.run` loop**. The latter is not an aggregate
+30-tool-call limit: a round can contain multiple calls, and background-result
+synthesis starts another loop. The shipping Codex subscription path bypassed
+generic `Provider._with_retry`; the generic `RetryConfig` default did not provide
+three retries for these calls. No root retry events were observed.
+
+The inspected Docker task containers used the existing scoped automatic-approval
+fixture. These runs exercised native tool execution and delegation, not human
+approval dialogs. Agent instructions, independent verifier execution, container
+limits, credential cleanup, and bounded child-history recording followed the
+[adapter contract](README.md). No benchmark-specific repair or extra solving
+turn was inserted after a failure.
+
+### Independent review-followthrough diagnostic
+
+Each diagnostic attempt completed one native child review and passed the frozen
+workflow audit as well as all nine independent functional checks. This is the
+self-authored diagnostic described in [its guide](../diagnostics/README.md),
+with no Terminal-Bench content.
+
+| Requested model | Harness outcome | Agent time | Root tool calls / errors | Functional checks | Workflow audit | Reward |
+| --- | --- | --- | --- | --- | --- | --- |
+| `gpt-5.6-luna` | Completed | 72.8 s | 12 / 0 | 9/9 | Pass | 1 |
+| `gpt-5.6-terra` | Completed | 75.8 s | 12 / 0 | 9/9 | Pass | 1 |
+| `gpt-5.6-sol` | Completed | 82.7 s | 12 / 0 | 9/9 | Pass | 1 |
+
+### Selected Terminal-Bench outcomes
+
+All nine attempts reached their actual verifier test suites. Counts below are
+passed checks out of the reported suite total; they are not setup-gate results.
+Repeated verifier reports or verifier-internal repeats are counted once per
+agent attempt, rather than summed as additional trials.
+
+| Task | Requested model | Harness outcome | Agent time | Root tool calls / errors | Verifier checks | Reward |
+| --- | --- | --- | --- | --- | --- | --- |
+| `session-window-debug` | `gpt-5.6-luna` | Round limit | 388.4 s | 46 / 1 | 4/7 | 0 |
+| `session-window-debug` | `gpt-5.6-terra` | Round limit | 686.1 s | 43 / 5 | 4/7 | 0 |
+| `session-window-debug` | `gpt-5.6-sol` | Response transport failure | 459.6 s | 31 / 0 | 4/7 | 0 |
+| `wal-recovery-ordering` | `gpt-5.6-luna` | Completed | 118.1 s | 50 / 0 | 97/97 | 1 |
+| `wal-recovery-ordering` | `gpt-5.6-terra` | Completed | 419.1 s | 37 / 1 | 95/97 | 0 |
+| `wal-recovery-ordering` | `gpt-5.6-sol` | Round limit | 347.7 s | 63 / 0 | 95/97 | 0 |
+| `data-anonymization` | `gpt-5.6-luna` | Completed | 356.7 s | 38 / 8 | 6/8 | 0 |
+| `data-anonymization` | `gpt-5.6-terra` | Completed | 600.6 s | 33 / 2 | 6/8 | 0 |
+| `data-anonymization` | `gpt-5.6-sol` | Round limit | 617.6 s | 45 / 9 | 6/8 | 0 |
+
+"Round limit" means the recorded `MAX_TOOL_ROUNDS` terminal error. Sol's session
+attempt instead recorded `CODEX_CONNECTION`, `category=response_payload`,
+`phase=response`. That identifies where transport failed; it does not establish
+the underlying network or service cause. These five attempts retained
+`harness_error` and Harbor's nonzero-agent-exit report even though the independent
+verifiers ran afterward. In particular, Sol's WAL attempt ran 97 checks, with
+95 passing and two failing, alongside the agent-wrapper failure. It was not
+rejected before its functional suite.
+
+Across all 12 attempts, seven Harness runs completed and five reported
+`harness_error`. Three completed Terminal-Bench runs still received reward zero.
+Agent times above cover the instrumented runner phase, including Harness
+initialization and cleanup, and exclude Harbor/container setup and verification.
+They are not whole-job latency or comparable throughput estimates.
+
+### Tool and lifecycle observations
+
+The root tool stream contained **422 calls and 26 tool-result errors**: 18
+whole-file size-limit rejections, seven unavailable-scheduler errors, and one
+concurrent-child-limit error. Shell execution also recorded 21 nonzero exits
+and eight timeouts; these categories should not be added to the tool-error count
+as if they were disjoint failures.
+
+Bounded retained child histories separately contained **522 tool calls and 69
+error hints**: 56 whole-file size-limit hints, eight concurrent-child-limit
+hints, two unavailable-scheduler hints, and three other hints. These histories
+can be compacted and are not complete child event streams. The 210 observed
+automatic approvals cover root and child requests, because child approvals and
+lifecycle records appear in the root observer stream. Root `DoneEvent` usage
+does not provide complete child/compaction billing.
+
+The repeated scheduler requests exposed a capability-advertisement defect:
+the headless client advertised native wakeup tools without an attached scheduler.
+The subsequent [effective-availability change](https://github.com/abi-jey/nagents/pull/86)
+filters the request's tools using actual client capabilities, profile permissions,
+and delegation depth while retaining the editable tool catalog and execution
+guards.
+
+Luna's session attempt also recorded an unscoped, nonrecoverable diagnostic when
+a stopped child could not receive its descendant's result. A separate scripted
+reproduction showed that this diagnostic could incorrectly mark a recovered
+root run failed and clear its UI draft. The subsequent
+[task-scoped warning change](https://github.com/abi-jey/nagents/pull/88) preserves
+failed/cancelled child outcomes while keeping expected delivery loss recoverable
+for the root. Luna's recorded attempt also reached its own root round limit;
+fixing the warning does not turn that frozen result into a successful run.
+
+Neither change was measured by this fixed 0.20.0 matrix. The
+[TUI expansion and synchronization changes](https://github.com/abi-jey/nagents/pull/87)
+came from separate CI failures, not these benchmark trials. No matrix attempt
+was rerun, discarded, or replaced after these findings. Full task traces remain private;
+temporary credentials were removed and no owned task containers remained after
+the matrix.
+
+### Hypotheses for subsequent experiments
+
+Primary harness documentation suggests several focused experiments. These are
+proposals, not measured gains or comparisons with those harnesses:
+
+- **Bounded reads and recovery:** SWE-agent's
+  [agent-computer interface guide](https://swe-agent.com/1.0/background/aci/)
+  describes windowed file viewing, navigation, and compact search results. Test
+  whether explicit continuation guidance after a size-limit rejection reduces
+  repeated oversized reads while retaining the same file-size guard.
+- **Contracts and visible execution state:** OpenHands separates
+  [actions, observations, and executors](https://docs.openhands.dev/sdk/guides/custom-tools).
+  Test clear input contracts and structured results for unavailable capabilities,
+  quota state, and recoverable errors. Keep execution checks authoritative and
+  distinguish requested work from running or completed work in observations.
+- **Independent verification:** Harbor's
+  [task format](https://docs.harborframework.com/tasks/overview) separates the
+  instruction, environment, and reward-producing tests. Evaluate each proposed
+  change first in a small controlled fixture, then in fresh native Harness runs
+  with unchanged tasks and budgets. Retain tool recovery, Harness completion,
+  and verifier reward as separate outcomes, including unsuccessful attempts.
+
+The one-attempt-per-pair matrix above cannot determine which intervention would
+improve general reliability. Any later comparison needs new, explicitly recorded
+trials; it cannot reuse these frozen outcomes as a measurement of the fixes.

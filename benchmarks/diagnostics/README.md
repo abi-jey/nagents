@@ -6,8 +6,9 @@ instructions, and completing actionable review work. It contains no Terminal-Ben
 material or reference solution, and produces no comparable benchmark score.
 
 The [0.20.0 release report](../terminal_bench/RESULTS.md#release-0200-evaluation)
-also includes a separate Agent-core description comparison using pure in-memory
-fixtures. That comparison does not run this diagnostic's Harness review workflow.
+records three completed runs of this diagnostic, each passing its nine functional
+checks and workflow audit. It separately reports an Agent-core description
+comparison and selected Terminal-Bench tasks; those results have different scopes.
 
 The standard-library fixture is deliberately staged: fix ordinary arithmetic,
 run the public tests, request an independent review against the public acceptance
