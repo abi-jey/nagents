@@ -1,0 +1,11 @@
+{
+  "active": "sample",
+  "providers": {
+    "sample": {
+      "auth": "auto",
+      "kind": "openai"
+    }
+  },
+  "revision": "0000000000000000000000000000000000000000000000000000000000000000",
+  "version": 2
+}

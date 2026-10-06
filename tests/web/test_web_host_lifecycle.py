@@ -27,6 +27,7 @@ from nagents.web.catalog import ChannelCatalog
 from nagents.web.subscriptions import Subscriber
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.web.test_web_subscription_lifecycle import until
@@ -72,7 +73,7 @@ async def application(
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-scripted-provider-key")
     assets = path / "static"
     (assets / "assets").mkdir(parents=True, exist_ok=True)
-    config = HarnessConfig(workspace=path, data_dir=path / "data", auth="api-key")
+    config = HarnessConfig(workspace=path, data_dir=path / "data", providers=connection(auth="api-key"))
     app = create_app(config, assets=assets, harness_factory=harness)
     async with app.router.lifespan_context(app):
         state: WebState = app.state.web

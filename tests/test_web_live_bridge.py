@@ -18,6 +18,9 @@ from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.types import Message
 from nagents.web.live_bridge import MainAgentBridge
@@ -28,6 +31,7 @@ from nagents.web.live_handoff import LoginHandoff
 from nagents.web.live_login import ChatGPTLiveConnection
 from nagents.web.live_runtime import _Record
 from nagents.web.service import Run
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
@@ -115,14 +119,26 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
         verify_model: bool = False,
     ) -> AsyncIterator[Event]:
         seen.append(
-            (provider.harness_config.provider, provider.model, len(messages), tuple(tool.name for tool in tools or ()))
+            (
+                provider.harness_config.provider_profile().kind,
+                provider.model,
+                len(messages),
+                tuple(tool.name for tool in tools or ()),
+            )
         )
         response = f"Assistant answer {len(seen)}"
         yield TextChunkEvent(chunk=response)
         yield TextDoneEvent(text=response)
 
     async def scenario() -> None:
-        async with client_app(tmp_path, config=_config(tmp_path)) as (app, client, headers, harnesses):
+        profile = ProviderProfile(kind="anthropic", auth="api-key")
+        ScopedProviderRegistryStore(tmp_path).global_store.save(
+            ProviderRegistry(active="anthropic", providers={"anthropic": profile}), expected="0" * 64
+        )
+        config = _config(tmp_path)
+        config.provider = "anthropic"
+        config.providers = {"anthropic": profile}
+        async with client_app(tmp_path, config=config) as (app, client, headers, harnesses):
             state = app.state.web
             root = state.selected_session_id
             bridge = MainAgentBridge(state, root)
@@ -131,13 +147,26 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
             assert seen[0][:2] == ("anthropic", "chat-model")
             assert len(seen) == 2 and seen[1][2] > seen[0][2]
             assert "shell" in seen[0][3]  # This is the real Harness tool registry.
-            before = (await client.get("/api/settings", headers=headers)).json()
+            registry = (await client.get("/api/provider-scopes/workspace/providers", headers=headers)).json()
+            added = await client.put(
+                "/api/provider-scopes/workspace/providers/gemini",
+                headers=headers,
+                json={"revision": registry["revision"], "profile": {"kind": "gemini", "auth": "api-key"}},
+            )
+            assert added.status_code == 200
+            selected = await client.post(
+                "/api/provider-scopes/workspace/providers/gemini/activate",
+                headers=headers,
+                json={"revision": added.json()["revision"]},
+            )
+            assert selected.status_code == 200
+            current = (await client.get("/api/settings", headers=headers)).json()
             changed = await client.post(
                 "/api/settings",
                 headers=headers,
                 json={
-                    "revision": before["revision"],
-                    "values": {**before["values"], "provider": "gemini", "model": "next-model"},
+                    "revision": current["revision"],
+                    "values": {**current["values"], "model": "next-model"},
                 },
             )
             assert changed.status_code == 200
@@ -238,6 +267,12 @@ def test_a_typed_interrupt_queues_instead_of_cancelling_the_active_voice_delegat
     async def scenario() -> None:
         config = _config(tmp_path)
         config.submit_mode = "interrupt"
+        profile = ProviderProfile(kind="anthropic", auth="api-key")
+        ScopedProviderRegistryStore(tmp_path).global_store.save(
+            ProviderRegistry(active="anthropic", providers={"anthropic": profile}), expected="0" * 64
+        )
+        config.provider = "anthropic"
+        config.providers = {"anthropic": profile}
         async with client_app(tmp_path, config=config) as (app, client, headers, _):
             state = app.state.web
             run = Run(state.selected_session_id, server_owned=True, voice=True)
@@ -292,7 +327,7 @@ def test_voice_keeps_its_original_chat_when_another_tab_selects_a_new_one(tmp_pa
                 "Continue in my previous chat" in str(msg.content)
                 for msg in await state.harness.agent.session.get_history(root)
             )
-            assert harnesses[0].config.provider == "anthropic"
+            assert harnesses[0].config.provider_profile().kind == "anthropic"
 
     with (
         patch.object(ControlledHarness, "run", Harness.run),
@@ -755,7 +790,7 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
         stream: bool = True,
         verify_model: bool = False,
     ) -> AsyncIterator[Event]:
-        seen.append((provider.harness_config.provider, provider.model, len(messages)))
+        seen.append((provider.harness_config.provider_profile().kind, provider.model, len(messages)))
         yield TextDoneEvent(text=f"Reply {len(seen)} from the selected assistant")
 
     async def connect(request: web.Request) -> web.WebSocketResponse:
@@ -874,5 +909,5 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
 
 def _config(path: Path) -> HarnessConfig:
     return HarnessConfig(
-        workspace=path, data_dir=path / "data", provider="anthropic", auth="api-key", model="chat-model"
+        workspace=path, data_dir=path / "data", providers=connection("anthropic", auth="api-key"), model="chat-model"
     )

@@ -59,11 +59,20 @@ metadata:
   labels:
     app: ngn-web
 data:
-  config.yaml: |
-    provider: openai
-    auth: chatgpt
-    api: auto
-    data_dir: /state/sessions
+  config.json: |
+    {
+      "data_dir": "/state/sessions",
+      "providers": "./providers.json"
+    }
+  providers.json: |
+    {
+      "version": 2,
+      "revision": "0000000000000000000000000000000000000000000000000000000000000000",
+      "active": "chatgpt",
+      "providers": {
+        "chatgpt": {"kind": "openai", "auth": "chatgpt"}
+      }
+    }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -127,7 +136,7 @@ spec:
                 --host 0.0.0.0 \
                 --port 8765 \
                 --workspace /state/workspace \
-                --config /etc/ngn/config.yaml
+                --config /etc/ngn/config.json
           workingDir: /state/workspace
           ports:
             - name: http

@@ -18,6 +18,8 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.tools import CodingTools
 from nagents.web.app import create_app
 from tests.support.hang_guard import HANG_GUARD
@@ -114,6 +116,25 @@ async def client_app(
     (assets / "assets" / "app.js").write_text("// test asset")
     if config is None:
         config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", demo=True)
+    if (
+        controlled
+        and not config.demo
+        and not config.provider
+        and config.provider_profile().kind in {"openai", "openai_compatible"}
+    ):
+        store = ScopedProviderRegistryStore(config.workspace, paths=config.provider_paths)
+        registry = store.load()
+        if registry.active:
+            config.provider = registry.active
+            config.providers = dict(registry.providers)
+        else:
+            selected = config.provider_profile()
+            store.workspace_store.save(
+                ProviderRegistry(active="fixture", providers={"fixture": selected}),
+                expected=store.workspace_store.load().revision,
+            )
+            config.provider = "fixture"
+            config.providers = {"fixture": selected}
     harnesses: list[Harness] = []
 
     def factory(config: HarnessConfig) -> Harness:

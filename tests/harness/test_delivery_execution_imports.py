@@ -63,12 +63,13 @@ if mode in {'custom', 'custom_subclass'}:
     from nagents.harness.execution import bind_channel_send, delivery_origin
     from nagents.harness.runtime import _HarnessSession
     from nagents.session import SessionManager
+    from tests.support.config import connection
     from tests.support.providers import FakeProvider
 
     async def run_custom():
         workspace = Path(sys.argv[2])
         harness = Harness(HarnessConfig(
-            workspace=workspace, data_dir=workspace / 'state', auth='api-key', model='fake-model'
+            workspace=workspace, data_dir=workspace / 'state', providers=connection(auth='api-key'), model='fake-model'
         ))
         calls = []
 

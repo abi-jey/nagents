@@ -364,7 +364,7 @@ class SubagentManager:
             defined.refresh_instructions()
             return defined
         chatgpt = isinstance(parent.agent.provider, OpenAIProvider) and parent.agent.provider.uses_chatgpt_auth
-        if not isinstance(parent.agent.provider, HarnessProvider) and not chatgpt and not parent.config.provider_id:
+        if not isinstance(parent.agent.provider, HarnessProvider) and not chatgpt and not parent.config.provider:
             raise ValueError(
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
@@ -379,7 +379,17 @@ class SubagentManager:
             plugins=(),
             diagnostics=(),
             demo=parent.config.demo or self.root.harness.config.demo,
-            auth="chatgpt" if chatgpt else "api-key",
+            providers={
+                **parent.config.providers,
+                parent.config.provider: replace(
+                    parent.config.provider_profile(),
+                    auth=parent.config.provider_profile().auth
+                    if parent.config.provider
+                    else "chatgpt"
+                    if chatgpt
+                    else "api-key",
+                ),
+            },
             max_tool_rounds=min(parent.config.max_tool_rounds, 12),
             max_subagent_depth=min(parent.config.max_subagent_depth, self.root.harness.config.max_subagent_depth),
         )

@@ -38,42 +38,42 @@ for verification, not additional files automatically loaded by the skill tool.
 
 ## Configure the Harness
 
-Settings are flat YAML. User config uses the XDG config location for
-`ngn/config.yaml`. Workspace `.ngn/config.yaml` is selected with
+Settings use JSON. User config uses the XDG config location for
+`ngn/config.json`. Workspace `.ngn/config.json` is selected with
 `--trust-project` or explicitly with `--config`. Precedence is defaults,
-`NGN_*` environment defaults, user YAML, trusted project YAML, explicit YAML,
+`NGN_*` environment defaults, user JSON, trusted project JSON, explicit JSON,
 then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
 `doctor` initializes trusted plugins, while `--demo` skips their execution.
 
-```yaml
-provider: openai
-model: gpt-6-luna
-api: auto
-auth: api-key
-api_key_env: OPENAI_API_KEY
-agent: audit
-max_tool_rounds: 30
-max_subagent_depth: 2
-skill_token_limit: 10000
-plugins: ["extensions.py:setup"]
-
-profiles:
-  audit:
-    mode: reviewer
-    instructions: Prioritize regressions and report the checks actually run.
+```json
+{
+  "providers": "./providers.json",
+  "model": "gpt-6-luna",
+  "agent": "audit",
+  "max_tool_rounds": 30,
+  "max_subagent_depth": 2,
+  "skill_token_limit": 10000,
+  "plugins": ["extensions.py:setup"],
+  "profiles": {
+    "audit": {
+      "mode": "reviewer",
+      "instructions": "Prioritize regressions and report the checks actually run."
+    }
+  }
+}
 ```
 
 `AgentProfile` has `mode`, `instructions`, and `model`. `assistant` is the only
 built-in agent and uses build mode. Other names require explicit profiles; use
-`mode: reviewer` for read-only behavior. Custom profiles cannot replace
+`"mode": "reviewer"` for read-only behavior. Custom profiles cannot replace
 `assistant`. A profile's nonempty model is selected on activation; inspect the
 effective model rather than assuming the top-level model always wins.
 
-YAML plugin paths and `data_dir` resolve relative to the config file. CLI
-`--plugin` paths resolve relative to the invoking directory. YAML plugin lists
+JSON plugin paths and `data_dir` resolve relative to the config file. CLI
+`--plugin` paths resolve relative to the invoking directory. JSON plugin lists
 replace earlier lists; CLI entries append. Profile entries merge by name, with a
 later same-name entry replacing that profile. Provider secrets come from the
-named environment variable, never literal YAML values.
+named environment variable, never literal JSON values.
 
 Other configuration groups: `shell_timeout`, `max_output` (bytes),
 `max_file_bytes`, and `max_tool_rounds`; `theme`, `theme_background`, `animations`,

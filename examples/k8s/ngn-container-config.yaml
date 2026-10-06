@@ -6,12 +6,20 @@ kind: ConfigMap
 metadata:
   name: ngn-container-example
 data:
-  config.yaml: |
-    provider: openai
-    model: gpt-6-luna
-    auth: api-key
-    api: auto
-    api_key_env: OPENAI_API_KEY
+  config.json: |
+    {
+      "model": "gpt-6-luna",
+      "providers": "./providers.json"
+    }
+  providers.json: |
+    {
+      "version": 2,
+      "revision": "0000000000000000000000000000000000000000000000000000000000000000",
+      "active": "openai",
+      "providers": {
+        "openai": {"kind": "openai", "auth": "api-key", "api_key_env": "OPENAI_API_KEY"}
+      }
+    }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -39,7 +47,7 @@ spec:
         - name: ngn
           image: ghcr.io/abi-jey/nagents/agent-server:latest
           command: ["ngn"]
-          args: ["serve", "--host", "0.0.0.0", "--workspace", "/workspace", "--config", "/etc/ngn/config.yaml"]
+          args: ["serve", "--host", "0.0.0.0", "--workspace", "/workspace", "--config", "/etc/ngn/config.json"]
           env:
             - name: XDG_DATA_HOME
               value: /data

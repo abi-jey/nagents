@@ -43,7 +43,7 @@ def test_tui_adds_named_connection_with_only_env_reference(tmp_path: Path) -> No
             assert registry.active == "home"
             assert registry.providers["home"].key_env == "TUI_TEST_KEY"
             assert registry.providers["home"].request_timeout == 240.5
-            assert app.harness.config.provider_id == "home"
+            assert app.harness.config.provider == "home"
             assert "TUI_TEST_KEY" in store.workspace_store.path.read_text()
             assert not store.global_store.path.exists()
             assert not (tmp_path / "user-data/ngn/auth/login.json").exists()

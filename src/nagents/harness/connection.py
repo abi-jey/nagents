@@ -129,7 +129,11 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
         if profile.auth == "codex" and not _codex_files_exist():
             raise CodexConfigError("Local Codex configuration was not found; sign in with Codex first")
         if profile.auth == "auto" and not _codex_files_exist():
-            return HarnessProvider(replace(config, auth="api-key"), None, request_timeout=profile.request_timeout)
+            return HarnessProvider(
+                replace(config, providers={**config.providers, config.provider: replace(profile, auth="api-key")}),
+                None,
+                request_timeout=profile.request_timeout,
+            )
         try:
             return OpenAIProvider(model=config.model, timeout=profile.request_timeout)
         except CodexConfigError:
@@ -141,7 +145,13 @@ def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAI
                 raise
             # No usable Codex login: use the named environment variable lazily.
     # No fallback to the legacy single-login key for named connections.
-    selected = replace(config, auth="api-key") if config.auth != "api-key" else config
+    selected = (
+        replace(
+            config, providers={**config.providers, config.provider: replace(config.provider_profile(), auth="api-key")}
+        )
+        if config.provider_profile().auth != "api-key"
+        else config
+    )
     return HarnessProvider(selected, None, request_timeout=profile.request_timeout)
 
 

@@ -20,11 +20,11 @@ from nagents.harness import HarnessConfig
 from nagents.harness import load_config
 from nagents.harness import runtime
 from nagents.harness.auth import DeviceAuthorization
-from nagents.harness.config import DEFAULT_HARNESS_MODEL
 from nagents.harness.provider import HarnessProvider
 from nagents.provider import openai as openai_module
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import OpenAIProvider
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 
 
@@ -90,8 +90,8 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             await harness.login(show)
             assert shown == ["TEST-CODE"]
             assert fake.saved
-            assert harness.config.auth == "chatgpt"
-            assert harness.config.model == DEFAULT_HARNESS_MODEL
+            assert harness.config.provider_profile().auth == "chatgpt"
+            assert harness.config.model == "gpt-6-astra"
             assert isinstance(harness.agent.provider, OpenAIProvider)
             assert await harness.history() == []
             assert "TEST-CODE" not in harness.describe()
@@ -101,11 +101,11 @@ def test_login_switches_protocol_without_polluting_history(tmp_path: Path, monke
             assert (selection.provider, selection.auth, selection.model) == (
                 "openai",
                 "chatgpt",
-                DEFAULT_HARNESS_MODEL,
+                "gpt-6-astra",
             )
             await harness.logout()
             assert not fake.saved
-            assert harness.config.auth == "api-key"
+            assert harness.config.provider_profile().auth == "api-key"
             assert harness.config.model == "gpt-6-astra"
             assert isinstance(harness.agent.provider, HarnessProvider)
             assert harness.login_store.selection() is None
@@ -130,8 +130,8 @@ def test_chatgpt_preserves_explicit_model(
         monkeypatch.setenv("NGN_MODEL", model)
         config = load_config(tmp_path)
     elif source == "file":
-        path = tmp_path / "config.yaml"
-        path.write_text(f"model: {model}\n")
+        path = tmp_path / "config.json"
+        path.write_text(f'{{"model": "{model}"}}\n')
         config = load_config(tmp_path, path)
     else:
         config = HarnessConfig(workspace=tmp_path, model=model)
@@ -164,7 +164,7 @@ def test_saved_oauth_never_reaches_custom_endpoints(
     monkeypatch.setattr(runtime, "OpenAIAuth", lambda: fake)
 
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, auth=auth, base_url=endpoint))
+        harness = Harness(HarnessConfig(workspace=tmp_path, providers=connection(auth=auth, base_url=endpoint)))
         try:
             await harness.initialize()
             assert isinstance(harness.agent.provider, OpenAIProvider) is expected
@@ -186,7 +186,9 @@ def test_login_rejects_incompatible_modes_before_network(
     monkeypatch.setattr(runtime, "OpenAIAuth", lambda: fake)
 
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, provider=provider, base_url=endpoint, demo=demo))
+        harness = Harness(
+            HarnessConfig(workspace=tmp_path, providers=connection(provider, base_url=endpoint), demo=demo)
+        )
 
         async def show(code: DeviceAuthorization) -> None:
             raise AssertionError("Must not request a device code")
@@ -248,9 +250,9 @@ def test_cli_login_and_status_are_safe(
 
 def test_chatgpt_configuration_rejects_routing_overrides(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="without base_url"):
-        HarnessConfig(workspace=tmp_path, auth="chatgpt", base_url="https://example.test/v1")
+        HarnessConfig(workspace=tmp_path, providers=connection(auth="chatgpt", base_url="https://example.test/v1"))
     with pytest.raises(ValueError, match="OpenAI provider"):
-        HarnessConfig(workspace=tmp_path, auth="chatgpt", provider="anthropic")
+        HarnessConfig(workspace=tmp_path, providers=connection("anthropic", auth="chatgpt"))
 
 
 def test_file_tools_cannot_read_oauth_store_even_with_custom_session_path(tmp_path: Path) -> None:
@@ -286,7 +288,7 @@ def test_empty_xdg_settings_cannot_trust_working_directory_config(
     home = tmp_path / "home"
     project = home / "project"
     (project / "ngn").mkdir(parents=True)
-    (project / "ngn/config.yaml").write_text("model: untrusted-model\n")
+    (project / "ngn/config.json").write_text('{"model": "untrusted-model"}\n')
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", "")

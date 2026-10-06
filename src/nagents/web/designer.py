@@ -92,11 +92,11 @@ class Designer:
         design.id = "delegation-demo"
         design.entrypoint = "coordinator"
         provider = design.providers["primary"]
-        provider.type = config.provider
+        provider.type = config.provider_profile().kind
         provider.model = self.state.harness.agent.provider.model
-        provider.base_url = config.base_url
-        provider.api = config.api
-        provider.api_version = config.api_version
+        provider.base_url = config.provider_profile().base_url
+        provider.api = config.provider_profile().api
+        provider.api_version = config.provider_profile().api_version
         if (
             isinstance(self.state.harness.agent.provider, OpenAIProvider)
             and self.state.harness.agent.provider.uses_chatgpt_auth
@@ -105,11 +105,16 @@ class Designer:
             provider.secret = ""
             design.secrets = {}
         else:
-            design.secrets["primary_key"].name = config.api_key_env
+            design.secrets["primary_key"].name = config.provider_profile().key_env
             selection = self.state.harness.login_store.selection()
-            if selection and selection.provider == config.provider and not selection.base_url and not config.base_url:
+            if (
+                selection
+                and selection.provider == config.provider_profile().kind
+                and not selection.base_url
+                and not config.provider_profile().base_url
+            ):
                 design.secrets["primary_key"].source = "saved"
-                design.secrets["primary_key"].name = config.provider
+                design.secrets["primary_key"].name = config.provider_profile().kind
         design.agents = {
             "coordinator": AgentDefinition(
                 name="Coordinator",
@@ -363,7 +368,7 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
                 harness = DesignedHarness(get().config, resolved, name)
                 previews[name] = {
                     "instructions": harness.agent.system_prompt,
-                    "provider": harness.config.provider,
+                    "provider": harness.config.provider_profile().kind,
                     "model": harness.agent.provider.model,
                     "provider_configuration": resolved.providers[
                         harness.definition.provider or resolved.defaults.provider

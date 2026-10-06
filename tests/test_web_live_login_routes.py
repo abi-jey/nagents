@@ -146,12 +146,7 @@ def configuration(path: Path, auth: str = "chatgpt") -> HarnessConfig:
     )
     providers.save_scope(registry, expected="0" * 64, scope="global")
     return HarnessConfig(
-        workspace=path,
-        data_dir=path / "data",
-        provider="anthropic",
-        provider_id="chat",
-        auth="api-key",
-        model="chat-model",
+        workspace=path, data_dir=path / "data", provider="chat", providers=registry.providers, model="chat-model"
     )
 
 
@@ -248,7 +243,7 @@ def test_login_pcm_route_admits_the_selected_assistant_and_rejects_browser_sdp(
             assert "selected chat" in services[0].configs[0].instructions
             assert login.reads == 1
             connection = await app.state.live_settings.connection()
-            assert connection.profile_name == "voice" and harnesses[0].config.provider_id == "chat"
+            assert connection.profile_name == "voice" and harnesses[0].config.provider == "chat"
             assert all(secret not in result.text for secret in (LOGIN_SECRET, KEY_SECRET, ACCOUNT))
             await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
 

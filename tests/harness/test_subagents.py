@@ -35,6 +35,7 @@ from nagents.harness.types import TaskStarted
 from nagents.provider.openai import OpenAIProvider
 from nagents.types import Message
 from nagents.types import ToolCall
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.support.providers import assert_balanced
@@ -696,7 +697,7 @@ def test_codex_child_shares_auth_not_provider_or_close_ownership(tmp_path: Path)
         harness = Harness(
             HarnessConfig(
                 workspace=tmp_path,
-                auth="api-key",
+                providers=connection(auth="api-key"),
                 data_dir=tmp_path / "state",
                 profiles={"reviewer": AgentProfile(mode="reviewer")},
             )
@@ -914,9 +915,9 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
                 yield TextDoneEvent(text=f"Response from worker {provider.index}")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
-        harness.config.base_url = "https://gateway.example/v1"
-        harness.config.api_key_env = "CHILD_TEST_KEY"
-        harness.config.api = "responses"
+        harness.config.providers = connection(
+            base_url="https://gateway.example/v1", api_key_env="CHILD_TEST_KEY", api="responses"
+        )
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
@@ -932,9 +933,9 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
             assert updated.followups == 1 and updated.status == "completed"
             assert providers[1].closed and providers[2].closed
             assert providers[2].model == "fake-model" and providers[0].model == "new-parent-model"
-            assert providers[2].harness_config.base_url == "https://gateway.example/v1"
-            assert providers[2].harness_config.api_key_env == "CHILD_TEST_KEY"
-            assert providers[2].harness_config.api == "responses"
+            assert providers[2].harness_config.provider_profile().base_url == "https://gateway.example/v1"
+            assert providers[2].harness_config.provider_profile().key_env == "CHILD_TEST_KEY"
+            assert providers[2].harness_config.provider_profile().api == "responses"
             assert harness.tasks._used == 2
             assert len([event for event in events if isinstance(event, TaskMessage)]) == 1
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from dataclasses import replace
 from types import SimpleNamespace
@@ -13,7 +14,6 @@ from unittest.mock import Mock
 
 import aiohttp
 import pytest
-import yaml
 from fastapi import HTTPException
 
 from nagents.harness.auth import OpenAIAuth
@@ -98,10 +98,10 @@ def test_request_timeout_rejects_invalid_numbers_in_profiles_and_web(value: obje
     assert rejected.value.status_code == 422
 
 
-def test_legacy_yaml_omission_defaults_to_120_and_round_trips_numeric_seconds(tmp_path: Path) -> None:
-    store = ProviderRegistryStore(tmp_path / "providers.yaml")
+def test_json_omission_defaults_to_120_and_round_trips_numeric_seconds(tmp_path: Path) -> None:
+    store = ProviderRegistryStore(tmp_path / "providers.json")
     store.path.write_text(
-        yaml.safe_dump(
+        json.dumps(
             {
                 "version": 2,
                 "revision": "0" * 64,
@@ -118,7 +118,7 @@ def test_legacy_yaml_omission_defaults_to_120_and_round_trips_numeric_seconds(tm
         expected=previous.revision,
     )
     assert store.load() == updated
-    assert yaml.safe_load(store.path.read_text())["providers"]["work"]["request_timeout"] == 275.5
+    assert json.loads(store.path.read_text())["providers"]["work"]["request_timeout"] == 275.5
 
 
 ROUTES = [
@@ -200,11 +200,8 @@ def test_all_named_factories_preserve_selected_request_timeout(
     profile = selected_profile(route, timeout)
     config = HarnessConfig(
         workspace=tmp_path,
-        provider=profile.kind,
-        auth=profile.auth,
-        base_url=profile.base_url,
-        api=profile.api,
-        api_version=profile.api_version,
+        provider="work",
+        providers={"work": profile},
         shell_timeout=47,
     )
 
@@ -353,7 +350,13 @@ def test_voice_provider_http_setting_does_not_change_live_budgets(route: str) ->
 
 def test_web_profile_updates_round_trip_and_rebuild_without_a_timeout_env_alias(tmp_path: Path) -> None:
     async def check() -> None:
-        config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key")
+        store = ScopedProviderRegistryStore(tmp_path)
+        store.workspace_store.save(
+            ProviderRegistry(active="work", providers={"work": ProviderProfile(kind="openai")}),
+            expected="0" * 64,
+        )
+        config = load_config(tmp_path)
+        config.data_dir = tmp_path / "data"
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             current = (await client.get("/api/provider-scopes/workspace/providers", headers=headers)).json()
             profile = {"kind": "openai", "auth": "api-key", "request_timeout": 13.25}
@@ -400,7 +403,7 @@ def test_request_timeout_is_not_a_global_harness_or_environment_setting(
     assert "request_timeout" not in vars(config)
     provider = build_provider(ProviderProfile(kind="openai"), config, OpenAIAuth())
     assert_timeout(provider, 120)
-    explicit = tmp_path / "config.yaml"
-    explicit.write_text("request_timeout: 999\n")
+    explicit = tmp_path / "config.json"
+    explicit.write_text(json.dumps({"request_timeout": 999}))
     with pytest.raises(ValueError, match="request_timeout"):
         load_config(tmp_path, explicit)

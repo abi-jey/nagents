@@ -29,20 +29,30 @@ def provider_setup(harness: Harness) -> ProviderSetup:
     config = harness.config
     if config.demo:
         return {"configured": True, "message": ""}
+    if not config.provider:
+        return {"configured": False, "message": "Select or add a named provider connection in Provider connections."}
     provider = harness.agent.provider
     if isinstance(provider, OpenAIProvider) and provider.uses_chatgpt_auth:
-        if harness.openai_auth.logged_in() or config.auth == "codex":
+        if harness.openai_auth.logged_in() or config.provider_profile().auth == "codex":
             return {"configured": True, "message": ""}
         return {
             "configured": False,
             "message": "ChatGPT login is missing or unreadable in this container. Run ngn login chatgpt "
             "with persistent XDG_DATA_HOME, or choose API-key authentication in Settings.",
         }
-    if not isinstance(provider, HarnessProvider) and not (config.provider_id and config.auth == "api-key"):
+    if not isinstance(provider, HarnessProvider) and not (
+        config.provider and config.provider_profile().auth == "api-key"
+    ):
         # Entra and other provider-specific credential sources are resolved on request.
         return {"configured": True, "message": ""}
-    key_env = provider.harness_config.api_key_env if isinstance(provider, HarnessProvider) else config.api_key_env
-    if os.environ.get(key_env, "").strip() or (not config.provider_id and harness.login_store.key_for(config.provider)):
+    key_env = (
+        provider.harness_config.provider_profile().key_env
+        if isinstance(provider, HarnessProvider)
+        else config.provider_profile().key_env
+    )
+    if os.environ.get(key_env, "").strip() or (
+        not config.provider and harness.login_store.key_for(config.provider_profile().kind)
+    ):
         return {"configured": True, "message": ""}
     return {
         "configured": False,

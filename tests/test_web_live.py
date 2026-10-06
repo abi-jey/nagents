@@ -34,6 +34,7 @@ from nagents.web.live_settings import LIVE_VOICES
 from nagents.web.live_settings import LiveConnection
 from nagents.web.live_settings import LiveSettings
 from nagents.web.live_settings import LiveValues
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
 from tests.support.web import ControlledHarness
@@ -68,9 +69,8 @@ def configuration(path: Path, *, demo: bool = False) -> HarnessConfig:
     return HarnessConfig(
         workspace=path,
         data_dir=path / "data",
-        provider="anthropic",
-        provider_id="chat",
-        auth="api-key",
+        provider="chat",
+        providers=connection("anthropic", name="chat", auth="api-key"),
         model="chat-only-model",
         demo=demo,
     )
@@ -190,14 +190,14 @@ async def configure(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
     return str(response.json()["revision"])
 
 
-def test_harness_has_no_live_yaml_or_environment_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_harness_has_no_live_json_or_environment_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert not any(item.name.startswith("live_") for item in fields(HarnessConfig))
     monkeypatch.setenv("NGN_LIVE_ENABLED", "true")
     monkeypatch.setenv("NGN_LIVE_PROVIDER", "not-a-provider")
     monkeypatch.setenv("NGN_LIVE_API_KEY_ENV", "OPENAI_API_KEY")
     assert not hasattr(load_config(tmp_path), "live_enabled")
-    path = tmp_path / "removed.yaml"
-    path.write_text("live_enabled: true\n")
+    path = tmp_path / "removed.json"
+    path.write_text('{"live_enabled": true}\n')
     with pytest.raises(ValueError, match="Unknown configuration fields"):
         load_config(tmp_path, path)
 
@@ -336,7 +336,10 @@ def test_setup_and_calls_work_without_environment_and_persist_after_restart(
                     assert services[0].snapshots[-1] == (SESSION, after)
                 ended = await client.post(f"/api/live/sessions/{SESSION}/close", json={}, headers=headers)
                 assert ended.status_code == 200 and ended.json()["status"] == "closed"
-            assert await harnesses[0].history() == before_history and harnesses[0].config.provider == "anthropic"
+            assert (
+                await harnesses[0].history() == before_history
+                and harnesses[0].config.provider_profile().kind == "anthropic"
+            )
             assert len(services[0].configs) == 2
             assert not os.environ.get("OPENAI_API_KEY")
             with pytest.raises(HTTPException):
@@ -466,8 +469,7 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
                     config=HarnessConfig(
                         workspace=tmp_path,
                         data_dir=tmp_path / "data",
-                        provider="anthropic",
-                        auth="api-key",
+                        providers=connection("anthropic", auth="api-key"),
                         model="chat-only-model",
                     ),
                 ) as (app, client, headers, harnesses):
@@ -544,7 +546,7 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
                         assert not service.active_session_id
                     # The second call is left active to exercise actual app shutdown ownership.
                     assert await harnesses[0].history() == before_history
-                    assert harnesses[0].config.provider == "anthropic"
+                    assert harnesses[0].config.provider_profile().kind == "anthropic"
                 assert service._closed and not service.active_session_id
             assert len(set(session_ids)) == 2
             assert commands == [("native-1", "session.close"), ("native-2", "session.close")]

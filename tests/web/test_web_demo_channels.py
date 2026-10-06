@@ -26,6 +26,7 @@ from nagents.web.catalog import ChannelCatalog
 from nagents.web.catalog import Connection
 from nagents.web.catalog import SavedCatalog
 from nagents.web.routing import RoutingStore
+from tests.support.config import connection as make_connection
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -103,7 +104,11 @@ def test_demo_enumerates_malicious_metadata_but_never_loads_or_starts_it(
     monkeypatch.setattr(Provider, "generate", network)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", shell)
     config = HarnessConfig(
-        workspace=workspace, data_dir=tmp_path / "state", demo=True, auth="api-key", plugins=(f"{module}:setup",)
+        workspace=workspace,
+        data_dir=tmp_path / "state",
+        demo=True,
+        providers=make_connection(auth="api-key"),
+        plugins=(f"{module}:setup",),
     )
 
     async def seed() -> tuple[Path, Path]:

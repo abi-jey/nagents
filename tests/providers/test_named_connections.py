@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -12,7 +13,6 @@ from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import AgentProfile
@@ -33,6 +33,7 @@ from nagents.web.live_settings import LiveSettings
 from nagents.web.live_settings import WorkspaceVoiceInput
 from nagents.web.voice_preferences import VoiceOverrides
 from nagents.web.voice_preferences import VoicePreferences
+from tests.support.config import connection
 
 
 def sample(**changes: object) -> ProviderProfile:
@@ -41,9 +42,9 @@ def sample(**changes: object) -> ProviderProfile:
 
 
 def test_v2_rejects_a_chat_model_inside_provider_connections(tmp_path: Path) -> None:
-    store = ProviderRegistryStore(tmp_path / "providers.yaml")
+    store = ProviderRegistryStore(tmp_path / "providers.json")
     store.path.write_text(
-        yaml.safe_dump(
+        json.dumps(
             {
                 "version": 2,
                 "revision": "0" * 64,
@@ -54,7 +55,7 @@ def test_v2_rejects_a_chat_model_inside_provider_connections(tmp_path: Path) -> 
     )
     with pytest.raises(ValueError, match="Invalid provider entry"):
         store.load()
-    store.path.write_text(yaml.safe_dump({"version": 1, "revision": "0" * 64, "active": "", "providers": {}}))
+    store.path.write_text(json.dumps({"version": 1, "revision": "0" * 64, "active": "", "providers": {}}))
     with pytest.raises(ValueError, match="Invalid provider configuration format"):
         store.load()
 
@@ -95,11 +96,11 @@ def test_registry_is_shared_revisioned_and_contains_no_secret(tmp_path: Path, mo
     monkeypatch.setenv("TEST_NGN_KEY", "synthetic-secret-never-on-disk")
     store = ProviderRegistryStore()
     selected = store.save(ProviderRegistry(active="work", providers={"work": sample()}), expected="0" * 64)
-    assert store.path == Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/providers.yaml"
+    assert store.path == Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/providers.json"
     assert "synthetic-secret-never-on-disk" not in store.path.read_text()
     assert "TEST_NGN_KEY" in store.path.read_text()
     assert selected.snapshot()["providers"]["work"]["key_configured"] is True  # type: ignore[index]
-    assert load_config(tmp_path).provider_id == "work"
+    assert load_config(tmp_path).provider == "work"
     with pytest.raises(ValueError, match="changed"):
         store.save(ProviderRegistry(active="work", providers={"work": sample(auth="auto")}), expected="0" * 64)
     second = store.save(
@@ -110,7 +111,7 @@ def test_registry_is_shared_revisioned_and_contains_no_secret(tmp_path: Path, mo
 
 
 def test_concurrent_provider_saves_reject_stale_revision(tmp_path: Path) -> None:
-    store = ProviderRegistryStore(tmp_path / "providers.yaml")
+    store = ProviderRegistryStore(tmp_path / "providers.json")
     barrier = Barrier(2)
 
     def save(auth: str) -> str:
@@ -150,7 +151,11 @@ def test_provider_id_override_preserves_workspace_model_unless_explicitly_overri
     ScopedProviderRegistryStore(tmp_path).model_store("workspace").save("workspace-model")
     monkeypatch.setenv("NGN_PROVIDER_ID", "second")
     selected = load_config(tmp_path)
-    assert (selected.provider_id, selected.provider, selected.model) == ("second", "anthropic", "workspace-model")
+    assert (selected.provider, selected.providers[selected.provider].kind, selected.model) == (
+        "second",
+        "anthropic",
+        "workspace-model",
+    )
     monkeypatch.setenv("NGN_MODEL", "explicit-model")
     assert load_config(tmp_path).model == "explicit-model"
 
@@ -193,17 +198,17 @@ def test_agent_binding_uses_named_provider_and_environment_at_request_time(
         harness = Harness(config)
         try:
             await harness.initialize(create_session=False)
-            assert harness.config.provider_id == "first"
+            assert harness.config.provider == "first"
             monkeypatch.setenv("TEST_NGN_KEY", "first-token")
             harness.agent.provider.credentials()  # type: ignore[attr-defined]
             assert harness.agent.provider.api_key == "first-token"
             await harness.set_agent("review")
-            assert (harness.config.provider_id, harness.config.model) == ("second", "workspace-choice")
+            assert (harness.config.provider, harness.config.model) == ("second", "workspace-choice")
             monkeypatch.setenv("ALT_NGN_KEY", "second-token")
             harness.agent.provider.credentials()  # type: ignore[attr-defined]
             assert harness.agent.provider.api_key == "second-token"
             await harness.set_agent("assistant")
-            assert harness.config.provider_id == "first"
+            assert harness.config.provider == "first"
             assert harness.agent.provider.model == "workspace-choice"
         finally:
             await harness.close()
@@ -269,7 +274,7 @@ def test_named_live_reads_same_env_and_revisions_without_key_table(
         result = await settings.change(body)
         assert result["values"]["model"] == "gpt-live-2"  # type: ignore[index]
         assert "voice-key-value" not in store.path.read_text()
-        assert set(yaml.safe_load(store.path.read_text())["providers"]["voice"]) == set(
+        assert set(json.loads(store.path.read_text())["providers"]["voice"]) == set(
             ProviderProfile.__dataclass_fields__
         )
         with pytest.raises(Exception, match="changed"):
@@ -300,11 +305,8 @@ def test_foundry_entra_resolves_sdk_credential_and_closes_it(tmp_path: Path, mon
     )
     config = HarnessConfig(
         workspace=tmp_path,
-        provider="foundry",
+        providers=connection("foundry", auth="entra", api="responses", base_url=profile.base_url),
         model="deployment",
-        auth="entra",
-        api="responses",
-        base_url=profile.base_url,
     )
 
     async def check() -> None:
@@ -322,7 +324,7 @@ def test_openai_auto_prefers_named_environment_without_codex_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile = sample(auth="auto", api_key_env="${MY_OPENAI_KEY}")
-    config = HarnessConfig(workspace=tmp_path, api_key_env=profile.key_env)
+    config = HarnessConfig(workspace=tmp_path, providers=connection(api_key_env=profile.key_env))
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-account")
     monkeypatch.setenv("MY_OPENAI_KEY", "selected-account")
     provider = build_provider(profile, config, OpenAIAuth())

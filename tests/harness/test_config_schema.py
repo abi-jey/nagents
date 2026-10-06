@@ -1,6 +1,7 @@
-"""The documented YAML/env/CLI schema, independent of provider I/O."""
+"""The documented JSON/env/CLI schema, independent of provider I/O."""
 
 import asyncio
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
@@ -10,15 +11,16 @@ import pytest
 
 from nagents.cli import _parser
 from nagents.harness import Harness
-from nagents.harness.config import API_NAMES
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.providers import API_NAMES
+from tests.support.config import connection
 
 
 def test_new_defaults_and_generic_agent(tmp_path: Path) -> None:
     config = HarnessConfig(workspace=tmp_path)
-    assert config.api == "auto"
+    assert config.provider_profile().api == "auto"
     assert config.max_subagent_depth == 2
     assert config.agent == "assistant"
     assert config.profile("assistant").mode == "build"
@@ -50,24 +52,24 @@ def test_builtin_assistant_only_and_explicit_custom_profiles(tmp_path: Path) -> 
         HarnessConfig(workspace=tmp_path, profiles={"assistant": AgentProfile(mode="reviewer")})
 
 
-def test_submit_mode_defaults_validation_yaml_and_cli(tmp_path: Path) -> None:
+def test_submit_mode_defaults_validation_json_and_cli(tmp_path: Path) -> None:
     assert HarnessConfig(workspace=tmp_path).submit_mode == "queue"
     assert HarnessConfig(workspace=tmp_path, submit_mode="interrupt").submit_mode == "interrupt"
     with pytest.raises(ValueError, match="submit_mode"):
         HarnessConfig(workspace=tmp_path, submit_mode=cast("Literal['queue', 'interrupt']", "discard"))
-    path = tmp_path / "config.yaml"
-    path.write_text("submit_mode: interrupt\n")
+    path = tmp_path / "config.json"
+    path.write_text('{"submit_mode": "interrupt"}\n')
     assert load_config(tmp_path, path).submit_mode == "interrupt"
     parsed = _parser().parse_args(["--submit-mode", "interrupt", "run", "hello"])
     assert parsed.submit_mode == "interrupt"
 
 
 @pytest.mark.parametrize("legacy_agent", ["build", "agent", "reviewer"])
-def test_load_config_migrates_legacy_agent_from_yaml_and_env(
+def test_load_config_migrates_legacy_agent_from_json_and_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_agent: str
 ) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text(f"agent: {legacy_agent}\n")
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"agent": legacy_agent}) + "\n")
     config = load_config(tmp_path, path)
     assert config.agent == "assistant"
     assert config.read_only is (legacy_agent == "reviewer")
@@ -80,8 +82,8 @@ def test_load_config_migrates_legacy_agent_from_yaml_and_env(
 
 
 def test_load_config_keeps_explicit_custom_reviewer_identity(tmp_path: Path) -> None:
-    path = tmp_path / "config.yaml"
-    path.write_text("agent: reviewer\nprofiles:\n  reviewer:\n    mode: reviewer\n")
+    path = tmp_path / "config.json"
+    path.write_text('{"agent": "reviewer", "profiles": {"reviewer": {"mode": "reviewer"}}}\n')
     config = load_config(tmp_path, path)
     assert config.agent == "reviewer" and config.read_only is False
     assert config.profile("reviewer").mode == "reviewer"
@@ -97,10 +99,10 @@ def test_load_config_fresh_default_is_only_assistant(tmp_path: Path) -> None:
             config.profile(name)
 
 
-def test_load_config_read_only_boolean_from_yaml_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_config_read_only_boolean_from_json_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert HarnessConfig(workspace=tmp_path).read_only is False
-    path = tmp_path / "config.yaml"
-    path.write_text("read_only: true\n")
+    path = tmp_path / "config.json"
+    path.write_text('{"read_only": true}\n')
     assert load_config(tmp_path, path).read_only is True
     monkeypatch.setenv("NGN_READ_ONLY", "1")
     assert load_config(tmp_path).read_only is True
@@ -109,7 +111,7 @@ def test_load_config_read_only_boolean_from_yaml_and_env(tmp_path: Path, monkeyp
 
 
 def test_shipped_config_example_loads_without_code_or_credentials(tmp_path: Path) -> None:
-    path = Path(__file__).resolve().parents[2] / "examples/harness/config.yaml"
+    path = Path(__file__).resolve().parents[2] / "examples/harness/config.json"
     config = load_config(tmp_path, path)
     assert config.theme == "ocean"
     assert config.max_subagent_depth == 2
@@ -119,13 +121,13 @@ def test_shipped_config_example_loads_without_code_or_credentials(tmp_path: Path
 
 @pytest.mark.parametrize("api", API_NAMES)
 def test_explicit_api_routes_are_configurable(tmp_path: Path, api: str) -> None:
-    assert HarnessConfig(workspace=tmp_path, api=api).api == api
+    assert HarnessConfig(workspace=tmp_path, providers=connection(api=api)).provider_profile().api == api
 
 
 @pytest.mark.parametrize("api", API_NAMES[1:])
 def test_generic_api_route_never_uses_chatgpt_auth(tmp_path: Path, api: str) -> None:
     with pytest.raises(ValueError, match="ChatGPT login requires"):
-        HarnessConfig(workspace=tmp_path, api=api, auth="chatgpt")
+        HarnessConfig(workspace=tmp_path, providers=connection(api=api, auth="chatgpt"))
 
 
 @pytest.mark.parametrize("api", ["chat_completions", "responses"])
@@ -136,7 +138,7 @@ def test_saved_login_does_not_override_explicit_api(
     api: str,
 ) -> None:
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, api=api, data_dir=tmp_path / "data"))
+        harness = Harness(HarnessConfig(workspace=tmp_path, providers=connection(api=api), data_dir=tmp_path / "data"))
         monkeypatch.setattr(harness.openai_auth, "logged_in", lambda: True)
 
         async def forbidden() -> None:
@@ -147,7 +149,7 @@ def test_saved_login_does_not_override_explicit_api(
             await harness.initialize()
             with pytest.raises(ValueError, match="api override"):
                 await harness.login(lambda authorization: forbidden())
-            assert harness.config.auth == "auto"
+            assert harness.config.provider_profile().auth == "auto"
         finally:
             await harness.close()
 
@@ -157,17 +159,17 @@ def test_saved_login_does_not_override_explicit_api(
 @pytest.mark.parametrize(
     "document",
     [
-        "api: unknown",
-        "theme_background: transparent",
-        "max_subagent_depth: -1",
-        "max_subagent_depth: 9",
-        "max_subagent_depth: true",
-        "max_subagent_depth: 1.5",
-        "profiles:\n  assistant:\n    mode: reviewer",
+        '{"api": "unknown"}',
+        '{"theme_background": "transparent"}',
+        '{"max_subagent_depth": -1}',
+        '{"max_subagent_depth": 9}',
+        '{"max_subagent_depth": true}',
+        '{"max_subagent_depth": 1.5}',
+        '{"profiles": {"assistant": {"mode": "reviewer"}}}',
     ],
 )
 def test_new_fields_reject_invalid_values(tmp_path: Path, document: str) -> None:
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "config.json"
     path.write_text(document)
     with pytest.raises(ValueError):
         load_config(tmp_path, path)
@@ -181,18 +183,17 @@ def test_depth_is_strict_for_python_configs(tmp_path: Path, depth: int) -> None:
 
 def test_scalar_environment_defaults_and_file_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in {
-        "API": "responses",
         "MAX_SUBAGENT_DEPTH": "3",
         "THEME_BACKGROUND": "terminal",
     }.items():
         monkeypatch.setenv(f"NGN_{key}", value)
     config = load_config(tmp_path)
-    assert config.api == "responses" and config.max_subagent_depth == 3
+    assert config.provider_profile().api == "auto" and config.max_subagent_depth == 3
     assert config.theme_background == "terminal"
-    path = tmp_path / "config.yaml"
-    path.write_text("api: chat_completions\nmax_subagent_depth: 0\n")
+    path = tmp_path / "config.json"
+    path.write_text('{"max_subagent_depth": 0}\n')
     config = load_config(tmp_path, path)
-    assert config.api == "chat_completions" and config.max_subagent_depth == 0
+    assert config.provider_profile().api == "auto" and config.max_subagent_depth == 0
 
 
 def test_cli_overrides(tmp_path: Path) -> None:
@@ -201,18 +202,21 @@ def test_cli_overrides(tmp_path: Path) -> None:
             "--theme-background",
             "theme",
             "run",
-            "--api",
-            "responses",
+            "--provider-id",
+            "work",
             "--max-subagent-depth",
             "0",
             "hello",
         ]
     )
     assert args.theme_background == "theme"
-    assert args.api == "responses" and args.max_subagent_depth == 0
+    assert args.provider_id == "work" and args.max_subagent_depth == 0
     assert args.prompt == ["hello"]
-    config = replace(HarnessConfig(workspace=tmp_path), api=args.api, max_subagent_depth=args.max_subagent_depth)
-    assert config.api == "responses" and config.max_subagent_depth == 0
+    config = replace(
+        HarnessConfig(workspace=tmp_path),
+        max_subagent_depth=args.max_subagent_depth,
+    )
+    assert config.provider_profile().api == "auto" and config.max_subagent_depth == 0
 
 
 def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(
@@ -221,15 +225,23 @@ def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user"))
     user = tmp_path / "user/ngn"
     user.mkdir(parents=True)
-    (user / "config.yaml").write_text(
-        "agent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: audit-model\n"
-        "    instructions: User instructions\n  other:\n    mode: reviewer\n"
+    (user / "config.json").write_text(
+        json.dumps(
+            {
+                "agent": "audit",
+                "profiles": {
+                    "audit": {"mode": "reviewer", "model": "audit-model", "instructions": "User instructions"},
+                    "other": {"mode": "reviewer"},
+                },
+            }
+        )
+        + "\n"
     )
     project = tmp_path / ".ngn"
     project.mkdir()
-    (project / "config.yaml").write_text("profiles:\n  audit:\n    instructions: Project instructions\n")
-    explicit = tmp_path / "explicit.yaml"
-    explicit.write_text("profiles:\n")
+    (project / "config.json").write_text('{"profiles": {"audit": {"instructions": "Project instructions"}}}\n')
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text('{"profiles": {}}\n')
 
     with pytest.warns(UserWarning, match="Ignoring untrusted project"):
         untrusted = load_config(tmp_path, explicit)
@@ -240,7 +252,7 @@ def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(
     assert trusted.profile("audit") == AgentProfile("build", "Project instructions", "")
     assert trusted.profile("other") == AgentProfile("reviewer")
 
-    explicit.write_text("profiles:\n  audit:\n    mode: reviewer\n")
+    explicit.write_text('{"profiles": {"audit": {"mode": "reviewer"}}}\n')
     overridden = load_config(tmp_path, explicit, trust_project=True)
     assert overridden.profile("audit") == AgentProfile("reviewer")
     assert overridden.profile("other") == AgentProfile("reviewer")

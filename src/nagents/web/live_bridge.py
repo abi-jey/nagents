@@ -142,7 +142,7 @@ class MainAgentBridge:
         config = self.state.harness.config
         return {
             "agent": "Main assistant" if config.agent in {"", "assistant", "default"} else config.agent,
-            "provider": config.provider_id or config.provider,
+            "provider": config.provider or config.provider_profile().kind,
             "model": self.state.harness.agent.provider.model,
         }
 

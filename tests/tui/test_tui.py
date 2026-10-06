@@ -41,6 +41,7 @@ from nagents.tui.widgets import Composer
 from nagents.tui.widgets import ToolCard
 from nagents.tui.widgets import Turn
 from nagents.types import Message
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.tui import FakeHarness
 from tests.support.tui import idle
@@ -623,7 +624,11 @@ def test_real_harness_boot_without_credentials(tmp_path: Path, monkeypatch: pyte
 
     async def scenario() -> None:
         backend = Harness(
-            HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", api_key_env="NGN_TUI_TEST_MISSING_KEY")
+            HarnessConfig(
+                workspace=tmp_path,
+                data_dir=tmp_path / "state",
+                providers=connection(api_key_env="NGN_TUI_TEST_MISSING_KEY"),
+            )
         )
         app = NagentsApp(backend)
         async with app.run_test() as pilot:

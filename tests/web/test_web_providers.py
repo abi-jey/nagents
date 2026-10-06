@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -10,7 +11,6 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
-import yaml
 
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
@@ -18,6 +18,7 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ProviderRegistryStore
 from nagents.harness.providers import ScopedProviderRegistryStore
+from tests.support.config import connection
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
@@ -32,7 +33,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
     async def check() -> None:
         config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data")
         with caplog.at_level(logging.INFO, logger="uvicorn.error"):
-            async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+            async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, harnesses):
                 before = (await client.get("/api/providers", headers=headers)).json()
                 assert before["active"] == "" and before["providers"] == {}
                 profile = {
@@ -81,7 +82,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 assert data["scope"] == "workspace"
                 assert data["origins"]["work"] == "workspace"
                 assert "synthetic-private-key" not in store.workspace_store.path.read_text()
-                document = yaml.safe_load(store.workspace_store.path.read_text())
+                document = json.loads(store.workspace_store.path.read_text())
                 assert document["version"] == 2
                 assert "model" not in document["providers"]["work"]
                 assert "live" not in document["providers"]["work"]
@@ -97,7 +98,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                     },
                 )
                 assert stale.status_code == 409
-                assert harnesses[0].config.provider_id == "work"
+                assert harnesses[0].config.provider == "work"
                 live = (await client.get("/api/live/settings", headers=headers)).json()
                 assert live["source"] == "providers" and live["profile_name"] == "work"
                 assert live["connection_scope"] == "workspace"
@@ -113,13 +114,17 @@ def test_provider_crud_model_catalog_and_live_are_shared(
     asyncio.run(check())
 
 
-def test_named_connection_does_not_inherit_a_saved_web_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_named_connection_cannot_take_credentials_from_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("TEST_BASE_KEY", "base-key")
     monkeypatch.delenv("TEST_SHARED_KEY", raising=False)
 
     async def check() -> None:
-        config = HarnessConfig(tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_BASE_KEY")
-        async with client_app(tmp_path, config=config) as (_, client, headers, _):
+        config = HarnessConfig(
+            tmp_path, data_dir=tmp_path / "data", providers=connection(auth="api-key", api_key_env="TEST_BASE_KEY")
+        )
+        async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, _):
             before = (await client.get("/api/settings", headers=headers)).json()
             values = {
                 **before["values"],
@@ -129,13 +134,13 @@ def test_named_connection_does_not_inherit_a_saved_web_key(tmp_path: Path, monke
                 "base_url": "",
                 "api_key_env": "TEST_SHARED_KEY",
             }
-            saved = await client.post(
+            rejected = await client.post(
                 "/api/settings",
                 headers=headers,
                 json={"revision": before["revision"], "values": values, "api_key": "stored-test-key"},
             )
-            assert saved.status_code == 200, saved.text
-            assert os.environ["TEST_SHARED_KEY"] == "stored-test-key"
+            assert rejected.status_code == 422
+            assert "TEST_SHARED_KEY" not in os.environ
 
             registry = (await client.get("/api/providers", headers=headers)).json()
             named = await client.put(
@@ -148,6 +153,7 @@ def test_named_connection_does_not_inherit_a_saved_web_key(tmp_path: Path, monke
             )
             assert named.status_code == 200, named.text
             assert "TEST_SHARED_KEY" not in os.environ
+            assert named.json()["providers"]["team"]["key_configured"] is False
             assert (await client.get("/api/settings", headers=headers)).json()["connection"]["key_configured"] is False
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["provider_setup"]["configured"] is False
@@ -256,7 +262,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
                 },
             )
             assert active.status_code == 200, active.text
-            assert harnesses[0].config.provider_id == "local"
+            assert harnesses[0].config.provider == "local"
             assert (await client.get("/api/live/settings", headers=headers)).json()["connection_scope"] == "workspace"
             restored = await client.post(
                 "/api/providers/inherit",
@@ -267,7 +273,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
             )
             assert restored.status_code == 200, restored.text
             assert restored.json()["inherited_active"] and restored.json()["active"] == "personal"
-            assert harnesses[0].config.provider_id == "personal"
+            assert harnesses[0].config.provider == "personal"
             assert (await client.get("/api/live/settings", headers=headers)).json()["connection_scope"] == "global"
             assert (
                 await client.post(

@@ -498,7 +498,7 @@ class NagentsApp(App[None]):
         self.query_one("#rail-session", Static).update(self.harness.session_id or "New session")
         self.query_one("#rail-auth", Static).update(auth_status)
         self.query_one("#rail-config", Static).update(
-            f"{config.provider}\n{config.model}\nProfile: {config.agent}\n"
+            f"{config.provider_profile().kind}\n{config.model}\nProfile: {config.agent}\n"
             f"Plugins: {', '.join(config.plugins) or 'none'}\n"
             f"Project trust: {'enabled' if config.trust_project else 'not granted'}"
         )

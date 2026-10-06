@@ -25,8 +25,8 @@ from pydantic import field_validator
 
 from nagents.compactor import Messages
 from nagents.compactor import Tokens
-from nagents.harness.config import API_NAMES
-from nagents.harness.config import PROVIDERS
+from nagents.harness.providers import API_NAMES
+from nagents.harness.providers import PROVIDERS
 
 from ._async import join_owned as _join
 
@@ -38,6 +38,7 @@ MAX_SETTINGS_BYTES = 16384
 MAX_API_KEY_BYTES = 4096
 PROVIDER_APIS: tuple[str, ...] = tuple(name for name in API_NAMES if name != "completions")
 PROVIDER_AUTHS: tuple[str, ...] = ("auto", "api-key", "chatgpt", "codex", "entra")
+_CONNECTION_FIELDS = frozenset({"provider", "base_url", "api", "auth", "api_key_env"})
 COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
 DEFAULT_COMPACT_TOKENS = 200_000
 DEFAULT_COMPACT_MESSAGES = 100
@@ -170,11 +171,11 @@ class SettingsValues(_SettingsValuesV1):
             max_file_bytes=config.max_file_bytes,
             max_tool_rounds=config.max_tool_rounds,
             max_subagent_depth=config.max_subagent_depth,
-            provider=config.provider,
-            base_url=config.base_url,
-            api=config.api,
-            auth=config.auth,
-            api_key_env=config.api_key_env,
+            provider=config.provider_profile().kind,
+            base_url=config.provider_profile().base_url,
+            api=config.provider_profile().api,
+            auth=config.provider_profile().auth,
+            api_key_env=config.provider_profile().key_env,
             compact_trigger=trigger,
             compact_tokens=tokens,
             compact_messages=messages,
@@ -258,43 +259,32 @@ class WebSettings:
     def provider_config(self, values: SettingsValues) -> "HarnessConfig":
         """Validated candidate configuration with allowlisted overrides applied."""
         candidate = copy.deepcopy(self._provider_admin)
-        candidate.provider = values.provider
-        candidate.base_url = values.base_url
-        candidate.api = values.api
-        candidate.auth = values.auth
-        candidate.api_key_env = values.api_key_env
         candidate.model = candidate.profile(values.agent).model or values.model
         registry = self.harness.provider_store.load()
-        name = self.harness.config.profile(values.agent).provider or registry.active
+        name = self.harness.config.profile(values.agent).provider or registry.active or self.harness.config.provider
+        candidate.providers.update(registry.providers)
         if name:
-            profile = registry.providers[name]
-            candidate.provider_id = name
-            candidate.provider = profile.kind
-            candidate.base_url = profile.base_url
-            candidate.api = profile.api
-            candidate.auth = profile.auth
-            candidate.api_key_env = profile.key_env
-            candidate.api_version = profile.api_version
+            candidate.provider = name
         candidate.validate()
         return candidate
 
     def _effective_values(self, values: SettingsValues) -> SettingsValues:
         candidate = self.provider_config(values)
-        if not candidate.provider_id:
+        if not candidate.provider:
             return values
         return values.model_copy(
             update={
-                "provider": candidate.provider,
-                "base_url": candidate.base_url,
-                "api": candidate.api,
-                "auth": candidate.auth,
-                "api_key_env": candidate.api_key_env,
+                "provider": candidate.provider_profile().kind,
+                "base_url": candidate.provider_profile().base_url,
+                "api": candidate.provider_profile().api,
+                "auth": candidate.provider_profile().auth,
+                "api_key_env": candidate.provider_profile().key_env,
             }
         )
 
     def sync_provider(self) -> None:
         """Project a shared provider selection into the existing web settings view."""
-        if self.harness.config.provider_id:
+        if self.harness.config.provider:
             # A key entered for an unnamed web override must never become the
             # credential of a subsequently selected named connection.
             self._restore_key()
@@ -348,15 +338,15 @@ class WebSettings:
             "apis": list(PROVIDER_APIS),
             "auths": list(PROVIDER_AUTHS),
             "connection": {
-                **({"provider_id": config.provider_id} if config.provider_id else {}),
-                "provider": config.provider,
-                "api": config.api,
-                "auth": config.auth,
-                "base_url": config.base_url,
-                "api_key_env": config.api_key_env,
-                "key_configured": bool(os.environ.get(config.api_key_env))
-                if config.provider_id
-                else config.provider in self.keys,
+                **({"provider_id": config.provider} if config.provider else {}),
+                "provider": config.provider_profile().kind,
+                "api": config.provider_profile().api,
+                "auth": config.provider_profile().auth,
+                "base_url": config.provider_profile().base_url,
+                "api_key_env": config.provider_profile().key_env,
+                "key_configured": bool(os.environ.get(config.provider_profile().key_env))
+                if config.provider
+                else config.provider_profile().kind in self.keys,
                 "auth_status": self.harness.auth_status(),
             },
         }
@@ -415,7 +405,9 @@ class WebSettings:
                     and 0 < len(secret.encode("utf-8")) <= MAX_API_KEY_BYTES
                 ):
                     keys[provider] = secret
-            self.keys = keys
+            # Connection credentials belong to named providers. Old unnamed
+            # web keys remain stored but are never adopted by this process.
+            self.keys = {}
             if row is not None:
                 version, payload, revision = row
                 if (
@@ -464,6 +456,8 @@ class WebSettings:
                     values = values.model_copy(
                         update={"agent": "assistant", "read_only": values.read_only or values.agent == "reviewer"}
                     )
+                values = values.model_copy(update={name: getattr(self.defaults, name) for name in _CONNECTION_FIELDS})
+                differences = {key: value for key, value in differences.items() if key not in _CONNECTION_FIELDS}
                 if self._pinned_startup_model:
                     values = values.model_copy(update={"model": self._startup_model})
                     differences.pop("model", None)
@@ -489,9 +483,6 @@ class WebSettings:
                 )
                 values = self._effective_values(values)
                 self.validate(values)
-                secret = keys.get(values.provider, "") if not self.provider_config(values).provider_id else ""
-                if secret:
-                    self._install_key(values.api_key_env, secret)
                 with self.harness.operation("load web settings"):
                     await self.harness.reconfigure_provider(self.provider_config(values))
                     values.apply(self.harness)
@@ -513,7 +504,7 @@ class WebSettings:
                     effective.apply(self.harness)
                 self.values = effective
                 self.effective_mode = self.harness.mode
-            if self.harness.config.provider_id:
+            if self.harness.config.provider:
                 self.sync_provider()
         except Exception:
             raise RuntimeError(
@@ -553,6 +544,7 @@ class WebSettings:
         values = json.loads(payload)
         if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
             raise ValueError("Invalid global settings fields")
+        values = {key: value for key, value in values.items() if key not in _CONNECTION_FIELDS}
         if self._pinned_startup_model:
             values.pop("model", None)
         self.defaults = SettingsValues.model_validate({**self.defaults.model_dump(), **values})
@@ -595,8 +587,10 @@ class WebSettings:
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.defaults.read_only})
         values = values.model_copy(update={"agent": self.startup_defaults.agent})
+        if any(getattr(values, name) != getattr(self.defaults, name) for name in _CONNECTION_FIELDS):
+            raise HTTPException(422, "Edit connections in Provider connections.")
         self.validate(values)
-        payload = values.model_dump_json(exclude={"agent"})
+        payload = values.model_dump_json(exclude={"agent", *_CONNECTION_FIELDS})
         next_revision = secrets.token_hex(32)
         self.global_path.parent.mkdir(parents=True, exist_ok=True)
         self.global_path.touch(mode=0o600, exist_ok=True)
@@ -649,8 +643,10 @@ class WebSettings:
         clear_api_key: bool = False,
         reset: bool = False,
     ) -> None:
-        if self.harness.provider_store.load().active and (api_key or clear_api_key):
-            raise HTTPException(422, "Named connections use environment variables; no API keys are saved here.")
+        if api_key or clear_api_key:
+            raise HTTPException(422, "Configure a named provider connection; API keys are not saved here.")
+        if any(getattr(values, name) != getattr(self.values, name) for name in _CONNECTION_FIELDS):
+            raise HTTPException(422, "Edit connections in Provider connections.")
         if "submit_mode" not in values.model_fields_set:
             values = values.model_copy(update={"submit_mode": self.values.submit_mode})
         if "read_only" not in values.model_fields_set:
@@ -729,8 +725,8 @@ class WebSettings:
                     harness._selected_model,
                 )
                 previous_keys = dict(self.keys)
-                previous_secret = previous_keys.get(config.provider, "")
-                previous_env = config.api_key_env
+                previous_secret = previous_keys.get(config.provider_profile().kind, "")
+                previous_env = config.provider_profile().key_env
                 model = harness.agent.provider.model
                 rounds = harness.agent.max_tool_rounds
                 prompt = harness.agent.system_prompt
@@ -742,7 +738,7 @@ class WebSettings:
                     elif clear_api_key:
                         self.keys.pop(provider, None)
                     self._restore_key()
-                    secret = self.keys.get(provider, "") if not self.provider_config(values).provider_id else ""
+                    secret = self.keys.get(provider, "") if not self.provider_config(values).provider else ""
                     if secret:
                         self._install_key(values.api_key_env, secret)
                     values.apply(harness)

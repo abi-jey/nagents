@@ -16,6 +16,7 @@ from nagents.harness import load_config
 from nagents.skills import Skill
 from tests.harness.test_harness import ScriptedProvider
 from tests.harness.test_harness import approve
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -33,7 +34,9 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HarnessConfig:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    return HarnessConfig(workspace=workspace, data_dir=tmp_path / "data", auth="api-key", model="fake-model")
+    return HarnessConfig(
+        workspace=workspace, data_dir=tmp_path / "data", providers=connection(auth="api-key"), model="fake-model"
+    )
 
 
 def skill_file(config: HarnessConfig, name: str, body: str, *, description: str = "Fixture skill") -> Path:

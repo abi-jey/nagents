@@ -22,6 +22,7 @@ from nagents.harness.tool_config import WorkspaceTools
 from nagents.session import SessionManager
 from nagents.types import Message
 from tests.harness.test_harness import ScriptedProvider
+from tests.support.config import connection
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 
@@ -155,7 +156,7 @@ def test_compact_history_runs_after_tool_results_and_before_next_model_round(tmp
 
 def test_tool_disabled_during_approval_never_executes_and_disappears_from_next_request(tmp_path: Path) -> None:
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", auth="api-key"))
+        harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", providers=connection(auth="api-key")))
         provider = ScriptedProvider(
             [[ToolCallEvent(id="custom", name="custom_tool", arguments={})], [TextDoneEvent(text="disabled")]]
         )

@@ -167,9 +167,9 @@ def test_missing_credentials_are_actionable(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.delenv("NGN_UNSET_TEST_KEY", raising=False)
-    result = main(["run", "--workspace", str(tmp_path), "--api-key-env", "NGN_UNSET_TEST_KEY", "hello"])
-    assert result in {1, 2}
-    assert "NGN_UNSET_TEST_KEY" in capsys.readouterr().err
+    result = main(["run", "--workspace", str(tmp_path), "hello"])
+    assert result == 2
+    assert "Select a named provider connection" in capsys.readouterr().err
 
 
 @pytest.mark.requires_posix
@@ -193,8 +193,8 @@ def test_run_header_shows_effective_provider_model_and_config(
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    config = tmp_path / "settings.yaml"
-    config.write_text("provider: openai\nmodel: header-model\n")
+    config = tmp_path / "settings.json"
+    config.write_text('{"model": "header-model"}\n')
     assert main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "run", "hello"]) == 0
     captured = capsys.readouterr()
     assert "Provider: openai" in captured.err
@@ -250,9 +250,16 @@ def test_demo_sessions_and_resume(
 def test_profile_activation_model_precedence_over_cli(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], profile_model: str
 ) -> None:
-    config = tmp_path / "config.yaml"
+    config = tmp_path / "config.json"
     config.write_text(
-        f'model: top-level-model\nagent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: "{profile_model}"\n'
+        json.dumps(
+            {
+                "model": "top-level-model",
+                "agent": "audit",
+                "profiles": {"audit": {"mode": "reviewer", "model": profile_model}},
+            }
+        )
+        + "\n"
     )
     assert (
         main(["--workspace", str(tmp_path), "--config", str(config), "--demo", "--model", "cli-model", "doctor"]) == 0

@@ -27,6 +27,7 @@ from nagents.provider.gateway import GatewayHTTPClient
 from tests.providers.test_gateway_provider import KEY
 from tests.providers.test_gateway_provider import LEAK
 from tests.providers.test_gateway_provider import endpoint
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 
@@ -358,7 +359,9 @@ def test_harness_explicit_discovery_resolves_current_key(tmp_path: Path, monkeyp
 
         async with endpoint(handle) as url:
             config = HarnessConfig(
-                workspace=tmp_path, demo=False, auth="api-key", base_url=url, api_key_env="TEST_CATALOG_KEY"
+                workspace=tmp_path,
+                demo=False,
+                providers=connection(auth="api-key", base_url=url, api_key_env="TEST_CATALOG_KEY"),
             )
             async with HarnessProvider(config) as provider:
                 assert provider.api_key == "deferred-until-live-request"
@@ -383,7 +386,10 @@ def test_harness_startup_no_catalog_and_demo_explicitly_offline(
 
     async def scenario() -> None:
         config = HarnessConfig(
-            workspace=tmp_path, data_dir=tmp_path / "data", demo=demo, auth="api-key", api_key_env="TEST_CATALOG_KEY"
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            demo=demo,
+            providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         harness = ControlledHarness(config)
         with (

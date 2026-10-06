@@ -39,6 +39,7 @@ from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.types import ToolDefinition
 from nagents.web.app import create_app
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -268,7 +269,9 @@ def test_read_only_design_never_starts_mcp_subprocess(tmp_path: Path, monkeypatc
         design = parse(STARTER)
         design.mcp_servers["docs"] = MCPDefinition(command="/bin/true", args=[], secrets={})
         design.agents["assistant"].mcp = [MCPSelection(server="docs", tools=[])]
-        config = HarnessConfig(tmp_path, data_dir=tmp_path / "data", auth="api-key", read_only=True)
+        config = HarnessConfig(
+            tmp_path, data_dir=tmp_path / "data", providers=connection(auth="api-key"), read_only=True
+        )
         harness = DesignedHarness(config, design)
         added: list[object] = []
 
@@ -477,9 +480,9 @@ def test_web_designer_chat_and_pinned_continuation(tmp_path: Path) -> None:
 
             # Runtime settings may change after the Designer was constructed.
             harness = app.state.web.harness
-            harness.config.provider = "openrouter"
-            harness.config.api = "chat_completions"
-            harness.config.api_key_env = "OPENROUTER_API_KEY"
+            harness.config.providers = connection(
+                "openrouter", api="chat_completions", api_key_env="OPENROUTER_API_KEY"
+            )
             harness.agent.provider.model = "deepseek/deepseek-v4.1-flash"
             catalog = (await client.get("/api/designer")).json()
             for key in ("starter", "example"):

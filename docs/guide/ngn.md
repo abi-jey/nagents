@@ -18,8 +18,8 @@ Related pages: [installation and environment choices](ngn-installation.md),
 
 Use `/provider` to create or edit named provider connections, activate one, or
 fetch its model IDs. The TUI and web UI share
-`$XDG_CONFIG_HOME/ngn/providers.yaml` (default
-`~/.config/ngn/providers.yaml`). Enter an environment-variable **name** such as
+`$XDG_CONFIG_HOME/ngn/providers.json` (default
+`~/.config/ngn/providers.json`). Enter an environment-variable **name** such as
 `OPENAI_API_KEY` or `${OPENAI_API_KEY}`; ngn reads the value when it makes a
 request and does not save it in that file. OpenAI also supports ngn's ChatGPT
 device login or the library's local Codex discovery. Foundry can use the
@@ -62,18 +62,19 @@ trusted setup code could perform I/O. It does save demo conversations locally.
 Send `demo approval` to inspect an approval dialog with a sample change preview.
 Demo actions are explicitly labeled as previews, not completed real work.
 
-For a real model, set the provider key in your shell environment and launch:
+For a real model, create a named connection in `providers.json` or the Provider
+connections UI, set its referenced key in your shell environment, and launch:
 
 ```bash
-poetry run ngn --provider openai --auth api-key --model gpt-6-luna
-poetry run ngn --provider anthropic --auth api-key --model YOUR_MODEL_ID --api-key-env ANTHROPIC_API_KEY
+poetry run ngn --provider-id my-openai --model gpt-6-luna
+poetry run ngn --provider-id my-anthropic --model YOUR_MODEL_ID
 poetry run ngn --workspace /path/to/project
 poetry run ngn --continue
 ```
 
-Use a model ID your provider account actually supports. `--base-url` and
-`--api-key-env` support custom endpoints without putting credentials in command
-arguments or project configuration. Credentials are not copied from another
+Use a model ID your provider account actually supports. Set `base_url` and
+`api_key_env` inside the named provider entry for custom endpoints; store key
+values outside configuration. Credentials are not copied from another
 coding assistant's configuration, and ngn does not automatically load `.env`.
 
 Use `api: auto` for provider-native defaults, or choose `chat_completions`,
@@ -148,8 +149,8 @@ ngn --submit-mode interrupt --tab-action complete
 ngn --tab-action focus
 ```
 
-The equivalent YAML settings are `submit_mode: queue` and
-`tab_action: agent`. Tab alternatives are `complete` for command completion
+The equivalent JSON settings are `"submit_mode": "queue"` and
+`"tab_action": "agent"`. Tab alternatives are `complete` for command completion
 and `focus` for ordinary widget navigation. They also accept `NGN_SUBMIT_MODE`
 and `NGN_TAB_ACTION` environment defaults.
 
@@ -244,10 +245,8 @@ semantic colors instead of sharing one accent. `theme_background` separately sel
 `"auto"`, `"terminal"`, or `"theme"`: follow the preset's automatic behavior,
 retain the terminal background, or use the theme background. For example:
 
-```yaml
-theme: ocean
-theme_background: terminal
-animations: false
+```json
+{"theme": "ocean", "theme_background": "terminal", "animations": false}
 ```
 
 The equivalent CLI choices make background variants easy to compare:
@@ -267,11 +266,11 @@ guessing whether the inherited background is light or dark.
 
 Each preset has a subtle three-column ASCII activity animation at eight frames
 per second; idle/error status states remain still. In the current checkout,
-`--no-animations`, `animations = false` in YAML, or `NGN_ANIMATIONS=false`
+`--no-animations`, `"animations": false` in JSON, or `NGN_ANIMATIONS=false`
 disables the indicator, animated scrolling, and input cursor blinking.
 `TEXTUAL_ANIMATIONS=none` also disables these motions. Brief button-press feedback
-remains. Theme selection also accepts YAML `theme` and `NGN_THEME`; background
-selection has the `NGN_THEME_BACKGROUND` environment default. YAML overrides
+remains. Theme selection also accepts JSON `theme` and `NGN_THEME`; background
+selection has the `NGN_THEME_BACKGROUND` environment default. JSON overrides
 `NGN_*` environment defaults. These are color/motion presets, not a graphical
 Bot avatar or a separate team-view implementation.
 
@@ -444,11 +443,10 @@ only a reference to an environment variable instead of a key, which suits a
 secret manager. A non-interactive `ngn login` without a method keeps the
 historical ChatGPT device-code behavior.
 
-The saved selection becomes this machine's provider default, but it is the
-lowest layer above built-ins: `NGN_*` environment variables, YAML files, and CLI
-flags all override it, and a stored key is used only when its environment
-variable is unset. `ngn login --status` prints the ChatGPT status and the active
-provider login without a network request.
+Saved login credentials do not select an active connection. Pick a named
+connection in `providers.json` or with `--provider-id`; ChatGPT device login
+supplies credentials when that connection uses `"auth": "chatgpt"`.
+`ngn login --status` prints saved credential status without a network request.
 
 The active login lives in `$XDG_DATA_HOME/ngn/auth/login.json`
 (`~/.local/share/ngn/auth/login.json` by default), a **plaintext credential
@@ -493,18 +491,18 @@ use an OpenAI Platform API key instead; device login does not bypass account
 restrictions or turn a ChatGPT subscription into general API access.
 
 ChatGPT sign-in uses `https://chatgpt.com/backend-api/codex/responses`, not the
-ordinary API-key chat-completions endpoint. The Harness preserves your selected
-model (default `gpt-6-astra`) for this route; use `/model` to select another model
-available to your account. The underlying `OpenAIProvider` lives in the library;
-interactive login, token refresh/storage,
+ordinary API-key chat-completions endpoint. Choose a model available to your
+account in `config.json`, `/model`, or `--model`. The underlying
+`OpenAIProvider` lives in the library; interactive login, token refresh/storage,
 and route selection live in the harness.
 
-The `auth` configuration field and `--auth` accept:
+The `auth` field in the selected `providers.json` connection accepts:
 
-- `auto`: prefer a saved ChatGPT login only for the default OpenAI endpoint with
-  `api: auto`; otherwise use the configured API-key environment variable.
+- `auto`: prefer a saved ChatGPT login for the default OpenAI endpoint with
+  `api: auto`; otherwise use the named key environment variable.
 - `api-key`: always use the configured API-key environment variable.
 - `chatgpt`: require the saved ChatGPT login and the Codex Responses route.
+- `codex`: use local Codex discovery rather than the ngn device login.
 
 Saved ChatGPT credentials are never sent to a custom `base_url`. Such endpoints
 use API-key authentication, and explicitly combining `auth: chatgpt` with a
@@ -554,7 +552,7 @@ top-level `model`), and the configuration files that were actually loaded:
 ```text
 Provider: openai
 Model: gpt-6-luna
-Config: /home/you/.config/ngn/config.yaml
+Config: /home/you/.config/ngn/config.json
 ```
 
 When no configuration file exists the header reads `Config: built-in defaults`,
@@ -596,14 +594,10 @@ after the subcommand; prefer supplying each option only once.
 | Common option | Meaning |
 | --- | --- |
 | `--workspace PATH`, `-C PATH` | Select an existing workspace directory. |
-| `--config PATH` | Load and explicitly trust a YAML file at any location. |
-| `--trust-project` | Also trust `<workspace>/.ngn/config.yaml`. |
-| `--provider NAME` | Select provider name/alias. |
+| `--config PATH` | Load and explicitly trust a JSON file at any location. |
+| `--trust-project` | Also trust `<workspace>/.ngn/config.json`. |
+| `--provider-id NAME` | Select a named connection in `providers.json`. |
 | `--model ID`, `-m ID` | Set top-level model selection. A profile's own model can supersede it on activation. |
-| `--base-url URL` | Override API endpoint. Never include credentials. |
-| `--api auto\|chat_completions\|responses\|messages\|completions` | Select provider HTTP protocol. Legacy Completions is text-only; ChatGPT login requires `auto`. |
-| `--api-key-env NAME` | Name the environment variable holding an API key. Never pass the value as this argument. |
-| `--auth auto\|api-key\|chatgpt` | Select authentication behavior. |
 | `--agent NAME`, `-a NAME` | Select the built-in `assistant` or an explicitly configured custom profile. |
 | `--max-subagent-depth N` | Integer `0..8`; default `2`, with the root at depth `0`. |
 | `--theme NAME` | Select `terminal`, `graphite`, `ocean`, or `ember`. |
@@ -616,9 +610,9 @@ after the subcommand; prefer supplying each option only once.
 | `--continue`, `-c` | Resume the latest session in this workspace, if any. |
 | `--resume ID` | Resume a specific session in this workspace. Mutually exclusive with `--continue`. |
 
-Not every YAML field has a matching CLI flag: `api_version`, `data_dir`,
-`shell_timeout`, `max_output`, `max_file_bytes`, and `max_tool_rounds` use YAML or
-their `NGN_*` defaults. Profile tables use YAML. Use the
+Connection authentication, API, endpoint, and key-variable name belong in
+`providers.json`; `config.json` holds general settings such as `data_dir`,
+`shell_timeout`, limits, model selection, and profiles. Use the
 [configuration reference](ngn-configuration.md) for types and validation, and
 `--help` for the flags present in the particular source build.
 
@@ -645,38 +639,38 @@ and is not relocated by `data_dir`.
 
 ## Configuration
 
-User configuration is `~/.config/ngn/config.yaml` (or under `$XDG_CONFIG_HOME`).
-Project configuration is `<workspace>/.ngn/config.yaml` and requires
+User configuration is `~/.config/ngn/config.json` (or under `$XDG_CONFIG_HOME`).
+Project configuration is `<workspace>/.ngn/config.json` and requires
 `--trust-project` **or explicit selection of that file** with `--config`.
-`--config /any/path/settings.yaml` explicitly trusts that file; its name and
-location need not be `.ngn/config.yaml`. Settings are top-level YAML with no
-`ngn:` wrapper; named profiles live under a `profiles:` mapping:
+`--config /any/path/settings.json` explicitly trusts that file; its name and
+location need not be `.ngn/config.json`. Settings are top-level JSON with no
+`ngn` wrapper; named profiles live under a `profiles` object:
 
-```yaml
-provider: openai
-model: gpt-6-luna
-api: auto
-auth: auto
-api_key_env: OPENAI_API_KEY
-agent: assistant
-shell_timeout: 60.0
-max_subagent_depth: 2
-
-profiles:
-  audit:
-    mode: reviewer
-    instructions: Prioritize regressions and missing tests.
+```json
+{
+  "providers": "./providers.json",
+  "model": "gpt-6-luna",
+  "agent": "assistant",
+  "shell_timeout": 60.0,
+  "max_subagent_depth": 2,
+  "profiles": {
+    "audit": {
+      "mode": "reviewer",
+      "instructions": "Prioritize regressions and missing tests."
+    }
+  }
+}
 ```
 
-Precedence is built-in defaults, `NGN_*` environment defaults, user YAML, trusted
-project YAML, explicit YAML, then CLI flags. `NGN_MODEL`, `NGN_PROVIDER`,
-`NGN_AUTH`, and `NGN_API_KEY_ENV` are examples of environment defaults. Plugin
-paths in YAML resolve relative to that file; explicit `--plugin` paths resolve
-relative to the shell's current directory. `data_dir` in YAML is also relative
-to that file, not the workspace. YAML plugin lists replace earlier lists; CLI
+Precedence is built-in defaults, `NGN_*` environment defaults, user JSON, trusted
+project JSON, explicit JSON, then CLI flags. `NGN_MODEL` and `NGN_PROVIDER_ID`
+are examples of environment defaults. Plugin
+paths in JSON resolve relative to that file; explicit `--plugin` paths resolve
+relative to the shell's current directory. `data_dir` in JSON is also relative
+to that file, not the workspace. JSON plugin lists replace earlier lists; CLI
 `--plugin` entries append. Profiles merge by name, but a later same-name entry
 replaces the whole profile, with omitted fields resetting to profile defaults.
-No literal API keys belong in YAML.
+No literal API keys belong in JSON.
 
 See the [full configuration reference](ngn-configuration.md) for every accepted
 field, exact types/defaults/ranges, provider recipes, and the distinction between
@@ -806,7 +800,7 @@ MCP implementation details to the terminal widgets.
 ## Trust and permissions
 
 - Global configuration and an explicitly selected `--config` file are trusted.
-- Project `.ngn/config.yaml` is ignored unless `--trust-project` is supplied or
+- Project `.ngn/config.json` is ignored unless `--trust-project` is supplied or
   that file is explicitly selected with `--config`.
   Review it and referenced Python code before enabling it.
 - `--plugin path.py:setup` explicitly trusts that Python code. Installed-module

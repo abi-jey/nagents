@@ -22,6 +22,7 @@ from nagents.tools import ToolRegistry
 from tests.channels.test_channels_runtime import MemoryChannel
 from tests.channels.test_channels_runtime import OfflineProvider
 from tests.channels.test_channels_runtime import make_agent
+from tests.support.config import connection
 
 
 def test_detached_catalog_schema_and_identity_membership() -> None:
@@ -148,7 +149,9 @@ def test_runtime_guards_and_exact_tool_schemas(tmp_path: Path) -> None:
 @pytest.mark.requires_posix
 def test_owned_registration_runs_real_harness_tools_without_listener(tmp_path: Path) -> None:
     async def drive() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", auth="api-key"))
+        harness = Harness(
+            HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"))
+        )
         channel = MemoryChannel("source")
         dispatcher = ChannelDispatcher((channel,), workspace=tmp_path)
         approvals: list[str] = []

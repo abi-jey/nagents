@@ -33,10 +33,10 @@ from .events import ToolResultEvent
 from .harness import Harness
 from .harness import load_config
 from .harness import provider_login
-from .harness.config import API_NAMES
 from .harness.config import THEME_BACKGROUNDS
 from .harness.config import THEME_NAMES
 from .harness.credentials import ProviderLogin
+from .harness.providers import API_NAMES
 from .harness.types import ApprovalRequest
 from .harness.types import HarnessEvent
 from .harness.types import Notice
@@ -57,14 +57,9 @@ if TYPE_CHECKING:
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
     common.add_argument("--workspace", "-C", type=Path, help="Working directory (default: current directory)")
-    common.add_argument("--config", type=Path, help="Explicit, trusted YAML configuration")
-    common.add_argument("--provider", help="Provider name, for example openai, anthropic, or gemini")
-    common.add_argument("--provider-id", help="Named connection from ~/.config/ngn/providers.yaml")
+    common.add_argument("--config", type=Path, help="Explicit, trusted JSON configuration")
+    common.add_argument("--provider-id", help="Named connection from ~/.config/ngn/providers.json")
     common.add_argument("--model", "-m", help="Provider model ID")
-    common.add_argument("--base-url", help="Provider API endpoint")
-    common.add_argument("--api", choices=API_NAMES, help="Provider HTTP API (default: provider-specific auto)")
-    common.add_argument("--api-key-env", help="Environment variable containing the API key, never the key itself")
-    common.add_argument("--auth", choices=("auto", "api-key", "chatgpt"), help="Authentication method (default: auto)")
     common.add_argument("--agent", "-a", help="Agent profile (default: assistant; other profiles must be configured)")
     common.add_argument(
         "--design", type=Path, help="Load an experimental YAML agent design (requires the designer extra)"
@@ -94,7 +89,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     common.add_argument("--plugin", action="append", help="Explicitly trust and load a Python path.py:setup extension")
     common.add_argument(
-        "--trust-project", action="store_true", help="Trust this project's .ngn/config.yaml and its code"
+        "--trust-project", action="store_true", help="Trust this project's .ngn/config.json and its code"
     )
     common.add_argument(
         "--demo", action="store_true", help="Offline interface demo; no model calls or workspace writes"
@@ -137,6 +132,11 @@ def _parser() -> argparse.ArgumentParser:
     login = commands.add_parser(
         "login", parents=[common], help="Sign in to a provider: ChatGPT/Codex, OpenRouter, or an API key"
     )
+    login.add_argument("--provider", help="Provider type for this login")
+    login.add_argument("--base-url", help="Provider API endpoint for this login")
+    login.add_argument("--api", choices=API_NAMES, help="Provider HTTP API for this login")
+    login.add_argument("--api-key-env", help="API key environment variable name for this login")
+    login.add_argument("--auth", choices=("auto", "api-key", "chatgpt"), help="Login authentication mode")
     login.add_argument(
         "method",
         nargs="?",
@@ -493,37 +493,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         overrides = {
             name: getattr(args, name)
             for name in (
-                "provider",
-                "provider_id",
                 "model",
-                "base_url",
-                "api_key_env",
                 "agent",
                 "demo",
-                "auth",
                 "theme",
                 "animations",
                 "submit_mode",
                 "tab_action",
-                "api",
                 "max_subagent_depth",
                 "theme_background",
             )
             if hasattr(args, name)
         }
-        if "provider_id" not in overrides and {"provider", "base_url", "api", "auth", "api_key_env"} & overrides.keys():
-            overrides["provider_id"] = ""
-        if "provider" in overrides and not overrides.get("provider_id"):
-            from .harness.providers import KINDS
-
-            selected_kind = str(overrides["provider"])
-            for field, default in (
-                ("auth", "api-key"),
-                ("base_url", ""),
-                ("api", "auto"),
-                ("api_key_env", KINDS[selected_kind].env if selected_kind in KINDS else "OPENAI_API_KEY"),
-            ):
-                overrides.setdefault(field, default)
         if hasattr(args, "plugin"):
             plugins = list(config.plugins)
             for entry in args.plugin:
@@ -539,20 +520,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.model_explicit = True
             config.model_config_explicit = True
             config.global_model_default = config.model
-        if config.provider_id:
+        selected_name = getattr(args, "provider_id", config.provider)
+        if selected_name:
             from .harness.providers import ScopedProviderRegistryStore
 
-            profile = ScopedProviderRegistryStore(config.workspace).load().providers.get(config.provider_id)
+            profile = (
+                ScopedProviderRegistryStore(config.workspace, paths=config.provider_paths)
+                .load()
+                .providers.get(selected_name)
+            )
             if profile is None:
-                raise ValueError(f"Unknown provider connection {config.provider_id!r}")
+                raise ValueError(f"Unknown provider connection {selected_name!r}")
             config = replace(
                 config,
-                provider=profile.kind,
-                base_url=profile.base_url,
-                api=profile.api,
-                auth=profile.auth,
-                api_key_env=profile.key_env,
-                api_version=profile.api_version,
+                provider=selected_name,
+                providers={**config.providers, selected_name: profile},
                 model_explicit=True,
             )
         if args.command == "serve":
@@ -571,6 +553,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dev=args.dev,
             )
             return 0
+        if args.command == "run" and not config.demo and not config.provider:
+            raise ValueError("Select a named provider connection before running a prompt.")
         if getattr(args, "design", None):
             try:
                 from .designer.runtime import DesignedHarness

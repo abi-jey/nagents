@@ -7,6 +7,7 @@ import pytest
 
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import ProviderProfile
 from nagents.live import LiveConfig
 
 
@@ -35,15 +36,15 @@ def test_astra_implicit_openai_tool_route_respects_explicit_contracts(
     config = HarnessConfig(
         workspace=tmp_path,
         model=model,
-        provider=kind,
-        auth="api-key",
-        api=api,
-        base_url=base_url,
+        provider="chosen",
+        providers={
+            "chosen": ProviderProfile(kind=kind, auth="api-key", api=api, base_url=base_url),
+        },
     )
     provider = HarnessProvider(config)
     try:
         assert provider.api == expected
         assert provider.model == model
-        assert config.api == api
+        assert config.provider_profile().api == api
     finally:
         asyncio.run(provider.close())

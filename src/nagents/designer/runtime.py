@@ -14,10 +14,11 @@ from nagents.events import Event
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.extensions import AgentPlugin
-from nagents.harness.config import PROVIDERS
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.credentials import ProviderLoginStore
+from nagents.harness.providers import PROVIDERS
+from nagents.harness.providers import ProviderProfile
 from nagents.harness.runtime import Harness
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
@@ -158,12 +159,18 @@ class DesignedHarness(Harness):
             agent=self.agent_id,
             profiles=profiles,
             plugins=(),
-            auth="api-key",
-            provider=provider.type,
+            provider="",
+            providers={
+                "": ProviderProfile(
+                    kind=provider.type,
+                    auth="api-key",
+                    base_url=provider.base_url,
+                    api=provider.api,
+                    api_key_env=config.provider_profile().key_env,
+                    api_version=provider.api_version,
+                )
+            },
             model=provider.model,
-            base_url=provider.base_url,
-            api=provider.api,
-            api_version=provider.api_version,
             max_tool_rounds=self.definition.max_tool_rounds,
             max_subagent_depth=design.defaults.max_subagent_depth,
         )
@@ -276,7 +283,7 @@ class DesignedHarness(Harness):
             observe(
                 "agent_started",
                 instructions=self.agent.system_prompt,
-                provider=self.config.provider,
+                provider=self.config.provider_profile().kind,
                 model=self.agent.provider.model,
             )
             async with aclosing(

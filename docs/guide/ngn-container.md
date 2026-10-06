@@ -11,35 +11,30 @@ single-user workspace, not a multi-user service.
 
 ## Two ways to configure an API-key connection
 
-For a mounted file, use flat, **secret-free** YAML. A complete Kubernetes
+For a mounted file, use **secret-free** JSON. A complete Kubernetes
 ConfigMap + Deployment + ClusterIP Service is in
 [`examples/k8s/ngn-container-config.yaml`](https://github.com/abi-jey/nagents/blob/main/examples/k8s/ngn-container-config.yaml).
 The deployment selects the projected file explicitly:
 
 ```text
-ngn serve --host 0.0.0.0 --workspace /workspace --config /etc/ngn/config.yaml
+ngn serve --host 0.0.0.0 --workspace /workspace --config /etc/ngn/config.json
 ```
 
-The ConfigMap example chooses OpenAI `auth: api-key`, `model: gpt-6-luna`, and
-`api_key_env: OPENAI_API_KEY`. The Secret reference sets that **environment
+The ConfigMap's `providers.json` selects an OpenAI API-key connection and
+`config.json` chooses `gpt-6-luna`. The Secret reference sets that **environment
 variable in the ngn container**; a browser's environment cannot supply it.
 Replace the example image tag with a digest of an image built from the updated
 Dockerfile. Change the model to one your account can use; setting a model name
 does not grant model access.
 
-For an **environment-only** deployment, omit `--config` and the `config`
-volume/mount from the example and set these on the ngn container instead:
+For **UI-first** setup, omit `--config` and the `config` volume/mount. The web
+client starts without a selected provider; add and activate a named connection
+in Provider connections before chatting. Supply its key variable to the container:
 
 ```yaml
 env:
-  - name: NGN_PROVIDER
-    value: openai
   - name: NGN_MODEL
     value: gpt-6-luna
-  - name: NGN_AUTH
-    value: api-key
-  - name: NGN_API_KEY_ENV
-    value: OPENAI_API_KEY
   - name: OPENAI_API_KEY
     valueFrom:
       secretKeyRef:
@@ -49,12 +44,11 @@ env:
 ```
 
 Keep the example's `XDG_DATA_HOME`, `XDG_CONFIG_HOME` and writable `/data` and
-`/workspace` volumes. A truly zero-config container can omit both YAML and
-`NGN_*` provider variables: it defaults to OpenAI `auth: auto` and shows the
-setup message until a usable credential is configured. `NGN_API_KEY_ENV` is
-the **name** of an environment variable; it is not the key itself. An explicit
+`/workspace` volumes. A zero-config container shows setup guidance until a
+named connection is selected. Enter the **variable name** `OPENAI_API_KEY` in
+that connection; never enter its value in configuration. An explicit
 `--config` must point to an existing readable file. Environment defaults have
-lower precedence than YAML; explicit CLI options have higher precedence. ngn
+lower precedence than JSON; explicit CLI options have higher precedence. ngn
 does not interpret `NGN_CONFIG` or automatically read `.env` files.
 
 ## Provision and verify
@@ -64,7 +58,7 @@ does not interpret `NGN_CONFIG` or automatically read `.env` files.
    `kubectl -n <namespace> create secret generic ngn-provider-example
    --from-file=OPENAI_API_KEY=/private/path/openai-api-key` (key only, with no
    trailing newline). Do not place the
-   key in a ConfigMap, YAML, image, command argument or logs. The Secret is
+    key in a ConfigMap, JSON, image, command argument or logs. The Secret is
    optional only to allow UI-first startup; a missing key cannot run inference.
 2. Deploy the ConfigMap example, or the env-only variant, in your namespace.
    Provide a persistent writable data volume when you want settings, sessions
