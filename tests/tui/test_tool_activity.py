@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from textual.containers import VerticalScroll
+from textual.messages import Layout
 from textual.widgets import Button
 from textual.widgets import Static
 
@@ -29,6 +30,8 @@ from tests.support.tui import send
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from textual.message import Message as TextualMessage
 
     from nagents.types import ToolArguments
 
@@ -390,6 +393,60 @@ def test_opening_large_tool_keeps_header_clickable_after_animations(tmp_path: Pa
             assert not card.collapsed
             assert card.region.height > size[1]
             assert title.region.y >= app.query_one("#conversation").content_region.y
+            assert await pilot.click(title)
+            await pilot.pause()
+            assert card.collapsed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("size", [(80, 24), (140, 40)])
+def test_expanding_tool_before_layout_delivery_keeps_header_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int]
+) -> None:
+    async def scenario() -> None:
+        app = make_app(FakeHarness(tmp_path))
+        async with app.run_test(size=size) as pilot:
+            await idle(app, pilot)
+            await app._event(ToolCallEvent(id="completed", name="shell", arguments={"command": "check"}))
+            await app._event(ToolOutput("completed", "shell", "large output\n" * OUTPUT_LIMIT))
+            await app._event(ToolResultEvent(id="completed", name="shell", result={"diff": "+new\n" * 100}))
+            await pilot.pause()
+            conversation = app.query_one("#conversation", VerticalScroll)
+            card = app.query_one(ToolCard)
+            title = card.query_one("CollapsibleTitle")
+            title.focus()
+            await pilot.pause()
+            assert card.collapsed and app.focused is title
+
+            # Deliver expansion callbacks before the queued layout messages.
+            # Bottom anchoring may otherwise use the new content height while
+            # scroll_visible still sees the collapsed scroll bounds.
+            layouts: list[Layout] = []
+            post_message = app.screen.post_message
+
+            def defer_layout(message: TextualMessage) -> bool:
+                if isinstance(message, Layout):
+                    layouts.append(message)
+                    return True
+                return post_message(message)
+
+            with monkeypatch.context() as delivery:
+                delivery.setattr(app.screen, "post_message", defer_layout)
+                await pilot.press("enter")
+                await pilot.pause()
+                assert not card.collapsed and layouts
+            for message in layouts:
+                post_message(message)
+            await pilot.pause()
+            async with asyncio.timeout(HANG_GUARD):
+                await app.animator.wait_until_complete()
+            await pilot.pause()
+
+            assert card.region.height > size[1]
+            assert title.region.y >= conversation.content_region.y
+            assert title.region.bottom <= conversation.content_region.bottom
+            assert app.focused is title
             assert await pilot.click(title)
             await pilot.pause()
             assert card.collapsed
