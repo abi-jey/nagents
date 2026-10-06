@@ -269,15 +269,11 @@ class Harness:
             "Read-only profiles may inspect and report only: no writes, shell, or custom tools. "
             "Choose only tools advertised for this request; workspace selections and client capabilities may narrow them further. "
             "Report what actually ran; never claim tests or edits succeeded without tool evidence.\n"
+            "Delayed self-follow-up is available only when a scheduler tool is advertised in this request. "
+            "If none is advertised, do not promise a delayed follow-up. Scheduling acknowledges immediately; "
+            "timers and task handles are process-local and do not survive restart. "
+            "Scheduling and waking grant no additional tool permissions.\n"
         )
-        if self.tasks.root.harness.wakeup_handler is not None:
-            base += (
-                "\nWhen available in your tools, use schedule_wakeup (legacy alias wake_up_in) for a delayed self-follow-up. "
-                "It acknowledges immediately; timers and task handles are process-local and do not survive restart. "
-                "Scheduling and waking grant no additional tool permissions.\n"
-            )
-        else:
-            base += "\nThis client has no wake-up scheduler. Do not promise a delayed follow-up.\n"
         if profile.instructions:
             base += f"\nTrusted profile instructions:\n{profile.instructions}\n"
         if self._parent_instructions:
@@ -536,8 +532,6 @@ class Harness:
             if not prompt_text.strip():
                 raise ValueError("Prompt must not be empty")
             await self.initialize()
-            # Client capabilities may change between runs without a profile change.
-            self.refresh_instructions()
             if not self._is_subagent:
                 async with aiosqlite.connect(self.agent.session.db_path) as db:
                     await db.execute(
