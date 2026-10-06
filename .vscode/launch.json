@@ -5,6 +5,22 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "ngn serve --dev (launch)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "nagents.cli",
+            "args": ["serve", "--dev"],
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "pythonArgs": ["-Xfrozen_modules=off"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "console": "integratedTerminal",
+            "subProcess": true,
+            "justMyCode": false
+        },
+        {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
