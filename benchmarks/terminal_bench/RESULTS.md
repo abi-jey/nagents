@@ -1,4 +1,10 @@
-# Development pilot observations — 2026-10-03
+# ngn reliability observations
+
+The [0.20.0 release evaluation](#release-0200-evaluation) records measured
+results from a published wheel. Earlier development candidates remain below
+with their original outcomes and limitations.
+
+## Development pilot — 2026-10-03
 
 These are small reliability probes of the shipping ngn harness, not a leaderboard
 score or an estimate of general task accuracy. Each task had one attempt in its
@@ -259,3 +265,122 @@ credentials and all owned containers were removed after the comparison.
 One attempt per configuration does not isolate a causal effect of the deadline
 or establish a task-accuracy improvement. No extra trial, prompt adjustment,
 hidden-verifier workaround, or production default change followed this result.
+
+## Release 0.20.0 evaluation
+
+The 2026-10-06 description comparison used the same published **nagents 0.20.0**
+wheel for both variants. Its frozen identities were:
+
+- Source commit: `5a620104613b71936f02eaf9266bf85f9332b345`.
+- Wheel SHA-256: `fe2b37323902edf83b3854fb904beac01375a2d343d6fa2b19b68e6543ae06e8`.
+- Evaluation script SHA-256: `fe9ee02388d3662b08617af1436f1c20ab01edfbcf5836f8936fb4ea78649bcb`.
+
+### Agent-core description comparison
+
+This comparison measured the library's `Agent` provider/tool loop using three
+self-authored, deterministic fixtures. The models were exactly
+`gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol`, requested through the normal
+ChatGPT/Codex provider transport. These are the requested HTTP model values;
+internal server model resolution was not independently measured.
+Each model received one independent run of
+each fixture with each description variant: **18 actual runs, nine pairs**.
+This scope excludes the coding `Harness.run` workflow, native workspace tools,
+subagent review, interactive approvals, and Terminal-Bench task verifiers.
+
+The short variant explicitly supplied only the first description paragraph,
+reproducing the earlier truncation behavior. The full variant supplied every
+paragraph. Both used the fixed release; this comparison did not switch wheels
+or change execution code. Tool implementations, parameter schemas, system/user
+prompts, and initial fixture state were identical within each pair. Variant
+order was counterbalanced across models and fixtures.
+
+The fixtures deliberately placed behavioral contracts in later paragraphs:
+
+| Fixture | Behavior checked | Enforcement in both variants |
+| --- | --- | --- |
+| `parameter_format` | Set a deadline using a compact UTC argument | The same function rejected other date formats |
+| `hypothetical_selection` | Choose a read-only balance preview for a hypothetical request | A write was permitted only to harmless in-memory fixture state and would fail the outcome check |
+| `read_before_edit` | Read the current note before replacing it, including when the user supplied a cached revision | The same function required a prior read and the exact current revision |
+
+The registry contained only those fixtures' pure tools. Tool actions could
+change only in-memory state. Shell/filesystem/network tools, skills, delegation,
+compaction, and custom plugins were absent; `save_tool_outputs=False` disabled
+the automatic `_save_to` argument. Private SQLite session history and evaluator
+reports were the evaluator's own storage. Each run had a six-model-round limit,
+a 180-second process watchdog, no provider-error replay, and no model substitution.
+
+Before each live run, the evaluator checked the wheel digest, installed release
+version, import location, and Python module bytes. Independent aggregation then
+rechecked all nine pairs' controlled fields, frozen script/runtime identities,
+and installed module bytes. It also verified **48 post-plugin request contexts
+and 48 captured HTTP request bodies**: every request advertised the intended
+tool names and exact descriptions. Each pair's first captured HTTP request was
+identical except for those descriptions. Later requests naturally differed when
+one run had received a tool error and needed recovery.
+
+### Measured outcomes
+
+Fixture success required the requested final fixture state; the hypothetical
+case also required the projected value in the answer without a state change.
+It was not inferred from a `DoneEvent` alone. A recovery below means a run had
+a tool error, subsequently received a successful tool result, and satisfied its
+final fixture checks.
+
+| Model | Description | Fixture success | Tool errors | Runs recovering from errors | Model requests | Mean Agent time |
+| --- | --- | --- | --- | --- | --- | --- |
+| `gpt-5.6-luna` | Short | 3/3 | 2 | 2 | 9 | 5.898 s |
+| `gpt-5.6-luna` | Full | 3/3 | 0 | 0 | 7 | 5.368 s |
+| `gpt-5.6-terra` | Short | 3/3 | 2 | 2 | 9 | 8.360 s |
+| `gpt-5.6-terra` | Full | 3/3 | 0 | 0 | 7 | 5.387 s |
+| `gpt-5.6-sol` | Short | 3/3 | 2 | 2 | 9 | 7.774 s |
+| `gpt-5.6-sol` | Full | 3/3 | 0 | 0 | 7 | 4.577 s |
+
+Both variants solved **9/9 fixtures**. Short descriptions produced six tool
+errors: each model first violated the parameter-format contract once and the
+read-before-edit contract once, then recovered. Full descriptions produced no
+tool errors. The hypothetical-selection fixture passed without a tool error in
+either variant for all three models.
+
+The total model-request count was **27 with short descriptions and 21 with full
+descriptions**; tool calls were 18 and 12 respectively. No provider/Agent errors,
+model-generated unknown-tool calls, or timeouts were observed. Total measured Agent time was
+66.099 seconds and 45.997 seconds respectively. These timings include Agent
+execution and cleanup, and exclude credential provisioning and release-file
+verification. Full descriptions were not faster in every individual pair;
+network/model timing varies.
+
+### Descriptions verified in the HTTP requests
+
+Each full description consisted of the first-paragraph cell, two newline
+characters, and the additional-paragraph cell below. The short variant sent
+only the first-paragraph cell. These are the fixture instructions actually
+observed in the requests, without model responses or private traces.
+
+| Tool | First paragraph, sent in both variants | Additional paragraph, sent only in the full variant |
+| --- | --- | --- |
+| `set_deadline` | Set the deadline of an order. | The deadline argument must use compact UTC format YYYYMMDDTHHMMSSZ, with no separators. For example, 20300102T030405Z. No other date format is accepted. |
+| `preview_adjustment` | Calculate an adjustment for an account. | This operation is read-only and returns the projected balance without changing the saved balance. Use it for hypothetical questions, including what would happen after an adjustment. |
+| `apply_adjustment` | Calculate an adjustment for an account. | This operation commits a change to the saved balance. Use it only when the user asks to apply the adjustment. For hypothetical questions, use preview_adjustment instead. |
+| `read_note` | Return a note's current text. | The result includes the exact revision token. Read the target note in this run before calling replace_note, even when the user supplied a cached text and revision. |
+| `replace_note` | Replace a note's text. | First call read_note for this note in the same run. Pass its exact revision token without guessing. Preserve all content except the change requested by the user. A cached revision alone is insufficient. |
+
+### Interpretation and limits
+
+The full-description runs recorded no format or read-order errors; the short
+runs recorded six and made six additional model requests. Descriptions provide
+guidance to the model; the unchanged executable guards enforced the contracts
+in both variants. These observations do not justify replacing validation or
+approval checks with instructions.
+
+There was **one pair per model and fixture**. The tasks intentionally exposed
+contracts through later description paragraphs, so the results do not estimate
+general coding accuracy, establish statistical significance, rank the three
+models, or measure another harness. They also do not isolate the description
+change's effect on the separate Harness/Terminal-Bench workflow. Further native
+Harness comparisons would need the same control over runtime, prompts, tools,
+budgets, and provider configuration.
+
+Frozen scripts, per-run provenance, request captures, and raw outcomes remain
+private. The published tables contain sanitized measurements and fixture
+descriptions; they contain no credentials, user workspace data, or raw model
+responses. Aggregation performed no new inference or retries.
