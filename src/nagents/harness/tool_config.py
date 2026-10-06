@@ -12,6 +12,9 @@ import yaml
 
 from nagents.tools.registry import ToolRegistry
 
+from .tools import MODIFYING_TOOLS
+from .tools import READ_ONLY_TOOLS
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -128,6 +131,31 @@ class HarnessToolRegistry(ToolRegistry):
         self.harness = harness
 
     def get_all(self) -> list[ToolDefinition]:
+        """Advertise currently usable tools without removing their definitions.
+
+        The executor remains the authority for every invocation. Keeping the raw
+        registry intact preserves tool identity and the editable settings catalog
+        when a profile, depth limit, scheduler or workspace selection changes.
+        """
         policy = self.harness.tool_settings
         policy.load()
-        return [tool for tool in super().get_all() if policy.enabled(self.harness.config.agent, tool.name)]
+        return [
+            tool
+            for tool in super().get_all()
+            if policy.enabled(self.harness.config.agent, tool.name) and self._available(tool)
+        ]
+
+    def _available(self, tool: ToolDefinition) -> bool:
+        harness = self.harness
+        builtin = tool.func is not None and tool.func == harness.tools.builtins.get(tool.name)
+        if tool.name == "delegate" and not harness.can_delegate:
+            return False
+        if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}):
+            return False
+        if harness.mode == "reviewer" and (not builtin or tool.name in MODIFYING_TOOLS):
+            return False
+        if harness._is_subagent and not builtin and not harness.supports_child_custom_tools:
+            return False
+        return not (
+            builtin and tool.func == harness.tools.schedule_wakeup and harness.tasks.root.harness.wakeup_handler is None
+        )

@@ -213,7 +213,7 @@ class DesignedHarness(Harness):
     def refresh_instructions(self) -> None:
         self.tools.refresh_limits()
         self.agent.system_prompt = self.definition.instructions.text
-        if self.definition.invokes:
+        if self.definition.invokes and self.can_delegate:
             self.agent.system_prompt += "\n\n" + self.delegation_description()
 
     async def initialize(self, *, create_session: bool = True) -> None:

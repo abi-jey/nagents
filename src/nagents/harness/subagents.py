@@ -94,9 +94,10 @@ class SubagentManager:
         self._shutdown: asyncio.Task[None] | None = None
 
     def register(self) -> None:
-        if self.harness.can_delegate:
-            self.harness.tools.builtins["delegate"] = self.delegate
-            self.harness.agent.register_tool(self.delegate)
+        # Register once even at depth zero. Advertisement and execution both
+        # check current limits, so changing settings never replaces this binding.
+        self.harness.tools.builtins["delegate"] = self.delegate
+        self.harness.agent.register_tool(self.delegate)
 
     def list(self) -> list[TaskInfo]:
         """Detached snapshots of all descendants retained in this root session."""

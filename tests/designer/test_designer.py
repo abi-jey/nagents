@@ -143,6 +143,15 @@ def test_general_agent_tools_and_delegation_are_explicit(tmp_path: Path) -> None
         try:
             assert root.agent.tool_registry.names() == ["delegate"]
             assert "coding assistant" not in str(root.agent.system_prompt)
+            delegation = root.agent.tool_registry.get("delegate")
+            root.config.max_subagent_depth = 0
+            root.refresh_instructions()
+            assert root.agent.system_prompt == root.definition.instructions.text
+            assert not root.agent.tool_registry.get_all()
+            root.config.max_subagent_depth = 2
+            root.refresh_instructions()
+            assert root.delegation_description() in str(root.agent.system_prompt)
+            assert root.agent.tool_registry.get_all() == [delegation]
             child = root.create_defined_child("researcher")
             try:
                 assert child.agent.system_prompt == "Only research."

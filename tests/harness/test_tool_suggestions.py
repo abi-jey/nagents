@@ -27,14 +27,15 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scheduler_available", [False, True])
 async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scheduler_available: bool
 ) -> None:
     # Unknown-tool suggestions are portable and do not discover workspace files.
     monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-        if len(provider.requests) == 1:
+        if len(provider.requests) % 2:
             yield ToolCallEvent(id="wrong", name="missing_tool", arguments={})
         else:
             yield TextDoneEvent(text="The unavailable tool was not executed.")
@@ -45,9 +46,15 @@ async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_ch
         raise AssertionError("Unknown and disabled calls must never request approval")
 
     harness.approval_handler = approve
+
+    async def schedule(owner: str, seconds: float, reason: str) -> dict[str, str]:
+        raise AssertionError("Unknown-tool suggestions must never schedule work")
+
+    harness.wakeup_handler = schedule if scheduler_available else None
     try:
         harness.tool_settings.save({"assistant": {"read_file": False, "schedule_wakeup": False}}, "")
         inventory = harness.agent.tool_registry.names()
+        definitions = ToolRegistry.get_all(harness.agent.tool_registry)
         events = await collect(harness)
         failure = next(event for event in events if isinstance(event, ToolResultEvent))
         assert failure.error is not None
@@ -60,10 +67,22 @@ async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_ch
         denied = await harness.agent.tool_executor.execute(ToolCall("disabled", "read_file", {"path": "missing"}))
         assert denied.error and "disabled for this agent" in denied.error
         harness.tool_settings.save({}, harness.tool_settings.revision)
-        restored = await harness.agent.tool_executor.execute(ToolCall("restored", "missing_tool", {}))
-        assert restored.error is not None
-        assert restored.error.partition("Available tools: ")[2].split(", ") == inventory
-        assert harness.agent.tool_registry.names() == inventory
+        for callback in (harness.wakeup_handler, None, schedule):
+            harness.wakeup_handler = callback
+            first_request = len(providers[0].requests)
+            events = await collect(harness)
+            restored = next(event for event in events if isinstance(event, ToolResultEvent))
+            assert restored.error is not None
+            suggestions = restored.error.partition("Available tools: ")[2].split(", ")
+            assert suggestions == providers[0].schemas[first_request]
+            assert "read_file" in suggestions
+            assert ("schedule_wakeup" in suggestions) == (callback is not None)
+            assert ("wake_up_in" in suggestions) == (callback is not None)
+            assert suggestions == [
+                name for name in inventory if callback is not None or name not in {"schedule_wakeup", "wake_up_in"}
+            ]
+            assert harness.agent.tool_registry.names() == inventory
+            assert all(harness.agent.tool_registry.get(tool.name) is tool for tool in definitions)
     finally:
         await harness.close()
 
