@@ -3,6 +3,7 @@
 from collections.abc import Awaitable
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Literal
 
 from nagents.events import Event
@@ -47,6 +48,7 @@ class ToolOutput:
     call_id: str
     tool: str
     text: str
+    extra: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

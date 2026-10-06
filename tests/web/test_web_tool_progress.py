@@ -16,6 +16,7 @@ from nagents.harness.types import ToolOutput
 from nagents.web.replay import RunReplay
 from nagents.web.service import Run
 from tests.support.channels import site
+from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -97,14 +98,59 @@ def test_compact_call_drafts_retain_the_exact_persisted_row_anchor() -> None:
     assert run.replay.records[0] == call, "Retaining an anchor must not mutate prior replay events"
 
 
+def test_result_removal_and_output_replay_keep_reused_call_generations_separate() -> None:
+    run = Run("root")
+    for generation in ("old", "new"):
+        identity = {"generation_id": generation, "index": 0}
+        run.remember({"event": "tool_call", "id": "same", "extra": identity})
+        run.remember({"event": "tool_output", "call_id": "same", "text": generation, "extra": identity})
+    assert len(run.drafts) == 4
+    run.remember({"event": "tool_result", "id": "same", "result": "ambiguous legacy result"})
+    assert len(run.drafts) == 4, "An uncorrelated result cannot clear either of two live generations"
+    run.remember({"event": "tool_result", "id": "same", "extra": {"generation_id": "old", "index": 0}})
+    assert len(run.drafts) == 2
+    assert all(record["extra"] == {"generation_id": "new", "index": 0} for record in run.drafts.values())
+    replay = RunReplay()
+    replay.append(
+        {"event": "tool_output", "call_id": "same", "text": "old tail", "extra": {"generation_id": "old", "index": 0}}
+    )
+    replay.append(
+        {"event": "tool_output", "call_id": "same", "text": "new tail", "extra": {"generation_id": "new", "index": 0}}
+    )
+    assert [record["text"] for record in replay.records] == ["old tail", "new tail"]
+
+
 @pytest.mark.requires_posix
+@pytest.mark.parametrize("approval_before_queued", [True, False])
 def test_websocket_and_cold_replay_expose_previews_before_validation_then_real_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, approval_before_queued: bool
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
         release = asyncio.Event()
         finish = asyncio.Event()
         identity = {"generation_id": "generation", "index": 0}
+        approval_published = asyncio.Event()
+        call_published = asyncio.Event()
+        original_send = app.state.send
+
+        async def ordered_send(run: Run, record: dict[str, object]) -> None:
+            # Provider events drain through the harness queue; approvals publish
+            # directly from its worker. Force both legal orders without sleeps.
+            if (
+                approval_before_queued
+                and record.get("event") == "tool_call_progress"
+                and record.get("status") == "ready"
+            ):
+                await asyncio.wait_for(approval_published.wait(), HANG_GUARD)
+            if not approval_before_queued and record.get("event") == "approval":
+                await asyncio.wait_for(call_published.wait(), HANG_GUARD)
+            await original_send(run, record)
+            if record.get("event") == "approval":
+                approval_published.set()
+            if record.get("event") == "tool_call":
+                call_published.set()
+
+        monkeypatch.setattr(app.state, "send", ordered_send)
         arguments = {"value": "test fixture only"}
         executions: list[str] = []
 
@@ -157,10 +203,8 @@ def test_websocket_and_cold_replay_expose_previews_before_validation_then_real_e
                     observed.append(record)
                 if record.get("event") == "approval":
                     break
-            kinds = [record["event"] for record in observed]
-            assert kinds.index("tool_call_progress") < kinds.index("tool_call") < kinds.index("approval")
-            assert next(record for record in observed if record["event"] == "tool_call")["extra"] == identity
             approval = observed[-1]
+            assert {key: approval[key] for key in identity} == identity
             assert not executions
             response = app.client.post(
                 "/api/approval",
@@ -181,10 +225,18 @@ def test_websocket_and_cold_replay_expose_previews_before_validation_then_real_e
                 if record.get("event") == "text_chunk":
                     break
             kinds = [record["event"] for record in observed]
+            assert kinds.index("tool_call_progress") < kinds.index("tool_call")
+            assert next(record for record in observed if record["event"] == "tool_call")["extra"] == identity
+            if approval_before_queued:
+                assert kinds.index("approval") < kinds.index("tool_call_progress")
+            else:
+                assert kinds.index("tool_call") < kinds.index("approval")
             # Approval can publish directly while the invocation event still
             # waits in the harness queue; both remain tied to the same call.
             assert kinds.index("tool_call") < kinds.index("tool_execution_started") < kinds.index("tool_result")
             assert kinds.index("approval_closed") < kinds.index("tool_output") < kinds.index("tool_result")
+            assert next(record for record in observed if record["event"] == "tool_output")["extra"] == identity
+            assert next(record for record in observed if record["event"] == "tool_result")["extra"] == identity
             assert executions == ["test fixture only"]
             with app.socket() as cold:
                 cold.send_json({"type": "subscribe", "session_id": app.main, "after": 0})

@@ -11,9 +11,11 @@ from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import aclosing
 from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
@@ -147,6 +149,29 @@ class UnsupportedAudioError(Exception):
             "Set unsupported_audio='drop' to silently omit audio, "
             "or unsupported_audio='transcribe' with an stt_service to auto-transcribe."
         )
+
+
+@contextmanager
+def _tool_invocation_scope(
+    call_id: str, name: str, identity: Mapping[str, object] = MappingProxyType({})
+) -> Iterator[None]:
+    # Child tasks inherit context variables. Every invocation masks its parent's
+    # correlation, including legacy, batch and explicit skill calls.
+    current = {
+        key: value
+        for key, value in observation_scope.get().items()
+        if key not in {"tool_call_id", "tool_name", "tool_generation_id", "tool_index"}
+    }
+    current["tool_call_id"] = call_id
+    current["tool_name"] = name
+    generation, index = identity.get("generation_id"), identity.get("index")
+    if isinstance(generation, str) and generation and type(index) is int and 0 <= index < 1024:
+        current.update(tool_generation_id=generation, tool_index=index)
+    token = observation_scope.set(current)
+    try:
+        yield
+    finally:
+        observation_scope.reset(token)
 
 
 class Agent:
@@ -538,9 +563,12 @@ class Agent:
             call.arguments.pop(_SAVE_TO_PARAM_NAME, None)
             # Explicit activation is observable and honors the same executor and
             # hooks as model-selected loading, but is ephemeral user-level context.
-            yield ToolCallEvent(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
-            yield ToolExecutionStartedEvent(id=call.id, name=call.name)
-            result = await self._execute_text_tool(deepcopy(call), context, plugins)
+            call_identity = {"generation_id": f"skill-{uuid.uuid4().hex}", "index": 0}
+            yield ToolCallEvent(id=call.id, name=call.name, arguments=deepcopy(call.arguments), extra=call_identity)
+            yield ToolExecutionStartedEvent(id=call.id, name=call.name, extra=deepcopy(call_identity))
+            with _tool_invocation_scope(call.id, call.name, call_identity):
+                result = await self._execute_text_tool(deepcopy(call), context, plugins)
+            result.extra = {**result.extra, **call_identity}
             yield result
             if result.error is not None:
                 task_context.append(Message(role="user", content=f"Requested skill ${name} could not be loaded."))
@@ -1784,10 +1812,11 @@ class Agent:
                 [replace(tool, parameters=deepcopy(tool.parameters)) for tool in tools or []],
                 deepcopy(config),
             )
+            model_call_id = uuid.uuid4().hex
             observation_scope.set(
                 {
                     **observation_scope.get(),
-                    "model_call_id": uuid.uuid4().hex,
+                    "model_call_id": model_call_id,
                     "round": round_num,
                     "session_id": context.session_id,
                 }
@@ -1836,6 +1865,17 @@ class Agent:
                         full_text = event.text
                         finish_reason = event.finish_reason
                     elif isinstance(event, ToolCallEvent):
+                        generation, index = event.extra.get("generation_id"), event.extra.get("index")
+                        if not (
+                            isinstance(generation, str) and generation and type(index) is int and 0 <= index < 1024
+                        ):
+                            # Providers without argument previews still need a
+                            # fresh, exact identity for direct approval events.
+                            event.extra = {
+                                **event.extra,
+                                "generation_id": f"agent-{model_call_id}",
+                                "index": len(pending_tool_calls),
+                            }
                         call = ToolCall(
                             id=event.id,
                             name=event.name,
@@ -1899,8 +1939,20 @@ class Agent:
                     observe("tool_started", call=execution_call)
                     save_path = _extract_save_path(execution_call) if self.save_tool_outputs else None
 
-                    with bridge.executing(execution_call, call_position) if bridge else nullcontext():
+                    # Approval callbacks may publish before queued provider
+                    # events. Give them this exact invocation's display identity.
+                    with (
+                        _tool_invocation_scope(
+                            execution_call.id, execution_call.name, pending_tool_events[call_position].extra
+                        ),
+                        bridge.executing(execution_call, call_position) if bridge else nullcontext(),
+                    ):
                         result_event = await self._execute_text_tool(execution_call, context, plugins)
+                    result_event.extra = {
+                        **result_event.extra,
+                        "generation_id": pending_tool_events[call_position].extra["generation_id"],
+                        "index": pending_tool_events[call_position].extra["index"],
+                    }
                     observe("tool_finished", result=result_event)
                     # Attach last known usage info to tool result events
                     result_event.usage = replace(last_usage, session=replace(session_usage))
@@ -2150,7 +2202,8 @@ class Agent:
                     save_path = _extract_save_path(tool_call)
 
                     yield ToolExecutionStartedEvent(id=tool_call.id, name=tool_call.name)
-                    result_event = await self.tool_executor.execute(tool_call)
+                    with _tool_invocation_scope(tool_call.id, tool_call.name):
+                        result_event = await self.tool_executor.execute(tool_call)
                     yield result_event
 
                     # Add tool result to history

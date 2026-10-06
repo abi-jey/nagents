@@ -25,7 +25,7 @@ function compatible(saved: Entry, previous: Entry): boolean {
   if (saved.kind === "live_caption" || previous.kind === "live_caption") return sameLiveCaption(saved, previous);
   if (saved.delivery || previous.delivery) return !!saved.delivery && saved.delivery.delivery_id === previous.delivery?.delivery_id;
   if (saved.abandoned || previous.abandoned) return false;
-  if (saved.toolProgress || previous.toolProgress) return false;
+  if (saved.toolProgress || previous.toolProgress || saved.unattributed || previous.unattributed) return false;
   if (saved.callPosition !== undefined && previous.callPosition !== undefined && saved.callPosition !== previous.callPosition) return false;
   if (saved.kind !== previous.kind || previous.taskId || (previous.recorded && previous.kind !== "context")) return false;
   return saved.kind !== "tool" || saved.callId === previous.callId;
@@ -172,7 +172,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
       const owner = replayOwners.get(entry);
       const scoped = entries.find((item) => !claimed.has(item.id) && item.runId === entry.runId && item.taskId === entry.taskId &&
         item.activation === entry.activation && (item.followup || 0) === (entry.followup || 0) &&
-        item.kind === entry.kind && (entry.generationId && item.generationId
+        item.kind === entry.kind && !!item.unattributed === !!entry.unattributed && (entry.generationId && item.generationId
           ? entry.generationId === item.generationId && entry.toolIndex === item.toolIndex : item.callId === entry.callId) && !conflictingRows(entry, item) &&
         (!entry.streaming || !!item.streaming) &&
         (entry.kind !== "user" || sameTranscriptUser(entry, item)) &&

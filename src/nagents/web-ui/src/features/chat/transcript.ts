@@ -54,6 +54,7 @@ export type Entry = {
   toolIndex?: number;
   toolProgress?: "streaming" | "ready" | "abandoned";
   inputsTruncated?: boolean;
+  unattributed?: boolean;
   streaming?: boolean;
   inputs?: string;
   result?: string;
@@ -363,8 +364,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     );
     if (compaction?.compacting) return entries;
     const index = entries.findLastIndex(
-      (entry) =>
-        entry.kind === "assistant" && entry.streaming && execution(entry),
+      (entry) => entry.kind === "assistant" && entry.streaming && execution(entry),
     );
     const previous = index >= 0 ? entries[index] : undefined;
     return save(
@@ -410,30 +410,46 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     const sameSavedCall = (entry: Entry) => event.event === "tool_call" && !!historyId && !taskId && !entry.taskId &&
       !entry.runId && entry.callId === callId && entry.historyId === historyId &&
       (entry.callPosition === undefined || event.call_position === undefined || entry.callPosition === event.call_position);
-    const index = entries.findLastIndex(
-      (entry) =>
-        entry.kind === "tool" &&
-        (sameSavedCall(entry) || (generationId && toolIndex !== undefined && event.event === "tool_call" ? sameProgress(entry) : entry.callId === callId && execution(entry))) &&
+    const matches = (entry: Entry) =>
+        entry.kind === "tool" && !entry.unattributed &&
+        (sameSavedCall(entry) || (generationId && toolIndex !== undefined ? sameProgress(entry) : entry.callId === callId && execution(entry))) &&
+        (event.event !== "approval" || generationId || (entry.result === undefined && !entry.abandoned &&
+          entry.toolProgress !== "abandoned" && !["Cancelled", "Interrupted", "Not run", "No result recorded", "Approval denied"].includes(entry.state || ""))) &&
         (event.event !== "tool_call" || sameSavedCall(entry) || sameProgress(entry) || (entry.provisional && (historyTurn === undefined || entry.result === undefined))) &&
         (event.event !== "tool_result" || historyTurn === undefined || entry.result === undefined ||
-          (!!historyId && entry.resultHistoryId === historyId)),
-    );
+          (!!historyId && entry.resultHistoryId === historyId));
+    // Old servers can omit invocation identity. Reused call IDs then cannot
+    // distinguish late background output from a newer execution. Retain that
+    // evidence neutrally instead of completing either possible call.
+    if (!generationId && ["tool_output", "tool_result", "tool_execution_started"].includes(event.event) && entries.filter(matches).length > 1) {
+      const index = entries.findLastIndex((entry) => entry.unattributed && entry.callId === callId && execution(entry));
+      const previous = index >= 0 ? entries[index] : undefined;
+      return save({ ...previous, kind: "tool", ...scope, callId, unattributed: true, provisional: true, streaming: false,
+        title: text(event, "name") || text(event, "tool") || previous?.title || "Tool activity",
+        state: event.event === "tool_result" ? "Unattributed result" : previous?.state || "Unattributed output",
+        text: (previous?.text || "") + (event.event === "tool_output" ? text(event, "text") : ""),
+        ...(event.event === "tool_result" ? { result: preview(event.error ? { result: event.result, error: event.error } : event.result) } : {}),
+      }, index, true);
+    }
+    const index = entries.findLastIndex(matches);
     const previous = index >= 0 ? entries[index] : undefined;
     const entry: Omit<Entry, "id"> = {
       kind: "tool",
       text: "",
       ...previous,
       ...scope,
+      ...(generationId && toolIndex !== undefined ? { generationId, toolIndex } : {}),
       callId,
       title: text(event, "name") || text(event, "tool") || previous?.title,
       taskName: text(event, "task_name") || previous?.taskName,
     };
-    if (event.event === "tool_call" && previous?.toolProgress === "abandoned") return entries;
+    if (["tool_call", "approval"].includes(event.event) && previous?.toolProgress === "abandoned") return entries;
+    if (event.event === "approval" && previous?.result !== undefined) return entries;
     if (event.event === "tool_call") {
       entry.historyId = historyId || previous?.historyId;
       entry.transcriptEventId = text(event, "transcript_event_id") || undefined;
       entry.callPosition = typeof event.call_position === "number" ? event.call_position : undefined;
-      entry.inputs = preview(event.arguments);
+      if (!previous?.approvalId || previous.inputs === undefined) entry.inputs = preview(event.arguments);
       entry.inputsTruncated = false;
       entry.generationId = generationId || previous?.generationId;
       entry.toolIndex = toolIndex ?? previous?.toolIndex;
@@ -442,15 +458,21 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       entry.provisional = false;
       entry.state = previous?.toolProgress ? "Requested" : previous?.state || "Requested";
     } else if (event.event === "tool_execution_started") {
-      if (entry.result === undefined && !["Approval denied", "Waiting for approval", "Cancelled", "Interrupted", "Not run"].includes(entry.state || "")) entry.state = "Starting";
+      if (entry.result === undefined && !["Approval denied", "Waiting for approval", "Awaiting execution result", "Receiving output", "Running", "Cancelled", "Interrupted", "Not run"].includes(entry.state || "")) entry.state = "Starting";
       entry.started = true;
       entry.toolProgress = undefined;
       entry.streaming = false;
       entry.provisional = previous?.provisional ?? !previous;
     } else if (event.event === "approval") {
-      entry.inputs ??= preview(event.arguments);
+      // The executor's real request may arrive before queued previews or the
+      // canonical call. Its exact generation/slot can already bind an empty-ID
+      // preview; later progress must not reset its nonce, inputs or decision.
+      if (event.arguments !== undefined) entry.inputs = preview(event.arguments);
+      entry.toolProgress = undefined;
+      entry.streaming = false;
+      entry.inputsTruncated = false;
       entry.approvalId = text(event, "approval_id");
-      if (!previous?.approval || previous.approvalId !== entry.approvalId) {
+      if (entry.result === undefined && (!previous?.approval || previous.approvalId !== entry.approvalId)) {
         entry.state = "Waiting for approval";
         entry.approval = undefined;
       }
@@ -659,8 +681,19 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     );
   }
   if (event.event === "notice" && event.policy === "workspace_tool_allow") {
-    const index = entries.findLastIndex((entry) => entry.kind === "tool" && execution(entry) && entry.callId === text(event, "call_id") && entry.title === text(event, "tool"));
-    if (index >= 0) entries = entries.map((entry, position) => position === index ? { ...entry, approval: "Always allowed in workspace" } : entry);
+    const index = entries.findLastIndex((entry) => entry.kind === "tool" && !entry.unattributed && (generationId && toolIndex !== undefined
+      ? sameProgress(entry) : execution(entry) && entry.callId === text(event, "call_id") && entry.title === text(event, "tool") &&
+        entry.result === undefined && !entry.abandoned && entry.toolProgress !== "abandoned" &&
+        !["Cancelled", "Interrupted", "Not run", "No result recorded", "Approval denied"].includes(entry.state || "")));
+    const previous = index >= 0 ? entries[index] : undefined;
+    if (previous?.toolProgress !== "abandoned" && text(event, "call_id") && text(event, "tool")) entries = save({
+      kind: "tool", text: "", ...previous, ...scope,
+      ...(generationId && toolIndex !== undefined ? { generationId, toolIndex } : {}),
+      callId: text(event, "call_id"), title: text(event, "tool"),
+      approval: "Always allowed in workspace", toolProgress: undefined, streaming: false,
+      provisional: previous?.provisional ?? true,
+      state: !previous || previous.toolProgress ? "Awaiting execution result" : previous.state,
+    }, index);
   }
   if (
     [
