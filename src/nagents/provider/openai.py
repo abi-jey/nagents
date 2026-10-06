@@ -27,6 +27,8 @@ from typing import cast
 
 import aiohttp
 
+from ..adapters._tool_progress import ToolCallProgressTracker
+from ..adapters._validation import ProtocolError
 from ..adapters._validation import json_values_equal
 from ..adapters._validation import list_data
 from ..adapters._validation import tool_arguments
@@ -650,6 +652,7 @@ class OpenAIProvider(Provider):
             headers["ChatGPT-Account-Id"] = credentials.account_id
         if credentials.residency and credentials.residency != "no_constraint":
             headers["x-openai-internal-codex-residency"] = credentials.residency
+        progress = ToolCallProgressTracker()
         try:
             async with (
                 aiohttp.ClientSession(
@@ -710,6 +713,14 @@ class OpenAIProvider(Provider):
                             _remember_completed_arguments(completed_arguments, index, merged_item["arguments"])
                         if kind == "response.output_item.done":
                             finished.add(index)
+                        if stream and merged_item.get("type") == "function_call":
+                            for preview in progress.preview(
+                                index,
+                                _string(merged_item.get("call_id", "")),
+                                _string(merged_item.get("name", "")),
+                                _string(arguments.get(index, merged_item.get("arguments", ""))),
+                            ):
+                                yield preview
                     elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
                         index = _index(event.get("output_index"))
                         item = items.setdefault(index, {})
@@ -723,6 +734,14 @@ class OpenAIProvider(Provider):
                         else:
                             item["arguments"] = _string(event.get("arguments"))
                             _remember_completed_arguments(completed_arguments, index, item["arguments"])
+                        if stream:
+                            for preview in progress.preview(
+                                index,
+                                _string(item.get("call_id", "")),
+                                _string(item.get("name", "")),
+                                _string(arguments.get(index, item.get("arguments", ""))),
+                            ):
+                                yield preview
                     elif kind in {"response.output_text.delta", "response.output_text.done"}:
                         text_key = (_index(event.get("output_index", 0)), _index(event.get("content_index", 0)))
                         index = text_key[0]
@@ -781,6 +800,7 @@ class OpenAIProvider(Provider):
                 if not completed:
                     raise _ProtocolError("Codex stream ended before response.completed; no tool calls were released.")
                 calls: list[ToolCallEvent] = []
+                call_indexes: list[int] = []
                 call_ids: set[str] = set()
                 final_texts: dict[tuple[int, int], str] = {}
                 for index, item in sorted(items.items()):
@@ -811,6 +831,7 @@ class OpenAIProvider(Provider):
                             ) from None
                         call_ids.add(call_id)
                         calls.append(ToolCallEvent(id=call_id, name=name, arguments=parsed_args, usage=usage))
+                        call_indexes.append(index)
                     elif index in arguments or index in completed_arguments:
                         raise _ProtocolError("Codex returned tool arguments without a complete tool call.")
                     elif item.get("type") == "message":
@@ -834,15 +855,21 @@ class OpenAIProvider(Provider):
                 usage=usage,
                 finish_reason=FinishReason.TOOL_CALLS if calls else FinishReason.STOP,
             )
-            for call in calls:
+            for index, call in zip(call_indexes, calls, strict=True):
+                if stream:
+                    yield progress.ready(index, call)
                 yield call
-        except _ProtocolError as error:
+        except (_ProtocolError, ProtocolError) as error:
+            for preview in progress.abandon():
+                yield preview
             yield ErrorEvent(
                 message=str(error),
                 code="CODEX_STREAM_INVALID",
                 extra=failure_extra(error, started, phase=phase, protocol=True),
             )
         except (aiohttp.ClientError, TimeoutError, ValueError) as error:
+            for preview in progress.abandon():
+                yield preview
             yield ErrorEvent(
                 message="Codex connection failed or timed out; retry the request.",
                 code="CODEX_CONNECTION",

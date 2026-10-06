@@ -50,6 +50,10 @@ export type Entry = {
   text: string;
   title?: string;
   callId?: string;
+  generationId?: string;
+  toolIndex?: number;
+  toolProgress?: "streaming" | "ready" | "abandoned";
+  inputsTruncated?: boolean;
   streaming?: boolean;
   inputs?: string;
   result?: string;
@@ -180,6 +184,14 @@ export function sameTranscriptUser(left: Pick<Entry, "historyId" | "ingressId" |
 }
 
 export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
+  // Provider events carry execution identity in extra; harness events use
+  // top-level fields. Normalize only known identity fields, never payload data.
+  if (event.extra && typeof event.extra === "object" && !Array.isArray(event.extra)) {
+    const extra = event.extra as Record<string, unknown>;
+    event = { ...event };
+    for (const key of ["task_id", "activation", "followup", "generation_id", "index"])
+      if (event[key] === undefined && extra[key] !== undefined) event[key] = extra[key];
+  }
   if (event.event === "live_caption") {
     const caption = liveCaptionEntry(event);
     if (!caption?.liveCaption) return entries;
@@ -211,6 +223,21 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     actor(entry) &&
     (entry.activation || 0) === activation &&
     (entry.followup || 0) === followup;
+  const generationId = text(event, "generation_id");
+  const toolIndex = typeof event.index === "number" && Number.isSafeInteger(event.index) && event.index >= 0 ? event.index : undefined;
+  const sameProgress = (entry: Entry) => !!generationId && toolIndex !== undefined &&
+    entry.generationId === generationId && entry.toolIndex === toolIndex && execution(entry);
+  if (event.event === "error" || event.event === "task_completed") {
+    entries = entries.map((entry) => {
+      if (entry.kind !== "tool" || !execution(entry)) return entry;
+      if (entry.toolProgress && entry.toolProgress !== "abandoned")
+        return { ...entry, streaming: false, toolProgress: "abandoned", state: event.event === "error" ? "Interrupted" : "Not run" };
+      if (event.event === "task_completed" && entry.result === undefined &&
+        ["Requested", "Starting", "Running", "Receiving output", "Waiting for approval", "Awaiting execution result"].includes(entry.state || ""))
+        return { ...entry, state: event.status === "cancelled" ? "Cancelled" : event.status === "failed" || event.error ? "Interrupted" : "No result recorded" };
+      return entry;
+    });
+  }
   if (["transcript_anchor", "transcript_abandoned"].includes(event.event) && Array.isArray(event.calls)) {
     const calls = event.calls as { event_id: string; call_position: number }[];
     return entries.map((entry) => {
@@ -265,8 +292,11 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       if ((entry.runId || "") !== runId) return entry;
       if (event.event === "done" && !execution(entry)) return entry;
       if (event.event === "done")
-        return entry.streaming ? { ...entry, streaming: false } : entry;
+        return entry.streaming || entry.toolProgress === "ready" ? { ...entry, streaming: false,
+          ...(entry.toolProgress && entry.toolProgress !== "abandoned" ? { toolProgress: "abandoned" as const, state: "Not run" } : {}) } : entry;
       const pending = [
+        "Preparing",
+        "Starting",
         "Requested",
         "Running",
         "Receiving output",
@@ -289,6 +319,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         ? {
             ...entry,
             streaming: false,
+            ...(entry.toolProgress && entry.toolProgress !== "abandoned" ? { toolProgress: "abandoned" as const } : {}),
             queued: false,
             state,
             activity: state !== entry.state ? activity : entry.activity,
@@ -351,19 +382,39 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       index,
     );
   }
+  if (event.event === "tool_call_progress") {
+    if (!generationId || toolIndex === undefined || !["streaming", "ready", "abandoned"].includes(text(event, "status"))) return entries;
+    const index = entries.findLastIndex((entry) => entry.kind === "tool" && sameProgress(entry));
+    const previous = entries[index];
+    // A late preview cannot roll back a committed call, an abandoned attempt,
+    // or a response that already finished validation.
+    if (previous && (!previous.toolProgress || previous.toolProgress === "abandoned" ||
+      previous.toolProgress === "ready" && event.status === "streaming")) return entries;
+    const raw = text(event, "arguments_text");
+    const inputs = Array.from(raw).slice(0, 16384).join("");
+    const status = event.status as "streaming" | "ready" | "abandoned";
+    return save({ ...previous, kind: "tool", text: "", ...scope, generationId, toolIndex,
+      callId: text(event, "id") || previous?.callId,
+      title: text(event, "name") || previous?.title,
+      inputs, inputsTruncated: event.arguments_truncated === true || inputs.length < raw.length,
+      toolProgress: status, streaming: status === "streaming", provisional: true,
+      state: status === "abandoned" ? "Not run" : "Preparing",
+    }, index);
+  }
   if (
-    ["tool_call", "tool_output", "tool_result", "approval"].includes(
+    ["tool_call", "tool_execution_started", "tool_output", "tool_result", "approval"].includes(
       event.event,
     )
   ) {
     const callId = text(event, "call_id") || text(event, "id");
+    const sameSavedCall = (entry: Entry) => event.event === "tool_call" && !!historyId && !taskId && !entry.taskId &&
+      !entry.runId && entry.callId === callId && entry.historyId === historyId &&
+      (entry.callPosition === undefined || event.call_position === undefined || entry.callPosition === event.call_position);
     const index = entries.findLastIndex(
       (entry) =>
         entry.kind === "tool" &&
-        entry.callId === callId &&
-        actor(entry) &&
-        (entry.activation || 0) === activation &&
-        (event.event !== "tool_call" || (entry.provisional && (historyTurn === undefined || entry.result === undefined))) &&
+        (sameSavedCall(entry) || (generationId && toolIndex !== undefined && event.event === "tool_call" ? sameProgress(entry) : entry.callId === callId && execution(entry))) &&
+        (event.event !== "tool_call" || sameSavedCall(entry) || sameProgress(entry) || (entry.provisional && (historyTurn === undefined || entry.result === undefined))) &&
         (event.event !== "tool_result" || historyTurn === undefined || entry.result === undefined ||
           (!!historyId && entry.resultHistoryId === historyId)),
     );
@@ -371,19 +422,31 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     const entry: Omit<Entry, "id"> = {
       kind: "tool",
       text: "",
-      ...scope,
       ...previous,
+      ...scope,
       callId,
       title: text(event, "name") || text(event, "tool") || previous?.title,
       taskName: text(event, "task_name") || previous?.taskName,
     };
+    if (event.event === "tool_call" && previous?.toolProgress === "abandoned") return entries;
     if (event.event === "tool_call") {
       entry.historyId = historyId || previous?.historyId;
       entry.transcriptEventId = text(event, "transcript_event_id") || undefined;
       entry.callPosition = typeof event.call_position === "number" ? event.call_position : undefined;
       entry.inputs = preview(event.arguments);
+      entry.inputsTruncated = false;
+      entry.generationId = generationId || previous?.generationId;
+      entry.toolIndex = toolIndex ?? previous?.toolIndex;
+      entry.toolProgress = undefined;
+      entry.streaming = false;
       entry.provisional = false;
-      entry.state = previous?.state || "Requested";
+      entry.state = previous?.toolProgress ? "Requested" : previous?.state || "Requested";
+    } else if (event.event === "tool_execution_started") {
+      if (entry.result === undefined && !["Approval denied", "Waiting for approval", "Cancelled", "Interrupted", "Not run"].includes(entry.state || "")) entry.state = "Starting";
+      entry.started = true;
+      entry.toolProgress = undefined;
+      entry.streaming = false;
+      entry.provisional = previous?.provisional ?? !previous;
     } else if (event.event === "approval") {
       entry.inputs ??= preview(event.arguments);
       entry.approvalId = text(event, "approval_id");
@@ -394,7 +457,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       entry.provisional = previous?.provisional ?? !previous;
     } else if (event.event === "tool_output") {
       entry.text += text(event, "text");
-      if (entry.result === undefined) entry.state = "Receiving output";
+      if (entry.result === undefined && !["Approval denied", "Cancelled", "Interrupted", "Not run"].includes(entry.state || "")) entry.state = "Receiving output";
       entry.provisional = previous?.provisional ?? !previous;
     } else {
       entry.resultHistoryId = historyId || previous?.resultHistoryId;
@@ -405,6 +468,8 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       entry.commandOutcome = outcome && previous?.commandOutcome?.kind === outcome.kind && previous.commandOutcome.exitCode === outcome.exitCode
         ? previous.commandOutcome : outcome;
       entry.result = preview(event.result);
+      entry.toolProgress = undefined;
+      entry.streaming = false;
       entry.error = text(event, "error");
       entry.state = event.saved
         ? "Recorded result"
@@ -445,11 +510,13 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         state:
           entry.result !== undefined
             ? entry.state
-            : event.decision === "allow"
+            : (event.decision === "allow" || event.decision === "allow_tool")
               ? "Awaiting execution result"
               : "Approval denied",
         approval:
-          event.decision === "allow"
+          event.decision === "allow_tool"
+            ? "Always allowed in workspace"
+            : event.decision === "allow"
             ? "Allowed once"
             : event.expired
               ? "Expired; denied"
@@ -590,6 +657,10 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       index,
       true,
     );
+  }
+  if (event.event === "notice" && event.policy === "workspace_tool_allow") {
+    const index = entries.findLastIndex((entry) => entry.kind === "tool" && execution(entry) && entry.callId === text(event, "call_id") && entry.title === text(event, "tool"));
+    if (index >= 0) entries = entries.map((entry, position) => position === index ? { ...entry, approval: "Always allowed in workspace" } : entry);
   }
   if (
     [

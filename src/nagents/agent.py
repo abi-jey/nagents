@@ -57,6 +57,7 @@ from .events import TextChunkEvent
 from .events import TextDoneEvent
 from .events import TokenUsage
 from .events import ToolCallEvent
+from .events import ToolExecutionStartedEvent
 from .events import ToolResultEvent
 from .events import Usage
 from .exceptions import ToolHallucinationError
@@ -538,6 +539,7 @@ class Agent:
             # Explicit activation is observable and honors the same executor and
             # hooks as model-selected loading, but is ephemeral user-level context.
             yield ToolCallEvent(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+            yield ToolExecutionStartedEvent(id=call.id, name=call.name)
             result = await self._execute_text_tool(deepcopy(call), context, plugins)
             yield result
             if result.error is not None:
@@ -1888,6 +1890,12 @@ class Agent:
 
                     # _save_to convention: remove from args before tool execution
                     execution_call = deepcopy(tool_call)
+                    yield ToolExecutionStartedEvent(
+                        id=execution_call.id,
+                        name=execution_call.name,
+                        extra=deepcopy(pending_tool_events[call_position].extra),
+                        usage=replace(last_usage, session=replace(session_usage)),
+                    )
                     observe("tool_started", call=execution_call)
                     save_path = _extract_save_path(execution_call) if self.save_tool_outputs else None
 
@@ -2141,6 +2149,7 @@ class Agent:
                     # _save_to convention: remove from args before tool execution
                     save_path = _extract_save_path(tool_call)
 
+                    yield ToolExecutionStartedEvent(id=tool_call.id, name=tool_call.name)
                     result_event = await self.tool_executor.execute(tool_call)
                     yield result_event
 

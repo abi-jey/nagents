@@ -9,6 +9,7 @@ from dataclasses import field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from typing import Literal
 
 # Type alias for tool result - can be any JSON-serializable value
 ToolResultType = str | int | float | bool | None | list[Any] | dict[str, Any]
@@ -43,6 +44,8 @@ class EventType(Enum):
 
     # Tool events
     TOOL_CALL = "tool_call"  # Model wants to call a tool
+    TOOL_CALL_PROGRESS = "tool_call_progress"  # Non-executable streamed preview
+    TOOL_EXECUTION_STARTED = "tool_execution_started"  # Invocation, including any approval gate
     TOOL_RESULT = "tool_result"  # Tool execution completed
 
     # Compaction events
@@ -263,6 +266,34 @@ class RealtimeRawEvent(Event):
     type: EventType = field(default=EventType.REALTIME_RAW)
     event_type: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolCallProgressEvent(Event):
+    """Bounded cumulative preview; never an instruction to execute a tool.
+
+    A generation ID belongs to one provider attempt. Index remains stable even
+    when the provider supplies the call ID or function name in later chunks.
+    Ready means protocol validation passed, not that the tool has executed.
+    """
+
+    type: EventType = field(default=EventType.TOOL_CALL_PROGRESS)
+    generation_id: str = ""
+    index: int = 0
+    id: str = ""
+    name: str = ""
+    arguments_text: str = ""
+    arguments_truncated: bool = False
+    status: Literal["streaming", "ready", "abandoned"] = "streaming"
+
+
+@dataclass
+class ToolExecutionStartedEvent(Event):
+    """The agent is invoking a tool; its callable may still request approval."""
+
+    type: EventType = field(default=EventType.TOOL_EXECUTION_STARTED)
+    id: str = ""
+    name: str = ""
 
 
 @dataclass

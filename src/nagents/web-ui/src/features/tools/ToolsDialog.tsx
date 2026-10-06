@@ -7,10 +7,12 @@ interface ToolInfo {
   name: string; description: string; parameters: Record<string, unknown>;
   category: string; builtin: boolean; reviewer_allowed: boolean; alias_of: string;
 }
+interface SavedToolApproval { tool: string; revision: string; persistent: boolean; }
 interface ToolSettings {
   path: string; revision: string; active_agent: string;
   agents: Record<string, Record<string, boolean>>;
   profiles: { id: string; mode: string }[]; tools: ToolInfo[];
+  tool_approvals?: SavedToolApproval[];
 }
 
 export function ToolsDialog({ token, blocked, close }: { token: string; blocked: boolean; close: () => void }) {
@@ -61,6 +63,18 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
       setConflict(cause instanceof RequestError && cause.status === 409);
     } finally { writing.current = false; setPending(false); }
   }
+  async function revoke(approval: SavedToolApproval) {
+    if (disabled || writing.current) return;
+    writing.current = true; setPending(true); setError(""); setNotice("");
+    try {
+      const next = await (await request("tools/approvals/revoke", token, { tool: approval.tool, revision: approval.revision })).json() as ToolSettings;
+      // Revoking a permission must not discard unsaved enable/disable edits.
+      setCatalog((current) => current ? { ...current, tool_approvals: next.tool_approvals } : next);
+      setNotice(`${approval.tool} will ask for approval again. Tool selections are unchanged.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Removal was not confirmed. Refresh to check saved permissions.");
+    } finally { writing.current = false; setPending(false); }
+  }
   function choose(names: string[], enabled: boolean) {
     const next = { ...agents[agent] };
     for (const name of names) next[name] = enabled;
@@ -86,7 +100,16 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     {blocked && <p role="status" className="tools-feedback">Finish the current operation before changing tools.</p>}
     {error && <p role="alert" className="tools-feedback error-text">{error}</p>}
     {notice && <p role="status" className="tools-feedback">{notice}</p>}
-    <div className="tools-list">{visible.map((tool) => <article className={`tool-setting${enabled(tool) ? " enabled" : ""}`} key={tool.name}>
+    <div className="tools-list">
+      <section className="tool-saved-approvals" aria-labelledby="tool-saved-approvals-title">
+        <h3 id="tool-saved-approvals-title">Saved tool approvals</h3>
+        <p>Saved for the approved tool definition across chats and agents in this workspace. Changed tools require approval again. Tool selections and read-only restrictions still apply.</p>
+        {catalog?.tool_approvals?.length ? <ul>{catalog.tool_approvals.map((approval) => <li key={approval.tool}>
+          <div><code>{approval.tool}</code><small>{approval.persistent ? "Saved across restarts · changes require approval again" : "Saved extension registration · reloads require approval again"}</small></div>
+          <button type="button" disabled={disabled} aria-label={`Ask again for ${approval.tool}`} onClick={() => void revoke(approval)}>Ask again</button>
+        </li>)}</ul> : <p>{catalog ? "No saved tool approvals. Choose Always allow this tool when a call asks for permission." : "Loading saved permissions…"}</p>}
+      </section>
+      {visible.map((tool) => <article className={`tool-setting${enabled(tool) ? " enabled" : ""}`} key={tool.name}>
       <div className="tool-setting-heading"><div><h3>{tool.name}</h3><span className="tool-category">{tool.category}</span>{tool.alias_of && <span className="tool-category">Alias of {tool.alias_of}</span>}</div>
         <label className="tool-switch"><span>{enabled(tool) ? "Enabled" : "Disabled"}</span><input type="checkbox" role="switch" aria-label={`Enable ${tool.name} for ${agent}`} checked={enabled(tool)} disabled={disabled || conflict || (!!tool.alias_of && selected[tool.alias_of] === false)} onChange={(event) => choose([tool.name], event.target.checked)} /></label></div>
       <p>{tool.description}</p>

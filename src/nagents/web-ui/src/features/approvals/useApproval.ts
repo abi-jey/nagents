@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
-import { request } from "../../api/client";
-import { text } from "../../api/events";
+import { request } from "../../api/client.js";
+import { text } from "../../api/events.js";
 import type { Approval, Decision, WireEvent } from "../../types";
 
 export function useApproval(token: string) {
@@ -19,6 +19,8 @@ export function useApproval(token: string) {
       description: text(event, "description"),
       preview: text(event, "preview"),
       arguments: event.arguments,
+      allow_tool: event.allow_tool === true,
+      allow_tool_persistent: event.allow_tool_persistent === true,
       task_id: text(event, "task_id"),
       task_name: text(event, "task_name"),
       depth: typeof event.depth === "number" ? event.depth : 0,

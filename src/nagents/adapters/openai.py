@@ -8,6 +8,8 @@ Works with OpenAI, Gemini via OpenAI compatibility, OpenRouter, Ollama, etc.
 import json
 from typing import Any
 
+from ..events import ToolCallEvent
+from ..events import ToolCallProgressEvent
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import AudioContent
 from ..types import ContentPart
@@ -17,6 +19,7 @@ from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
 from ..types import ToolDefinition
+from ._tool_progress import ToolCallProgressTracker
 from ._validation import ProtocolError
 from ._validation import list_data
 from ._validation import string_data
@@ -278,6 +281,20 @@ class StreamingToolCallAccumulator:
 
     def __init__(self) -> None:
         self._tool_calls: dict[int, dict[str, Any]] = {}
+        self.progress = ToolCallProgressTracker()
+
+    def previews(self) -> list[ToolCallProgressEvent]:
+        """Publish cumulative, non-executable snapshots after an accepted delta."""
+        return [
+            event
+            for index, call in sorted(self._tool_calls.items())
+            for event in self.progress.preview(index, call["id"], call["name"], call["arguments"])
+        ]
+
+    def ready(self, call: ToolCallEvent) -> ToolCallProgressEvent:
+        """Link a validated call to its original streamed output index."""
+        index = next(index for index, value in self._tool_calls.items() if value["id"] == call.id)
+        return self.progress.ready(index, call)
 
     def add_delta(self, delta: dict[str, Any]) -> ToolCall | None:
         """
@@ -346,3 +363,4 @@ class StreamingToolCallAccumulator:
     def clear(self) -> None:
         """Clear accumulated tool calls."""
         self._tool_calls.clear()
+        self.progress = ToolCallProgressTracker()

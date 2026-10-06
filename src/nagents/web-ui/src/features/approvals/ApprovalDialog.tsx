@@ -64,7 +64,7 @@ export function ApprovalDialog({
         <h2 id="approval-title" ref={heading} tabIndex={-1}>
           Review <code>{approval.tool}</code>
         </h2>
-        <p>One call only. Deny is the default.</p>
+        <p>Review this call and choose how long to allow it.</p>
       </header>
       <div className="approval-body">
         <dl className="request-identity">
@@ -89,6 +89,11 @@ export function ApprovalDialog({
           Review the inputs and proposed change, not just the description. Local
           tools are not sandboxed. Escape denies this call.
         </p>
+        {approval.allow_tool && <p className="muted" id="approval-scope">
+          Always allow applies to this tool in all chats and agents in this workspace.
+          {approval.allow_tool_persistent ? " Saved across server restarts." : " This extension asks again after it is reloaded."}
+          {" "}Change saved permissions in Tools. Read-only restrictions still apply.
+        </p>}
         {error && (
           <p role="alert" className="error-text">
             {error}
@@ -102,6 +107,9 @@ export function ApprovalDialog({
         <button disabled={busy} onClick={() => decide("allow")}>
           Allow once
         </button>
+        {approval.allow_tool && <button className="primary" disabled={busy} aria-describedby="approval-scope" onClick={() => decide("allow_tool")}>
+          Always allow this tool
+        </button>}
         <button className="cancel" onClick={cancel}>
           Stop run
         </button>

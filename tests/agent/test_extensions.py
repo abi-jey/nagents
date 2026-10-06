@@ -489,6 +489,8 @@ def test_ordered_hooks_transform_before_executor_and_persist(tmp_path: Path) -> 
             "B:tool",
             "A:event:tool_call",
             "B:event:tool_call",
+            "A:event:tool_execution_started",
+            "B:event:tool_execution_started",
             "execute",
             "A:result",
             "B:result",

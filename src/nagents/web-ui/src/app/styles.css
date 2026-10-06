@@ -644,6 +644,8 @@ main {
 .tool-record[data-tone="error"] { --tool-tone: var(--state-error); }
 .tool-record[data-tone="complete"] { --tool-tone: var(--state-complete); }
 .tool-record > summary {
+  position: relative;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto 14px;
   align-items: center;
@@ -693,6 +695,42 @@ main {
   flex-shrink: 1;
 }
 .tool-outcome .execution-duration { font-variant-numeric: tabular-nums; }
+.tool-record[data-busy] > summary::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tool-tone) 55%, transparent), transparent);
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: tool-progress 2.2s ease-in-out infinite;
+}
+.tool-skeleton { display: flex; flex-direction: column; gap: 4px; width: clamp(40px, 10vw, 130px); flex-shrink: 1; }
+.tool-skeleton i {
+  display: block;
+  height: 4px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--border-group), color-mix(in srgb, var(--tool-tone) 30%, var(--border-group)), var(--border-group));
+  background-size: 200% 100%;
+  animation: tool-shimmer 2.2s ease-in-out infinite;
+}
+.tool-skeleton i:last-child { width: 65%; }
+.tool-record[data-preparing] .tool-heading { flex-direction: column; align-items: stretch; gap: 3px; }
+.tool-record[data-preparing] .execution-name { max-width: 100%; }
+.tool-argument-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  max-height: 3em;
+  font: 11px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: var(--text-secondary);
+}
+.tool-input-note { margin: 10px 14px 2px; font-size: 11px; color: var(--text-secondary); }
+@keyframes tool-progress { from { background-position: -85% 0; } to { background-position: 185% 0; } }
+@keyframes tool-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .tool-inspector {
   border-top: 1px solid color-mix(in srgb, var(--border-group) 65%, transparent);
   background: var(--surface-output);
