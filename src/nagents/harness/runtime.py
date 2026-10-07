@@ -272,7 +272,7 @@ class Harness:
             "Follow applicable AGENTS.md instructions; nested instructions take precedence for their subtree. "
             "Read-only profiles may inspect and report only: no writes, shell, or custom tools. "
             "Report what actually ran; never claim tests or edits succeeded without tool evidence.\n"
-            "Use schedule_wakeup (legacy alias wake_up_in) for a delayed self-follow-up only when the client supplies a scheduler. "
+            "Use schedule_wakeup for a delayed self-follow-up only when the client supplies a scheduler. "
             "It acknowledges immediately; timers and task handles are process-local and do not survive restart. "
             "Scheduling and waking grant no additional tool permissions.\n"
         )

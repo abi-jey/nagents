@@ -45,8 +45,10 @@ async def test_designed_root_and_defined_child_publish_limits_without_rewriting_
             assert shell is not None and read is not None
             assert "1.25 seconds" in shell.description and "2048 bytes" in shell.description
             assert "configured default of 1.25" in shell.parameters["properties"]["timeout"]["description"]
-            assert "4096 bytes" in read.description and "even when requesting a line slice" in read.description
-            assert "1 through 1000" in read.parameters["properties"]["limit"]["description"]
+            assert (
+                "4096 bytes" in read.description and "entire file" in read.description and "slices" in read.description
+            )
+            assert "1..1000" in read.parameters["properties"]["limit"]["description"]
         assert harness.agent.system_prompt == expected_root
         assert child.agent.system_prompt == child_text
 

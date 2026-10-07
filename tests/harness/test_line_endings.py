@@ -92,7 +92,14 @@ async def test_slice_and_truncation_keep_whole_file_newline_metadata_and_hash(
         assert definition is not None
         assert "1024 bytes" in definition.description
         assert "newline_style" in definition.description and "entire file" in definition.description
-        assert "\\r\\n" in definition.description
+        assert "remembered internally" in definition.description
+        edit = harness.agent.tool_registry.get("edit")
+        assert edit is not None
+        arguments = edit.parameters["properties"]
+        assert "\\r\\n" in arguments["old"]["description"]
+        assert "line numbers" in arguments["old"]["description"]
+        assert "empty deletes" in arguments["new"]["description"]
+        assert set(arguments) == {"path", "old", "new"}
     finally:
         await harness.close()
 

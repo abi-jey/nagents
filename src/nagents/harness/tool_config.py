@@ -130,4 +130,20 @@ class HarnessToolRegistry(ToolRegistry):
     def get_all(self) -> list[ToolDefinition]:
         policy = self.harness.tool_settings
         policy.load()
-        return [tool for tool in super().get_all() if policy.enabled(self.harness.config.agent, tool.name)]
+        tools = [tool for tool in super().get_all() if policy.enabled(self.harness.config.agent, tool.name)]
+        definitions = {tool.name: tool for tool in tools}
+        canonical, alias = definitions.get("schedule_wakeup"), definitions.get("wake_up_in")
+        originals = self.harness.tools._wakeup_definitions
+        if (
+            canonical is not None
+            and alias is not None
+            and canonical is originals.get("schedule_wakeup")
+            and alias is originals.get("wake_up_in")
+            and canonical.func == alias.func == self.harness.tools.schedule_wakeup
+            and canonical.description == alias.description
+            and canonical.parameters == alias.parameters
+        ):
+            # Keep legacy execution/history and workspace settings intact while
+            # advertising only one copy of the same native scheduling contract.
+            tools.remove(alias)
+        return tools
