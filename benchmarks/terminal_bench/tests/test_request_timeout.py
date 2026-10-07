@@ -129,13 +129,18 @@ async def test_root_and_native_child_only_change_http_deadline(tmp_path: Path, m
 
 
 @pytest.mark.parametrize("value", [False, True, 0, -1, "300", float("nan"), float("inf"), 10**400])
-def test_job_and_agent_refuse_invalid_deadlines(tmp_path: Path, value: object) -> None:
-    from benchmarks.terminal_bench.agent import NgnOptions
-
+def test_job_refuses_invalid_deadlines(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError):
         job_config(
             tmp_path, tmp_path / "creds", tmp_path / "jobs", 900, "gpt-6-astra", request_timeout=cast("float", value)
         )
+
+
+@pytest.mark.parametrize("value", [False, True, 0, -1, "300", float("nan"), float("inf"), 10**400])
+def test_agent_refuses_invalid_deadlines(tmp_path: Path, value: object) -> None:
+    pytest.importorskip("harbor", reason="Harbor belongs only in the optional benchmark environment")
+    from benchmarks.terminal_bench.agent import NgnOptions
+
     with pytest.raises(ValueError):
         NgnOptions(bundle=str(tmp_path), credentials_path=str(tmp_path / "creds"), request_timeout=value)
 

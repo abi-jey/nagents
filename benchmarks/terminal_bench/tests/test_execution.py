@@ -64,7 +64,7 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
         credentials=str(credentials),
         instruction=str(instruction),
         model="gpt-6-astra",
-        timeout=1 if outcome == "timeout" else 5,
+        timeout=30 if outcome == "timeout" else 5,
     )
     configure = runner.configuration
 
@@ -95,6 +95,16 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
     entered = asyncio.Event()
     calls = 0
     provider_instances: list[OpenAIProvider] = []
+    deadlines: list[asyncio.Timeout] = []
+    native_timeout = asyncio.timeout
+
+    def record_timeout(seconds: float) -> asyncio.Timeout:
+        deadline = native_timeout(seconds)
+        deadlines.append(deadline)
+        return deadline
+
+    if outcome == "timeout":
+        monkeypatch.setattr(asyncio, "timeout", record_timeout)
 
     async def verify(provider: OpenAIProvider, force: bool = False) -> bool:
         return True
@@ -111,6 +121,10 @@ async def test_runner_preserves_error_evidence_without_misclassifying_recovery(
         calls += 1
         provider_instances.append(provider)
         entered.set()
+        if outcome == "timeout":
+            # Expire the real runner deadline only after generation starts.
+            # Local initialization must not race a one-second wall-clock budget.
+            deadlines[0].reschedule(asyncio.get_running_loop().time())
         if outcome in {"cancelled", "cancelled_close_failure", "timeout"}:
             await asyncio.Event().wait()
         elif calls == 1 or outcome in {"retry_then_fatal", "round_limit"}:
