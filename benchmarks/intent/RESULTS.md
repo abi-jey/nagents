@@ -76,3 +76,45 @@ candidate rather than attributed to the first candidate's development metrics.
 
 Additional private artifact:
 `/tmp/ngn-intent-cycle2-candidate2-development/summary.json`.
+
+## Sealed heldout validation of the final combined source
+
+After all candidates were selected, the final combined source was frozen at
+`e7ce8f5` (context compaction, compact JSON history, evidence reuse and preliminary
+instruction-discovery guidance; no rejected path-relevance sentence). The ten
+previously sealed heldout cases ran once for baseline `355adb0` and once for that
+final source, using the identical fixed main benchmark runner. Baseline and final
+runs were sequential matrices with concurrency two. Recorded `source_roots`
+identify the actual imported baseline/final native packages; all source/prompt
+hashes remained unchanged and every trial had complete usage and root completion.
+
+| Metric | Baseline | Final combined source | Change |
+| --- | ---: | ---: | ---: |
+| Correct outcomes and intent compliance | 10/10 | 10/10 | unchanged |
+| Tool calls | 14 | 9 | −35.71% |
+| Provider generations | 23 | 19 | −17.39% |
+| Total tokens | 36,097 | 30,107 | −16.59% |
+| Prompt and uncached prompt tokens | 35,446 | 29,560 | −16.61% |
+| Completion tokens | 651 | 547 | −15.98% |
+| Cached tokens | 0 | 0 | unchanged |
+| Summed per-trial run seconds | 59.28 | 58.14 | −1.92% |
+
+The ambiguous target case used one content search whose returned matching paths
+and values supplied enough evidence, rather than discovery and two file reads
+(4 → 1). Both baseline and final questions correctly ask whether to change Asia,
+Europe, or both; manual review confirmed the missing target choice is resolved
+without edits. Explicit authorized correction retained read → edit → saved
+readback and avoided preliminary searches (5 → 3). Advice-only and literal search
+still used an optional read; their call counts did not improve. Zero-call cases
+retained zero calls with modest additional instruction overhead. There were no
+provider errors, failed children, unauthorized mutation attempts or saved-file
+failures. Neither variant delegated these small tasks.
+
+This supports the combined source on the declared heldout tasks, without
+attributing all changes to one individual optimization or claiming general intent
+accuracy. No prompts, cases or production behavior were tuned after these results.
+
+Private frozen evidence artifacts:
+
+- `/tmp/ngn-cycle2-heldout-baseline/summary.json`.
+- `/tmp/ngn-cycle2-heldout-final/summary.json`.
