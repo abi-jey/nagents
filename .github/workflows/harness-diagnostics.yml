@@ -50,3 +50,4 @@ jobs:
           benchmarks/diagnostics/tests
           benchmarks/tool_descriptions/test_run.py
           benchmarks/orchestration/test_run.py
+          benchmarks/intent/test_run.py

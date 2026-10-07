@@ -14,6 +14,8 @@ from .run import source_hashes
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 
 def test_splits_are_declared_disjoint_and_fixture_variants_differ() -> None:
     development = [case for case in cases() if case.split == "development"]
@@ -161,3 +163,20 @@ def test_regrading_saved_verification_requires_read_after_last_edit() -> None:
         "child_failures": 0,
     }
     assert regrade_result(case, original)["failures"] == [f"missing_readback:{path}"]
+
+
+def test_source_provenance_follows_imported_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+
+    from nagents.harness import runtime
+
+    package = tmp_path / "alternate" / "nagents"
+    (package / "harness").mkdir(parents=True)
+    (package / "harness/runtime.py").write_text("# alternate runtime\n")
+    contents = b"# measured alternate agent\n"
+    (package / "agent.py").write_bytes(contents)
+    monkeypatch.setattr(runtime, "__file__", str(package / "harness/runtime.py"))
+    hashes = source_hashes()
+    assert hashes["src/nagents/agent.py"] == hashlib.sha256(contents).hexdigest()
+    assert "src/nagents/provider/openai.py" not in hashes
+    assert "benchmarks/intent/cases.py" in hashes

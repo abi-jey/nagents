@@ -14,6 +14,7 @@ from unittest.mock import patch
 from benchmarks.orchestration import run as native
 from benchmarks.orchestration.fixtures import grade as grade_saved
 from benchmarks.orchestration.fixtures import parse_answer
+from nagents.harness import runtime
 
 from .cases import cases
 
@@ -23,11 +24,19 @@ if TYPE_CHECKING:
     from .cases import Case
 
 
-def source_hashes() -> dict[str, str]:
-    root = Path(__file__).resolve().parents[2]
+def source_roots() -> dict[str, str]:
     return {
-        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for directory in (root / "src/nagents", root / "benchmarks/orchestration", root / "benchmarks/intent")
+        "src/nagents": str(Path(runtime.__file__).resolve().parents[1]),
+        "benchmarks/orchestration": str(Path(native.__file__).resolve().parent),
+        "benchmarks/intent": str(Path(__file__).resolve().parent),
+    }
+
+
+def source_hashes() -> dict[str, str]:
+    return {
+        f"{prefix}/{path.relative_to(directory).as_posix()}": hashlib.sha256(path.read_bytes()).hexdigest()
+        for prefix, source in source_roots().items()
+        for directory in (Path(source),)
         for path in sorted(directory.rglob("*.py"))
     }
 
@@ -92,7 +101,11 @@ def assess(case: Case, result: dict[str, object]) -> dict[str, object]:
 
 async def trial(case: Case, model: str, timeout: float) -> dict[str, object]:
     prompt_hash = native.sha256(case.scenario.goal)
-    with patch.object(native, "source_hashes", source_hashes), patch.object(native, "grade", grade):
+    with (
+        patch.object(native, "source_roots", source_roots),
+        patch.object(native, "source_hashes", source_hashes),
+        patch.object(native, "grade", grade),
+    ):
         result = await native.trial(case.scenario, "adaptive", model, timeout)
     if prompt_hash != native.sha256(case.scenario.goal):
         result["source_changed"] = True
