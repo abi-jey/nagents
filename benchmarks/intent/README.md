@@ -8,11 +8,12 @@ only explicit authorized correction cases approve root edits of their fixture fi
 Children cannot receive write approval. Fixture contents are untrusted task data.
 The model has no tools for benchmark-source files outside its temporary workspace.
 
-`cases.py` declares eight development and eight heldout cases **before tuning**.
-Paraphrases and numeric/path seeds differ across these fixed sets. Cases cover
+`cases.py` declares ten development and ten heldout cases **before tuning**.
+Paraphrases, config fields and directory layouts differ across these fixed sets. Cases cover
 knowledge/conversation, context-known answers, filename versus literal-content
-search, inspection questions, consequential ambiguity and authorized saved edits.
-They are not a general intent accuracy estimate or a multi-turn cancellation test.
+search, inspection questions, advice-only requests, cancelled work, ambiguous target selection
+and authorized saved edits.
+They are not a general intent accuracy estimate or a multi-turn interruption test.
 Machine-readable output fields permit deterministic outcome grading without
 matching prose or prescribing a particular tool sequence. Equivalent tool choices
 are allowed. Tool-free answers require zero calls. Other minimum-action targets are

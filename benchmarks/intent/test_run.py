@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 def test_splits_are_declared_disjoint_and_fixture_variants_differ() -> None:
     development = [case for case in cases() if case.split == "development"]
     heldout = [case for case in cases() if case.split == "heldout"]
-    assert len(development) == len(heldout) == 8
+    assert len(development) == len(heldout) == 10
     assert {case.scenario.name for case in development}.isdisjoint(case.scenario.name for case in heldout)
     for first, second in zip(development, heldout, strict=True):
         assert first.scenario.goal != second.scenario.goal
@@ -31,7 +31,7 @@ def test_clarification_requires_actual_question_and_no_mutation(tmp_path: Path) 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     assert "missing_clarification_question" in grade(scenario, tmp_path, '{"needs_clarification":true}', set())
-    answer = '{"needs_clarification":true,"question":"What retry count do you want?"}'
+    answer = '{"needs_clarification":true,"question":"Which environment configuration should I change?"}'
     assert grade(scenario, tmp_path, answer, set()) == []
     path.write_text("{}")
     assert any("unexpected_mutation" in failure for failure in grade(scenario, tmp_path, answer, set()))

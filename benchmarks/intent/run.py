@@ -38,7 +38,14 @@ def grade(scenario: Scenario, workspace: Path, answer: str, verified: set[str]) 
         # A real clarification must include a question, not just label ambiguity.
         if isinstance(actual, dict) and isinstance(actual.get("question"), str) and actual["question"].strip():
             normalized = dict(actual)
-            normalized.pop("question")
+            question = str(normalized.pop("question")).lower()
+            choices = (
+                ("staging", "production", "environment", "file", "configuration")
+                if scenario.name.startswith("development")
+                else ("europe", "asia", "region", "file", "configuration")
+            )
+            if not any(choice in question for choice in choices):
+                return ["clarification_does_not_select_target"]
             return grade_saved(scenario, workspace, json.dumps(normalized), verified)
         return [*grade_saved(scenario, workspace, answer, verified), "missing_clarification_question"]
     return grade_saved(scenario, workspace, answer, verified)
