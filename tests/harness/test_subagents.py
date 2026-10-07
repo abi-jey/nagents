@@ -68,6 +68,60 @@ def collect_released_resources() -> Iterator[None]:
     gc.collect()
 
 
+def test_tool_free_waiting_turn_resumes_synthesis_without_premature_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        child_started, yielded, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if provider.index:
+                child_started.set()
+                await release.wait()
+                yield TextDoneEvent(text="Review finding")
+            elif notifications(messages):
+                assert "Review finding" in str(notifications(messages)[0].content)
+                yield TextDoneEvent(text="Verified synthesis")
+            elif len(provider.requests) == 1:
+                yield ToolCallEvent(id="review", name="delegate", arguments={"prompt": "Review independently"})
+            else:
+                yield TextDoneEvent(text="Waiting for the independent review")
+
+        harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        observed: list[HarnessEvent] = []
+
+        async def consume() -> None:
+            async for event in harness.run("Review and synthesize"):
+                observed.append(event)
+                if isinstance(event, TextDoneEvent) and event.text == "Waiting for the independent review":
+                    yielded.set()
+
+        task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(child_started.wait(), HANG_GUARD)
+            await asyncio.wait_for(yielded.wait(), HANG_GUARD)
+            assert not task.done()
+            assert len(providers[0].requests) == 2
+            assert not any(isinstance(event, DoneEvent) for event in observed)
+            release.set()
+            await asyncio.wait_for(task, HANG_GUARD)
+            assert len(providers[0].requests) == 3
+            completions = [index for index, event in enumerate(observed) if isinstance(event, TaskCompleted)]
+            done = [(index, event) for index, event in enumerate(observed) if isinstance(event, DoneEvent)]
+            assert len(completions) == len(done) == 1
+            assert completions[0] < done[0][0]
+            assert done[0][1].final_text == "Verified synthesis"
+            assert_balanced(await harness.history())
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("count", [2, 3])
 def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_parent(
     tmp_path: Path,

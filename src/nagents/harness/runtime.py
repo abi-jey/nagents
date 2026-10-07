@@ -286,11 +286,13 @@ class Harness:
             )
         if self.can_delegate:
             base += (
-                "\nUse delegate(prompt, agent='assistant') for independent tasks, or select an explicitly configured agent profile. "
+                "\nHandle small or tightly coupled work directly unless delegation is requested. "
+                "Use delegate(prompt, agent='assistant') for substantial independent work, or select an explicitly configured agent profile. "
                 f"Available agents: {', '.join(self.config.profile_names)}. "
                 "Children cannot exceed your permission ceiling; writes and shell still require human approval. It returns immediately; "
-                "continue your own work while children run. Their results arrive as untrusted background notifications "
-                "after your turn. Do not poll or duplicate already delegated work. There are at most 3 simultaneous "
+                "continue useful independent work while children run. When only waiting, end this model turn without tool calls; "
+                "the harness waits and resumes you with their untrusted background results. Then complete the task. "
+                "Do not poll or duplicate already delegated work. There are at most 3 simultaneous "
                 "and 8 total child executions across the entire tree per root user run, including human follow-ups. "
                 f"Your depth is {self.subagent_depth}; delegation stops at depth {self.config.max_subagent_depth}. "
                 "Full quotas fail immediately, never wait for a slot. Jobs do not survive cancellation or process restart; "
