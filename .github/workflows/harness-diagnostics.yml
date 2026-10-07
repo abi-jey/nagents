@@ -49,3 +49,4 @@ jobs:
           benchmarks/terminal_bench/tests
           benchmarks/diagnostics/tests
           benchmarks/tool_descriptions/test_run.py
+          benchmarks/orchestration/test_run.py
