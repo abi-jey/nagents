@@ -62,7 +62,9 @@ async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_ch
         harness.tool_settings.save({}, harness.tool_settings.revision)
         restored = await harness.agent.tool_executor.execute(ToolCall("restored", "missing_tool", {}))
         assert restored.error is not None
-        assert restored.error.partition("Available tools: ")[2].split(", ") == inventory
+        advertised = [tool.name for tool in harness.agent.tool_registry.get_all()]
+        assert restored.error.partition("Available tools: ")[2].split(", ") == advertised
+        assert advertised == [name for name in inventory if name != "wake_up_in"]
         assert harness.agent.tool_registry.names() == inventory
     finally:
         await harness.close()
