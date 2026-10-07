@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 from .cases import cases
+from .regrade import regrade_result
 from .run import assess
 from .run import grade
 from .run import source_hashes
@@ -121,3 +122,42 @@ def test_advice_inspection_is_correct_but_exceeds_soft_efficiency_target() -> No
     assessed = assess(case, result)
     assert assessed["correct"] is True
     assert assessed["within_action_target"] is False
+
+
+def test_regrading_preserves_native_unexpected_file_evidence() -> None:
+    case = cases()[0]
+    original: dict[str, object] = {
+        "saved_files": {},
+        "tool_events": [],
+        "final_text": '{"idempotent":true,"note":"Correct."}',
+        "failures": ["wrong_final_answer", "unexpected_file:rogue.txt"],
+        "errors": [],
+        "usage": {"usage_complete": True},
+        "run_complete": True,
+        "source_changed": False,
+        "provider_errors": [],
+        "child_failures": 0,
+    }
+    result = regrade_result(case, original)
+    assert result["failures"] == ["unexpected_file:rogue.txt"]
+    assert result["correct"] is False
+
+
+def test_regrading_saved_verification_requires_read_after_last_edit() -> None:
+    case = next(case for case in cases() if case.scenario.name == "development_authorized_correction")
+    path = next(iter(case.scenario.corrected_files))
+    original: dict[str, object] = {
+        "saved_files": case.scenario.corrected_files,
+        "tool_events": [
+            {"tool": tool, "arguments": {"path": path}, "error": ""} for tool in ("edit", "read_file", "edit")
+        ],
+        "final_text": json.dumps(case.scenario.expected),
+        "failures": [],
+        "errors": [],
+        "usage": {"usage_complete": True},
+        "run_complete": True,
+        "source_changed": False,
+        "provider_errors": [],
+        "child_failures": 0,
+    }
+    assert regrade_result(case, original)["failures"] == [f"missing_readback:{path}"]

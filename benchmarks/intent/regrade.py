@@ -51,6 +51,17 @@ def regrade_result(case: Case, original: dict[str, object]) -> dict[str, object]
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(str(saved[name]))
         result["failures"] = grade(case.scenario, workspace, str(result["final_text"]), verified)
+    # Reconstructed saved_files omit unknown files and alias metadata. Retain
+    # those original native safety observations rather than erase them.
+    original_failures = original["failures"]
+    assert isinstance(original_failures, list) and isinstance(result["failures"], list)
+    for failure in original_failures:
+        if (
+            isinstance(failure, str)
+            and failure.startswith(("unexpected_file:", "missing_or_aliased_file:"))
+            and failure not in result["failures"]
+        ):
+            result["failures"].append(failure)
     result["task_correct"] = not result["failures"]
     if result["errors"]:
         assert isinstance(result["failures"], list)
