@@ -11,6 +11,24 @@ different answers. Tool failures use `ToolResultEvent.error`; generation
 failures use `ErrorEvent.message`. Initialization and extension failures can
 also raise exceptions instead of emitting an error event.
 
+Streaming tool generation emits `ToolCallProgressEvent` before an executable
+`ToolCallEvent` is available. The preview contains a cumulative `arguments_text`
+snapshot (at most 16,384 characters), `arguments_truncated`, a unique
+`generation_id`, and a stable output `index`. Call IDs and names may arrive after
+the first snapshot. Use the generation/index pair to update one preview rather
+than appending every snapshot. The final call carries the same identifiers in
+`extra` and retains its complete, validated arguments.
+
+Progress status is `streaming`, `ready` after protocol validation, or `abandoned`
+after a failed attempt. A preview is never executed or stored as conversation
+history. A cancelled consumer may close before an abandonment event can be sent;
+clients must stop loading indicators when their enclosing run ends. A ready call
+can still be queued behind another call or require approval.
+
+`ToolExecutionStartedEvent` identifies the next tool the agent invokes. The tool
+may request approval as part of that invocation; this event is not proof that
+side effects have occurred. `ToolResultEvent` remains the execution outcome.
+
 When the agent exhausts its configured model/tool rounds, it emits
 `ErrorEvent(code="MAX_TOOL_ROUNDS", recoverable=False)` followed by
 `DoneEvent(finish_reason=FinishReason.UNKNOWN)`. The existing error message and
@@ -24,6 +42,20 @@ The web UI describes this known error as a round limit using fixed safe text.
 A native child that reaches its limit remains failed, retains its history, and
 reports a fixed budget explanation to its parent. These diagnostics do not change
 the library, Harness, or child round limits or their cleanup behavior.
+
+If a descendant finishes while its immediate parent is stopping or cancelled,
+the Harness keeps the descendant's `TaskCompleted` outcome and withholds delivery.
+It emits the host-owned `TaskDeliveryWarning` subtype of `ErrorEvent`, with code
+`TASK_DELIVERY_SKIPPED` and `recoverable=True`. Recoverable refers to the root run:
+it may continue or delegate replacement work, but descendant data is never routed
+directly to Main and the failed/cancelled child outcomes are not changed.
+
+This diagnostic carries `task_id`, `task_name`, `parent_task_id`,
+`parent_session_id`, `child_session_id`, `depth`, `activation`, and `followup`.
+The web client retains only these owned scope fields and fixed safe text, so a
+child warning does not clear Main's tool preview or mark its run failed. Ordinary
+provider errors cannot gain this scope by copying the code or adding metadata.
+Missing or mismatched parent identities remain fatal errors.
 
 Built-in text providers attach safe diagnostics to caught generation failures in
 `ErrorEvent.extra["transport"]`. Existing `code`, `message`, and `recoverable`
@@ -58,6 +90,10 @@ and other human-readable clients continue to show their existing safe messages.
 ::: nagents.TextDoneEvent
 
 ::: nagents.ToolCallEvent
+
+::: nagents.ToolCallProgressEvent
+
+::: nagents.ToolExecutionStartedEvent
 
 ::: nagents.ToolResultEvent
 

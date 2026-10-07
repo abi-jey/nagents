@@ -8,6 +8,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +19,7 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ProviderRegistryStore
 from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.tools import CodingTools
 from tests.support.config import connection
 from tests.support.web import client_app
 
@@ -29,6 +31,8 @@ def test_provider_crud_model_catalog_and_live_are_shared(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("TEST_PROVIDER_KEY", "synthetic-private-key")
+    monkeypatch.setattr(CodingTools, "instructions", Mock(return_value=""))
+    monkeypatch.setattr(CodingTools, "discover_skills", Mock())
 
     async def check() -> None:
         config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data")
@@ -119,6 +123,8 @@ def test_named_connection_cannot_take_credentials_from_settings(
 ) -> None:
     monkeypatch.setenv("TEST_BASE_KEY", "base-key")
     monkeypatch.delenv("TEST_SHARED_KEY", raising=False)
+    monkeypatch.setattr(CodingTools, "instructions", Mock(return_value=""))
+    monkeypatch.setattr(CodingTools, "discover_skills", Mock())
 
     async def check() -> None:
         config = HarnessConfig(

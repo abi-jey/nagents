@@ -553,7 +553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dev=args.dev,
             )
             return 0
-        if args.command == "run" and not config.demo and not config.provider:
+        if args.command == "run" and not config.demo and not config.provider and not getattr(args, "design", None):
             raise ValueError("Select a named provider connection before running a prompt.")
         if getattr(args, "design", None):
             try:

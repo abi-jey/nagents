@@ -35,6 +35,8 @@ class RunReplay:
                     "activation",
                     "followup",
                     "stream",
+                    "generation_id",
+                    "index",
                 )
             ),
             record.get("call_id", record.get("id", "")),
@@ -49,9 +51,15 @@ class RunReplay:
         copied: dict[str, object] = json.loads(json.dumps(record, default=_json_default, ensure_ascii=True))
         event = copied.get("event")
         delta = "text" if event == "tool_output" else "chunk" if event in {"text_chunk", "reasoning_chunk"} else ""
-        merge = bool(delta and self.records and self.scope(self.records[-1]) == self.scope(copied))
+        progress = bool(
+            event == "tool_call_progress"
+            and self.records
+            and self.scope(self.records[-1])[:-2] == self.scope(copied)[:-2]
+        )
+        merge = progress or bool(delta and self.records and self.scope(self.records[-1]) == self.scope(copied))
         if merge:
-            copied[delta] = str(self.records[-1].get(delta, "")) + str(copied.get(delta, ""))
+            if not progress:
+                copied[delta] = str(self.records[-1].get(delta, "")) + str(copied.get(delta, ""))
             self.bytes -= self.sizes.pop()
             self.records.pop()
         size = len(json.dumps(copied, ensure_ascii=True))

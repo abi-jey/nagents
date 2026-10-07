@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
 import yaml
@@ -24,6 +25,12 @@ class ToolSettingsInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     revision: str = Field(max_length=64)
     agents: dict[str, dict[str, bool]]
+
+
+class ToolApprovalRevoke(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    tool: str = Field(min_length=1, max_length=200)
+    revision: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
 def snapshot(state: WebState) -> dict[str, object]:
@@ -63,6 +70,7 @@ def snapshot(state: WebState) -> dict[str, object]:
         "active_agent": harness.config.agent,
         "profiles": [{"id": name, "mode": harness.mode_for_profile(name)} for name in profiles],
         "tools": sorted(tools, key=lambda item: str(item["name"])),
+        "tool_approvals": state.tool_approvals.snapshot(),
     }
 
 
@@ -71,7 +79,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     async def tools() -> dict[str, object]:
         try:
             return snapshot(get())
-        except (ValueError, OSError, yaml.YAMLError):
+        except (ValueError, OSError, sqlite3.Error, yaml.YAMLError):
             raise HTTPException(422, "Cannot read tool settings. Check .ngn/tools.yaml in the workspace.") from None
 
     @app.post("/api/tools")
@@ -83,7 +91,18 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
                 return snapshot(state)
             except FileExistsError:
                 raise HTTPException(409, "Tool settings changed on disk. Refresh before saving.") from None
-            except (ValueError, OSError, yaml.YAMLError):
+            except (ValueError, OSError, sqlite3.Error, yaml.YAMLError):
                 raise HTTPException(
                     422, "Cannot save tool settings. Check the selections and workspace configuration file."
                 ) from None
+
+    @app.post("/api/tools/approvals/revoke")
+    async def revoke(body: ToolApprovalRevoke) -> dict[str, object]:
+        state = get()
+        with state.idle():
+            try:
+                if not state.tool_approvals.revoke(body.tool, body.revision):
+                    raise HTTPException(409, "This saved permission changed. Refresh tools before trying again.")
+                return snapshot(state)
+            except sqlite3.Error:
+                raise HTTPException(503, "Could not remove the saved permission. Refresh and retry.") from None

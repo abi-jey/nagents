@@ -1,13 +1,55 @@
 # ngn container: configuration and authentication
 
 The runtime image in `dockerfiles/Runtime.Dockerfile` starts `ngn serve --host
-0.0.0.0` in a writable, unprivileged workspace. It serves the web UI **with
+0.0.0.0` as root inside the container, in `/home/agent/workspace`. It serves the web UI **with
 no configuration file or API key**. Starting and passing `/api/bootstrap`
 does not verify provider access: live chat still needs an account, a supported
 model and credentials. With no credential source, the UI shows setup guidance
 and a chat attempt returns a specific, safe error instead of claiming success.
 Use an authenticated, trusted network boundary around the container; it is a
 single-user workspace, not a multi-user service.
+
+## Root access inside the container
+
+Approved shell tools run with the same container identity as ngn. The runtime
+image and web Kubernetes examples use UID/GID 0 and a writable container root
+filesystem, so commands such as `apt-get update` and `apt-get install` can install
+system dependencies. Tool approval still applies: becoming root does not grant
+automatic approval to run a tool.
+
+The Kubernetes examples drop all capabilities, then add `CHOWN`, `DAC_OVERRIDE`,
+`FOWNER`, `SETUID`, and `SETGID` for package ownership and the package manager's
+unprivileged download user. They retain the runtime's default seccomp profile,
+disable privilege escalation and service-account-token mounting, and do not
+mount a Docker socket or host system directories. No `privileged: true`,
+`SYS_ADMIN`, host networking, or host process namespace is needed.
+
+For the same configuration with Docker, use a published image digest:
+
+```sh
+docker run --rm --user 0:0 --cap-drop ALL \
+  --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
+  -p 127.0.0.1:8765:8765 \
+  ghcr.io/abi-jey/nagents/agent-server@sha256:<reviewed-digest>
+```
+
+Package installations change the container's writable layer. They disappear
+when the container is replaced; put permanent system dependencies in a derived
+image. Keep sessions, credentials, and workspace files on the configured data
+volume. The retained `agent` account also supports an explicitly non-root
+deployment with Docker `--user 1000:1000 --env HOME=/home/agent`, or equivalent
+Kubernetes settings and writable volumes owned by that user.
+
+When changing an existing deployment from UID 1000 to UID 0, first stop ngn at
+an idle maintenance window and back up its persistent state. Preserve its
+`HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, and workspace/data paths, and migrate
+ownership of only its dedicated private state to the new UID/GID. Update any
+initializer that sets ownership too. Keep authentication directories at 0700
+and credential files at 0600: the credential store checks ownership against
+the running UID and will reject a store still owned by the previous user.
+Changing only the image's `USER` does not override a pod's `runAsNonRoot`,
+`runAsUser`, or read-only root filesystem settings.
 
 ## Two ways to configure an API-key connection
 

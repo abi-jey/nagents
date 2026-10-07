@@ -857,7 +857,7 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
                     },
                 )
                 assert created.status_code == 201
-                async with asyncio.timeout(8):
+                async with asyncio.timeout(HANG_GUARD):
                     await complete.wait()
                 assert spoken == ["Reply 1 from the selected assistant", "Reply 2 from the selected assistant"]
                 assert seen[0][:2] == seen[1][:2] == ("anthropic", "chat-model")

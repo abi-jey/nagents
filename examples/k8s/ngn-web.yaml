@@ -151,13 +151,17 @@ spec:
             - name: NGN_CHANNEL_PLUGIN_PATH
               value: /state/channel-plugins
           securityContext:
+            runAsNonRoot: false
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
+            # Approved shell tools can install packages in the container layer.
+            # These installs are lost when Kubernetes replaces the container.
+            readOnlyRootFilesystem: false
             capabilities:
               drop:
                 - ALL
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
           readinessProbe:
             exec:
               command:

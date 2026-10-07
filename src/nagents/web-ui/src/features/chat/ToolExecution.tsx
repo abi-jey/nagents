@@ -16,6 +16,8 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const name = entry.title || "Tool call";
   const target = executionTarget(entry);
   const status = executionStatus(entry);
+  const busy = status.tone === "active" && entry.result === undefined;
+  const preparing = entry.state === "Preparing";
   // Promote a matching stream in place, but never remove an existing result
   // surface. Its reading position must survive late output and tab switches too.
   const matchingOutput = !!entry.text && entry.text === entry.result;
@@ -30,9 +32,16 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
     content: <ExecutionValue label={sameOutput ? "Result" : "Streamed output"} text={entry.text} />,
   });
   if (entry.inputs !== undefined) panels.push({
-    key: "inputs", label: "Inputs", content: <ExecutionValue label="Inputs" text={entry.inputs} />,
+    key: "inputs", label: "Inputs", content: <>
+      {preparing && <p className="tool-input-note">Receiving arguments. This tool has not started.</p>}
+      {entry.toolProgress === "abandoned" && <p className="tool-input-note">This proposed call was not executed.</p>}
+      {entry.inputsTruncated && <p className="tool-input-note">Partial preview limited to 16,384 characters. Complete inputs appear when the call is ready.</p>}
+      <ExecutionValue label={preparing ? "Arguments being received" : "Inputs"} text={entry.inputs}
+        emptyText={preparing ? "Waiting for arguments…" : undefined} />
+    </>,
   });
   panels.push({ key: "metadata", label: "Details", content: <div className="tool-metadata">
+    {entry.unattributed && <p className="record-note">This event has no unique invocation identity. It has not been attributed to either call sharing this ID.</p>}
     {entry.state === "Recorded result" && <p className="record-note">Result saved in conversation history. Original execution status and timing may be unavailable.</p>}
     {entry.delegatedTaskId && <p className="record-note">Delegated to <a href={`#${encodeURIComponent(`task-${entry.delegatedTaskId}`)}`}>{entry.delegatedTaskId}</a>. The task has its own execution state.</p>}
     {["schedule_wakeup", "wake_up_in"].includes(name) && <p className="record-note">This is the scheduling request, not evidence that a wake-up fired.</p>}
@@ -40,7 +49,8 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   </div> });
   const selected = panels.some((panel) => panel.key === chosen) ? chosen : panels[0].key;
   return (
-    <details className="execution-record tool-record" data-tone={status.tone} data-disclosure-key={entry.id} open={open}
+    <details className="execution-record tool-record" data-tone={status.tone} data-busy={busy || undefined}
+      data-preparing={preparing || undefined} data-disclosure-key={entry.id} open={open}
       onToggle={(event) => {
         // Opening begins an inspection. New evidence must not change the tab the
         // reader is using; updates to a closed, untouched card may pick its result.
@@ -51,10 +61,13 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
         <span className="tool-symbol"><Icon name={name === "channel_send" ? "channels" : "tools"} size={16} /></span>
         <span className="tool-heading">
           <span className="execution-name" title={name}>{executionName(name)}</span>
-          {target && <span className="execution-target" title={target}>{target}</span>}
+          {preparing && entry.inputs ? <span className="tool-argument-preview">{entry.inputs}</span>
+            : target ? <span className="execution-target" title={target}>{target}</span>
+            : busy && <span className="tool-skeleton" aria-hidden="true"><i /><i /></span>}
         </span>
         <span className="tool-outcome">
-          <span className="execution-state" data-state={entry.state} title={statusDescription}>{status.label}</span>
+          <span className="execution-state" data-state={entry.state} title={statusDescription}
+            role="status" aria-live="polite" aria-atomic="true">{status.label}</span>
           {entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0 &&
             <span className="execution-duration">{executionDuration(entry.durationMs)}</span>}
         </span>

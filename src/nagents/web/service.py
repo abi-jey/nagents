@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import secrets
+import sqlite3
 from contextlib import aclosing
 from contextlib import contextmanager
 from contextlib import nullcontext
@@ -31,6 +32,8 @@ from nagents.events import ToolResultEvent
 from nagents.harness.execution import bind_channel_send
 from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
+from nagents.harness.types import TaskDeliveryWarning
+from nagents.observation import scope as observation_scope
 
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
@@ -44,6 +47,8 @@ from .provider_setup import provider_error
 from .provider_setup import provider_setup
 from .replay import RunReplay
 from .subscriptions import EventBus
+from .tool_approvals import ToolApprovals
+from .tool_approvals import ToolBinding
 from .trash import SessionTrash
 from .uploads import Uploads
 from .wakeups import Chain
@@ -79,6 +84,10 @@ class Pending:
     answer: asyncio.Future[bool]
     record: dict[str, object] = field(default_factory=dict)
     in_chat: bool = False
+    binding: ToolBinding | None = None
+    request: ApprovalRequest | None = None
+    harness: Harness | None = None
+    decision: str = ""
 
 
 @dataclass
@@ -132,28 +141,89 @@ class Run:
         extra = extra if isinstance(extra, dict) else {}
         scope = (
             f"{record.get('task_id', extra.get('task_id', ''))}:{record.get('activation', extra.get('activation', 0))}"
+            f":{record.get('followup', extra.get('followup', 0))}"
         )
+        generation = record.get("generation_id", extra.get("generation_id", ""))
+        index = record.get("index", extra.get("index", ""))
+        progress_key = f"{scope}:progress:{generation}:{index}"
+        correlated = isinstance(generation, str) and bool(generation) and type(index) is int and 0 <= index < 1024
+        call_id = record.get("call_id", record.get("id", ""))
+        tool_slot = json.dumps([call_id, generation if correlated else "", index if correlated else -1])
         if not record.get("task_id", extra.get("task_id", "")):
             if event == "text_chunk" and not any(key.startswith(f"{scope}:call:") for key in self.drafts):
                 self._context_reply_live = True
-            elif event in {"text_done", "tool_call", "tool_result", "done", "compaction_started"}:
+            elif event in {"text_done", "tool_call_progress", "tool_call", "tool_result", "done", "compaction_started"}:
                 self._context_reply_live = False
         if event in {"text_chunk", "reasoning_chunk"}:
             key = f"{scope}:{event}"
             old = self.drafts.get(key, {})
             self.retain(key, {**record, "chunk": (str(old.get("chunk", "")) + str(record.get("chunk", "")))[-262144:]})
+        elif event == "tool_call_progress":
+            if record.get("status") == "abandoned":
+                self.forget(progress_key)
+            else:
+                self.retain(progress_key, record)
         elif event == "tool_call":
-            self.retain(f"{scope}:call:{record.get('id', '')}", record)
+            self.forget(progress_key)
+            self.retain(f"{scope}:call:{tool_slot}", record)
+        elif event == "tool_execution_started":
+            self.retain(f"{scope}:started:{tool_slot}", record)
+        elif event == "transcript_anchor":
+            calls = record.get("calls", [])
+            if isinstance(calls, list):
+                for key, draft in list(self.drafts.items()):
+                    if (
+                        draft.get("event") != "tool_call"
+                        or not draft.get("transcript_event_id")
+                        or not key.startswith(f"{scope}:")
+                    ):
+                        continue
+                    for call in calls:
+                        if isinstance(call, dict) and call.get("event_id") == draft.get("transcript_event_id"):
+                            self.retain(
+                                key,
+                                {
+                                    **draft,
+                                    "history_id": record.get("history_id", ""),
+                                    "call_position": call.get("call_position"),
+                                },
+                            )
         elif event == "tool_output":
-            key = f"{scope}:output:{record.get('call_id', '')}"
+            key = f"{scope}:output:{tool_slot}"
             old = self.drafts.get(key, {})
             self.retain(key, {**record, "text": (str(old.get("text", "")) + str(record.get("text", "")))[-262144:]})
         elif event == "tool_result":
-            self.forget(f"{scope}:call:{record.get('id', '')}")
-            self.forget(f"{scope}:output:{record.get('id', '')}")
+            if correlated:
+                for kind in ("call", "started", "output"):
+                    self.forget(f"{scope}:{kind}:{tool_slot}")
+            else:
+                # Legacy uncorrelated results may clear one unambiguous call,
+                # never a newer generation that happens to reuse the same ID.
+                matches: list[str] = []
+                identities: set[str] = set()
+                for key, draft in self.drafts.items():
+                    if (
+                        not key.startswith(f"{scope}:")
+                        or draft.get("event") not in {"tool_call", "tool_execution_started", "tool_output"}
+                        or draft.get("call_id", draft.get("id", "")) != call_id
+                    ):
+                        continue
+                    metadata = draft.get("extra", {})
+                    metadata = metadata if isinstance(metadata, dict) else {}
+                    identity = draft.get("generation_id", metadata.get("generation_id", ""))
+                    if identity:
+                        identities.add(str(identity))
+                    matches.append(key)
+                if len(identities) <= 1:
+                    for key in matches:
+                        self.forget(key)
         elif event in {"text_done", "done", "task_completed"}:
             self.forget(f"{scope}:text_chunk")
             self.forget(f"{scope}:reasoning_chunk")
+        if event in {"done", "error", "task_completed", "run_finished"}:
+            for key in list(self.drafts):
+                if ":progress:" in key and (event == "run_finished" or key.startswith(f"{scope}:")):
+                    self.forget(key)
 
     def forget(self, key: str) -> None:
         self.drafts.pop(key, None)
@@ -181,6 +251,9 @@ class WebState:
         self.mutating = False
         self.bus = EventBus()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
+        self.tool_approvals = ToolApprovals(
+            harness.agent.session.db_path.with_name("tool-approvals.db"), harness.workspace
+        )
         # Preserve explicit custom persistence adapters. Their unlinked rows still
         # get stable SQLite history IDs, without fabricated ingress annotations.
         if type(harness.agent.session) is _HarnessSession:
@@ -333,6 +406,42 @@ class WebState:
         run = self.active
         if run is None or run.pending is not None or run.finished or run.task.done() or run.task.cancelling():
             return False
+        # Display correlation only. The nonce and the real executor request
+        # remain the authority for approving an operation.
+        identity: dict[str, object] = {}
+        invocation = observation_scope.get()
+        generation = invocation.get("tool_generation_id")
+        index = invocation.get("tool_index")
+        if (
+            invocation.get("tool_call_id") == request.id
+            and invocation.get("tool_name") == request.tool
+            and isinstance(generation, str)
+            and generation
+            and type(index) is int
+            and 0 <= index < 1024
+        ):
+            identity = {"generation_id": generation, "index": index}
+        binding = self.tool_approvals.requested_binding(self.running_harness, request)
+        try:
+            allowed = binding is not None and self.tool_approvals.allowed(binding)
+        except sqlite3.Error:
+            allowed = False  # Unreadable saved policy requires an explicit decision.
+        if allowed:
+            await self.send(
+                run,
+                {
+                    "event": "notice",
+                    "automatic": True,
+                    "policy": "workspace_tool_allow",
+                    **identity,
+                    "text": f"{request.tool} is always allowed in this workspace.",
+                    "task_id": request.task_id,
+                    "activation": request.activation,
+                    "call_id": request.id,
+                    "tool": request.tool,
+                },
+            )
+            return True
         if await automatic_reply(self, run, request):
             self.publish(
                 run,
@@ -340,6 +449,7 @@ class WebState:
                     "event": "notice",
                     "automatic": True,
                     "policy": "channel_auto_reply",
+                    **identity,
                     "text": "Automatic approval for this session's permanently owned chat under its connection's automatic-message policy.",
                     "task_id": request.task_id,
                     "activation": request.activation,
@@ -371,7 +481,18 @@ class WebState:
         pending = Pending(
             secrets.token_urlsafe(24), request.id, asyncio.get_running_loop().create_future(), in_chat=in_chat
         )
-        pending.record = {"event": "approval", **asdict(request), "approval_id": pending.id, "run_id": run.id}
+        pending.binding = binding
+        pending.request = replace(request)
+        pending.harness = self.running_harness
+        pending.record = {
+            "event": "approval",
+            **asdict(request),
+            **identity,
+            "approval_id": pending.id,
+            "run_id": run.id,
+            "allow_tool": binding is not None,
+            "allow_tool_persistent": binding.persistent if binding else False,
+        }
         run.pending = pending
         approved = False
         expired = False
@@ -394,11 +515,12 @@ class WebState:
                     run,
                     {
                         "event": "approval_closed",
+                        **identity,
                         "approval_id": pending.id,
                         "task_id": request.task_id,
                         "activation": request.activation,
                         "call_id": request.id,
-                        "decision": "allow" if approved else "deny",
+                        "decision": (pending.decision or "allow") if approved else "deny",
                         "expired": expired,
                     },
                 )
@@ -470,9 +592,34 @@ class WebState:
                         if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
                             run.final_text = event.final_text
                         if isinstance(event, ErrorEvent):
-                            reason, message = provider_error(event)
+                            if type(event) is TaskDeliveryWarning:
+                                # Only this host-owned type carries trusted task
+                                # scope. Provider codes and arbitrary extra fields
+                                # cannot impersonate it or leak into web records.
+                                reason, message = "task_delivery_skipped", TaskDeliveryWarning.message
+                                record = {
+                                    "event": "error",
+                                    "message": message,
+                                    "code": "TASK_DELIVERY_SKIPPED",
+                                    "recoverable": True,
+                                    "task_id": event.task_id,
+                                    "task_name": event.task_name,
+                                    "parent_task_id": event.parent_task_id,
+                                    "parent_session_id": event.parent_session_id,
+                                    "child_session_id": event.child_session_id,
+                                    "depth": event.depth,
+                                    "activation": event.activation,
+                                    "followup": event.followup,
+                                }
+                            else:
+                                reason, message = provider_error(event)
+                                record = {
+                                    "event": "error",
+                                    "message": message,
+                                    "recoverable": event.recoverable,
+                                }
                             logger.warning(
-                                "Provider run error: session=%s run=%s reason=%s recoverable=%s",
+                                "Run error: session=%s run=%s reason=%s recoverable=%s",
                                 run.session_id,
                                 run.id,
                                 reason,
@@ -480,11 +627,6 @@ class WebState:
                             )
                             if not event.recoverable:
                                 run.outcome = "failed"
-                            record = {
-                                "event": "error",
-                                "message": message,
-                                "recoverable": event.recoverable,
-                            }
                         else:
                             if isinstance(event, ToolCallEvent):
                                 known = (

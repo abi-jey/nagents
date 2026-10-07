@@ -28,6 +28,7 @@ from nagents.provider.openai import OpenAIProvider
 from .provider import HarnessProvider
 from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
 from .types import TaskCompleted
+from .types import TaskDeliveryWarning
 from .types import TaskMessage
 from .types import TaskNotification
 from .types import TaskStarted
@@ -94,9 +95,10 @@ class SubagentManager:
         self._shutdown: asyncio.Task[None] | None = None
 
     def register(self) -> None:
-        if self.harness.can_delegate:
-            self.harness.tools.builtins["delegate"] = self.delegate
-            self.harness.agent.register_tool(self.delegate)
+        # Register once even at depth zero. Advertisement and execution both
+        # check current limits, so changing settings never replaces this binding.
+        self.harness.tools.builtins["delegate"] = self.delegate
+        self.harness.agent.register_tool(self.delegate)
 
     def list(self) -> list[TaskInfo]:
         """Detached snapshots of all descendants retained in this root session."""
@@ -175,8 +177,8 @@ class SubagentManager:
         Continue useful independent work. When only waiting, end the current model
         turn without tool calls; the harness waits and resumes you with untrusted
         results. Then complete the task.
-        Children inherit your permission ceiling and need
-        human approval for writes and shell. The whole tree shares 3 concurrent
+        Children inherit your permission ceiling; writes and shell pass through
+        the host approval policy. The whole tree shares 3 concurrent
         slots and 8 executions per root run; full quotas fail immediately.
 
         Args:
@@ -569,8 +571,15 @@ class SubagentManager:
                 )
             ):
                 self.root._observed.append(
-                    ErrorEvent(
-                        message="Immediate parent is stopping or cancelled; descendant result was not forwarded to Main."
+                    TaskDeliveryWarning(
+                        task_id=info.id,
+                        task_name=info.name,
+                        parent_task_id=info.parent_task_id,
+                        parent_session_id=info.parent_session_id,
+                        child_session_id=info.child_session_id,
+                        depth=info.depth,
+                        activation=info.activation,
+                        followup=info.followups,
                     )
                 )
                 return

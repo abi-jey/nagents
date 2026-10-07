@@ -21,6 +21,7 @@ from nagents.events import ReasoningChunkEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.events import ToolCallProgressEvent
 from nagents.events import ToolResultEvent
 from nagents.exceptions import ModelListError
 from nagents.http import HTTPLogger
@@ -681,7 +682,11 @@ def test_failed_or_malformed_streams_never_release_tools(monkeypatch: pytest.Mon
         async with endpoint(monkeypatch, handle):
             provider = OpenAIProvider(credentials)
             events = [event async for event in provider.generate([Message(role="user", content="work")])]
-            assert len(events) == 1 and isinstance(events[0], ErrorEvent)
+            terminal = [event for event in events if not isinstance(event, ToolCallProgressEvent)]
+            assert len(terminal) == 1 and isinstance(terminal[0], ErrorEvent)
+            previews = [event for event in events if isinstance(event, ToolCallProgressEvent)]
+            assert not previews or previews[-1].status == "abandoned"
+            assert not any(event.status == "ready" for event in previews)
             assert ACCESS not in repr(events)
             await provider.close()
 
@@ -746,7 +751,11 @@ def test_invalid_tool_state_is_rejected_before_any_call(monkeypatch: pytest.Monk
         async with endpoint(monkeypatch, handle):
             provider = OpenAIProvider(credentials)
             events = [event async for event in provider.generate([Message(role="user", content="work")])]
-            assert len(events) == 1 and isinstance(events[0], ErrorEvent)
+            terminal = [event for event in events if not isinstance(event, ToolCallProgressEvent)]
+            assert len(terminal) == 1 and isinstance(terminal[0], ErrorEvent)
+            previews = [event for event in events if isinstance(event, ToolCallProgressEvent)]
+            assert not previews or previews[-1].status == "abandoned"
+            assert not any(event.status == "ready" for event in previews)
             await provider.close()
 
     asyncio.run(scenario())

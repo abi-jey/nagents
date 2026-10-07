@@ -25,6 +25,8 @@ from .types import TextChunkEvent
 from .types import TextDoneEvent
 from .types import TokenUsage
 from .types import ToolCallEvent
+from .types import ToolCallProgressEvent
+from .types import ToolExecutionStartedEvent
 from .types import ToolResultEvent
 from .types import ToolResultType
 from .types import Usage
@@ -55,6 +57,8 @@ __all__ = [
     "TextDoneEvent",
     "TokenUsage",
     "ToolCallEvent",
+    "ToolCallProgressEvent",
+    "ToolExecutionStartedEvent",
     "ToolResultEvent",
     "ToolResultType",
     "Usage",

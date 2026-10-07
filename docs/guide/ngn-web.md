@@ -319,7 +319,12 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   approvals fail closed, and completed actions are **not rolled back**.
 - Approvals apply to an exact run, call ID, and fresh approval nonce. Only the
   active pending approval may be decided; stale, duplicate, or unknown decisions
-  fail. An unanswered approval expires after five minutes and is denied.
+  fail. **Allow once** approves that invocation. **Always allow this tool** also
+  saves approval for this exact tool definition across all chats and agents in
+  this workspace. **Deny**, Escape, cancellation, and expiry never save a grant.
+  An unanswered approval expires after five minutes and is denied. Saved grants
+  do not override read-only profiles, disabled tools, input validation, or file
+  checks. Revoke them under **Tools → Saved tool approvals → Ask again**.
 - Partial streamed output remains visible after failure/cancellation. Subscription
   reconnects use a cursor and server-instance epoch. A gap or restart requests a
   fresh snapshot instead of replaying model/tool work. Web input has a stable
@@ -776,9 +781,10 @@ instructions or extra results for an already acknowledged tool call.
 
 Execution is serialized with user runs, session changes, and settings writes.
 Changing the selected session never redirects a wakeup into that conversation.
-Automatic runs preserve permission ceilings and do not grant unattended file
-writes, shell execution, or custom-tool approval. Scheduling is not permission
-to perform a later privileged operation. Root-owned execution budgets still
+Automatic runs preserve permission ceilings. Scheduling itself does not grant
+approval for writes, shell execution, or custom tools. An explicit workspace
+**Always allow this tool** permission can approve that tool in an automatic run;
+otherwise the existing browser or opted-in channel approval rules apply. Root-owned execution budgets still
 apply to automatic child/parent activations; human follow-up counters are
 separate. The scheduler also bounds pending timers and automatic activation
 chains to prevent unbounded self-scheduling.
@@ -1006,7 +1012,8 @@ chat history; the browser shows tool activity in the same conversation. The
 voice service receives the assistant's result to speak, not a copy of workspace
 tools or provider credentials. The transcript is partial speech data rather
 than a fabricated finished turn: review proposed writes and shell commands
-before approving them, just as with typed messages. An approval without a
+before approving them, just as with typed messages. Saved **Always allow this
+tool** workspace decisions also apply to voice work. A new approval without a
 connected browser subscriber is denied. A concurrent chat run is serialized
 before a voice request. Ending voice or losing its connection leaves an already
 started assistant task running, with its result and tool activity available in
@@ -1162,6 +1169,14 @@ channel `/compact` command) always remain available.
 Open **Tools** in the sidebar to inspect registered built-in, channel, and extension
 tools. Select a default agent/profile, search or filter tools, and use the switches
 to enable or disable them. Tool descriptions and parameter schemas are read-only.
+These registered descriptions and schemas are sent to the selected model for enabled,
+currently available tools; they guide tool selection and argument construction, while the executor still
+enforces permissions and input validation. The catalog shows registered definitions:
+a trusted `before_model` plugin may change a particular request, so its captured
+model context/request is the source for that invocation. Search and category filters
+only affect this list; **Enable visible**/**Disable visible** change selections that
+apply after saving. Choosing an agent here edits that profile's selections without
+switching the active conversation's agent.
 **Save tools** writes `.ngn/tools.yaml` in the workspace, for example:
 
 ```yaml
@@ -1176,10 +1191,33 @@ agents:
 the Tools selector. Unspecified tools are enabled by default. Selections are per agent and apply in
 both `ngn serve` and the terminal harness. Disabled tools are omitted from model
 requests and rejected by the executor, including when a configuration change
-occurs during approval. Profile restrictions and per-call approvals still apply.
+occurs during approval. Profile restrictions and tool approval rules still apply.
+Saved selections are intersected with the current profile's permissions, delegation
+depth, and client capabilities before model requests. For example, read-only profiles
+do not receive modifying or custom tools, and native wake-up tools require a client
+scheduler. The complete registered catalog remains editable even when a tool is
+unavailable; changing these capabilities does not replace its registered definition.
 Disabling `schedule_wakeup` also disables its `wake_up_in` alias. **Reset agent**
 removes that agent's overrides when saved. Changes use revision checks and atomic
 file replacement; no credentials are written to this configuration.
+
+**Saved tool approvals** lists the web operator's saved decisions separately from
+these enable/disable selections. **Ask again** removes one saved approval immediately;
+it does not change tool availability or discard unsaved selection edits. New grants
+are created only by choosing **Always allow this tool** on a live, exact pending
+approval, never by enabling tools or editing `.ngn/tools.yaml`.
+
+Grants live in `tool-approvals.db`, beside this workspace's private `sessions.db`,
+and apply to normal chat, voice, queued work, and Agent Designer runs in this
+workspace. They are not shared with another workspace or the terminal harness.
+Built-in and inspectable plain-function grants survive server restarts and are
+invalidated when their definition changes. Extension closures and bound objects
+can hide server or destination identity, so their grants are restricted to the
+current registration: reloading or replacing one asks again. The approval dialog
+and saved-permissions list show that distinction. A tool with the same name but a
+different definition never inherits a grant. Designer connection setup requests
+such as starting an MCP subprocess are not registered tools; their **Always allow**
+button is disabled with an explanation, and **Allow once** remains available.
 
 The built-in **`compact_history`** requests compaction of the current conversation.
 The agent finishes pending tool calls, persists their results, then compacts before

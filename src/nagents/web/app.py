@@ -4,6 +4,7 @@ import asyncio
 import copy
 import logging
 import secrets
+import sqlite3
 from collections.abc import AsyncIterator
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -116,7 +117,7 @@ class RunInput(Input):
 class DecisionInput(RunInput):
     approval_id: str = Field(min_length=1, max_length=80)
     call_id: str = Field(min_length=1, max_length=200)
-    decision: Literal["allow", "deny"]
+    decision: Literal["allow", "allow_tool", "deny"]
 
 
 class ProviderInput(Input):
@@ -272,6 +273,7 @@ def create_app(
             designer = Designer(state)
             await designer.traces.initialize()
             await state.history.initialize()
+            state.tool_approvals.initialize()
             harness.agent.plugins.append(state.history.identity)
             state.settings = WebSettings(harness)
             await state.settings.load()
@@ -786,7 +788,21 @@ def create_app(
         if (active.server_owned or active.background) and not state.bus.listening(active.session_id):
             pending.answer.set_result(False)
             raise HTTPException(409, "A live subscriber to this session is required for approval.")
-        pending.answer.set_result(body.decision == "allow")
+        if body.decision == "allow_tool":
+            if pending.binding is None or pending.request is None or pending.harness is None:
+                raise HTTPException(409, "This tool cannot be remembered. Allow this call once instead.")
+            # Re-resolve the registered definition. A replacement must receive
+            # its own approval and must never inherit the pending tool grant.
+            if state.tool_approvals.requested_binding(pending.harness, pending.request) != pending.binding:
+                raise HTTPException(409, "Tool definition or permissions changed. Deny this call and retry.")
+            try:
+                state.tool_approvals.grant(pending.binding)
+            except sqlite3.Error:
+                raise HTTPException(
+                    503, "Could not save this tool permission. Nothing was approved; retry or allow once."
+                ) from None
+        pending.decision = body.decision
+        pending.answer.set_result(body.decision in {"allow", "allow_tool"})
         logger.info("Approval decided: run=%s approval=%s decision=%s", body.run_id, body.approval_id, body.decision)
         return {"status": body.decision}
 

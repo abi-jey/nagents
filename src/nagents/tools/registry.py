@@ -58,7 +58,8 @@ class ToolRegistry:
         Args:
             func: The function to register
             name: Optional override for tool name (defaults to function name)
-            description: Optional override for description (defaults to docstring)
+            description: Nonempty override preserved verbatim. None or an empty
+                         string uses the first docstring paragraph.
             parameters: Optional JSON Schema for parameters. When provided,
                          skips auto-extraction from type hints.
 
@@ -70,10 +71,14 @@ class ToolRegistry:
         # Use provided schema or extract from type hints
         param_schema = parameters if parameters is not None else self._extract_parameters(func)
 
-        # Get description from docstring or override
-        tool_description = description or func.__doc__ or f"Call {tool_name}"
-        # Clean up docstring - take first line/paragraph
-        tool_description = tool_description.strip().split("\n\n")[0].strip()
+        # Explicit descriptions are model-facing instructions supplied by the
+        # caller (including MCP/Designer metadata), not docstrings to summarize.
+        # Keep the existing empty-string fallback while preserving all explicit
+        # paragraphs, hard line breaks and Markdown whitespace.
+        tool_description = description
+        if not tool_description:
+            docstring = func.__doc__ or f"Call {tool_name}"
+            tool_description = docstring.strip().split("\n\n")[0].strip()
 
         tool_def = ToolDefinition(
             name=tool_name,

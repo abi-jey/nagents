@@ -209,6 +209,11 @@ async def test_wakeup_schema_dedup_preserves_custom_contracts(
         return reason
 
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
+
+    async def schedule(owner: str, seconds: float, reason: str) -> dict[str, str]:
+        raise AssertionError("Schema checks must not schedule work")
+
+    harness.wakeup_handler = schedule
     try:
         registry = harness.agent.tool_registry
         assert "wake_up_in" not in {tool.name for tool in registry.get_all()}
@@ -235,6 +240,11 @@ async def test_wakeup_schema_dedup_keeps_workspace_disable_policy(
         yield TextDoneEvent(text="Unused")
 
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
+
+    async def schedule(owner: str, seconds: float, reason: str) -> dict[str, str]:
+        raise AssertionError("Schema checks must not schedule work")
+
+    harness.wakeup_handler = schedule
     try:
         harness.tool_settings.save({"assistant": {name: False}}, "")
         visible = {tool.name for tool in harness.agent.tool_registry.get_all()}

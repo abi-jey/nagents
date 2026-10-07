@@ -48,6 +48,25 @@ if TYPE_CHECKING:
     from nagents.harness.types import ApprovalRequest
 
 
+def test_cli_design_uses_its_provider_without_global_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from nagents.cli import main
+    from nagents.designer.runtime import DesignProvider
+
+    path = tmp_path / "agent.yaml"
+    path.write_text(STARTER)
+    expected = parse(STARTER)
+
+    async def generate(self: DesignProvider, *args: object, **kwargs: object) -> AsyncIterator[Event]:
+        assert self.definition.model == expected.providers[expected.defaults.provider].model
+        yield TextDoneEvent(text="design-provider-used")
+
+    monkeypatch.setattr(DesignProvider, "generate", generate)
+    assert main(["--workspace", str(tmp_path), "run", "--design", str(path), "--json", "hello"]) == 0
+    assert "design-provider-used" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("suffix", ["\nid: repeated\n", "\nunknown: true\n", "\nlayout: &a {x: *a}\n"])
 def test_definition_rejects_ambiguous_yaml(suffix: str) -> None:
     with pytest.raises(ValueError):
@@ -144,6 +163,15 @@ def test_general_agent_tools_and_delegation_are_explicit(tmp_path: Path) -> None
         try:
             assert root.agent.tool_registry.names() == ["delegate"]
             assert "coding assistant" not in str(root.agent.system_prompt)
+            delegation = root.agent.tool_registry.get("delegate")
+            root.config.max_subagent_depth = 0
+            root.refresh_instructions()
+            assert root.agent.system_prompt == root.definition.instructions.text
+            assert not root.agent.tool_registry.get_all()
+            root.config.max_subagent_depth = 2
+            root.refresh_instructions()
+            assert root.delegation_description() in str(root.agent.system_prompt)
+            assert root.agent.tool_registry.get_all() == [delegation]
             child = root.create_defined_child("researcher")
             try:
                 assert child.agent.system_prompt == "Only research."

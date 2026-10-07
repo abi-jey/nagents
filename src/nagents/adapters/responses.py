@@ -13,6 +13,7 @@ from ..events import ToolCallEvent
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
+from ._tool_progress import ToolCallProgressTracker
 from ._validation import ProtocolError
 from ._validation import json_values_equal
 from ._validation import list_data
@@ -128,7 +129,7 @@ def _index(value: object) -> int:
 class ResponseAccumulator:
     """Validate the entire response before releasing any executable tool calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, streaming: bool = True) -> None:
         self.items: dict[int, dict[str, object]] = {}
         self.finished: set[int] = set()
         self.arguments: dict[int, str] = {}
@@ -136,6 +137,20 @@ class ResponseAccumulator:
         self.texts: dict[tuple[int, int], str] = {}
         self.texts_done: set[tuple[int, int]] = set()
         self.completed = False
+        self.streaming = streaming
+        self.progress = ToolCallProgressTracker()
+
+    def _preview(self, index: int) -> list[Event]:
+        item = self.items[index]
+        arguments = self.arguments.get(index, item.get("arguments", ""))
+        return list(
+            self.progress.preview(
+                index,
+                string_data(item.get("call_id", "")),
+                string_data(item.get("name", "")),
+                arguments if isinstance(arguments, str) else json.dumps(arguments, allow_nan=False),
+            )
+        )
 
     def _merge(self, index: int, item: dict[str, object]) -> None:
         previous = self.items.get(index, {})
@@ -163,6 +178,8 @@ class ResponseAccumulator:
                 if self.items[index].get("type") == "function_call" and "arguments" in item:
                     tool_arguments(item["arguments"])
                 self.finished.add(index)
+            if self.streaming and self.items[index].get("type") == "function_call":
+                return self._preview(index)
         elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
             index = _index(event.get("output_index"))
             self.items.setdefault(index, {})
@@ -180,6 +197,8 @@ class ResponseAccumulator:
                 tool_arguments(arguments)
                 self._merge(index, {"arguments": arguments})
                 self.arguments_done.add(index)
+            if self.streaming:
+                return self._preview(index)
         elif kind in {
             "response.output_text.delta",
             "response.output_text.done",
@@ -232,6 +251,7 @@ class ResponseAccumulator:
         usage = token_usage(result.get("usage"), "responses")
         extra: dict[str, object] = {key: result[key] for key in ("id", "model", "created_at") if key in result}
         calls: list[ToolCallEvent] = []
+        call_indexes: list[int] = []
         call_ids: set[str] = set()
         reasoning: list[dict[str, object]] = []
         texts: dict[tuple[int, int], str] = {}
@@ -259,6 +279,7 @@ class ResponseAccumulator:
                 if index in self.arguments and not json_values_equal(tool_arguments(self.arguments[index]), args):
                     raise ProtocolError("Responses returned inconsistent streamed tool arguments.")
                 calls.append(ToolCallEvent(id=call_id, name=name, arguments=args, usage=usage, extra=extra))
+                call_indexes.append(index)
                 call_ids.add(call_id)
             elif index in self.arguments or index in self.arguments_done:
                 raise ProtocolError("Responses returned arguments without a function call.")
@@ -291,6 +312,11 @@ class ResponseAccumulator:
                 usage=usage,
                 finish_reason=FinishReason.TOOL_CALLS if calls else reason,
                 extra=extra,
+            ),
+            *(
+                self.progress.ready(index, call)
+                for index, call in zip(call_indexes, calls, strict=True)
+                if self.streaming
             ),
             *calls,
         ]

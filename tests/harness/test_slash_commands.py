@@ -296,8 +296,11 @@ def test_live_registry_plugin_source_and_callback(tmp_path: Path) -> None:
             assert not app.query_one(SlashMenu).matches
             with backend.commands.plugin_source("/private/location/reports.py:setup"):
                 backend.commands.register("report", "Build a local report", handler=report)
-            await pilot.pause(0.2)
             menu = app.query_one(SlashMenu)
+            # Registration is immediate; the open menu refreshes on a timer.
+            async with asyncio.timeout(HANG_GUARD):
+                while menu.selected() is None:
+                    await pilot.pause()
             selected = menu.selected()
             assert selected is not None and selected.source == "plugin:reports.py"
             await pilot.press("enter", "enter")
