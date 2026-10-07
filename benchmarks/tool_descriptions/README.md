@@ -9,11 +9,11 @@ Opt-in real-model evaluation of the tool definitions registered by an initialize
 .venv/bin/python -m pytest benchmarks/tool_descriptions/test_run.py
 ```
 
-Use `--suite observed` for the two CRLF edit scenarios with native-shaped prior assistant/tool messages, exact fixture SHA-256 values, and renamed tool references matching each variant. These remain synthetic histories, not executed tool reads.
+Use `--suite observed` for the two CRLF edit scenarios with native-shaped prior assistant/tool messages, exact fixture SHA-256 values, and renamed tool references matching each variant. These remain synthetic histories, not executed tool reads. Tool results use the imported native Agent serializer (legacy `str` when unavailable), so history formatting follows the measured runtime.
 
 Use `--suite challenge` for 11 harder boundary cases (9 automatically graded, 2 manually reviewed), or `--suite all` for both sets. The challenge suite includes original CRLF preservation, unique edits with duplicate text, whole-file replacement, line deletion, large line windows, filename references in contents, millisecond conversion, self-contained delegation, and oversized-file/unsupported-deadline handling. Edit grading applies the proposed literal replacement to a fixed in-memory fixture and checks the complete resulting text; it never writes files. Delegation grading checks only filename/focus/profile coverage, so manually review the prose as well.
 
-Output must be a new directory. Its schema snapshot/hash, prompt-suite and runner-code hashes, variant mappings, per-case raw calls, response text, errors, wall timing, reported token usage, and summary are saved privately (directory 0700, files 0600). Authentication comes from normal local Codex configuration; missing authentication produces failed cases rather than prompting for credentials.
+Output must be a new directory. Its schema snapshot/hash, prompt-suite and runner-code hashes, variant mappings, imported runtime source root/hashes, per-case hashes of the complete model messages, raw calls, response text, errors, wall timing, reported token usage, and summary are saved privately (directory 0700, files 0600). Schema hashes alone do not establish identical observed histories; compare runtime provenance and per-case model-message hashes as well. Authentication comes from normal local Codex configuration; missing authentication produces failed cases rather than prompting for credentials.
 
 Variants are cloned in memory and never modify production schemas:
 

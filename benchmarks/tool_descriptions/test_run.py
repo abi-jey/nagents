@@ -269,11 +269,12 @@ def test_suite_selection_and_manual_denominators() -> None:
 
 @pytest.mark.parametrize("variant", ["current", "clarified", "tool_names", "arg_names", "explicit_names"])
 def test_observed_history_matches_exposed_tool_and_argument_names(variant: str) -> None:
-    import ast
     import hashlib
+    import json
 
     from benchmarks.tool_descriptions.challenges import EDIT_FIXTURES
     from benchmarks.tool_descriptions.run import observed_messages
+    from benchmarks.tool_descriptions.run import serialize_observed_result
     from benchmarks.tool_descriptions.run import suite_cases
 
     for case in suite_cases("observed"):
@@ -283,6 +284,53 @@ def test_observed_history_matches_exposed_tool_and_argument_names(variant: str) 
         assert canonical(call, variant).arguments == {"path": case.expected["path"]}
         assert history[2].name == call.name and history[2].tool_call_id == call.id
         assert isinstance(history[2].content, str)
-        result = ast.literal_eval(history[2].content)
+        result = json.loads(history[2].content)
+        assert history[2].content == serialize_observed_result(result)
         assert result["sha256"] == hashlib.sha256(EDIT_FIXTURES[case.name][0].encode()).hexdigest()
         assert result["newline_style"] == "CRLF"
+
+
+def test_observed_generation_hash_tracks_native_result_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections.abc import AsyncIterator
+
+    import benchmarks.tool_descriptions.run as benchmark
+    import nagents.agent as agent_module
+    from nagents.events import Event
+    from nagents.events import TextDoneEvent
+    from nagents.provider.openai import OpenAIProvider
+    from nagents.types import Message
+
+    captured: list[list[Message]] = []
+
+    async def fake_generate(self: OpenAIProvider, messages: list[Message], **kwargs: object) -> AsyncIterator[Event]:
+        captured.append(messages)
+        yield TextDoneEvent(text="offline")
+
+    def fake_provider(**kwargs: object) -> OpenAIProvider:
+        return OpenAIProvider(api_key="test-key", model="offline")
+
+    monkeypatch.setattr(OpenAIProvider, "generate", fake_generate)
+    monkeypatch.setattr(benchmark, "OpenAIProvider", fake_provider)
+    native = asyncio.run(benchmark.run("offline", 1, tmp_path / "native", 1, "current", "observed"))
+    native_results = native["results"]
+    assert isinstance(native_results, list)
+    native_hashes = [result["model_messages_sha256"] for result in native_results]
+    assert native_hashes == [benchmark.messages_sha256(messages) for messages in captured]
+    assert native["runtime_source_root"] == str(Path(agent_module.__file__).resolve().parent)
+    source_hashes = native["runtime_source_sha256"]
+    assert isinstance(source_hashes, dict)
+    assert "src/nagents/agent.py" in source_hashes
+
+    monkeypatch.setattr(agent_module, "_serialize_tool_result", str)
+    captured.clear()
+    legacy = asyncio.run(benchmark.run("offline", 1, tmp_path / "legacy", 1, "current", "observed"))
+    legacy_results = legacy["results"]
+    assert isinstance(legacy_results, list)
+    legacy_hashes = [result["model_messages_sha256"] for result in legacy_results]
+    assert legacy_hashes == [benchmark.messages_sha256(messages) for messages in captured]
+    assert all(
+        native_hash != legacy_hash for native_hash, legacy_hash in zip(native_hashes, legacy_hashes, strict=True)
+    )
+
+    monkeypatch.delattr(agent_module, "_serialize_tool_result")
+    assert benchmark.serialize_observed_result({"ok": True}) == "{'ok': True}"

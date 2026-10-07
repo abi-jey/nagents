@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import nagents.agent as agent_module
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
 from nagents.events import TextDoneEvent
@@ -292,6 +293,33 @@ def suite_cases(suite: str) -> tuple[Case, ...]:
     return (*CASES, *challenges) if suite == "all" else challenges
 
 
+def serialize_observed_result(result: object) -> str:
+    """Mirror the imported native agent, including baseline checkouts without its helper."""
+    serializer = getattr(agent_module, "_serialize_tool_result", str)
+    encoded: object = serializer(result)
+    if not isinstance(encoded, str):
+        raise TypeError("Native tool result serializer must return text")
+    return encoded
+
+
+def runtime_provenance() -> dict[str, object]:
+    root = Path(agent_module.__file__).resolve().parent
+    return {
+        "runtime_source_root": str(root),
+        "runtime_source_sha256": {
+            f"src/nagents/{path.relative_to(root).as_posix()}": hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob("*.py"))
+        },
+    }
+
+
+def messages_sha256(messages: list[Message]) -> str:
+    payload = json.dumps(
+        [asdict(message) for message in messages], sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def observed_messages(case: Case, variant: str) -> list[Message]:
     from benchmarks.tool_descriptions.challenges import EDIT_FIXTURES
 
@@ -313,7 +341,7 @@ def observed_messages(case: Case, variant: str) -> list[Message]:
     return [
         Message("user", f"Read {path} before I request a change."),
         Message("assistant", tool_calls=[ToolCall("observed-read", name, {path_argument: path})]),
-        Message("tool", str(result), tool_call_id="observed-read", name=name),
+        Message("tool", serialize_observed_result(result), tool_call_id="observed-read", name=name),
     ]
 
 
@@ -362,6 +390,7 @@ def private_json(path: Path, value: object) -> None:
 async def run(
     model: str, concurrency: int, output: Path, repeats: int, variant: str, suite: str = "basic"
 ) -> dict[str, object]:
+    provenance = runtime_provenance()
     cases = suite_cases(suite)
     suite_sha256 = hashlib.sha256(json.dumps([asdict(case) for case in cases], sort_keys=True).encode()).hexdigest()
     source = Path(__file__).read_bytes() + Path(__file__).with_name("challenges.py").read_bytes()
@@ -404,19 +433,20 @@ async def run(
                 )
             }
             usage_reported = False
+            messages = [
+                Message(
+                    "system",
+                    "Choose the next appropriate action using the available tools. All paths refer to a fictional workspace. Only the assistant agent profile exists. The configured shell timeout is 60 seconds. Do not invent tools or arguments. Return at most one tool call, or explain if no appropriate tool exists.",
+                ),
+                *(observed_messages(case, variant) if suite == "observed" else []),
+                Message("user", case.prompt),
+            ]
+            model_messages_sha256 = messages_sha256(messages)
             try:
                 async with (
                     asyncio.timeout(150),
                     OpenAIProvider(model=model, timeout=120, retry_config=RetryConfig(max_retries=0)) as provider,
                 ):
-                    messages = [
-                        Message(
-                            "system",
-                            "Choose the next appropriate action using the available tools. All paths refer to a fictional workspace. Only the assistant agent profile exists. The configured shell timeout is 60 seconds. Do not invent tools or arguments. Return at most one tool call, or explain if no appropriate tool exists.",
-                        ),
-                        *(observed_messages(case, variant) if suite == "observed" else []),
-                        Message("user", case.prompt),
-                    ]
                     async for event in provider.generate(messages, tools=tools):
                         if event.usage.has_usage():
                             usage_reported = True
@@ -443,6 +473,7 @@ async def run(
                 "case": case.name,
                 "repeat": repeat,
                 "prompt": case.prompt,
+                "model_messages_sha256": model_messages_sha256,
                 "seconds": round(time.monotonic() - started, 3),
                 "passed": (not failures and not errors) if not manual_case(case) else None,
                 "structural_pass": not failures and not errors,
@@ -465,6 +496,7 @@ async def run(
         "suite": suite,
         "suite_sha256": suite_sha256,
         "runner_sha256": runner_sha256,
+        **provenance,
         "schema_sha256": digest,
         "schema_chars": schema_chars,
         "schema_source": "initialized non-demo Harness; isolated stores; deferred api-key provider with no generation",
