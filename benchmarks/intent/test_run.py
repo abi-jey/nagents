@@ -73,3 +73,23 @@ def test_source_protection_covers_native_harness_and_benchmark() -> None:
     assert "src/nagents/harness/runtime.py" in hashes
     assert "benchmarks/intent/cases.py" in hashes
     assert "benchmarks/orchestration/telemetry.py" in hashes
+
+
+def test_denied_edit_attempt_is_intent_failure_despite_correct_answer() -> None:
+    case = next(case for case in cases() if case.scenario.name == "development_review_question")
+    result: dict[str, object] = {
+        "task_correct": True,
+        "failures": [],
+        "tool_events": [{"tool": "edit", "error": "approval_denied"}],
+        "usage": {"usage_complete": True},
+        "run_complete": True,
+        "source_changed": False,
+        "provider_errors": [],
+        "child_failures": 0,
+    }
+    assessed = assess(case, result)
+    assert assessed["task_correct"] is True
+    assert assessed["intent_compliant"] is False
+    assert assessed["correct"] is False
+    assert assessed["intent_failures"] == ["unrequested_mutation_attempt"]
+    assert assessed["efficiency_eligible"] is False
