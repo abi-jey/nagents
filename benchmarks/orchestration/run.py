@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+from nagents.events import CompactionDoneEvent
+from nagents.events import CompactionStartedEvent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
@@ -70,6 +72,10 @@ def source_hashes() -> dict[str, str]:
     }
 
 
+def root_completion(event: object, session_id: str, compacting: bool) -> bool:
+    return isinstance(event, DoneEvent) and not compacting and event.session_id == session_id
+
+
 async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -> dict[str, object]:
     source_at_start = source_hashes()
     meter = Meter()
@@ -83,6 +89,7 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
     errors: list[str] = []
     final_text = ""
     root_done = False
+    compacting = False
     root_finish_reason = "missing"
     initialization_seconds = 0.0
     run_seconds = 0.0
@@ -118,9 +125,18 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
 
     async def approve(request: ApprovalRequest) -> bool:
         # Only the fixture's allowed correction is approved, and only at root.
-        return (
-            not request.task_id and request.tool == "edit" and request.arguments.get("path") in scenario.corrected_files
-        )
+        path = request.arguments.get("path")
+        if request.task_id or request.tool != "edit" or not isinstance(path, str):
+            return False
+        target = Path(path)
+        absolute = target if target.is_absolute() else workspace / target
+        if absolute.is_symlink():
+            return False
+        try:
+            relative = absolute.resolve().relative_to(workspace.resolve()).as_posix()
+        except ValueError:
+            return False
+        return relative in scenario.corrected_files
 
     with tempfile.TemporaryDirectory(prefix="ngn-orchestration-") as temporary:
         private = Path(temporary)
@@ -169,7 +185,12 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
                             child_outcomes.append(
                                 {"status": event.status, "error": event.error, "result": event.result}
                             )
-                        elif isinstance(event, DoneEvent) and event.session_id == harness.session_id:
+                        elif isinstance(event, CompactionStartedEvent):
+                            compacting = True
+                        elif isinstance(event, CompactionDoneEvent):
+                            compacting = False
+                        elif root_completion(event, harness.session_id, compacting):
+                            assert isinstance(event, DoneEvent)
                             final_text = event.final_text
                             root_done = True
                             root_finish_reason = event.finish_reason.value

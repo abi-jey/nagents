@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from nagents.events import DoneEvent
 from nagents.events import FinishReason
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
@@ -16,6 +17,7 @@ from . import telemetry
 from .fixtures import grade
 from .fixtures import scenarios
 from .run import maximum_overlap
+from .run import root_completion
 from .run import trial
 from .telemetry import Meter
 from .telemetry import example_usage
@@ -154,3 +156,10 @@ def test_native_harness_instrumentation_includes_child_generations(
     assert usage["total_tokens"] == 110 * sum(provider.requests for provider in created)
     assert usage["usage_complete"] is True
     assert usage["child_generations"] == (4 if strategy == "delegated" else 0)
+
+
+def test_only_noncompaction_root_done_qualifies() -> None:
+    assert root_completion(DoneEvent(session_id="root"), "root", False)
+    assert not root_completion(DoneEvent(session_id="child"), "root", False)
+    assert not root_completion(DoneEvent(session_id="root"), "root", True)
+    assert not root_completion(DoneEvent(session_id=None), "root", False)
