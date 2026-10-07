@@ -10,6 +10,7 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -88,7 +89,7 @@ def setup_harness(
     config = HarnessConfig(
         workspace=tmp_path,
         data_dir=tmp_path / "state",
-        auth="api-key",
+        providers=connection(auth="api-key"),
         model="fake-model",
         agent=agent,
         profiles=profiles,

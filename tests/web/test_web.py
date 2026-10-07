@@ -26,6 +26,7 @@ from nagents.web import local_authority
 from nagents.web import serve
 from nagents.web.app import create_app
 from tests.providers.test_openai_provider import endpoint as openai_endpoint
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
 from tests.support.web import ControlledHarness
@@ -155,7 +156,9 @@ def test_models_uses_active_provider_read_only(tmp_path: Path, monkeypatch: pyte
 
     async def check() -> None:
         config = HarnessConfig(
-            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         with patch.object(
             HarnessProvider, "get_model_list", AsyncMock(side_effect=AssertionError("No startup discovery"))
@@ -186,7 +189,7 @@ def test_models_uses_active_provider_read_only(tmp_path: Path, monkeypatch: pyte
                         assert response.headers["cache-control"] == "no-store"
                         get.assert_awaited_once_with()
                         assert (await client.get("/api/settings", headers=headers)).json() == before
-                        assert provider.model == original.model and harness.config.provider == "openai"
+                        assert provider.model == original.model and harness.config.provider_profile().kind == "openai"
                         assert harness.agent.provider is provider
                         callback.assert_not_called()
                 finally:
@@ -250,7 +253,9 @@ def test_models_real_codex_catalog_with_configured_openai(
             )
 
         config = HarnessConfig(
-            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         async with (
             openai_endpoint(monkeypatch, handle),
@@ -275,7 +280,7 @@ def test_models_real_codex_catalog_with_configured_openai(
                         assert isinstance(response.json()["detail"], str)
                     assert "SECRET" not in response.text
                     assert (await client.get("/api/settings", headers=headers)).json() == before
-                    assert provider.model == original.model and harness.config.provider == "openai"
+                    assert provider.model == original.model and harness.config.provider_profile().kind == "openai"
                     assert paths == ([] if outcome == "missing-credentials" else ["/backend-api/codex/models"])
                     callback.assert_awaited_once_with()
                     saved = await client.post(
@@ -300,7 +305,9 @@ def test_models_captures_provider_during_inflight_read(tmp_path: Path, monkeypat
 
     async def check() -> None:
         config = HarnessConfig(
-            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             harness = harnesses[0]
@@ -351,7 +358,9 @@ def test_model_failure_safe_and_manual_settings_still_work(
 
     async def check() -> None:
         config = HarnessConfig(
-            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
@@ -379,7 +388,9 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
 
     async def check() -> None:
         config = HarnessConfig(
-            workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key", api_key_env="TEST_CATALOG_KEY"
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         async with client_app(tmp_path, config=config) as (app, client, headers, harnesses):
             harness = harnesses[0]

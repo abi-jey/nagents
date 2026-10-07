@@ -38,6 +38,7 @@ from nagents.web.live_inspection import seed_details
 from nagents.web.live_runtime import LiveService
 from nagents.web.live_runtime import _Call
 from nagents.web.live_runtime import _Record
+from tests.support.config import connection
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
 from tests.test_web_live_delegations import update
@@ -76,11 +77,13 @@ def test_real_harness_captures_post_plugin_context_and_actual_provider_body(
         config = HarnessConfig(
             workspace=tmp_path,
             data_dir=tmp_path / "data",
-            provider="openai_compatible",
-            auth="api-key",
+            providers=connection(
+                "openai_compatible",
+                auth="api-key",
+                base_url=f"http://127.0.0.1:{runner.addresses[0][1]}/v1",
+                api_key_env="INSPECTION_TEST_KEY",
+            ),
             model="fixture",
-            base_url=f"http://127.0.0.1:{runner.addresses[0][1]}/v1",
-            api_key_env="INSPECTION_TEST_KEY",
         )
         try:
             with (

@@ -129,13 +129,18 @@ async def test_root_and_native_child_only_change_http_deadline(tmp_path: Path, m
 
 
 @pytest.mark.parametrize("value", [False, True, 0, -1, "300", float("nan"), float("inf"), 10**400])
-def test_job_and_agent_refuse_invalid_deadlines(tmp_path: Path, value: object) -> None:
-    from benchmarks.terminal_bench.agent import NgnOptions
-
+def test_job_refuses_invalid_deadlines(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError):
         job_config(
             tmp_path, tmp_path / "creds", tmp_path / "jobs", 900, "gpt-6-astra", request_timeout=cast("float", value)
         )
+
+
+@pytest.mark.parametrize("value", [False, True, 0, -1, "300", float("nan"), float("inf"), 10**400])
+def test_agent_refuses_invalid_deadlines(tmp_path: Path, value: object) -> None:
+    pytest.importorskip("harbor", reason="Harbor belongs only in the optional benchmark environment")
+    from benchmarks.terminal_bench.agent import NgnOptions
+
     with pytest.raises(ValueError):
         NgnOptions(bundle=str(tmp_path), credentials_path=str(tmp_path / "creds"), request_timeout=value)
 
@@ -144,7 +149,12 @@ def test_older_runtime_keeps_callback_fixture_and_rejects_named_option_clearly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delattr(providers, "validate_request_timeout")
-    assert runner.configuration(tmp_path, "gpt-6-astra", tmp_path / "private").auth == "chatgpt"
+    config = runner.configuration(tmp_path, "gpt-6-astra", tmp_path / "private")
+    if hasattr(config, "providers"):
+        assert config.provider_profile().auth == "chatgpt"
+    else:
+        assert hasattr(config, "auth")
+        assert config.auth == "chatgpt"
     with pytest.raises(ValueError, match=r"0\.18-compatible runtime"):
         runner.request_deadline(300)
     assert not runner.PRIVATE_CODEX_HOME.exists()

@@ -17,6 +17,7 @@ from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskDeliveryWarning
 from nagents.harness.types import TaskNotification
 from tests.support.child_failures import ChildFailureScenario
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect
 
@@ -30,7 +31,9 @@ async def test_child_budget_failure_cancels_descendant_without_poisoning_recover
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wrong_parent: bool
 ) -> None:
     scenario = ChildFailureScenario(monkeypatch, wrong_parent=wrong_parent)
-    harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "state", auth="api-key", max_tool_rounds=6))
+    harness = Harness(
+        HarnessConfig(tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"), max_tool_rounds=6)
+    )
     try:
         async with asyncio.timeout(HANG_GUARD):
             events = await collect(harness)
@@ -75,7 +78,9 @@ async def test_root_cancellation_still_cancels_and_joins_the_whole_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     scenario = ChildFailureScenario(monkeypatch, hold_child=True)
-    harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "state", auth="api-key", max_tool_rounds=6))
+    harness = Harness(
+        HarnessConfig(tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"), max_tool_rounds=6)
+    )
     task = asyncio.create_task(collect(harness))
     try:
         async with asyncio.timeout(HANG_GUARD):

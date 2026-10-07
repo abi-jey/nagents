@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import math
 import os
 import re
@@ -22,20 +23,30 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Protocol
 from typing import cast
+from urllib.parse import urlsplit
 
-import yaml
-
+from nagents.provider import ProviderType
 from nagents.provider.auth import validate_prefix
 from nagents.provider.openai import CODEX_ENDPOINT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from collections.abc import Mapping
     from typing import BinaryIO
 
 NAME = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 ENV = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 REVISION = re.compile(r"[0-9a-f]{64}\Z")
 MAX_BYTES = 64 * 1024
+PROVIDERS = {provider.value: provider for provider in ProviderType}
+PROVIDERS.update(
+    openai=ProviderType.OPENAI_COMPATIBLE,
+    gemini=ProviderType.GEMINI_NATIVE,
+    google=ProviderType.GEMINI_NATIVE,
+    azure=ProviderType.AZURE_OPENAI_COMPATIBLE,
+    foundry=ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
+)
+API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
 
 
 class _WindowsLock(Protocol):
@@ -242,6 +253,40 @@ class ProviderProfile:
         return f"API key ${self.key_env}"
 
 
+def validate_provider(profile: ProviderProfile) -> None:
+    """Validate a runtime provider profile, including programmatic harness routes."""
+    if profile.kind not in PROVIDERS:
+        raise ValueError(f"Unknown provider {profile.kind!r}; choose from {', '.join(sorted(PROVIDERS))}")
+    if profile.api not in API_NAMES:
+        raise ValueError(f"api must be one of: {', '.join(API_NAMES)}")
+    if profile.kind == "litellm" and not profile.base_url:
+        raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
+    if profile.auth not in {"auto", "api-key", "chatgpt", "codex", "entra"}:
+        raise ValueError("auth must be auto, api-key, chatgpt, codex, or entra")
+    if profile.auth == "entra" and profile.kind not in {"foundry", "azure_openai_compatible_v1"}:
+        raise ValueError("Entra authentication requires Foundry or Azure v1")
+    if profile.auth == "chatgpt" and (
+        profile.kind not in {"openai", "openai_compatible"} or profile.base_url or profile.api != "auto"
+    ):
+        raise ValueError(
+            "ChatGPT login requires the default OpenAI provider endpoint, without base_url or api overrides"
+        )
+    if profile.auth == "codex" and (profile.kind != "openai" or profile.base_url or profile.api != "auto"):
+        raise ValueError("Local Codex discovery requires the default OpenAI endpoint and API")
+    if not ENV.fullmatch(profile.key_env):
+        raise ValueError("api_key_env must be an environment variable name, not a literal secret")
+    if profile.base_url:
+        url = urlsplit(profile.base_url)
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.hostname
+            or any(char.isspace() or ord(char) < 32 for char in profile.base_url)
+        ):
+            raise ValueError("base_url must be an HTTP(S) URL")
+        if url.username or url.password or url.query or url.fragment:
+            raise ValueError("base_url must not contain credentials, query parameters, or fragments")
+
+
 @dataclass(frozen=True)
 class ProviderRegistry:
     revision: str = "0" * 64
@@ -286,37 +331,37 @@ class ProviderRegistry:
 
 
 class ModelPreferenceStore:
-    """Scoped chat-model choice, separate from connection identity and Live."""
+    """Scoped chat-model choice inside config.json, separate from connections."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def load(self) -> str:
+    def _document(self) -> dict[str, object]:
         try:
             info = self.path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
-                raise ValueError("Model preference must be a regular, bounded file")
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+                raise ValueError("Configuration must be a regular, bounded file")
             raw = self.path.read_bytes()
-            if len(raw) > 4096:
-                raise ValueError("Model preference is too large")
-            data = yaml.safe_load(raw)
-            if (
-                not isinstance(data, dict)
-                or set(data) != {"version", "model"}
-                or type(data["version"]) is not int
-                or data["version"] != 1
-            ):
-                raise ValueError("Invalid model preference format")
-            model = data["model"]
-            if not isinstance(model, str) or (
-                model and (not model.strip() or len(model) > 200 or not model.isprintable())
-            ):
-                raise ValueError("Invalid model preference")
-            return model
+            if len(raw) > MAX_BYTES:
+                raise ValueError("Configuration is too large")
+            data: object = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("Invalid configuration format")
+            return data
         except FileNotFoundError:
-            return ""
-        except (yaml.YAMLError, UnicodeError, OSError):
-            raise ValueError("Model preference is unreadable or invalid") from None
+            return {}
+        except (json.JSONDecodeError, UnicodeError, OSError):
+            raise ValueError("Configuration is unreadable or invalid") from None
+
+    def load(self) -> str:
+        return self._model(self._document())
+
+    @staticmethod
+    def _model(document: dict[str, object]) -> str:
+        model = document.get("model", "")
+        if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
+            raise ValueError("Invalid model preference")
+        return model
 
     def save(self, model: str, *, only_if_missing: bool = False) -> str:
         if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
@@ -327,17 +372,17 @@ class ModelPreferenceStore:
         if lock.is_symlink():
             raise ValueError("Model preference lock must not be a symlink")
         with lock.open("a+b") as stream, _exclusive_lock(stream):
-            try:
-                self.path.lstat()
-            except FileNotFoundError:
-                pass
+            document = self._document()
+            current = self._model(document)
+            if (only_if_missing and "model" in document) or ("model" in document and current == model):
+                return current
+            if model:
+                document["model"] = model
             else:
-                current = self.load()
-                if only_if_missing:
-                    return current
-                if current == model:
-                    return current
-            payload = yaml.safe_dump({"version": 1, "model": model}, sort_keys=True).encode("utf-8")
+                document.pop("model", None)
+            payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            if len(payload) > MAX_BYTES:
+                raise ValueError("Configuration is too large")
             descriptor, temporary = tempfile.mkstemp(prefix=".models-", dir=directory)
             try:
                 with os.fdopen(descriptor, "wb") as output:
@@ -359,18 +404,20 @@ class ModelPreferenceStore:
 
 
 class ProviderRegistryStore:
-    """Revisioned, atomic YAML file shared by ngn serve, ngn, and ngn run."""
+    """Revisioned, atomic JSON registry shared by ngn serve, ngn, and ngn run."""
 
     def __init__(self, path: Path | None = None, *, allow_external_active: bool = False) -> None:
         home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
         if not home.is_absolute():
             raise ValueError("XDG_CONFIG_HOME must be an absolute path")
-        self.path = path or home / "ngn" / "providers.yaml"
+        self.path = path or home / "ngn" / "providers.json"
+        if self.path.suffix != ".json":
+            raise ValueError("Provider registry path must end in .json")
         self.allow_external_active = allow_external_active
 
     @property
     def model_store(self) -> ModelPreferenceStore:
-        return ModelPreferenceStore(self.path.with_name("models.yaml"))
+        return ModelPreferenceStore(self.path.with_name("config.json"))
 
     def load(self) -> ProviderRegistry:
         try:
@@ -380,7 +427,7 @@ class ProviderRegistryStore:
             raw = self.path.read_bytes()
             if len(raw) > MAX_BYTES:
                 raise ValueError("Provider configuration is too large")
-            document: object = yaml.safe_load(raw)
+            document: object = json.loads(raw)
             if (
                 not isinstance(document, dict)
                 or set(document) != {"version", "revision", "active", "providers"}
@@ -405,7 +452,7 @@ class ProviderRegistryStore:
             return registry
         except FileNotFoundError:
             return ProviderRegistry()
-        except (yaml.YAMLError, TypeError, UnicodeError, OSError):
+        except (json.JSONDecodeError, TypeError, UnicodeError, OSError):
             raise ValueError("Provider configuration is unreadable or invalid") from None
 
     def save(self, registry: ProviderRegistry, *, expected: str) -> ProviderRegistry:
@@ -422,15 +469,13 @@ class ProviderRegistryStore:
             if self.load().revision != expected:
                 raise ValueError("Provider configuration changed; reload before saving")
             next_registry = ProviderRegistry(secrets.token_hex(32), registry.active, registry.providers)
-            payload = yaml.safe_dump(
-                {
-                    "version": 2,
-                    "revision": next_registry.revision,
-                    "active": next_registry.active,
-                    "providers": {name: asdict(profile) for name, profile in next_registry.providers.items()},
-                },
-                sort_keys=True,
-            ).encode("utf-8")
+            document = {
+                "version": 2,
+                "revision": next_registry.revision,
+                "active": next_registry.active,
+                "providers": {name: asdict(profile) for name, profile in next_registry.providers.items()},
+            }
+            payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
             if len(payload) > MAX_BYTES:
                 raise ValueError("Provider configuration is too large")
             descriptor, temporary = tempfile.mkstemp(prefix=".providers-", dir=directory)
@@ -456,20 +501,29 @@ class ProviderRegistryStore:
 
 
 class ScopedProviderRegistryStore:
-    """Global connections plus a workspace-local YAML overlay and selection.
+    """Global connections plus a workspace-local JSON overlay and selection.
 
     Workspace files live under the user's configuration directory rather than
     inside an untrusted project. Both UIs and the terminal resolve the same two
     files for a workspace. Local names cannot shadow global names through the UI.
     """
 
-    def __init__(self, workspace: Path) -> None:
-        self.global_store = ProviderRegistryStore()
+    def __init__(self, workspace: Path, *, paths: Mapping[str, Path] | None = None) -> None:
+        paths = paths or {}
+        default_global = ProviderRegistryStore().path
         identifier = hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest()[:32]
+        default_workspace = default_global.parent / "workspaces" / identifier / "providers.json"
+        self._models = {
+            "global": ModelPreferenceStore(default_global.with_name("config.json")),
+            "workspace": ModelPreferenceStore(default_workspace.with_name("config.json")),
+        }
+        self.global_store = ProviderRegistryStore(paths.get("global", default_global))
         self.workspace_store = ProviderRegistryStore(
-            self.global_store.path.parent / "workspaces" / identifier / "providers.yaml",
+            paths.get("workspace", default_workspace),
             allow_external_active=True,
         )
+        if self.global_store.path.resolve() == self.workspace_store.path.resolve():
+            raise ValueError("Global and workspace providers must use different files")
 
     @property
     def path(self) -> Path:
@@ -486,7 +540,8 @@ class ScopedProviderRegistryStore:
         return self.store(scope).load()
 
     def model_store(self, scope: str) -> ModelPreferenceStore:
-        return self.store(scope).model_store
+        self.store(scope)
+        return self._models[scope]
 
     def model(self) -> str:
         return self.model_store("workspace").load() or self.model_store("global").load()

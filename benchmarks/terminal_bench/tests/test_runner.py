@@ -19,6 +19,7 @@ from nagents.cli import _event_record
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness import Harness
+from nagents.harness.providers import ProviderRegistryStore
 from nagents.provider import OpenAIProvider
 from nagents.provider.openai import CodexCredentials
 
@@ -131,16 +132,21 @@ def test_event_redaction_and_interrupted_trial_are_not_success(tmp_path: Path) -
 
 
 def test_fresh_trial_configuration_excludes_ambient_provider_registries(tmp_path: Path) -> None:
-    ambient = Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/providers.yaml"
+    ambient = ProviderRegistryStore().path
     ambient.parent.mkdir(parents=True)
     ambient.write_text("not valid provider configuration")
     first = configuration(tmp_path, "gpt-6-astra", tmp_path / "private")
     first_config = Path(os.environ["XDG_CONFIG_HOME"])
     (first_config / "ngn").mkdir()
-    (first_config / "ngn/providers.yaml").write_text("a previous trial must not supply providers")
+    (first_config / "ngn" / ambient.name).write_text("a previous trial must not supply providers")
     second = configuration(tmp_path, "gpt-6-luna", tmp_path / "private")
     second_config = Path(os.environ["XDG_CONFIG_HOME"])
-    assert second_config != first_config and not (second_config / "ngn/providers.yaml").exists()
+    assert second_config != first_config and not (second_config / "ngn" / ambient.name).exists()
     assert first.data_dir != second.data_dir
-    assert (second.provider, second.provider_id, second.auth, second.model) == ("openai", "", "chatgpt", "gpt-6-luna")
+    if hasattr(second, "providers"):
+        assert second.provider == "" and second.provider_profile().auth == "chatgpt"
+    else:
+        assert hasattr(second, "provider_id") and hasattr(second, "auth")
+        assert (second.provider, second.provider_id, second.auth) == ("openai", "", "chatgpt")
+    assert second.model == "gpt-6-luna"
     assert ambient.read_text() == "not valid provider configuration"

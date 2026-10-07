@@ -10,6 +10,7 @@ import pytest
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
 from nagents.types import ToolCall
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -22,7 +23,9 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize("mutation", ["register", "function", "schema", "remove"])
 def test_custom_tool_changed_during_approval_fails_closed(tmp_path: Path, name: str, mutation: str) -> None:
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", auth="api-key"))
+        harness = Harness(
+            HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"))
+        )
         approving, release = asyncio.Event(), asyncio.Event()
         calls: list[str] = []
 
@@ -70,7 +73,9 @@ def test_custom_tool_changed_during_approval_fails_closed(tmp_path: Path, name: 
 @pytest.mark.parametrize("allowed", [False, True])
 def test_stable_builtin_replacement_requires_its_own_approval(tmp_path: Path, allowed: bool) -> None:
     async def scenario() -> None:
-        harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", auth="api-key"))
+        harness = Harness(
+            HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"))
+        )
         calls: list[str] = []
         approvals: list[ApprovalRequest] = []
 

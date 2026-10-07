@@ -314,7 +314,7 @@ def create_app(
             logger.info(
                 "ngn serve ready: session=%s provider=%s model=%s",
                 harness.session_id,
-                harness.config.provider_id or harness.config.provider,
+                harness.config.provider or harness.config.provider_profile().kind,
                 harness.agent.provider.model,
             )
             yield
@@ -390,7 +390,7 @@ def create_app(
             "schema_version": 1,
             "token": token,
             "workspace": str(state.harness.workspace),
-            "provider": state.harness.config.provider,
+            "provider": state.harness.config.provider_profile().kind,
             "model": state.harness.config.profile(state.settings.values.agent).model or state.settings.values.model,
             "agent": state.settings.values.agent,
             "demo": state.harness.config.demo,
@@ -406,6 +406,8 @@ def create_app(
 
     @app.post("/api/messages")
     async def message(body: MessageInput) -> dict[str, str]:
+        if not config.demo and not state.harness.config.provider:
+            raise HTTPException(409, "Select a named provider connection before sending a message.")
         if not body.prompt.strip() and not body.attachments:
             raise HTTPException(422, "Prompt must not be blank.")
 
@@ -492,8 +494,8 @@ def create_app(
         provider = state.harness.agent.provider
         logger.info(
             "Model catalog requested: active=%s provider=%s",
-            state.harness.config.provider_id or "(legacy)",
-            state.harness.config.provider,
+            state.harness.config.provider or "(unconfigured)",
+            state.harness.config.provider_profile().kind,
         )
         if state.harness.config.demo:
             raise HTTPException(501, "Model discovery is unavailable in offline demo mode. Enter a model ID manually.")
@@ -507,14 +509,15 @@ def create_app(
         except NotImplementedError:
             logger.info(
                 "Model catalog unsupported: provider=%s",
-                state.harness.config.provider_id or state.harness.config.provider,
+                state.harness.config.provider or state.harness.config.provider_profile().kind,
             )
             raise HTTPException(
                 501, "Model discovery is not supported by this connection. Enter a model ID manually."
             ) from None
         except Exception:
             logger.warning(
-                "Model catalog failed: provider=%s", state.harness.config.provider_id or state.harness.config.provider
+                "Model catalog failed: provider=%s",
+                state.harness.config.provider or state.harness.config.provider_profile().kind,
             )
             raise HTTPException(
                 502,
@@ -635,7 +638,7 @@ def create_app(
             )
             logger.info(
                 "Workspace settings saved: provider=%s agent=%s model=%s",
-                state.harness.config.provider_id or state.harness.config.provider,
+                state.harness.config.provider or state.harness.config.provider_profile().kind,
                 state.harness.config.agent,
                 state.harness.config.model,
             )
@@ -740,6 +743,8 @@ def create_app(
 
     @app.post("/api/run")
     async def run(body: PromptInput) -> StreamingResponse:
+        if not config.demo and not state.harness.config.provider:
+            raise HTTPException(409, "Select a named provider connection before starting a run.")
         with state.idle():
             await state.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
             if body.session_id != state.selected_session_id:

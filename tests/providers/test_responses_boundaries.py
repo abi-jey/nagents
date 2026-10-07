@@ -23,6 +23,7 @@ from tests.providers.test_openai_provider import credentials
 from tests.providers.test_openai_provider import endpoint as codex_endpoint
 from tests.providers.test_openai_provider import text_item
 from tests.providers.test_tool_stream_boundaries import generate
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -531,11 +532,7 @@ async def test_real_harness_releases_only_validated_calls_even_when_tool_approva
                 workspace=tmp_path,
                 data_dir=tmp_path / "state",
                 model="fixture",
-                provider="openai",
-                auth="api-key",
-                base_url=url,
-                api="responses",
-                api_key_env="NGN_BOUNDARY_TEST_KEY",
+                providers=connection(base_url=url, api="responses", api_key_env="NGN_BOUNDARY_TEST_KEY"),
             )
         )
         harness.agent.compactor = None

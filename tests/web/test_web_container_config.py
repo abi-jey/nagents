@@ -17,7 +17,6 @@ from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.auth import OpenAIAuthError
-from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
@@ -43,27 +42,18 @@ def test_container_serve_starts_from_defaults_or_env_without_a_file(
     with patch("nagents.web.serve") as serve:
         assert main(["serve", "--workspace", str(tmp_path)]) == 0
         config = serve.call_args.args[0]
-        assert config.config_paths == () and config.auth == "auto" and not config.demo
+        assert config.config_paths == () and config.provider == "" and not config.demo
         assert config.model == "gpt-6-astra"
         assert serve.call_args.kwargs["host"] == "127.0.0.1"  # The image opts into 0.0.0.0 explicitly.
 
         assert main(["serve", "--workspace", str(tmp_path), "--model", "gpt-6-luna"]) == 0
-        assert serve.call_args.args[0].model == "gpt-6-luna"
         assert serve.call_args.args[0].model_explicit
         assert serve.call_args.args[0].model_config_explicit
 
-        monkeypatch.setenv("NGN_PROVIDER", "anthropic")
         monkeypatch.setenv("NGN_MODEL", "claude-example")
-        monkeypatch.setenv("NGN_AUTH", "api-key")
-        monkeypatch.setenv("NGN_API_KEY_ENV", "TEST_CONTAINER_KEY")
         assert main(["serve", "--workspace", str(tmp_path)]) == 0
         configured = serve.call_args.args[0]
-        assert (configured.provider, configured.model, configured.auth, configured.api_key_env) == (
-            "anthropic",
-            "claude-example",
-            "api-key",
-            "TEST_CONTAINER_KEY",
-        )
+        assert configured.provider == "" and configured.model == "claude-example"
         assert configured.config_paths == ()
 
 
@@ -74,15 +64,16 @@ def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, mo
     example = Path(__file__).resolve().parents[2] / "examples/k8s/ngn-container-config.yaml"
     documents = list(yaml.safe_load_all(example.read_text()))
     assert [document["kind"] for document in documents] == ["ConfigMap", "Deployment", "Service"]
-    content = documents[0]["data"]["config.yaml"]
+    content = documents[0]["data"]["config.json"]
     projection = tmp_path / "..2026_09_27_18_46_12"
     projection.mkdir()
-    projected_file = projection / "config.yaml"
+    projected_file = projection / "config.json"
     projected_file.write_text(content)
+    (projection / "providers.json").write_text(documents[0]["data"]["providers.json"])
     data_link = tmp_path / "..data"
     data_link.symlink_to(projection.name)
-    config_file = tmp_path / "config.yaml"
-    config_file.symlink_to("..data/config.yaml")
+    config_file = tmp_path / "config.json"
+    config_file.symlink_to("..data/config.json")
     assert data_link.is_symlink() and data_link.samefile(projection)
     assert config_file.is_symlink() and config_file.samefile(projected_file)
     assert config_file.read_text() == content
@@ -90,11 +81,16 @@ def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, mo
     config = load_config(tmp_path, config_file)
     assert len(config.config_paths) == 1
     assert config.config_paths[0].samefile(projected_file)
-    assert len(config.diagnostics) == 1
+    assert config.diagnostics[0] == "Applied provider connection: openai"
     prefix = "Loaded trusted configuration: "
-    assert config.diagnostics[0].startswith(prefix)
-    assert Path(config.diagnostics[0][len(prefix) :]).samefile(projected_file)
-    assert (config.provider, config.model, config.auth, config.api_key_env) == (
+    assert config.diagnostics[1].startswith(prefix)
+    assert Path(config.diagnostics[1][len(prefix) :]).samefile(projected_file)
+    assert (
+        config.provider_profile().kind,
+        config.model,
+        config.provider_profile().auth,
+        config.provider_profile().key_env,
+    ) == (
         "openai",
         "gpt-6-luna",
         "api-key",
@@ -105,7 +101,7 @@ def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, mo
         served = serve.call_args.args[0]
         assert len(served.config_paths) == 1
         assert served.config_paths[0].samefile(projected_file)
-        assert (served.model, served.auth) == (config.model, config.auth)
+        assert (served.model, served.provider_profile().auth) == (config.model, config.provider_profile().auth)
 
 
 @pytest.mark.requires_posix
@@ -116,13 +112,15 @@ def test_web_starts_without_key_and_explains_failed_run(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.delenv(key_name, raising=False)
+    ScopedProviderRegistryStore(tmp_path).global_store.save(
+        ProviderRegistry(
+            active="test", providers={"test": ProviderProfile(kind="openai", auth="api-key", api_key_env=key_name)}
+        ),
+        expected="0" * 64,
+    )
 
     async def check() -> None:
-        config = (
-            load_config(tmp_path)
-            if key_name == "OPENAI_API_KEY"
-            else HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "sessions", auth="api-key", api_key_env=key_name)
-        )
+        config = load_config(tmp_path)
         async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, _):
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["provider_setup"]["configured"] is False
@@ -141,11 +139,15 @@ def test_web_starts_without_key_and_explains_failed_run(
 def test_env_key_marks_setup_configured_without_exposing_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setenv("NGN_PROVIDER", "openai")
     monkeypatch.setenv("NGN_MODEL", "gpt-6-luna")
-    monkeypatch.setenv("NGN_AUTH", "api-key")
-    monkeypatch.setenv("NGN_API_KEY_ENV", "TEST_CONTAINER_KEY")
     monkeypatch.setenv("TEST_CONTAINER_KEY", "PRIVATE-CONTAINER-KEY")
+    ScopedProviderRegistryStore(tmp_path).global_store.save(
+        ProviderRegistry(
+            active="test",
+            providers={"test": ProviderProfile(kind="openai", auth="api-key", api_key_env="TEST_CONTAINER_KEY")},
+        ),
+        expected="0" * 64,
+    )
 
     async def check() -> None:
         config = load_config(tmp_path)
@@ -229,7 +231,7 @@ def test_missing_selected_key_does_not_block_scripted_provider(tmp_path: Path, m
         stream: bool = True,
         verify_model: bool = False,
     ) -> AsyncIterator[Event]:
-        assert provider.harness_config.provider_id == "team" and provider.model == "team-chat"
+        assert provider.harness_config.provider == "team" and provider.model == "team-chat"
         yield TextDoneEvent(text="Scripted reply")
 
     async def check() -> None:
@@ -257,9 +259,13 @@ def test_chatgpt_missing_login_or_unusable_credential_is_actionable_and_safe(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("OPENAI_API_KEY", "PRIVATE-API-KEY-IS-NOT-CODEX-AUTH")
+    ScopedProviderRegistryStore(tmp_path).global_store.save(
+        ProviderRegistry(active="chatgpt", providers={"chatgpt": ProviderProfile(kind="openai", auth="chatgpt")}),
+        expected="0" * 64,
+    )
 
     async def check() -> None:
-        config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "sessions", auth="chatgpt")
+        config = load_config(tmp_path)
         async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, _):
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["provider_setup"]["configured"] is False

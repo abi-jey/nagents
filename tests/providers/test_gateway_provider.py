@@ -39,6 +39,7 @@ from nagents.types import RetryConfig
 from nagents.types import TextContent
 from nagents.types import ToolCall
 from nagents.types import ToolDefinition
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -645,17 +646,14 @@ def test_constructor_and_harness_contract(tmp_path: Path, monkeypatch: pytest.Mo
             Provider(provider_type, KEY, "fixture", api="responses")
     config = HarnessConfig(
         workspace=tmp_path,
-        provider="litellm",
-        base_url="http://127.0.0.1:1",
-        api="responses",
-        api_key_env="LITELLM_API_KEY",
+        providers=connection("litellm", base_url="http://127.0.0.1:1", api="responses", api_key_env="LITELLM_API_KEY"),
     )
     provider = HarnessProvider(config)
     assert provider.api == "responses" and provider.provider_type == ProviderType.LITELLM
     monkeypatch.setenv("LITELLM_API_KEY", KEY)
     provider.credentials()
     assert provider.api_key == KEY
-    config.api = "completions"
+    config.providers = connection("litellm", base_url="https://gateway.example/v1", api="completions")
     with pytest.raises(ValueError, match=r"coding harness.*text-only"):
         HarnessProvider(config)
     assert Provider(ProviderType.LITELLM, KEY, "fixture", base_url="http://127.0.0.1:1").api == "chat_completions"

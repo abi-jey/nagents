@@ -92,7 +92,14 @@ async def test_slice_and_truncation_keep_whole_file_newline_metadata_and_hash(
         assert definition is not None
         assert "1024 bytes" in definition.description
         assert "newline_style" in definition.description and "entire file" in definition.description
-        assert "\\r\\n" in definition.description
+        assert "remembered internally" in definition.description
+        edit = harness.agent.tool_registry.get("edit")
+        assert edit is not None
+        arguments = edit.parameters["properties"]
+        assert "\\r\\n" in arguments["old"]["description"]
+        assert "line numbers" in arguments["old"]["description"]
+        assert "empty deletes" in arguments["new"]["description"]
+        assert set(arguments) == {"path", "old", "new"}
     finally:
         await harness.close()
 
@@ -115,7 +122,7 @@ async def test_normal_harness_recovers_from_displayed_lf_to_exact_crlf_before_ap
                 id="read", name="read_file", arguments={"path": "fixture.txt", "start_line": 2, "limit": 2}
             )
         elif len(provider.requests) == 2:
-            assert "'newline_style': 'CRLF'" in str(messages[-1].content)
+            assert json.loads(str(messages[-1].content))["newline_style"] == "CRLF"
             yield ToolCallEvent(
                 id="displayed-lf",
                 name="edit",

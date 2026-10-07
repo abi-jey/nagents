@@ -21,11 +21,14 @@ from nagents.harness import Harness
 from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web import wakeups
 from nagents.web.app import WebState
 from nagents.web.wakeups import Chain
 from nagents.web.wakeups import Wakeup
 from nagents.web.wakeups import Wakeups
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.support.web import LiveStream
@@ -74,11 +77,20 @@ async def scheduled_app(
         return instance
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)
+    monkeypatch.setattr(runtime, "build_provider", lambda profile, config, auth: provider(config))
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-scripted-provider-key")
+    selected = connection(name="fixture", auth="api-key")
+    store = ScopedProviderRegistryStore(tmp_path).global_store
+    registry = store.load()
+    if registry.active:
+        selected = dict(registry.providers)
+    else:
+        store.save(ProviderRegistry(active="fixture", providers=selected), expected=registry.revision)
     config = HarnessConfig(
         workspace=tmp_path,
         data_dir=tmp_path / "data",
-        auth="api-key",
+        provider=registry.active or "fixture",
+        providers=selected,
         model="fake-model",
         profiles={"reviewer": AgentProfile(mode="reviewer")},
     )

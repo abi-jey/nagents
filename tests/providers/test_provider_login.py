@@ -26,6 +26,7 @@ from nagents.harness.credentials import ProviderLoginError
 from nagents.harness.credentials import ProviderLoginStore
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -111,26 +112,21 @@ def test_store_rejects_invalid_fields_before_writing() -> None:
 
 
 @pytest.mark.requires_posix
-def test_saved_login_supplies_defaults_below_env_and_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_saved_login_does_not_select_a_connection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store().save(login())
     config = load_config(tmp_path)
-    assert (config.provider, config.model, config.auth, config.api_key_env) == (
-        "openrouter",
-        "openrouter/auto",
-        "api-key",
-        "OPENROUTER_API_KEY",
-    )
-    assert any("Applied saved provider login" in note for note in config.diagnostics)
+    assert config.provider == "" and config.model == "gpt-6-astra"
+    assert not config.diagnostics
 
     monkeypatch.setenv("NGN_PROVIDER", "anthropic")
-    assert load_config(tmp_path).provider == "anthropic"
+    assert load_config(tmp_path).provider == ""
     monkeypatch.delenv("NGN_PROVIDER")
 
-    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/config.yaml"
+    user_config = Path(os.environ["XDG_CONFIG_HOME"]) / "ngn/config.json"
     user_config.parent.mkdir(parents=True, exist_ok=True)
-    user_config.write_text("model: file-model\n")
+    user_config.write_text('{"model": "file-model"}\n')
     overridden = load_config(tmp_path)
-    assert overridden.provider == "openrouter" and overridden.model == "file-model"
+    assert overridden.provider == "" and overridden.model == "file-model"
 
 
 @pytest.mark.requires_posix
@@ -152,8 +148,8 @@ def test_invalid_saved_login_is_ignored_with_a_diagnostic(tmp_path: Path) -> Non
         )
     )
     config = load_config(tmp_path)
-    assert config.provider == "openai" and config.model == "gpt-6-astra"
-    assert any("Ignored" in note for note in config.diagnostics)
+    assert config.provider_profile().kind == "openai" and config.model == "gpt-6-astra"
+    assert not config.diagnostics
 
 
 @pytest.mark.requires_posix
@@ -163,16 +159,9 @@ def test_harness_provider_prefers_environment_key_over_stored_key(
     provider_store = store()
     provider_store.save(login())
 
-    class Config:
-        demo = False
-        provider = "openrouter"
-        model = "openrouter/auto"
-        api_key_env = "OPENROUTER_API_KEY"
-        base_url = ""
-        api = "auto"
-        api_version = ""
-
-    provider = HarnessProvider(Config(), provider_store)  # type: ignore[arg-type]
+    provider = HarnessProvider(
+        HarnessConfig(workspace=tmp_path, providers=connection("openrouter"), model="openrouter/auto"), provider_store
+    )
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     provider.credentials()
     assert provider.api_key == SECRET
@@ -180,16 +169,9 @@ def test_harness_provider_prefers_environment_key_over_stored_key(
     provider.credentials()
     assert provider.api_key == "environment-key"
 
-    class Other:
-        demo = False
-        provider = "anthropic"
-        model = "claude"
-        api_key_env = "ANTHROPIC_API_KEY"
-        base_url = ""
-        api = "auto"
-        api_version = ""
-
-    mismatched = HarnessProvider(Other(), provider_store)  # type: ignore[arg-type]
+    mismatched = HarnessProvider(
+        HarnessConfig(workspace=tmp_path, providers=connection("anthropic"), model="claude"), provider_store
+    )
     with pytest.raises(ValueError, match="sign in with ngn login"):
         mismatched.credentials()
 
@@ -201,7 +183,7 @@ def test_harness_login_api_persists_and_logout_removes(tmp_path: Path, monkeypat
         try:
             await harness.initialize()
             await harness.login_api(login())
-            assert harness.config.provider == "openrouter" and harness.config.model == "gpt-6-luna"
+            assert harness.config.provider_profile().kind == "openrouter" and harness.config.model == "gpt-6-luna"
             assert isinstance(harness.agent.provider, HarnessProvider)
             harness.agent.provider.credentials()
             assert harness.agent.provider.api_key == SECRET
@@ -211,7 +193,7 @@ def test_harness_login_api_persists_and_logout_removes(tmp_path: Path, monkeypat
             assert saved is not None and saved.auth == "api-key"
             assert harness.login_store.key_for("openrouter") == SECRET
             await harness.logout()
-            assert harness.config.auth == "api-key"
+            assert harness.config.provider_profile().auth == "api-key"
             assert harness.login_store.selection() is None
             assert harness.login_store.key_for("openrouter") == ""
         finally:
@@ -228,7 +210,7 @@ def test_harness_login_api_requires_credentials_and_rejects_demo(tmp_path: Path)
             await harness.initialize()
             with pytest.raises(ValueError, match="No API key or key environment variable"):
                 await harness.login_api(login(api_key="", api_key_env=""))
-            assert harness.config.provider == "openai"
+            assert harness.config.provider_profile().kind == "openai"
             assert harness.login_store.selection() is None
         finally:
             await harness.close()
@@ -349,7 +331,7 @@ def test_cli_login_stores_key_from_stdin_without_rendering(
     assert "Signed in to openai" in output and SECRET not in output
     assert store().key_for("openai") == SECRET
     config = load_config(tmp_path)
-    assert (config.provider, config.model) == ("openai", "gpt-6-astra")
+    assert (config.provider_profile().kind, config.model) == ("openai", "gpt-6-astra")
 
 
 @pytest.mark.requires_posix
@@ -421,7 +403,7 @@ def test_cli_login_can_reference_a_key_environment_variable(
     provider_store = store()
     assert provider_store.key_for("anthropic") == ""
     config = load_config(tmp_path)
-    assert (config.provider, config.model, config.api_key_env) == ("anthropic", "synthetic-model", KEY_ENV)
+    assert config.provider == "" and config.model == "gpt-6-astra"
     assert main(["login", "--status", "--workspace", str(tmp_path)]) == 0
     status = capsys.readouterr().out
     assert "anthropic" in status and KEY_ENV in status

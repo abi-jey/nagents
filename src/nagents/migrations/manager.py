@@ -1,6 +1,7 @@
 """Migration manager for handling database schema evolution."""
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,8 @@ class MigrationManager:
         db_path: Path,
         db_name: str = "database",
         migrations: list[Migration] | None = None,
+        *,
+        atomic: bool = False,
     ):
         """Initialize the migration manager.
 
@@ -44,11 +47,15 @@ class MigrationManager:
             db_path: Path to the SQLite database file
             db_name: Human-readable name for logging
             migrations: List of migrations for this database type
+            atomic: Initialize schema and versions in one transaction. Scripts
+                must support execution inside a transaction and must not contain
+                transaction-control statements. Legacy script behavior is the default.
         """
         self.db_path = db_path
         self.db_name = db_name
         self.migrations = migrations or []
         self._initialized = False
+        self.atomic = atomic
 
     async def initialize(self) -> None:
         """Initialize the database and run pending migrations."""
@@ -58,16 +65,43 @@ class MigrationManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         async with aiosqlite.connect(self.db_path) as db:
-            await self._ensure_schema_migrations_table(db)
-            await self._run_pending_migrations(db)
+            if self.atomic:
+                # Reserve the writer before reading versions: another initializer
+                # must see our committed schema rather than apply the same upgrade.
+                await db.execute("BEGIN IMMEDIATE")
+            try:
+                await self._ensure_schema_migrations_table(db, atomic=self.atomic)
+                await self._run_pending_migrations(db, atomic=self.atomic)
+                if self.atomic:
+                    await db.commit()
+            except BaseException:
+                if self.atomic:
+                    await db.rollback()
+                raise
 
         self._initialized = True
         logger.debug(f"{self.db_name} database initialized with migrations")
 
-    async def _ensure_schema_migrations_table(self, db: aiosqlite.Connection) -> None:
+    async def _ensure_schema_migrations_table(self, db: aiosqlite.Connection, *, atomic: bool = False) -> None:
         """Create schema_migrations table if it doesn't exist."""
-        await db.executescript(SCHEMA_MIGRATIONS_TABLE)
-        await db.commit()
+        await self._execute_script(db, SCHEMA_MIGRATIONS_TABLE, atomic=atomic)
+        if not atomic:
+            await db.commit()
+
+    async def _execute_script(self, db: aiosqlite.Connection, script: str, *, atomic: bool = False) -> None:
+        if not atomic:
+            await db.executescript(script)
+            return
+        # executescript() implicitly commits an existing transaction on supported
+        # Python versions. SQLite's parser recognizes complete statements, including
+        # quoted semicolons, comments and trigger bodies; keep our writer lock intact.
+        start = 0
+        for position, character in enumerate(script):
+            if character == ";" and sqlite3.complete_statement(script[start : position + 1]):
+                await db.execute(script[start : position + 1])
+                start = position + 1
+        if script[start:].strip():
+            await db.execute(script[start:])
 
     async def get_version(self) -> int:
         """Get the current schema version.
@@ -95,7 +129,7 @@ class MigrationManager:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def _run_pending_migrations(self, db: aiosqlite.Connection) -> None:
+    async def _run_pending_migrations(self, db: aiosqlite.Connection, *, atomic: bool = False) -> None:
         """Run all pending migrations."""
         current_version = await self._get_version(db)
         pending = [m for m in self.migrations if m.version > current_version]
@@ -110,22 +144,23 @@ class MigrationManager:
         )
 
         for migration in pending:
-            await self._apply_migration(db, migration)
+            await self._apply_migration(db, migration, atomic=atomic)
 
         logger.info(f"{self.db_name} database: migrated to version {pending[-1].version}")
 
-    async def _apply_migration(self, db: aiosqlite.Connection, migration: Migration) -> None:
+    async def _apply_migration(self, db: aiosqlite.Connection, migration: Migration, *, atomic: bool = False) -> None:
         """Apply a single migration."""
         logger.debug(f"{self.db_name} database: applying migration v{migration.version} - {migration.description}")
 
-        await db.executescript(migration.up_sql)
+        await self._execute_script(db, migration.up_sql, atomic=atomic)
 
         await db.execute(
             """INSERT INTO schema_migrations (version, description, rollback_sql)
                VALUES (?, ?, ?)""",
             (migration.version, migration.description, migration.down_sql),
         )
-        await db.commit()
+        if not atomic:
+            await db.commit()
 
     async def _get_version(self, db: aiosqlite.Connection) -> int:
         """Get current version from database connection."""

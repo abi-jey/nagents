@@ -16,8 +16,8 @@ nagents supports multiple LLM providers with a unified interface, making it easy
 
 Use `/provider` in the TUI or **Settings → Global/Workspace → Provider connections**
 in `ngn serve` to manage named connections shared across clients. Global ones
-are saved to `$XDG_CONFIG_HOME/ngn/providers.yaml`; workspace ones are saved to
-workspace-specific YAML under the same config root. Both use environment-variable **references**,
+are saved to `$XDG_CONFIG_HOME/ngn/providers.json`; workspace ones are saved to
+workspace-specific JSON under the same config root. Both use environment-variable **references**,
 not key values. OpenAI can select ngn ChatGPT login, local Codex discovery, or
 an API-key variable. Azure AI Foundry supports API-key variables and Microsoft
 Entra ID through the optional `azure-identity` package. Voice settings for a
@@ -27,22 +27,15 @@ named connection use the same endpoint and credential reference. See
 Chat model selection is independent: use `/model` in the TUI, `--model` for a
 single CLI invocation, or the global/workspace chat-model selector in web
 Settings. Connections display their credential source and effective endpoint;
-their YAML v2 entries do not contain a chat model. Legacy Live values are kept
-outside v2 connection entries until the separate voice migration consumes them.
+their JSON entries do not contain a chat model. Voice preferences are stored
+separately from provider connections.
 
-The historical `ngn login` command remains available for older single-login
-configurations and OpenAI device authorization; it is separate from the named
-provider registry.
-
-The terminal client selects a provider with `ngn login`: `chatgpt` (device
-login), `openrouter` (browser PKCE that yields a user-controlled API key),
-`openai`, `anthropic`, `gemini`, `custom` (any OpenAI-compatible endpoint), or
-any advanced `--provider` name. API keys are accepted through a hidden prompt or
-`--key-stdin`, or referenced with `--api-key-env NAME` so the value stays in the
-environment. The active selection is stored in the protected provider login
-store described in [ngn configuration](../guide/ngn-configuration.md#file-locations-and-trust);
-`ngn login --status` and `ngn logout` manage it. Library users pass credentials
-explicitly as shown below.
+`ngn login chatgpt` stores the device credential used by a named OpenAI
+connection with `"auth": "chatgpt"`. Login alone does not activate a provider;
+select a named connection in the registry or with `--provider-id`. API-key
+connections use the environment-variable name specified in `providers.json`.
+`ngn login --status` and `ngn logout` manage saved login credentials. Library
+users pass credentials explicitly as shown below.
 
 ## Discover Model IDs
 

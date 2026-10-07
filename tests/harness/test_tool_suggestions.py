@@ -77,9 +77,11 @@ async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_ch
             assert suggestions == providers[0].schemas[first_request]
             assert "read_file" in suggestions
             assert ("schedule_wakeup" in suggestions) == (callback is not None)
-            assert ("wake_up_in" in suggestions) == (callback is not None)
+            assert "wake_up_in" not in suggestions
             assert suggestions == [
-                name for name in inventory if callback is not None or name not in {"schedule_wakeup", "wake_up_in"}
+                name
+                for name in inventory
+                if name != "wake_up_in" and (callback is not None or name != "schedule_wakeup")
             ]
             assert harness.agent.tool_registry.names() == inventory
             assert all(harness.agent.tool_registry.get(tool.name) is tool for tool in definitions)

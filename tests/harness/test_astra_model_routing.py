@@ -10,6 +10,7 @@ import pytest
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import ProviderProfile
 from nagents.harness.runtime import Harness
 from nagents.provider.gateway import GatewayHTTPClient
 from nagents.provider.openai import CodexCredentials
@@ -27,10 +28,7 @@ def configuration(path: Path, *, kind: str = "openai", api: str = "auto", base_u
         workspace=path,
         data_dir=path / "state",
         demo=True,
-        provider=kind,
-        auth="api-key",
-        api=api,
-        base_url=base_url,
+        providers={"": ProviderProfile(kind=kind, auth="api-key", api=api, base_url=base_url)},
         model="gpt-6-luna",
     )
 
@@ -70,7 +68,7 @@ async def test_model_assignment_refreshes_only_automatic_openai_routing(
             assert provider.model == "gpt-6-astra"
             provider.model = "gpt-6-luna"
             assert provider.api == original_api
-        assert config.model == "gpt-6-luna" and config.api == api
+        assert config.model == "gpt-6-luna" and config.provider_profile().api == api
     finally:
         await provider.close()
 

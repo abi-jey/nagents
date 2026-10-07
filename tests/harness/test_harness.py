@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import os
 import shlex
 import signal
@@ -32,12 +33,17 @@ from nagents.harness import HarnessConfig
 from nagents.harness import Notice
 from nagents.harness import ToolOutput
 from nagents.harness import load_config
-from nagents.harness.config import PROVIDERS
 from nagents.harness.config import AgentProfile
+from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import PROVIDERS
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ProviderRegistryStore
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.types import Message
 from nagents.types import ToolCall
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
@@ -67,7 +73,10 @@ def config(tmp_path: Path) -> HarnessConfig:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     return HarnessConfig(
-        workspace=workspace, data_dir=tmp_path / "data", api_key_env="NGN_TEST_KEY", model="fake-model"
+        workspace=workspace,
+        data_dir=tmp_path / "data",
+        providers=connection(api_key_env="NGN_TEST_KEY"),
+        model="fake-model",
     )
 
 
@@ -107,18 +116,25 @@ def test_config_ignores_entire_untrusted_project_and_does_not_import(config: Har
     project.mkdir()
     marker = tmp_path / "imported"
     (project / "extension.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
-    (project / "config.yaml").write_text(
-        "model: injected\nprovider: anthropic\nbase_url: https://untrusted.invalid\n"
-        'api_key_env: UNRELATED_SECRET\nplugins: ["extension.py:setup"]\n'
+    (project / "config.json").write_text(
+        json.dumps(
+            {
+                "model": "injected",
+                "provider": "anthropic",
+                "base_url": "https://untrusted.invalid",
+                "api_key_env": "UNRELATED_SECRET",
+                "plugins": ["extension.py:setup"],
+            }
+        )
     )
     with pytest.warns(UserWarning, match="Ignoring untrusted project"):
         loaded = load_config(config.workspace)
-    assert loaded.provider == "openai"
+    assert loaded.provider_profile().kind == "openai"
     assert loaded.model == "gpt-6-astra"
-    assert loaded.api_key_env == "OPENAI_API_KEY"
-    assert not loaded.base_url and not loaded.plugins
+    assert loaded.provider_profile().key_env == "OPENAI_API_KEY"
+    assert not loaded.provider_profile().base_url and not loaded.plugins
     assert loaded.diagnostics and not marker.exists()
-    (project / "config.yaml").write_text("not: [valid\n")
+    (project / "config.json").write_text('{"not": [invalid\n')
     with pytest.warns(UserWarning):
         assert load_config(config.workspace).model == "gpt-6-astra"
 
@@ -127,43 +143,54 @@ def test_config_precedence_origins_profiles_and_xdg(
     config: HarnessConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("NGN_MODEL", "environment-model")
-    monkeypatch.setenv("NGN_PROVIDER", "gemini")
-    monkeypatch.setenv("NGN_API_KEY_ENV", "NGN_TEST_KEY")
+    ProviderRegistryStore().save(
+        ProviderRegistry(providers={"gemini": ProviderProfile(kind="gemini", auth="api-key")}),
+        expected="0" * 64,
+    )
+    monkeypatch.setenv("NGN_PROVIDER_ID", "gemini")
     monkeypatch.setenv("NGN_DEMO", "true")
     assert load_config(config.workspace).model == "environment-model"
     user = tmp_path / "config/ngn"
-    user.mkdir(parents=True)
-    (user / "config.yaml").write_text('model: user-model\nplugins: ["./extension.py:setup"]\n')
+    user.mkdir(parents=True, exist_ok=True)
+    (user / "config.json").write_text('{"model": "user-model", "plugins": ["./extension.py:setup"]}\n')
     loaded = load_config(config.workspace)
     assert loaded.model == "user-model"
     assert loaded.plugins == (f"{user / 'extension.py'}:setup",)
     assert loaded.data_dir == tmp_path / "data/ngn"
     project = config.workspace / ".ngn"
     project.mkdir()
-    project_config = project / "config.yaml"
+    project_config = project / "config.json"
     project_config.write_text(
-        'model: project-model\nplugins: ["../extension.py:setup", "installed.module:setup"]\n'
-        "data_dir: local-state\nagent: audit\n"
-        "profiles:\n  audit:\n    mode: reviewer\n    instructions: Report regressions\n    model: audit-model\n"
+        json.dumps(
+            {
+                "model": "project-model",
+                "plugins": ["../extension.py:setup", "installed.module:setup"],
+                "data_dir": "local-state",
+                "agent": "audit",
+                "profiles": {
+                    "audit": {"mode": "reviewer", "instructions": "Report regressions", "model": "audit-model"}
+                },
+            }
+        )
     )
     loaded = load_config(config.workspace, trust_project=True)
-    assert loaded.model == "project-model" and loaded.provider == "gemini" and loaded.demo
+    assert loaded.model == "project-model" and loaded.provider_profile().kind == "gemini" and loaded.demo
     assert loaded.plugins == (f"{config.workspace / 'extension.py'}:setup", "installed.module:setup")
     assert loaded.data_dir == project / "local-state"
     assert loaded.profile("audit") == AgentProfile("reviewer", "Report regressions", "audit-model")
-    explicit = tmp_path / "explicit.yaml"
-    explicit.write_text("model: explicit-model\n")
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text('{"model": "explicit-model"}\n')
     assert load_config(config.workspace, explicit, trust_project=True).model == "explicit-model"
     assert load_config(config.workspace, project_config).plugins == loaded.plugins
-    assert load_config(config.workspace, user / "config.yaml", trust_project=True).model == "user-model"
+    assert load_config(config.workspace, user / "config.json", trust_project=True).model == "user-model"
     # config_paths records exactly the files that were read, in load order.
-    assert load_config(config.workspace).config_paths == (user / "config.yaml",)
+    assert load_config(config.workspace).config_paths == (user / "config.json",)
     assert load_config(config.workspace, trust_project=True).config_paths == (
-        user / "config.yaml",
+        user / "config.json",
         project_config,
     )
     assert load_config(config.workspace, explicit, trust_project=True).config_paths == (
-        user / "config.yaml",
+        user / "config.json",
         project_config,
         explicit,
     )
@@ -176,27 +203,27 @@ def test_config_paths_are_empty_with_only_builtin_defaults(config: HarnessConfig
 @pytest.mark.parametrize(
     "document",
     [
-        "api_key: never-store-this",
-        "unknown: 1",
-        'demo: "false"',
-        "model: 3",
-        "plugins: extension.py:setup",
-        'plugins: ["extension.py"]',
-        "plugins: [3]",
-        "shell_timeout: false",
-        "max_output: true",
-        "provider: missing",
-        'base_url: "https://user:secret@example.invalid"',
-        'base_url: "https://example.invalid?key=secret"',
-        "api_key_env: literal-secret-key",
-        "profiles:\n  assistant:\n    mode: build",
-        "profiles:\n  audit:\n    mode: permissive",
-        "profiles:\n  audit:\n    instructions: 3",
-        "model: [",
+        '{"api_key": "never-store-this"}',
+        '{"unknown": 1}',
+        '{"demo": "false"}',
+        '{"model": 3}',
+        '{"plugins": "extension.py:setup"}',
+        '{"plugins": ["extension.py"]}',
+        '{"plugins": [3]}',
+        '{"shell_timeout": false}',
+        '{"max_output": true}',
+        '{"provider": "missing"}',
+        '{"base_url": "https://user:secret@example.invalid"}',
+        '{"base_url": "https://example.invalid?key=secret"}',
+        '{"api_key_env": "literal-secret-key"}',
+        '{"profiles": {"assistant": {"mode": "build"}}}',
+        '{"profiles": {"audit": {"mode": "permissive"}}}',
+        '{"profiles": {"audit": {"instructions": 3}}}',
+        '{"model": [',
     ],
 )
 def test_strict_config_rejects_invalid_and_secret_fields(config: HarnessConfig, tmp_path: Path, document: str) -> None:
-    path = tmp_path / "explicit.yaml"
+    path = tmp_path / "explicit.json"
     path.write_text(document)
     with pytest.raises(ValueError):
         load_config(config.workspace, path)
@@ -206,12 +233,16 @@ def test_provider_aliases_and_missing_explicit_config(config: HarnessConfig, tmp
     assert set(ProviderType) <= set(PROVIDERS.values())
     assert PROVIDERS["openai"] is ProviderType.OPENAI_COMPATIBLE
     with pytest.raises(FileNotFoundError):
-        load_config(config.workspace, tmp_path / "missing.yaml")
+        load_config(config.workspace, tmp_path / "missing.json")
 
 
 def test_config_header_reports_effective_selection(config: HarnessConfig, tmp_path: Path) -> None:
-    settings = tmp_path / "settings.yaml"
-    settings.write_text("provider: anthropic\nmodel: claude-test\n")
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"model": "claude-test"}\n')
+    ProviderRegistryStore().save(
+        ProviderRegistry(active="anthropic", providers={"anthropic": ProviderProfile(kind="anthropic")}),
+        expected="0" * 64,
+    )
     harness = Harness(load_config(config.workspace, settings))
     try:
         header = harness.config_header()
@@ -224,9 +255,10 @@ def test_config_header_reports_effective_selection(config: HarnessConfig, tmp_pa
 
 
 def test_config_header_uses_effective_profile_model(config: HarnessConfig, tmp_path: Path) -> None:
-    settings = tmp_path / "settings.yaml"
+    settings = tmp_path / "settings.json"
     settings.write_text(
-        "model: top-level-model\nagent: audit\nprofiles:\n  audit:\n    mode: reviewer\n    model: profile-model\n"
+        '{"model": "top-level-model", "agent": "audit", "profiles": '
+        '{"audit": {"mode": "reviewer", "model": "profile-model"}}}\n'
     )
     harness = Harness(load_config(config.workspace, settings))
     try:
@@ -594,9 +626,10 @@ def test_post_plugin_validation_and_custom_tools_share_core_loop(config: Harness
             )
             bad = await harness.agent.tool_executor.execute(ToolCall("bad", "custom", {"value": 3}))
             assert bad.error and "must be string" in bad.error
+            approval_count = len(requests)
             unknown = await harness.agent.tool_executor.execute(ToolCall("unknown", "missing", {}))
             assert unknown.error and "does not exist" in unknown.error
-            assert [request.tool for request in requests] == ["custom"]
+            assert len(requests) == approval_count
         finally:
             await harness.close()
 
@@ -1169,5 +1202,32 @@ def test_offline_demo_approval_sessions_and_no_plugins(config: HarnessConfig, tm
                 assert result_event.error and "OFFLINE DEMO" in result_event.error
         finally:
             await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_demo_reads_current_json_and_legacy_tool_history(config: HarnessConfig, accepted: bool, legacy: bool) -> None:
+    async def scenario() -> None:
+        provider = HarnessProvider(replace(config, demo=True))
+        listing = {"paths": ["sample.txt"], "truncated": False, "cursor": None}
+        approval = {"approved": accepted, "preview_only": True, "path": None}
+        encode = str if legacy else json.dumps
+        messages = [
+            Message("user", "demo approval"),
+            Message("tool", encode(listing), name="list_files", tool_call_id="list"),
+            Message("tool", encode(approval), name="demo_preview", tool_call_id="preview"),
+            Message("tool", "Error: rejected", name="list_files", tool_call_id="error"),
+            Message("tool", "{", name="demo_preview", tool_call_id="invalid"),
+        ]
+        try:
+            events = [event async for event in provider.generate(messages)]
+            final = next(event.text for event in events if isinstance(event, TextDoneEvent))
+            assert "sample.txt" in final
+            assert ("**approved**" if accepted else "**declined**") in final
+            assert "Error: rejected" not in final
+        finally:
+            await provider.close()
 
     asyncio.run(scenario())

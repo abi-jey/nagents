@@ -98,7 +98,9 @@ async def test_selected_codex_keeps_endpoint_and_key_in_text_and_voice(
 ) -> None:
     selected_codex(tmp_path / "codex")
     profile = ProviderProfile(kind="openai", auth=auth, api_key_env=key_env, request_timeout=37.5)
-    normal = build_provider(profile, HarnessConfig(workspace=tmp_path, auth=auth), OpenAIAuth())
+    normal = build_provider(
+        profile, HarnessConfig(workspace=tmp_path, provider="selected", providers={"selected": profile}), OpenAIAuth()
+    )
     try:
         async with connection(tmp_path, profile, explicit_selection=explicit_selection) as selected:
             assert selected.profile_name == "selected" and selected.voice_auth == "api-key"

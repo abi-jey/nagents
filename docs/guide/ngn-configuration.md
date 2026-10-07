@@ -7,39 +7,36 @@ release notes before assuming every current field or behavior is available.
 
 ## Quick example
 
-Configuration is **flat YAML**. Do not wrap it in an `ngn:`, `provider:`, or `theme:`
-mapping. Named agent profiles are the only nested mapping:
+Configuration is JSON. Keep general settings in `config.json` and named connections
+in `providers.json`. `profiles` and the optional `providers` file reference are
+the nested settings in the general config:
 
-```yaml
-provider: openai
-model: gpt-6-astra
-api: auto
-auth: api-key
-api_key_env: OPENAI_API_KEY
-agent: assistant
-theme: terminal
-theme_background: auto
-animations: true
-submit_mode: queue
-tab_action: agent
-max_subagent_depth: 2
-
-profiles:
-  audit:
-    mode: reviewer
-    instructions: Prioritize regressions and missing tests. Do not edit files.
+```json
+{
+  "providers": "./providers.json",
+  "model": "gpt-6-luna",
+  "agent": "assistant",
+  "theme": "terminal",
+  "animations": true,
+  "max_subagent_depth": 2,
+  "profiles": {
+    "audit": {
+      "mode": "reviewer",
+      "instructions": "Prioritize regressions and missing tests. Do not edit files."
+    }
+  }
+}
 ```
 
-Every top-level setting is a scalar or a list; `profiles` is the only mapping.
-Unknown fields, wrong YAML types, invalid values, and literal `api_key` fields
+Unknown fields, wrong JSON types, invalid values, and literal `api_key` fields
 are errors rather than silently ignored options.
 
-The checkout includes an annotated, complete example at
-`examples/harness/config.yaml`. To try it
+The checkout includes an example pair at `examples/harness/config.json` and
+`examples/harness/providers.json`. To try it
 without provider calls, run from the repository root:
 
 ```bash
-poetry run ngn --config examples/harness/config.yaml --demo
+poetry run ngn --config examples/harness/config.json --demo
 ```
 
 ## Precedence
@@ -47,15 +44,15 @@ poetry run ngn --config examples/harness/config.yaml --demo
 The order is **lowest to highest priority**:
 
 1. Built-in defaults.
-2. The active named connection in `$XDG_CONFIG_HOME/ngn/providers.yaml`, when present; otherwise a legacy saved provider login (`ngn login`).
-3. `NGN_*` environment defaults.
-4. Global/user YAML.
-5. Trusted project YAML.
-6. An explicitly selected YAML file.
+2. The active named connection in `$XDG_CONFIG_HOME/ngn/providers.json`, when present.
+3. `NGN_*` environment defaults, including `NGN_PROVIDER_ID` for a named selection.
+4. Global/user JSON.
+5. Trusted project JSON.
+6. An explicitly selected JSON file.
 7. Explicit CLI flags.
 
 Environment variables are **not** the highest-priority override. For example,
-`NGN_MODEL=environment-model` loses to `model: file-model` in global YAML;
+`NGN_MODEL=environment-model` loses to `"model": "file-model"` in global JSON;
 `--model cli-model` overrides that top-level setting. A flag omitted from the
 command line leaves the loaded value intact.
 
@@ -64,7 +61,7 @@ or a project file allowed by `--trust-project`. Re-selecting the global file wit
 `--config` puts it at explicit-file priority, after the trusted project file.
 An explicit file must exist; absent global and project files are fine.
 
-Each loaded file must be valid YAML with valid field types. CLI flags are applied
+Each loaded file must be valid JSON with valid field types. CLI flags are applied
 after configuration loading and validation, so a CLI override is not a way to
 repair a malformed or invalid lower-priority configuration. Likewise, invalid
 environment conversions can fail before a file replaces the value.
@@ -75,38 +72,39 @@ configuration; see [profiles](#agent-profiles) before combining a profile-specif
 
 ### Shared named provider connections
 
-`ngn` and `ngn serve` share `$XDG_CONFIG_HOME/ngn/providers.yaml` (default
-`~/.config/ngn/providers.yaml`) for global connections. Use **Settings → Global →
+`ngn` and `ngn serve` share `$XDG_CONFIG_HOME/ngn/providers.json` (default
+`~/.config/ngn/providers.json`) for global connections. Use **Settings → Global →
 Provider connections** to edit them and choose the default. **Settings → Workspace →
 Provider connections** manages connections and a selection for this workspace;
-its YAML lives at `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml`.
+its JSON lives at `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json`.
 The workspace list includes global connections, which can be selected without
 changing the global default. **Use global default** clears a workspace selection.
-The TUI `/provider` menu also offers both scopes. You can edit either YAML while
+The TUI `/provider` menu also offers both scopes. Without an active connection,
+`ngn serve` starts for setup, but chat waits until one is selected. You can edit either JSON while
 ngn is stopped. A revision prevents an older UI from overwriting another
 process's edits. A separate connection can be selected for a trusted agent profile using
 `profiles.NAME.provider: CONNECTION_NAME`.
 
 Provider connections contain kind, authentication source, endpoint where needed,
 HTTP API and **environment variable names**. Chat models are chosen separately:
-global `$XDG_CONFIG_HOME/ngn/models.yaml` and workspace
-`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/models.yaml` provide shared
-defaults for the CLI, TUI and web UI. Trusted YAML `model`, agent-profile models,
+the `model` field in global `$XDG_CONFIG_HOME/ngn/config.json` or workspace
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/config.json` provides shared
+defaults for the CLI, TUI and web UI. Trusted JSON model selections, agent-profile models,
 `NGN_MODEL` and explicit `--model` overrides retain their precedence. Switching
 connections does not change the chat model. Voice duplex preferences are edited
 separately in **GPT-Live → Voice settings**: Global supplies defaults, and the
-workspace may override individual fields. Use `api_key_env: OPENAI_API_KEY` or
-`api_key_env: ${OPENAI_API_KEY}`; ngn resolves the variable when it makes a
+workspace may override individual fields. Use `"api_key_env": "OPENAI_API_KEY"` or
+`"api_key_env": "${OPENAI_API_KEY}"`; ngn resolves the variable when it makes a
 request. It never writes the key value to this file. Set environment variables
 in the environment of the **ngn process** (including the `ngn serve` process),
-not in the browser. For Microsoft Entra ID, `auth: entra` uses the optional
+not in the browser. For Microsoft Entra ID, `"auth": "entra"` uses the optional
 `azure-identity` package's `DefaultAzureCredential` chain; its SDK credential
 owns token caching and refresh. OpenAI supports `auth: chatgpt` for ngn's device
-login and `auth: codex` for the library's local Codex discovery (`CODEX_HOME` or
+login and `"auth": "codex"` for the library's local Codex discovery (`CODEX_HOME` or
 `~/.codex`). These existing OAuth/Codex files are not copied into the provider
-registry. `auth: auto` prefers an existing ngn ChatGPT login or local Codex
-configuration before an OpenAI API-key environment variable. `auth: auto` is
-available only for OpenAI; `auth: codex` uses only local Codex discovery. OpenAI
+registry. `"auth": "auto"` prefers an existing ngn ChatGPT login or local Codex
+configuration before an OpenAI API-key environment variable. Auto auth is
+available only for OpenAI; Codex auth uses only local Codex discovery. OpenAI
 uses a fixed API host; use `openai_compatible` for custom endpoints.
 [Web voice](ngn-web.md#gpt-live-voice-conversations) uses the normal provider registry
 and defaults; an explicit Voice connection can select a different Live-capable
@@ -117,17 +115,21 @@ tokens are never exposed to the browser or used as public Live API keys.
 
 Example:
 
-```yaml
-version: 2
-revision: "0000000000000000000000000000000000000000000000000000000000000000"
-active: work
-providers:
-  work:
-    kind: foundry
-    base_url: https://resource.openai.azure.com/openai/v1
-    api: responses
-    auth: entra
-    request_timeout: 120.0
+```json
+{
+  "version": 2,
+  "revision": "0000000000000000000000000000000000000000000000000000000000000000",
+  "active": "work",
+  "providers": {
+    "work": {
+      "kind": "foundry",
+      "base_url": "https://resource.openai.azure.com/openai/v1",
+      "api": "responses",
+      "auth": "entra",
+      "request_timeout": 120.0
+    }
+  }
+}
 ```
 
 `request_timeout` is the total deadline, in seconds, for each ngn-issued model
@@ -146,11 +148,11 @@ for its other fields. Model catalogs retain their separate cap of
 This field does not change shell limits, whole-run or child deadlines, Live
 session duration, Live backend waiting limits, or authentication SDK deadlines.
 Existing retries remain unchanged; retries and backoff can make a generation
-last longer than one request deadline. There is no top-level Harness YAML field
-or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's YAML,
+last longer than one request deadline. There is no top-level Harness JSON field
+or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's JSON,
 web provider editor, or TUI `/provider` editor.
 
-The UI generates a fresh revision on save. Workspace YAML uses the same schema:
+The UI generates a fresh revision on save and writes indented JSON. Workspace JSON uses the same schema:
 its `active` may reference a global connection, and an empty `active` inherits
 the global default. Other provider types (`openai`,
 `openai_compatible`, `openrouter`, `anthropic`, `gemini`, `litellm`, both Azure
@@ -160,6 +162,16 @@ list of model IDs, not a guarantee of access. Providers without a catalog or a
 compatible `/models` endpoint require manual model entry. Saving a named
 connection does not perform network authentication.
 
+To place the registry elsewhere, set `"providers": "./providers.json"` in
+`config.json`. A reference in the user config selects the global provider file;
+a reference in a trusted project or explicit config selects the workspace file.
+Use `"providers": {"global": "./shared.json", "workspace": "./team.json"}`
+to set either scope explicitly. Paths are relative to the containing config
+file. Omitted references use the default `providers.json` paths. An explicit
+reference to a missing file starts with an empty registry; the UI creates that
+file on save. The references must name distinct `.json` files. The full resolved
+provider definitions are visible as `config.providers` during CLI startup.
+
 Voice defaults are stored in `$XDG_CONFIG_HOME/ngn/voice.db`, and workspace
 overrides in the workspace session database. Provider connections contain no
 chat or Voice model and no API-key values.
@@ -167,56 +179,30 @@ chat or Voice model and no API-key values.
 Create a named connection in the web UI or TUI and set its environment variable;
 the provider editor does not offer an API-key-value field.
 
-#### Updating existing installations to provider YAML v2
-
-Stop ngn and back up your configuration and session databases before upgrading.
-Version-1 `providers.yaml` files are not read by the new schema. In both the global
-file and any workspace provider files, set `version: 2` and remove `model` and
-`live` from each `providers.NAME` entry. Keep `revision`, `active`, and the
-connection's kind, authentication, endpoint, and environment-variable name.
-Put the selected chat model in `models.yaml` alongside the provider file, for
-example:
-
-```yaml
-version: 1
-model: gpt-6-luna
-```
-
-Re-enter voice-duplex model and voice preferences in Voice settings (Global or
-Workspace) after restarting. These preferences are independent of the provider
-connection; there is no automatic import from the old provider YAML.
-
-Older saved web-settings rows containing removed fields also cannot be loaded.
-Before upgrading, reset the Global and Workspace web settings using the old UI.
-If already upgraded, stop ngn, back up the databases, and remove only the
-`ngn_web_global_settings` row (in `data_dir/web-defaults.db`) and the
-`ngn_web_settings` row (in that workspace's session database), then restart
-and re-enter preferences. Keep other tables and session history intact.
-
 ## File locations and trust
 
 | Item | Location or selection | Behavior |
 | --- | --- | --- |
-| Global/user YAML | `$XDG_CONFIG_HOME/ngn/config.yaml`; defaults to `~/.config/ngn/config.yaml` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
-| Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.yaml`; defaults to `~/.config/ngn/providers.yaml` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
-| Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml` | Workspace-only connections and selection; inherits global connections and default. |
-| Global/workspace chat-model preferences | `models.yaml` beside the corresponding provider registry | Shared chat-model choice, independent of connection identity; no credentials or Live data. |
-| Project YAML | `<workspace>/.ngn/config.yaml` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
-| Explicit YAML | `--config /any/path/settings.yaml` | Any filename/location is accepted. Selecting the file explicitly trusts it, including endpoint and plugin settings. |
+| Global/user JSON | `$XDG_CONFIG_HOME/ngn/config.json`; defaults to `~/.config/ngn/config.json` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
+| Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.json`; defaults to `~/.config/ngn/providers.json` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
+| Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json` | Workspace-only connections and selection; inherits global connections and default. |
+| Workspace chat-model preference | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/config.json` | The workspace `model` field overrides the global model preference; no credentials. |
+| Project JSON | `<workspace>/.ngn/config.json` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
+| Explicit JSON | `--config /any/path/settings.json` | Any filename/location ending in `.json` is accepted. Selecting it explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
 | State root | `data_dir`; default `$XDG_DATA_HOME/ngn` or `~/.local/share/ngn` when `XDG_DATA_HOME` is unset or empty | Stores workspace-scoped session databases. |
-| OpenAI login store | `$XDG_DATA_HOME/ngn/auth/openai.json` or `~/.local/share/ngn/auth/openai.json` | Separate credential store, not a YAML setting or a session database. Changing `data_dir` does not move it. Never include it in a config example or bug report. |
-| Provider login store | `$XDG_DATA_HOME/ngn/auth/login.json` or `~/.local/share/ngn/auth/login.json` | One active `ngn login` selection and its optional write-only API key, beside the ChatGPT store. Supplies defaults below environment variables and YAML; `ngn logout` removes it. Never include it in a config example or bug report. |
+| OpenAI login store | `$XDG_DATA_HOME/ngn/auth/openai.json` or `~/.local/share/ngn/auth/openai.json` | Separate credential store, not a general config setting or a session database. Changing `data_dir` does not move it. Never include it in a config example or bug report. |
+| Provider login store | `$XDG_DATA_HOME/ngn/auth/login.json` or `~/.local/share/ngn/auth/login.json` | Login credentials beside the ChatGPT store; this does not select a named provider. `ngn logout` removes it. Never include it in a config example or bug report. |
 
-The workspace's `.ngn/config.yaml` is the project file; ngn does not search every
+The workspace's `.ngn/config.json` is the project file; ngn does not search every
 ancestor directory for more configuration layers. The trust decision is made
 from CLI arguments before project configuration is read. There is no
-`trust_project = true` YAML escape hatch or `NGN_TRUST_PROJECT` shortcut.
+`trust_project = true` JSON escape hatch or `NGN_TRUST_PROJECT` shortcut.
 
 ```bash
 ngn --workspace /path/to/project --trust-project
-ngn --workspace /path/to/project --config /path/to/project/.ngn/config.yaml
-ngn --workspace /path/to/project --config /another/location/review.yaml
+ngn --workspace /path/to/project --config /path/to/project/.ngn/config.json
+ngn --workspace /path/to/project --config /another/location/review.json
 ```
 
 The second command explicitly trusts the selected project file without needing
@@ -233,35 +219,46 @@ from an untrusted project file: the entire file is skipped.
 - `--workspace`, `--config`, and file paths passed with `--plugin` resolve from
   the shell's current working directory, not from each other. `-C` selects a
   workspace; it does not change how another CLI path is resolved.
-- `data_dir` and `.py` plugin paths written in YAML resolve from the directory
-  containing **that YAML file**. In `.ngn/config.yaml`, `data_dir: state`
+- `data_dir`, provider references, and `.py` plugin paths written in JSON resolve from the directory
+  containing **that JSON file**. In `.ngn/config.json`, `"data_dir": "state"`
   means `.ngn/state`, and `plugins: ["../extension.py:setup"]` refers to
   `extension.py` at the workspace root.
 - `NGN_DATA_DIR` is a path relative to the shell's working directory unless
   absolute. It is the full state root; ngn does not append another `/ngn` to it.
 - Supported path values expand `~` and resolve to absolute paths. Use absolute
   XDG environment paths. General `$VARIABLE` or `${VARIABLE}` interpolation in
-  YAML strings is not supported.
+  JSON strings is not supported.
 - An installed-module plugin such as `my_package.extension:setup` is imported
   from the selected Python environment, not resolved as a filesystem path.
 
 ## Complete top-level schema
 
-Defaults below are built-ins, before environment, YAML, CLI, profile activation,
+Defaults below are built-ins, before environment, JSON, CLI, profile activation,
 or authentication-route selection. String choices are case-sensitive.
 
-### Provider and authentication
+### Model and named provider selection
 
-| Field | YAML type | Default | Accepted values and meaning |
+| Field | JSON type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
-| `provider` | string | `"openai"` | A provider name or alias from the table below. |
-| `provider_id` | string | `""` | Optional named connection from `providers.yaml`; its endpoint, auth and key reference take precedence over flat provider fields. |
+| `provider_id` | string | `""` | Optional named connection from `providers.json`; otherwise the registry's active connection is used. |
+| `providers` | string or object | omitted | Relative `.json` file reference for this scope, or `{"global": "path.json", "workspace": "path.json"}`. Omitted scopes use their default `providers.json`. The web UI saves the selected file. |
 | `model` | string | `"gpt-6-astra"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
-| `api` | string | `"auto"` | `"auto"`, `"chat_completions"`, `"responses"`, `"messages"`, or `"completions"`. Selects the request protocol, not the authentication method. |
-| `base_url` | string | `""` | Empty selects the provider default. Otherwise an HTTP(S) API-prefix URL with a hostname, no whitespace, user/password, query parameters, or fragment. Do not include a generation-route suffix. Required explicitly for LiteLLM and Azure. |
-| `api_key_env` | string | `"OPENAI_API_KEY"` | Environment-variable name matching `[A-Za-z_][A-Za-z0-9_]*`, never a literal key. Changing provider does not automatically change this default. |
-| `auth` | string | `"auto"` | `"auto"`, `"api-key"`, or `"chatgpt"`; see authentication behavior below. |
-| `api_version` | string | `""` | Provider API version. Required for the versioned Azure route; not a general model/version selector. |
+
+Connection details—`kind`, `api`, `base_url`, `api_key_env`, `auth`, and
+`api_version`—belong only to entries under `providers.json` → `providers.NAME`.
+They are rejected as top-level `config.json` fields. The resolved connection is
+available by name at CLI startup: `config.provider` is the selected name and
+`config.providers` maps names to provider definitions.
+
+At the CLI's `serve(config, ...)` breakpoint, inspect `config.provider`
+and `config.providers[config.provider]` for its `kind`, `auth`, `api`, `base_url`,
+`api_key_env`, and `api_version`. The `api` value selects the provider's HTTP
+protocol, such as `messages`, `responses`, or `chat_completions`; allowed values
+depend on the provider kind and authentication mode. There is no `connection`
+wrapper or `provider_registry` field, and no flat `config.auth` or API fields. General
+settings such as `config.model`, `config.workspace`, and limits remain separate.
+The profile's `key_env` property resolves the environment-variable **name**;
+loading configuration does not read its secret value.
 
 | Provider string | Aliases | Default endpoint/behavior |
 | --- | --- | --- |
@@ -289,7 +286,7 @@ compatible `base_url` rather than the default OpenAI endpoint.
 `base_url` is a prefix such as `https://api.openai.com/v1`, not the full URL ending
 in `/chat/completions`, `/responses`, `/messages`, or `/completions`. Those
 generation suffixes are rejected during provider setup to avoid double-appending
-a route. Provider setup also validates requirements beyond YAML parsing, such as
+a route. Provider setup also validates requirements beyond JSON parsing, such as
 Azure's endpoint/version and whether a provider accepts the selected API.
 
 **Legacy `completions` is text-only.** A server accepting `/completions` does not
@@ -314,16 +311,15 @@ selection. Saved OAuth credentials are never sent to a custom endpoint,
 including LiteLLM. Do not use `api` to attempt to
 redirect a ChatGPT login to a gateway or to the ordinary paid API.
 
-The key's **value** is read from the named environment variable when a live
-request needs it. `NGN_API_KEY_ENV=TEAM_OPENAI_KEY` changes the reference; it does
-not set the key itself. When that environment variable is unset, ngn falls back
-to a matching `ngn login` key stored in the protected provider login file. ngn
+The key's **value** is read from the variable named by the active connection
+when a live request needs it. Put the variable name in `providers.json`, not
+`config.json`; no API-key value belongs in either file. ngn
 does not automatically load `.env` files or borrow another coding assistant's
 credentials.
 
 ### Agent and tool limits
 
-| Field | YAML type | Default | Accepted values and meaning |
+| Field | JSON type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
 | `agent` | string | `"assistant"` | The built-in `"assistant"` or an explicitly configured profile name. |
 | `read_only` | boolean | `false` | Enforce read-only operation for the assistant and child agents. |
@@ -336,12 +332,21 @@ credentials.
 
 Integer fields reject floats and booleans even if numerically equivalent.
 Subagent concurrency, per-run job counts, timeouts, and result-size budgets are
-additional safeguards, not extra YAML fields. See
+additional safeguards, not extra JSON fields. See
 [subagents](ngn.md#native-background-subagents).
+
+The model receives the active shell timeout, output cap, and whole-file read
+limit in the native tool descriptions. These descriptions refresh when settings
+change and when a child harness starts. A shell call may omit `timeout` or use
+`0` for the configured default; a positive value cannot exceed `shell_timeout`.
+Reading fewer lines does not bypass `max_file_bytes`: guarded reads take a
+snapshot of the whole file. Invalid arguments and limit failures return tool
+errors for the model to correct; they do not automatically relax limits or retry
+the operation.
 
 ### Terminal behavior
 
-| Field | YAML type | Default | Accepted values and meaning |
+| Field | JSON type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
 | `theme` | string | `"terminal"` | `"terminal"`, `"graphite"`, `"ocean"`, or `"ember"`. |
 | `theme_background` | string | `"auto"` | `"auto"`, `"terminal"`, or `"theme"`. Automatic preset behavior, terminal-native background, or the theme's background. Separate from palette selection. |
@@ -361,15 +366,15 @@ at either scope. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
 
 ### Storage and extensions
 
-| Field | YAML type | Default | Accepted values and meaning |
+| Field | JSON type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
-| `data_dir` | string path | `$XDG_DATA_HOME/ngn` or `~/.local/share/ngn` | Full session-state root; converted to an absolute `Path`. YAML-relative paths use the file's directory. |
-| `plugins` | list of strings | `[]` | Ordered `"path.py:setup"` or `"installed.module:setup"` references. Converted to a tuple internally. Each higher-priority YAML list replaces the previous list. |
+| `data_dir` | string path | `$XDG_DATA_HOME/ngn` or `~/.local/share/ngn` | Full session-state root; converted to an absolute `Path`. JSON-relative paths use the file's directory. |
+| `plugins` | list of strings | `[]` | Ordered `"path.py:setup"` or `"installed.module:setup"` references. Converted to a tuple internally. Each higher-priority JSON list replaces the previous list. |
 | `profiles` | mapping of profile mappings | No custom profiles | Entries under `profiles.NAME`, merged by name with whole-profile replacement. Built-in profiles remain available. |
 
 `workspace` (`Path`), `trust_project` (`bool`, default `False`), and `diagnostics`
 (`tuple[str, ...]`, initially empty) also exist on the Python `HarnessConfig`
-object. They are runtime/loader inputs or outputs, **not accepted YAML fields**.
+object. They are runtime/loader inputs or outputs, **not accepted JSON fields**.
 Select workspace and trust through the CLI; diagnostics are generated by loading.
 
 ## Environment defaults
@@ -382,17 +387,17 @@ provider, model, limits, and state storage.
 ```bash
 NGN_THEME=ocean NGN_ANIMATIONS=false ngn --demo
 NGN_SUBMIT_MODE=interrupt NGN_MAX_SUBAGENT_DEPTH=1 ngn
-NGN_API_KEY_ENV=TEAM_OPENAI_KEY ngn --auth api-key
+NGN_PROVIDER_ID=team-openai ngn --model gpt-6-luna
 ```
 
-YAML can override every one of these defaults. Booleans accept case-insensitive
+JSON can override every one of these defaults. Booleans accept case-insensitive
 `true`/`false` or `1`/`0` in the environment. Integer fields are converted with
 integer parsing; `shell_timeout` uses floating-point parsing. Normal value/range
 validation still applies.
 
 There is no `NGN_PLUGINS` list or `NGN_PROFILES` mapping parser, no per-profile
 environment-variable convention, and no `NGN_CONFIG`, `NGN_WORKSPACE`, or
-`NGN_TRUST_PROJECT` configuration mechanism. Use YAML, `--config`, `--workspace`,
+`NGN_TRUST_PROJECT` configuration mechanism. Use JSON, `--config`, `--workspace`,
 `--trust-project`, and repeatable `--plugin` flags as appropriate. Unknown
 `NGN_*` environment names are not a substitute for supported fields.
 
@@ -404,7 +409,7 @@ explicitly in `profiles`:
 Use `read_only: true` (or `NGN_READ_ONLY=true`) to constrain the assistant and its
 children to read-only operation. This startup restriction cannot be relaxed by
 switching profiles or saving web preferences. Legacy agent selections in loaded
-YAML/environment configuration migrate to `assistant`; legacy read-only selections
+JSON/environment configuration migrate to `assistant`; legacy read-only selections
 also enable this restriction. Explicitly configured custom profiles are preserved.
 
 | Profile | Mode | Purpose |
@@ -419,25 +424,29 @@ string fields:
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
 | `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
-| `provider` | `""` | Optional named connection ID in `providers.yaml`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
+| `provider` | `""` | Optional named connection ID in `providers.json`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
 
-```yaml
-agent: audit
-
-profiles:
-  audit:
-    mode: reviewer
-    instructions: Report bugs with file references and explain missing tests.
-  implementation:
-    mode: build
-    instructions: Make the smallest correct change and verify it.
+```json
+{
+  "agent": "audit",
+  "profiles": {
+    "audit": {
+      "mode": "reviewer",
+      "instructions": "Report bugs with file references and explain missing tests."
+    },
+    "implementation": {
+      "mode": "build",
+      "instructions": "Make the smallest correct change and verify it."
+    }
+  }
+}
 ```
 
 Activate with `--agent audit` or `/agent audit`; Tab normally cycles profiles.
 A nonempty profile `model` is applied when the harness activates that profile,
 after top-level `model` loading, so it can also supersede the value supplied by
 `--model`. Leave a profile's `model` empty if you want top-level model selection
-to govern it. In-process `/model` changes are runtime state, not edits to YAML.
+to govern it. In-process `/model` changes are runtime state, not edits to JSON.
 
 ### Merge and replacement rules
 
@@ -446,18 +455,20 @@ different files remain available, but a later `profiles.audit` entry constructs 
 new profile and replaces the earlier `audit` completely. Omitted fields in that
 replacement return to the profile defaults.
 
-For example, if global YAML defines `audit` with `mode: reviewer` and a model,
+For example, if global JSON defines `audit` with `mode: reviewer` and a model,
 then a trusted project file containing only:
 
-```yaml
-profiles:
-  audit:
-    instructions: Focus on tests.
+```json
+{
+  "profiles": {
+    "audit": {"instructions": "Focus on tests."}
+  }
+}
 ```
 
 replaces it with a **build-mode** profile and an empty model override. It does
 not inherit `mode: reviewer`. Repeat the intended mode when redefining a
-read-only profile. An empty `profiles:` mapping does not clear previously defined
+read-only profile. An empty `"profiles": {}` mapping does not clear previously defined
 profiles, and no profile deletion syntax is provided.
 
 Delegation defaults to `agent`, rather than silently forcing every child into
@@ -468,23 +479,23 @@ instructions cannot bypass approvals, depth limits, or the permission ceiling.
 
 ## Plugins
 
-```yaml
-plugins: ["./extension.py:setup", "team_extensions.review:setup"]
+```json
+{"plugins": ["./extension.py:setup", "team_extensions.review:setup"]}
 ```
 
 The setup name must be a Python identifier. Installed module names must be
 dot-separated identifiers. References are checked when loading configuration;
-Python import and setup happen when the harness initializes, not during YAML
+Python import and setup happen when the harness initializes, not during JSON
 parsing. A setup function may be synchronous or asynchronous and may return an
 `AgentPlugin` or `None`.
 
-YAML plugin lists **replace** the previous list, including `plugins: []` to clear
-lower-priority entries. Repeated `--plugin` flags **append** to the final YAML
+JSON plugin lists **replace** the previous list, including `"plugins": []` to clear
+lower-priority entries. Repeated `--plugin` flags **append** to the final JSON
 list in CLI order. There is no automatic deduplication of plugin references;
 listing one twice can invoke setup twice and can fail on duplicate registrations.
 
 ```bash
-ngn --config /path/to/settings.yaml --plugin /path/to/extension.py:setup
+ngn --config /path/to/settings.json --plugin /path/to/extension.py:setup
 ngn --plugin examples/harness/commands.py:setup
 ```
 
@@ -498,34 +509,35 @@ command interfaces.
 
 ## Provider recipes
 
-These snippets are standalone, secret-free YAML files. Use a model ID your
-account/gateway exposes. Put API-key values in your shell or secret manager, not
-in these files, URLs, or command arguments.
+These snippets are provider **entries** under `providers.json` → `providers.NAME`;
+the active name belongs in that file's `active` field. Set the chat `model` in
+`config.json` or the model selector. Put API-key values in your shell or secret
+manager, not in these files, URLs, or command arguments.
 
 ### OpenAI API key
 
-```yaml
-provider: openai
-model: gpt-6-astra
-api: auto
-auth: api-key
-api_key_env: OPENAI_API_KEY
+```json
+{
+  "kind": "openai",
+  "api": "auto",
+  "auth": "api-key",
+  "api_key_env": "OPENAI_API_KEY"
+}
 ```
 
 For eligible ChatGPT/Codex access instead, leave `base_url` unset, use
-`auth: auto` or `"chatgpt"`, and follow [device login](ngn.md#openai-device-login).
-New harness selections default to Astra on both routes; explicitly configured
-models stay selected. The default OpenAI endpoint uses Responses for Astra when
-`api: auto`; explicit API choices and custom endpoints retain their routing.
+`"auth": "auto"` or `"chatgpt"`, and follow [device login](ngn.md#openai-device-login).
+That route can select a different account-supported default model.
 
 ### OpenRouter
 
-```yaml
-provider: openrouter
-model: openai/gpt-6-luna
-api: chat_completions
-auth: api-key
-api_key_env: OPENROUTER_API_KEY
+```json
+{
+  "kind": "openrouter",
+  "api": "chat_completions",
+  "auth": "api-key",
+  "api_key_env": "OPENROUTER_API_KEY"
+}
 ```
 
 The default endpoint is `https://openrouter.ai/api/v1`; no `base_url` override is
@@ -536,36 +548,39 @@ environment-file launch through uv is shown in the
 
 ### Anthropic
 
-```yaml
-provider: anthropic
-model: YOUR_ANTHROPIC_MODEL_ID
-api: auto
-auth: api-key
-api_key_env: ANTHROPIC_API_KEY
+```json
+{
+  "kind": "anthropic",
+  "api": "auto",
+  "auth": "api-key",
+  "api_key_env": "ANTHROPIC_API_KEY"
+}
 ```
 
 ### Native Gemini
 
-```yaml
-provider: gemini
-model: YOUR_GEMINI_MODEL_ID
-api: auto
-auth: api-key
-api_key_env: GEMINI_API_KEY
+```json
+{
+  "kind": "gemini",
+  "api": "auto",
+  "auth": "api-key",
+  "api_key_env": "GEMINI_API_KEY"
+}
 ```
 
 ### LiteLLM gateway
 
-```yaml
-provider: litellm
-base_url: http://127.0.0.1:4000/v1
-model: YOUR_GATEWAY_MODEL_ALIAS
-api: chat_completions
-auth: api-key
-api_key_env: LITELLM_API_KEY
+```json
+{
+  "kind": "litellm",
+  "base_url": "http://127.0.0.1:4000/v1",
+  "api": "chat_completions",
+  "auth": "api-key",
+  "api_key_env": "LITELLM_API_KEY"
+}
 ```
 
-Configure the base URL and model alias for **your running server**; the example
+Configure the base URL and choose a model alias for **your running server**; the example
 does not start a gateway or guarantee a route exists. For a server exposing
 Responses or Messages, choose `responses` or `messages` and the corresponding
 API base. The library also exposes legacy Completions, but ngn rejects that
@@ -580,12 +595,13 @@ incomplete streams remain errors, not successful responses.
 
 ### Another OpenAI-compatible endpoint
 
-```yaml
-provider: openai_compatible
-base_url: http://127.0.0.1:8000/v1
-model: YOUR_SERVER_MODEL_ID
-auth: api-key
-api_key_env: LOCAL_MODEL_API_KEY
+```json
+{
+  "kind": "openai_compatible",
+  "base_url": "http://127.0.0.1:8000/v1",
+  "auth": "api-key",
+  "api_key_env": "LOCAL_MODEL_API_KEY"
+}
 ```
 
 Use the endpoint's required key in that environment variable. The harness still
@@ -598,7 +614,7 @@ detects anonymous local servers automatically.
 or Python plugin imports. `/context` shows effective runtime context, and
 `/plugins` shows configured/loaded extensions. A real `ngn doctor` loads trusted
 plugins, which can perform arbitrary I/O. These commands can create local state;
-they are not side-effect-free YAML parsers.
+they are not side-effect-free JSON parsers.
 
 If a setting is unexpected, check the global file, the workspace selected with
 `-C`, whether project trust was granted, the explicit file, and CLI flags in that

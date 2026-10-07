@@ -12,6 +12,7 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.tools.registry import ToolRegistry
 from nagents.types import ToolCall
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,7 +31,7 @@ def test_inherited_mode_depth_and_root_scheduler_are_resolved_for_each_request(t
             HarnessConfig(
                 tmp_path,
                 data_dir=tmp_path / "data",
-                auth="api-key",
+                providers=connection(auth="api-key"),
                 read_only=read_only,
                 profiles={"reviewer": AgentProfile(mode="reviewer")},
             )
@@ -51,7 +52,9 @@ def test_inherited_mode_depth_and_root_scheduler_are_resolved_for_each_request(t
             assert not {"schedule_wakeup", "wake_up_in", "custom", "read_file"} & names(child)
             assert ("shell" in names(child)) is not read_only
             root.wakeup_handler = scheduler
-            assert {"schedule_wakeup", "wake_up_in"} <= names(child)
+            assert "schedule_wakeup" in names(child)
+            assert "wake_up_in" not in names(child)
+            assert child.agent.tool_registry.get("wake_up_in") is original["wake_up_in"]
             child.wakeup_handler = None  # Scheduling is owned by the root client, not this child.
             assert "schedule_wakeup" in names(child)
             root.config.max_subagent_depth = 1

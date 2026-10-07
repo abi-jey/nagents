@@ -17,7 +17,7 @@ from nagents.extensions import CompactionResult
 from nagents.provider import Provider
 from nagents.types import Message
 
-from .config import PROVIDERS
+from .providers import PROVIDERS
 
 if TYPE_CHECKING:
     from nagents.extensions import CompactionRequest
@@ -36,7 +36,8 @@ class HarnessProvider(Provider):
         *,
         request_timeout: float = 120.0,
     ) -> None:
-        if config.api == "completions":
+        profile = config.provider_profile()
+        if profile.api == "completions":
             raise ValueError(
                 "The coding harness requires conversation roles and tools; the legacy completions API is text-only. "
                 "Use api='chat_completions', 'responses', or 'messages', or use Provider directly with one text prompt."
@@ -47,19 +48,19 @@ class HarnessProvider(Provider):
         # Astra uses Responses for tool calls. Respect an explicitly selected
         # contract or compatible endpoint rather than rewriting custom routing.
         self._automatic_model_api = (
-            config.provider in {"openai", "openai_compatible"} and config.api == "auto" and not config.base_url
+            profile.kind in {"openai", "openai_compatible"} and profile.api == "auto" and not profile.base_url
         )
         # Resolve auto before constructing the HTTP client so later model
         # changes keep the same bounded transport used by explicit Responses.
-        api = config.api
+        api = profile.api
         if self._automatic_model_api:
             api = "responses" if config.model == "gpt-6-astra" else "chat_completions"
         super().__init__(
-            provider_type=PROVIDERS[config.provider],
+            provider_type=PROVIDERS[config.provider_profile().kind],
             api_key="deferred-until-live-request",
             model=config.model,
-            base_url=config.base_url or None,
-            api_version=config.api_version or None,
+            base_url=config.provider_profile().base_url or None,
+            api_version=config.provider_profile().api_version or None,
             api=api,
             timeout=request_timeout,
         )
@@ -80,12 +81,12 @@ class HarnessProvider(Provider):
     def credentials(self) -> None:
         if self.harness_config.demo:
             return
-        key = os.environ.get(self.harness_config.api_key_env, "")
+        key = os.environ.get(self.harness_config.provider_profile().key_env, "")
         if not key.strip() and self.login_store is not None:
-            key = self.login_store.key_for(self.harness_config.provider)
+            key = self.login_store.key_for(self.harness_config.provider_profile().kind)
         if not key.strip():
             raise ValueError(
-                f"Set {self.harness_config.api_key_env}, sign in with ngn login, or use offline demo mode "
+                f"Set {self.harness_config.provider_profile().key_env}, sign in with ngn login, or use offline demo mode "
                 "before an API-key request"
             )
         self.api_key = key
@@ -160,10 +161,13 @@ class HarnessProvider(Provider):
             if message.role != "tool" or not isinstance(message.content, str):
                 continue
             try:
-                # Core persists tool results as Python literals, not JSON.
-                result = ast.literal_eval(message.content)
-            except (ValueError, SyntaxError):
-                continue
+                result = json.loads(message.content)
+            except json.JSONDecodeError:
+                # Persisted histories from older agents used Python literals.
+                try:
+                    result = ast.literal_eval(message.content)
+                except (ValueError, SyntaxError):
+                    continue
             if isinstance(result, dict) and message.name == "list_files":
                 files = [str(path) for path in result.get("paths", [])]
             if isinstance(result, dict) and message.name == "demo_preview":

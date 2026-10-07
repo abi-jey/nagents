@@ -16,6 +16,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.types import ToolCall
 from nagents.web.tool_approvals import ToolApprovals
 from tests.harness.test_harness import ScriptedProvider
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import LiveStream
 from tests.support.web import client_app
@@ -39,7 +40,7 @@ async def replacement(value: str = "") -> str:
 
 
 def config_for(workspace: Path, *, data_dir: Path | None = None) -> HarnessConfig:
-    return HarnessConfig(workspace, data_dir=data_dir or workspace / "data", auth="api-key")
+    return HarnessConfig(workspace, data_dir=data_dir or workspace / "data", providers=connection(auth="api-key"))
 
 
 async def decide(

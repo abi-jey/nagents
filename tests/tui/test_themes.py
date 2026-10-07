@@ -102,7 +102,8 @@ def isolated_theme_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def color_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Color-rendering checks must not inherit a developer's NO_COLOR setting.
+    # These contracts inspect emitted colors; developer NO_COLOR preferences
+    # must not suppress their ANSI and SVG evidence.
     monkeypatch.delenv("NO_COLOR", raising=False)
 
 
@@ -120,19 +121,20 @@ def test_defaults_and_shared_theme_names(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", THEME_NAMES)
 @pytest.mark.parametrize("enabled", [True, False])
-def test_theme_yaml(tmp_path: Path, name: str, enabled: bool) -> None:
-    path = tmp_path / "theme.yaml"
-    path.write_text(f"theme: {name}\nanimations: {str(enabled).lower()}\n", encoding="utf-8")
+def test_theme_json(tmp_path: Path, name: str, enabled: bool) -> None:
+    path = tmp_path / "theme.json"
+    path.write_text(f'{{"theme": "{name}", "animations": {str(enabled).lower()}}}\n', encoding="utf-8")
     config = load_config(tmp_path, path)
     assert config.theme == name
     assert config.animations is enabled
 
 
 @pytest.mark.parametrize(
-    "text", ["theme: yellow", "theme: 1", 'animations: "false"', "animations: 0", "animations: []"]
+    "text",
+    ['{"theme": "yellow"}', '{"theme": 1}', '{"animations": "false"}', '{"animations": 0}', '{"animations": []}'],
 )
-def test_invalid_theme_yaml(tmp_path: Path, text: str) -> None:
-    path = tmp_path / "theme.yaml"
+def test_invalid_theme_json(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "theme.json"
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError, match=r"theme|animations"):
         load_config(tmp_path, path)
@@ -163,17 +165,17 @@ def test_theme_config_precedence_and_project_trust(tmp_path: Path, monkeypatch: 
     monkeypatch.setenv("NGN_ANIMATIONS", "false")
     user_dir = tmp_path / "user-config" / "ngn"
     user_dir.mkdir(parents=True)
-    (user_dir / "config.yaml").write_text("theme: graphite\nanimations: true\n", encoding="utf-8")
+    (user_dir / "config.json").write_text('{"theme": "graphite", "animations": true}\n', encoding="utf-8")
     project_dir = tmp_path / ".ngn"
     project_dir.mkdir()
-    (project_dir / "config.yaml").write_text("theme: ocean\nanimations: false\n", encoding="utf-8")
+    (project_dir / "config.json").write_text('{"theme": "ocean", "animations": false}\n', encoding="utf-8")
     with pytest.warns(UserWarning, match="untrusted project"):
         config = load_config(tmp_path)
     assert (config.theme, config.animations) == ("graphite", True)
     config = load_config(tmp_path, trust_project=True)
     assert (config.theme, config.animations) == ("ocean", False)
-    explicit = tmp_path / "selected.yaml"
-    explicit.write_text("theme: terminal\nanimations: true\n", encoding="utf-8")
+    explicit = tmp_path / "selected.json"
+    explicit.write_text('{"theme": "terminal", "animations": true}\n', encoding="utf-8")
     config = load_config(tmp_path, explicit, trust_project=True)
     assert (config.theme, config.animations) == ("terminal", True)
 
@@ -227,8 +229,8 @@ def test_cli_passes_theme_overrides_to_harness(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(cli, "Harness", create_harness)
     monkeypatch.setenv("NGN_THEME", "ocean")
     monkeypatch.setenv("NGN_ANIMATIONS", "true")
-    assert cli.main(["-C", str(tmp_path), "--theme", "graphite", "doctor", "--no-animations", "--auth", "api-key"]) == 0
-    assert (captured[0].theme, captured[0].animations, captured[0].auth) == ("graphite", False, "api-key")
+    assert cli.main(["-C", str(tmp_path), "--theme", "graphite", "doctor", "--no-animations"]) == 0
+    assert (captured[0].theme, captured[0].animations) == ("graphite", False)
 
 
 def test_cli_and_config_do_not_import_textual() -> None:

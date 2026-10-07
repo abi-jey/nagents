@@ -21,7 +21,11 @@ from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ProviderRegistryStore
 from nagents.types import Message
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -138,8 +142,7 @@ def test_real_adapter_harness_and_ephemeral_context(tmp_path: Path, monkeypatch:
                     workspace=tmp_path,
                     data_dir=tmp_path / "state",
                     model="ngn-integration",
-                    base_url=url,
-                    api_key_env="NGN_TEST_API_KEY",
+                    providers=connection(base_url=url, api_key_env="NGN_TEST_API_KEY"),
                 )
             )
             try:
@@ -173,8 +176,7 @@ def test_live_edit_is_bound_to_approval(tmp_path: Path, monkeypatch: pytest.Monk
                     workspace=tmp_path,
                     data_dir=tmp_path / "state",
                     model="ngn-integration",
-                    base_url=url,
-                    api_key_env="NGN_TEST_API_KEY",
+                    providers=connection(base_url=url, api_key_env="NGN_TEST_API_KEY"),
                 )
             )
             approvals: list[ApprovalRequest] = []
@@ -207,6 +209,17 @@ def test_cli_live_protocol_stream(tmp_path: Path) -> None:
 
     async def scenario() -> None:
         async with local_provider() as (url, requests):
+            ProviderRegistryStore(tmp_path / "config/ngn/providers.json").save(
+                ProviderRegistry(
+                    active="local",
+                    providers={
+                        "local": ProviderProfile(
+                            kind="openai_compatible", auth="api-key", base_url=url, api_key_env="NGN_TEST_API_KEY"
+                        )
+                    },
+                ),
+                expected="0" * 64,
+            )
             env = {
                 **os.environ,
                 "NGN_TEST_API_KEY": "ngn-test-key",
@@ -221,14 +234,10 @@ def test_cli_live_protocol_stream(tmp_path: Path) -> None:
                 "--json",
                 "--workspace",
                 str(tmp_path),
-                "--provider",
-                "openai",
+                "--provider-id",
+                "local",
                 "--model",
                 "ngn-integration",
-                "--base-url",
-                url,
-                "--api-key-env",
-                "NGN_TEST_API_KEY",
                 "Read sample.txt",
                 env=env,
                 stdout=asyncio.subprocess.PIPE,

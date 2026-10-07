@@ -35,6 +35,7 @@ from nagents.harness.types import TaskStarted
 from nagents.provider.openai import OpenAIProvider
 from nagents.types import Message
 from nagents.types import ToolCall
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.support.providers import assert_balanced
@@ -61,10 +62,130 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_posix
 
 
+@pytest.mark.parametrize("custom_prompt", ["", "replacement instructions", "append"])
+def test_child_preserves_custom_system_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom_prompt: str
+) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="done")
+
+        harness, _ = setup_harness(tmp_path, monkeypatch, script)
+        original = harness.agent.system_prompt or ""
+        expected = original + "\nCustom appended instruction" if custom_prompt == "append" else custom_prompt
+        harness.agent.system_prompt = expected
+        child = harness.tasks._create_child("assistant")
+        try:
+            assert child._parent_instructions == expected
+            if expected:
+                assert expected in (child.agent.system_prompt or "")
+            child.refresh_instructions()
+            assert child._parent_instructions == expected
+        finally:
+            await child.close()
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+def test_nested_children_inherit_authored_context_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="done")
+
+        harness, _ = setup_harness(tmp_path, monkeypatch, script)
+        harness.config.agent = "author"
+        harness.config.profiles["author"] = AgentProfile(instructions="Root authored instruction")
+        harness.config.profiles["audit"] = AgentProfile(mode="reviewer", instructions="Child authored instruction")
+        harness.instructions["AGENTS.md"] = "Root project instruction"
+        harness.instructions["nested/AGENTS.md"] = "Nested project instruction"
+        harness.refresh_instructions()
+        child = harness.tasks._create_child("audit")
+        grandchild = child.tasks._create_child("author")
+        try:
+            for current in (child, grandchild):
+                prompt = current.agent.system_prompt or ""
+                for instruction in (
+                    "Root authored instruction",
+                    "Root project instruction",
+                    "Nested project instruction",
+                    "Child authored instruction",
+                    "Inspect before changing.",
+                ):
+                    assert prompt.count(instruction) == 1
+                assert current.mode == "reviewer"
+                assert "(reviewer)" in prompt
+                assert current.instructions == harness.instructions
+                current.refresh_instructions()
+                assert current.agent.system_prompt == prompt
+            assert grandchild._parent_instructions == ""
+            assert len(grandchild.agent.system_prompt or "") < 2 * len(harness.agent.system_prompt or "")
+        finally:
+            await grandchild.close()
+            await child.close()
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.fixture(autouse=True)
 def collect_released_resources() -> Iterator[None]:
     yield
     gc.collect()
+
+
+def test_tool_free_waiting_turn_resumes_synthesis_without_premature_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        child_started, yielded, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if provider.index:
+                child_started.set()
+                await release.wait()
+                yield TextDoneEvent(text="Review finding")
+            elif notifications(messages):
+                assert "Review finding" in str(notifications(messages)[0].content)
+                yield TextDoneEvent(text="Verified synthesis")
+            elif len(provider.requests) == 1:
+                yield ToolCallEvent(id="review", name="delegate", arguments={"prompt": "Review independently"})
+            else:
+                yield TextDoneEvent(text="Waiting for the independent review")
+
+        harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        observed: list[HarnessEvent] = []
+
+        async def consume() -> None:
+            async for event in harness.run("Review and synthesize"):
+                observed.append(event)
+                if isinstance(event, TextDoneEvent) and event.text == "Waiting for the independent review":
+                    yielded.set()
+
+        task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(child_started.wait(), HANG_GUARD)
+            await asyncio.wait_for(yielded.wait(), HANG_GUARD)
+            assert not task.done()
+            assert len(providers[0].requests) == 2
+            assert not any(isinstance(event, DoneEvent) for event in observed)
+            release.set()
+            await asyncio.wait_for(task, HANG_GUARD)
+            assert len(providers[0].requests) == 3
+            completions = [index for index, event in enumerate(observed) if isinstance(event, TaskCompleted)]
+            done = [(index, event) for index, event in enumerate(observed) if isinstance(event, DoneEvent)]
+            assert len(completions) == len(done) == 1
+            assert completions[0] < done[0][0]
+            assert done[0][1].final_text == "Verified synthesis"
+            assert_balanced(await harness.history())
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await harness.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("count", [2, 3])
@@ -696,7 +817,7 @@ def test_codex_child_shares_auth_not_provider_or_close_ownership(tmp_path: Path)
         harness = Harness(
             HarnessConfig(
                 workspace=tmp_path,
-                auth="api-key",
+                providers=connection(auth="api-key"),
                 data_dir=tmp_path / "state",
                 profiles={"reviewer": AgentProfile(mode="reviewer")},
             )
@@ -914,9 +1035,9 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
                 yield TextDoneEvent(text=f"Response from worker {provider.index}")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
-        harness.config.base_url = "https://gateway.example/v1"
-        harness.config.api_key_env = "CHILD_TEST_KEY"
-        harness.config.api = "responses"
+        harness.config.providers = connection(
+            base_url="https://gateway.example/v1", api_key_env="CHILD_TEST_KEY", api="responses"
+        )
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
@@ -932,9 +1053,9 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
             assert updated.followups == 1 and updated.status == "completed"
             assert providers[1].closed and providers[2].closed
             assert providers[2].model == "fake-model" and providers[0].model == "new-parent-model"
-            assert providers[2].harness_config.base_url == "https://gateway.example/v1"
-            assert providers[2].harness_config.api_key_env == "CHILD_TEST_KEY"
-            assert providers[2].harness_config.api == "responses"
+            assert providers[2].harness_config.provider_profile().base_url == "https://gateway.example/v1"
+            assert providers[2].harness_config.provider_profile().key_env == "CHILD_TEST_KEY"
+            assert providers[2].harness_config.provider_profile().api == "responses"
             assert harness.tasks._used == 2
             assert len([event for event in events if isinstance(event, TaskMessage)]) == 1
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 1
@@ -1255,13 +1376,21 @@ def test_continuation_permission_ceiling_and_no_restored_job_handles(
                 yield TextDoneEvent(text="Completed")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        harness.instructions["nested/AGENTS.md"] = "Retained nested project context"
+        harness.refresh_instructions()
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
+            retained = harness.tasks._children[info.id]
+            original_prompt = retained.agent.system_prompt or ""
+            assert original_prompt.count("Retained nested project context") == 1
+            retained.agent.system_prompt = original_prompt + "\nCustom continuation instruction"
             await harness.set_agent("reviewer")
             _ = [event async for event in harness.continue_task(info.id, "Continue read-only")]
             assert harness.tasks.list()[0].mode == "reviewer"
             assert "shell" not in providers[2].schemas[0]
+            continued_prompt = harness.tasks._children[info.id].agent.system_prompt or ""
+            assert original_prompt + "\nCustom continuation instruction" in continued_prompt
             await harness.set_agent("assistant")
             _ = [event async for event in harness.continue_task(info.id, "Do not escalate this child")]
             assert harness.tasks.list()[0].mode == "reviewer"

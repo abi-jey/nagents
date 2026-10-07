@@ -22,9 +22,6 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             values = {
                 **original["values"],
                 "model": "global-model",
-                "provider": "openrouter",
-                "api": "chat_completions",
-                "api_key_env": "OPENROUTER_API_KEY",
             }
             saved = await client.post(
                 "/api/settings/global", headers=headers, json={"revision": original["revision"], "values": values}
@@ -52,7 +49,7 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             current = (await client.get("/api/settings", headers=headers)).json()
             assert current["values"]["model"] == "project-model"
             assert current["defaults"]["model"] == "new-global-model"
-            assert current["values"]["provider"] == "openrouter"
+            assert current["values"]["provider"] == "openai"
             inherited_limit = await client.post(
                 "/api/settings/global",
                 headers=headers,
@@ -92,8 +89,8 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             inherited = (await client.get("/api/settings", headers=headers)).json()
             assert not inherited["persisted"]
             assert inherited["values"]["model"] == "global-model"
-            assert inherited["values"]["provider"] == "openrouter"
-            assert inherited["values"]["api"] == "chat_completions"
+            assert inherited["values"]["provider"] == "openai"
+            assert inherited["values"]["api"] == "auto"
             global_values = (await client.get("/api/settings/global", headers=headers)).json()
             reset = await client.post(
                 "/api/settings/global/reset", headers=headers, json={"revision": global_values["revision"]}

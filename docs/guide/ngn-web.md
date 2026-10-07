@@ -62,9 +62,9 @@ and authentication modes; the list displays each connection's credential source
 and effective endpoint without showing secrets. Choose a chat model in **Agent
 profile and permissions**, where you can enter an ID or browse the active
 connection's model catalog. The same connections appear in the TUI's `/provider` menu. The
-global registry lives in `$XDG_CONFIG_HOME/ngn/providers.yaml` (normally
-`~/.config/ngn/providers.yaml`); the workspace registry lives under
-`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.yaml`. Use an API key **environment-variable name**
+global registry lives in `$XDG_CONFIG_HOME/ngn/providers.json` (normally
+`~/.config/ngn/providers.json`); the workspace registry lives under
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json`. Use an API key **environment-variable name**
 (`OPENAI_API_KEY` or `${OPENAI_API_KEY}`), never a literal key. The variable
 must be set in the `ngn serve` process environment. OpenAI can use ngn's
 ChatGPT device login or local Codex discovery; Foundry can use API keys or
@@ -100,13 +100,14 @@ catalog discovery does not require switching it to an OpenAI Platform API key.
 For your own installation, choose your own connection deliberately:
 
 - **OpenAI Platform API key:** set `OPENAI_API_KEY` securely in the backend
-  environment using your own key, then run `ngn serve --provider openai --auth
-  api-key --model gpt-6-luna`. Platform API usage and billing are separate from a
+  environment using your own key. In Provider connections add and activate an
+  OpenAI connection with `auth: api-key` and `api_key_env: OPENAI_API_KEY`, then
+  choose your model. Platform API usage and billing are separate from a
   ChatGPT subscription. Never put key values into browser settings, URLs, or Git.
 - **ChatGPT/Codex login:** run `ngn login --device-auth`, approve only the code you
-  requested, and use `ngn login --status` to check the saved login. Then run
-  `ngn serve --provider openai --auth chatgpt`, with the default endpoint and
-  `api = "auto"`. Interactive `/login` remains available in the terminal client.
+  requested, and use `ngn login --status` to check the saved login. Add and
+  activate a named OpenAI connection with `auth: chatgpt` and `api: auto` in
+  Provider connections. Interactive `/login` remains available in the terminal client.
   Use your own eligible ChatGPT account; protected credential storage currently
   requires POSIX. See [device login](ngn.md#openai-device-login) for limitations.
 
@@ -180,8 +181,8 @@ still stored locally in the Harness data directory.
 The sidebar keeps **New session** above an independently scrolling session list.
 Repeated **New session** clicks reuse the selected unused draft. `ngn serve`
 discards abandoned, unnamed drafts that have no messages, captions, uploads,
-queued input, task activity, or other session references. Drafts with an active browser subscription are protected while the server
-is running. `--continue` prefers meaningful history over an abandoned
+queued input, task activity, or other session references. A draft open in another
+browser is protected. `--continue` prefers meaningful history over an abandoned
 blank draft; an explicit session ID is still honored. Used conversations and
 named sessions remain available.
 **Settings**, **Channels**, **Tools**, **Agent Designer**, **Trash**, and the workspace information overlay stay
@@ -849,8 +850,7 @@ offline demo/custom persistence adapters are outside this input path. See
 ### GPT-Live Voice Conversations
 
 The **Voice** button beside **Attach** starts voice in the current chat. Grant
-microphone access when prompted. A floating, interactive sphere sits beside the
-composer controls, responding to microphone and playback levels. Click it to mute
+microphone access when prompted. A floating, interactive sphere sits beside the composer controls, responding to microphone and playback levels. Click the sphere to mute
 or unmute your microphone; its glow and shape reflect the connection state.
 The chat stays visible and typing remains available.
 
@@ -866,8 +866,7 @@ Reduced-motion preferences disable the sphere's motion.
 Speech captions appear in the same chat, marked **Live** with their speaker and
 call-relative time. Ordinary messages and assistant work retain their usual
 presentation. Captions remain visible after ending the call or reloading the page.
-A composer status line shows the handoff when the main assistant takes a request:
-queued, working, completed, stopped, or failed.
+A composer status line shows the handoff when the main assistant takes a request: waiting, working, completed, stopped, or failed.
 **View in chat** opens the associated run's progress and result. Muting or ending
 voice does not imply that an admitted assistant task has stopped.
 **Request & events** expands inline with the received voice payload, the
@@ -895,9 +894,9 @@ entire model context, tool outputs, attachments, or private reasoning. Open
 - **Start without chat context** sends no saved history at startup. The main
   assistant can still consult its conversation when the caller requests help.
 
-The final seed contains at most 14 items and 7,000 UTF-8 bytes of text, leaving
+The final seed contains at most 14 text items and 7,000 UTF-8 bytes, leaving
 headroom under GPT-Live's startup-input limit. The optional summary source uses
-at most 128 messages plus 512 saved caption fragments, bounded together to
+at most 128 messages plus a bounded window of saved caption fragments and
 96,000 UTF-8 bytes. It explicitly marks missing, compacted, or clipped material;
 a generated brief is never presented as the complete conversation. **Chat brief**
 or **Chat context** beside the voice timer explains what was included.
@@ -962,10 +961,7 @@ opening settings alone does not capture audio. Refresh the list after connecting
 hardware. Refreshing during voice never starts an extra microphone capture.
 Speaker selection depends on browser support; unsupported browsers use
 the system output. A saved device that is unavailable must be changed or reset to
-**System default** before starting a call. If an explicitly selected speaker
-disappears during voice, a notice offers **Use system default** for the current
-call; output is never silently rerouted. Losing the active microphone stops
-voice with a reconnect message. Choose a working microphone before retrying.
+**System default** before starting a call.
 
 ChatGPT voice uses the signed-in account through server-owned media and Live
 control connections. The browser exchanges audio only with ngn over a same-origin
@@ -1060,8 +1056,7 @@ when locally ready and the active ID is empty when there is no active call.
 `global_preferences`, the workspace `overrides`, per-field `origins`, connection
 reference and a 64-character hexadecimal revision. The workspace's missing
 override fields inherit global values. Voice preferences are `{enabled,
-connection_id, backend_mode, model, backend_model, voice, instructions,
-context_mode}`; an empty `connection_id`
+connection_id, backend_mode, model, backend_model, voice}`; an empty `connection_id`
 follows the active chat connection. An explicit ID selects a voice connection
 without changing the assistant. `backend_model` is used in hosted
 mode only. The provider and base URL in `values` describe the selected connection
@@ -1106,10 +1101,7 @@ override, arbitrary command, or tool configuration input; connection changes
 go through the revisioned settings route.
 
 Snapshots contain `{session_id, status, model, voice, events, cursor, delegations}` and may
-include a safe `message` and startup `context` metadata. The context reports its
-mode and method, bound chat ID, source fingerprint, included text counts/bytes,
-and omission indicators; it does not return the seed text. Status is `connecting`,
-`connected`, `closing`, `closed`,
+include a safe `message`. Status is `connecting`, `connected`, `closing`, `closed`,
 or `error`. Events have `seq` and a normalized `type` (`transcript`, `delegation`, `status`, or
 `error`); transcript records include `speaker`, `text`, and timing when available.
 Pass the last cursor as `after`, an integer in `0..9007199254740991`. This is the
@@ -1141,7 +1133,7 @@ as delegation inspection; routine polling and creation responses remain metadata
 
 Main-assistant delegation records contain `delegation_id`, `voice_session_id`,
 `chat_session_id`, `run_id`, `status`, `agent`, `provider`, `model`, `text`, and
-`seq`. The bridge issues an application delegation ID when it receives each handler
+`seq`. The bridge issues an application delegation ID for each admitted handler
 request. It binds that ID to the original call and chat; `run_id` becomes available
 when the main assistant accepts the work. The lifecycle is `queued` → `working`
 → `completed`, `failed`, or `cancelled`; a queued request can also end before

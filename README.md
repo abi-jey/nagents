@@ -62,9 +62,9 @@ and performs no workspace edits or shell commands. It does save demo
 conversations locally. Send `demo approval` to try a change-preview dialog or
 `demo subagents` to exercise three native async jobs without provider calls.
 
-For a real model, set the provider key outside YAML and launch through the same
-environment, for example `poetry run ngn --auth api-key --model MODEL_ID` or
-`uv run --no-project --python .venv/bin/python ngn --auth api-key --model MODEL_ID`.
+For a real model, select a named connection in `providers.json`, set its referenced
+environment variable, and launch through the same environment, for example
+`poetry run ngn --provider-id my-connection --model MODEL_ID`.
 With the environment activated, use `ngn run --json "your prompt"` for headless
 integration. Non-interactive approvals fail closed.
 
@@ -76,21 +76,22 @@ with `--no-animations`. Build-capable delegation uses the built-in `agent` profi
 by default, never exceeds the parent's permissions, and defaults to depth two
 (root 0, child 1, grandchild 2).
 
-For ChatGPT/Codex subscription access, start `ngn` without `--demo` and use
-`/login`, or run `ngn login chatgpt` (same as `--device-auth`). Device login must
+For ChatGPT/Codex subscription access, select a named OpenAI connection with
+`"auth": "chatgpt"` or `"auth": "codex"` in `providers.json`. Use `/login`
+or `ngn login chatgpt` for the ChatGPT device flow. Device login must
 be enabled in your ChatGPT security/workspace settings. This uses a separate
 Codex Responses route, not a general-purpose OpenAI API key. `ngn login` also
 selects OpenRouter through a browser sign-in or stores API keys for OpenAI,
 Anthropic, Gemini, and custom OpenAI-compatible endpoints; keys are entered
 hidden or referenced with `--api-key-env`, and `ngn login --status`/`ngn logout`
-manage the saved selection. See the guide for credential storage and `--auth`
-selection. Saved credentials are never sent to custom endpoints.
+manage stored credentials. A saved login does not select the active connection;
+choose it in Provider connections or `providers.json`.
 
-Configuration uses top-level YAML, **not an `ngn:` wrapper**. Priority is built-ins
-< saved `ngn login` selection < `NGN_*` environment defaults < global YAML <
-trusted project YAML < explicit YAML < CLI. The global file is
-`~/.config/ngn/config.yaml` (respecting `XDG_CONFIG_HOME`); workspace
-`.ngn/config.yaml` needs `--trust-project`, or explicit selection with `--config`.
+Configuration uses JSON with separate `config.json` and `providers.json` files.
+Priority is built-ins < `NGN_*` environment defaults
+< global JSON < trusted project JSON < explicit JSON < CLI. The global file is
+`~/.config/ngn/config.json` (respecting `XDG_CONFIG_HOME`); workspace
+`.ngn/config.json` needs `--trust-project`, or explicit selection with `--config`.
 Any explicitly selected config file is trusted.
 See the [full schema and recipes](docs/guide/ngn-configuration.md) for types,
 defaults, ranges, profile replacement, relative paths, and LiteLLM endpoints.

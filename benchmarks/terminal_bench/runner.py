@@ -44,10 +44,10 @@ PRIVATE_CODEX_HOME = PRIVATE_ROOT / "codex-access"
 
 
 def configuration(workspace: Path, model: str, private_root: Path = PRIVATE_ROOT) -> HarnessConfig:
-    """Use shipping YAML configuration with fresh, process-local XDG stores.
+    """Use the runtime's configuration schema with fresh private XDG stores.
 
     Both global and workspace provider registries live below XDG_CONFIG_HOME in
-    the released Harness. An empty private directory excludes image/host state
+    the Harness. An empty private directory excludes image/host state
     without replacing providers, loaders, or native child construction.
     """
     private_root.mkdir(parents=True, exist_ok=True)
@@ -56,15 +56,21 @@ def configuration(workspace: Path, model: str, private_root: Path = PRIVATE_ROOT
         target = directory / child
         target.mkdir(mode=0o700)
         os.environ[name] = str(target)
-    return HarnessConfig(
+    config = HarnessConfig(
         workspace=workspace,
         data_dir=directory / "sessions",
-        provider="openai",
-        provider_id="",
-        auth="chatgpt",
         model=model,
         model_explicit=True,
     )
+    if hasattr(config, "providers"):
+        return replace(config, providers={"": ProviderProfile(kind="openai", auth="chatgpt")})
+    # Frozen released wheels retain the earlier YAML-backed configuration API.
+    if not hasattr(config, "provider_id") or not hasattr(config, "auth"):
+        raise ValueError("Unsupported Harness provider configuration schema")
+    config.provider = "openai"
+    config.provider_id = ""
+    config.auth = "chatgpt"
+    return config
 
 
 def request_deadline(value: object) -> float:
@@ -99,7 +105,14 @@ async def named_deadline(config: HarnessConfig, credentials: CodexCredentials, s
     ScopedProviderRegistryStore(config.workspace).workspace_store.save(
         ProviderRegistry(active="benchmark", providers={"benchmark": profile}), expected="0" * 64
     )
-    return replace(config, provider_id="benchmark", auth="codex")
+    if hasattr(config, "providers"):
+        return replace(config, provider="benchmark", providers={"benchmark": profile})
+    named = replace(config)
+    if not hasattr(named, "provider_id") or not hasattr(named, "auth"):
+        raise ValueError("Unsupported Harness provider configuration schema")
+    named.provider_id = "benchmark"
+    named.auth = "codex"
+    return named
 
 
 def container_gate(marker: Path = Path("/installed-agent/ngn-benchmark/isolated")) -> None:

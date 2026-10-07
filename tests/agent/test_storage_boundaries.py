@@ -12,6 +12,7 @@ import pytest
 
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
+from tests.support.config import connection
 
 if TYPE_CHECKING:
     from nagents.harness.tools import CodingTools
@@ -33,7 +34,7 @@ def storage(
     for path in (data, xdg, auth.parent, auth):
         path.mkdir(mode=0o700)
     monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
-    harness = Harness(HarnessConfig(workspace=workspace, data_dir=data, auth="api-key"))
+    harness = Harness(HarnessConfig(workspace=workspace, data_dir=data, providers=connection(auth="api-key")))
     protected = data if request.param == "session" else auth
     (protected / "nested").mkdir(mode=0o700)
     for folder in (protected, protected / "nested"):

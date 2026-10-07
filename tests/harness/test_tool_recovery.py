@@ -119,8 +119,12 @@ async def test_tool_contracts_expose_current_limits_to_root_and_native_child(
                 assert (
                     "0 for the configured default of 1.25" in shell.parameters["properties"]["timeout"]["description"]
                 )
-                assert "4096 bytes" in read.description and "even when requesting a line slice" in read.description
-                assert "1 through 1000" in read.parameters["properties"]["limit"]["description"]
+                assert (
+                    "4096 bytes" in read.description
+                    and "entire file" in read.description
+                    and "slices" in read.description
+                )
+                assert "1..1000" in read.parameters["properties"]["limit"]["description"]
 
             # The advertised limits agree with actual execution, before approval.
             (tmp_path / "large.txt").write_text("x" * 4097)

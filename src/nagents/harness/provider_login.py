@@ -24,8 +24,8 @@ from nagents.provider import Provider
 from nagents.provider.openai import USER_AGENT
 
 from .config import DEFAULT_HARNESS_MODEL
-from .config import PROVIDERS
 from .credentials import ProviderLoginError
+from .providers import PROVIDERS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -62,13 +63,17 @@ class LoginHarness(FakeHarness):
         self.failure = ""
 
     def auth_status(self) -> str:
-        return "ChatGPT/Codex signed in" if self.config.auth == "chatgpt" else "Not signed in; API-key setup available"
+        return (
+            "ChatGPT/Codex signed in"
+            if self.config.provider_profile().auth == "chatgpt"
+            else "Not signed in; API-key setup available"
+        )
 
     async def login_api(self, login: ProviderLogin) -> None:
         if self.failure == "api":
             raise RuntimeError(f"provider error: {TOKEN}, {PRIVATE_ID}, {PROVIDER_KEY}")
         self.api_logins.append(login)
-        self.config.provider = login.provider
+        self.config.providers[self.config.provider] = replace(self.config.provider_profile(), kind=login.provider)
         if login.model:
             self.config.model = login.model
 
@@ -94,7 +99,7 @@ class LoginHarness(FakeHarness):
                 raise TimeoutError(f"expired: {TOKEN}, {PRIVATE_ID}, {USER_CODE}")
             if self.failure == "denied":
                 raise PermissionError(f"denied: {TOKEN}, {PRIVATE_ID}, {USER_CODE}")
-            self.config.auth = "chatgpt"
+            self.config.providers[self.config.provider] = replace(self.config.provider_profile(), auth="chatgpt")
             self.config.model = "gpt-5.3-codex"
         except asyncio.CancelledError:
             self.login_cancelled = True
@@ -108,7 +113,7 @@ class LoginHarness(FakeHarness):
         self.logout_calls += 1
         if self.failure == "logout":
             raise RuntimeError(f"store error: {TOKEN}, {PRIVATE_ID}, {USER_CODE}")
-        self.config.auth = "api-key"
+        self.config.providers[self.config.provider] = replace(self.config.provider_profile(), auth="api-key")
 
 
 async def start_login(app: NagentsApp, pilot: Pilot[None]) -> DeviceLoginModal:
@@ -203,7 +208,7 @@ def test_provider_key_sign_in_stores_key_without_rendering(tmp_path: Path, monke
             assert len(backend.api_logins) == 1
             login = backend.api_logins[0]
             assert (login.provider, login.model, login.api_key) == ("openai", "gpt-6-astra", PROVIDER_KEY)
-            assert backend.config.provider == "openai"
+            assert backend.config.provider_profile().kind == "openai"
             assert not isinstance(app.screen, ProviderKeyModal)
             rendered = app.export_screenshot()
             assert PROVIDER_KEY not in rendered
@@ -435,7 +440,7 @@ def test_login_success_logout_and_job_guard(tmp_path: Path, size: tuple[int, int
             await idle(app, pilot)
             assert not isinstance(app.screen, DeviceLoginModal)
             assert modal._user_code == ""
-            assert backend.config.auth == "chatgpt"
+            assert backend.config.provider_profile().auth == "chatgpt"
             assert "gpt-5.3-codex" in str(app.query_one("#rail-config", Static).content)
             assert not app.query_one("#mode").display
             assert app.query_one("#main").region.y == 0
@@ -448,7 +453,7 @@ def test_login_success_logout_and_job_guard(tmp_path: Path, size: tuple[int, int
             await send(app, pilot, "/logout")
             await idle(app, pilot)
             assert backend.logout_calls == 1
-            assert backend.config.auth == "api-key"
+            assert backend.config.provider_profile().auth == "api-key"
             assert not app.query_one("#mode").display
             assert app.query_one("#main").region.y == 0
             assert "Not signed in" in str(app.query_one("#rail-auth", Static).content)
@@ -477,7 +482,7 @@ def test_login_errors_do_not_echo_response_bodies(
             assert "expired" in status
             assert "Signed in" not in app.export_screenshot()
             assert modal._user_code == ""
-            assert backend.config.auth != "chatgpt"
+            assert backend.config.provider_profile().auth != "chatgpt"
             assert_private(app)
         output = capsys.readouterr()
         for secret in (USER_CODE, PRIVATE_ID, TOKEN):

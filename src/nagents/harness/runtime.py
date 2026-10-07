@@ -132,6 +132,18 @@ class Harness:
         """Coding harnesses discover workspace instructions during initialization."""
         self.tools.instructions(Path("AGENTS.md"))
 
+    @property
+    def providers(self) -> ProviderRegistry:
+        return self._providers
+
+    @providers.setter
+    def providers(self, registry: ProviderRegistry) -> None:
+        self._providers = registry
+        self.config.providers = {
+            **({"": self.config.providers[""]} if "" in self.config.providers else {}),
+            **registry.providers,
+        }
+
     def __init__(self, config: "HarnessConfig", *, allow_subagents: bool = True) -> None:
         self.config = config
         self.allow_subagents = allow_subagents
@@ -146,6 +158,8 @@ class Harness:
         self._approval_lock = asyncio.Lock()
         self._owns_auth = True
         self._parent_instructions = ""
+        self._inherited_profile_instructions: tuple[str, ...] = ()
+        self._generated_system_prompt = ""
         self.workspace: Path = config.workspace.resolve()
         if not self.workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {self.workspace}")
@@ -158,21 +172,15 @@ class Harness:
         self.loaded_plugins: list[str] = []
         self.openai_auth = OpenAIAuth()
         self.login_store = ProviderLoginStore()
-        self.provider_store = ScopedProviderRegistryStore(self.workspace)
+        self.provider_store = ScopedProviderRegistryStore(self.workspace, paths=config.provider_paths)
         self.providers = self.provider_store.load()
         initial_profile = config.profile(config.agent)
         if initial_profile.provider:
             selected = self.providers.providers.get(initial_profile.provider)
             if selected is None:
                 raise ValueError(f"Unknown provider connection {initial_profile.provider!r} for agent {config.agent!r}")
-            config.provider_id = initial_profile.provider
-            config.provider = selected.kind
-            config.base_url = selected.base_url
-            config.api = selected.api
-            config.auth = selected.auth
-            config.api_key_env = selected.key_env
-            config.api_version = selected.api_version
-        self._built_provider_profile = self.providers.providers.get(config.provider_id)
+            config.provider = initial_profile.provider
+        self._built_provider_profile = self.providers.providers.get(config.provider)
         self._api_model = config.model
         self._selected_model = config.model
         self._selected_model_explicit = config.model_explicit
@@ -189,9 +197,9 @@ class Harness:
         self.tool_settings = WorkspaceTools(self.workspace)
         self.agent = Agent(
             provider=(
-                build_provider(self.providers.providers[config.provider_id], config, self.openai_auth)
-                if config.provider_id
-                else HarnessProvider(config, self.login_store if not config.provider_id else None)
+                build_provider(config.providers[config.provider], config, self.openai_auth)
+                if config.provider
+                else HarnessProvider(config, self.login_store if not config.provider else None)
             ),
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
             streaming=True,
@@ -252,11 +260,27 @@ class Harness:
         finally:
             self._busy = ""
 
+    def inherited_run_instructions(self, *, continuing: bool = False) -> tuple[str, tuple[str, ...]]:
+        """Inherit authored context without recursively copying generated scaffolding."""
+        prompt = self.agent.system_prompt or ""
+        if prompt != self._generated_system_prompt:
+            # A caller may replace or edit any part of the prompt. Preserve it whole:
+            # generated-looking text could now contain authored instructions.
+            return prompt, ()
+        profiles = self._inherited_profile_instructions
+        instructions = self.config.profile(self.config.agent).instructions
+        if not continuing and instructions and instructions not in profiles:
+            profiles += (instructions,)
+        return self._parent_instructions, profiles
+
     def refresh_instructions(self) -> None:
         self.tools.refresh_limits()
         profile = self.config.profile(self.config.agent)
         base = (
             f"You are ngn, a coding assistant working in {self.workspace}. Active profile: {self.config.agent} ({self.mode}).\n"
+            "Use existing conversation and tool evidence when sufficient; obtain only missing facts. "
+            "Native file tools load applicable AGENTS.md for their target paths; avoid redundant preliminary searches for those instructions. "
+            "Before shell work, inspect project instructions applicable to all affected paths, including nested instructions. "
             "Inspect before changing. Use bounded file tools; read before edit, make one exact unique replacement, and check tool errors. "
             "Complete the user's authorized task end to end. Continue fixing and verifying actionable findings, including findings from delegated reviews, "
             "instead of ending with an acknowledgement or a plan while required work remains possible. Respect requests to stop; explain concrete blockers when you cannot proceed. "
@@ -276,6 +300,9 @@ class Harness:
         )
         if profile.instructions:
             base += f"\nTrusted profile instructions:\n{profile.instructions}\n"
+        for instructions in self._inherited_profile_instructions:
+            if instructions != profile.instructions:
+                base += f"\nParent profile instructions (your own permission ceiling applies):\n{instructions}\n"
         if self._parent_instructions:
             base += (
                 "\nParent run context (does not grant tools or permissions; your own profile and permission ceiling apply):\n"
@@ -284,12 +311,13 @@ class Harness:
             )
         if self.can_delegate:
             base += (
-                "\nWhen available in your tools, use delegate(prompt, agent='assistant') for independent tasks, or select an explicitly configured agent profile. "
+                "\nHandle small or tightly coupled work directly unless delegation is requested. "
+                "When available in your tools, use delegate(prompt, agent='assistant') for substantial independent work, or select an explicitly configured agent profile. "
                 f"Available agents: {', '.join(self.config.profile_names)}. "
                 "Children cannot exceed your permission ceiling; writes and shell still pass through the host approval policy. It returns immediately; "
-                "continue your own work while children run. Their results arrive as untrusted background notifications "
-                "after your turn. If no independent work remains, end this model turn with a brief progress note; "
-                "the harness delivers completed child results and resumes you automatically. No wake-up scheduler is needed to receive child results. "
+                "continue useful independent work while children run. When only waiting, end this model turn without tool calls; "
+                "the harness waits and resumes you with their untrusted background results. Then complete the task. "
+                "No wake-up scheduler is needed to receive child results. "
                 "Do not poll or duplicate already delegated work. There are at most 3 simultaneous "
                 "and 8 total child executions across the entire tree per root user run, including human follow-ups. "
                 f"Your depth is {self.subagent_depth}; delegation stops at depth {self.config.max_subagent_depth}. "
@@ -306,6 +334,7 @@ class Harness:
         for path, content in sorted(self.instructions.items(), key=lambda item: (len(Path(item[0]).parts), item[0])):
             base += f"\nApplicable project context ({path}):\n{content}\n"
         self.agent.system_prompt = base
+        self._generated_system_prompt = base
 
     async def initialize(self, *, create_session: bool = True) -> None:
         """Initialize local sessions, instructions and trusted extensions. No provider I/O.
@@ -343,12 +372,12 @@ class Harness:
                     self.refresh_instructions()
                     if (
                         not self.config.demo
-                        and not self.config.provider_id
-                        and self.config.provider in {"openai", "openai_compatible"}
-                        and not self.config.base_url
-                        and self.config.api == "auto"
-                        and self.config.auth != "api-key"
-                        and (self.config.auth == "chatgpt" or self.openai_auth.logged_in())
+                        and not self.config.provider
+                        and self.config.provider_profile().kind in {"openai", "openai_compatible"}
+                        and not self.config.provider_profile().base_url
+                        and self.config.provider_profile().api == "auto"
+                        and self.config.provider_profile().auth != "api-key"
+                        and (self.config.provider_profile().auth == "chatgpt" or self.openai_auth.logged_in())
                     ):
                         await self._use_chatgpt()
                     if self.config.demo and self.config.plugins:
@@ -691,7 +720,7 @@ class Harness:
             profile = self.config.profile(name)
             if profile.provider:
                 await self._select_provider(profile.provider)
-            elif self.config.provider_id and self.config.provider_id != self.providers.active and self.providers.active:
+            elif self.config.provider and self.config.provider != self.providers.active and self.providers.active:
                 await self._select_provider(self.providers.active)
             self.config.agent = name
             self.config.model = profile.model or self._selected_model
@@ -720,10 +749,12 @@ class Harness:
         config.validate()
         if config.demo is not self.config.demo:
             raise ValueError("Provider overrides cannot change demo mode")
-        identity = ("provider_id", "provider", "base_url", "api", "auth", "api_key_env", "api_version")
-        changing = any(getattr(config, name) != getattr(self.config, name) for name in identity)
-        if config.provider_id and self._built_provider_profile is not None:
-            current = self.provider_store.load().providers.get(config.provider_id)
+        changing = (config.provider, config.provider_profile()) != (
+            self.config.provider,
+            self.config.provider_profile(),
+        )
+        if config.provider and self._built_provider_profile is not None:
+            current = self.provider_store.load().providers.get(config.provider)
             changing = changing or (
                 current is not None
                 and (current.scope, current.request_timeout)
@@ -731,13 +762,13 @@ class Harness:
             )
         if changing:
             replacement: Provider
-            if config.provider_id:
+            if config.provider:
                 registry = self.provider_store.load()
-                profile = registry.providers.get(config.provider_id)
+                profile = registry.providers.get(config.provider)
                 if profile is None:
                     raise ValueError("Named provider connection was removed; reload settings")
                 replacement = build_provider(profile, config, self.openai_auth)
-            elif config.auth == "chatgpt":
+            elif config.provider_profile().auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
                     self._api_model = self.agent.provider.model
                 replacement = OpenAIProvider(self.openai_auth.credentials, model=config.model)
@@ -747,9 +778,9 @@ class Harness:
                 await self.agent.close()
             finally:
                 self.agent.provider = replacement
-            self._built_provider_profile = profile if config.provider_id else None
-        for name in identity:
-            setattr(self.config, name, getattr(config, name))
+            self._built_provider_profile = profile if config.provider else None
+        self.config.provider = config.provider
+        self.config.providers = dict(config.providers)
         self.config.model = config.model
         self.config.model_explicit = True
         self.agent.provider.model = config.model
@@ -761,13 +792,8 @@ class Harness:
             raise ValueError(f"Unknown provider connection {name!r}")
         candidate = replace(
             self.config,
-            provider_id=name,
-            provider=profile.kind,
-            base_url=profile.base_url,
-            api=profile.api,
-            auth=profile.auth,
-            api_key_env=profile.key_env,
-            api_version=profile.api_version,
+            provider=name,
+            providers=dict(registry.providers),
         )
         await self.reconfigure_provider(candidate)
         self.providers = registry
@@ -859,13 +885,8 @@ class Harness:
             raise ValueError(f"Unknown provider connection {name!r}")
         candidate = replace(
             self.config,
-            provider_id=name,
-            provider=profile.kind,
-            base_url=profile.base_url,
-            api=profile.api,
-            auth=profile.auth,
-            api_key_env=profile.key_env,
-            api_version=profile.api_version,
+            provider=name,
+            providers=dict(registry.providers),
         )
         provider = build_provider(profile, candidate, self.openai_auth)
         try:
@@ -878,7 +899,7 @@ class Harness:
     async def _use_chatgpt(self) -> None:
         if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
             self._api_model = self.agent.provider.model
-        profile = self.provider_store.load().providers.get(self.config.provider_id) if self.config.provider_id else None
+        profile = self.provider_store.load().providers.get(self.config.provider) if self.config.provider else None
         replacement = OpenAIProvider(
             self.openai_auth.credentials, model=self.config.model, timeout=profile.request_timeout if profile else 120.0
         )
@@ -893,9 +914,9 @@ class Harness:
             if self.config.demo:
                 raise ValueError("Login is disabled in offline demo. Restart ngn without --demo, then use /login.")
             if (
-                self.config.provider not in {"openai", "openai_compatible"}
-                or self.config.base_url
-                or self.config.api != "auto"
+                self.config.provider_profile().kind not in {"openai", "openai_compatible"}
+                or self.config.provider_profile().base_url
+                or self.config.provider_profile().api != "auto"
             ):
                 raise ValueError(
                     "Device login is for the default OpenAI provider, without a custom base_url or api override."
@@ -904,7 +925,7 @@ class Harness:
             authorization = await self.openai_auth.start_device_login()
             await show_code(authorization)
             await self.openai_auth.complete_device_login(authorization)
-            self.config.auth = "chatgpt"
+            self.config.providers[self.config.provider] = replace(self.config.provider_profile(), auth="chatgpt")
             await self._use_chatgpt()
             # Remember the selection so later runs use ChatGPT without flags.
             self.login_store.save(ProviderLogin(provider="openai", model=self.config.model, auth="chatgpt"))
@@ -922,12 +943,18 @@ class Harness:
                 raise ValueError("Login is disabled in offline demo. Restart ngn without --demo, then use ngn login.")
             candidate = replace(
                 self.config,
-                provider=login.provider,
+                provider="",
+                providers={
+                    **self.config.providers,
+                    "": ProviderProfile(
+                        kind=login.provider,
+                        base_url=login.base_url,
+                        api=login.api,
+                        auth="api-key",
+                        api_key_env=login.api_key_env or self.config.provider_profile().key_env,
+                    ),
+                },
                 model=self.config.model,
-                base_url=login.base_url,
-                api=login.api,
-                auth="api-key",
-                api_key_env=login.api_key_env or self.config.api_key_env,
             )
             if not login.api_key and not login.api_key_env:
                 raise ValueError(
@@ -938,9 +965,9 @@ class Harness:
             stored = replace(
                 login,
                 model=candidate.model,
-                base_url=candidate.base_url,
-                api=candidate.api,
-                api_key_env=candidate.api_key_env,
+                base_url=candidate.provider_profile().base_url,
+                api=candidate.provider_profile().api,
+                api_key_env=candidate.provider_profile().key_env,
             )
             previous = self.login_store.selection()
             self.login_store.save(stored)
@@ -952,7 +979,9 @@ class Harness:
                 else:
                     self.login_store.save(previous)
                 raise
-            self.diagnostics.append(f"Signed in to provider {candidate.provider} using saved credentials")
+            self.diagnostics.append(
+                f"Signed in to provider {candidate.provider_profile().kind} using saved credentials"
+            )
 
     async def logout(self) -> None:
         """Remove only ngn's local logins, not other clients' credentials."""
@@ -961,9 +990,9 @@ class Harness:
                 raise ValueError("Logout is disabled in offline demo; your saved credentials were not touched.")
             self.openai_auth.logout()
             self.login_store.remove()
-            if self.config.provider_id:
-                profile = self.provider_store.load().providers[self.config.provider_id]
-                self.config.auth = profile.auth
+            if self.config.provider:
+                profile = self.provider_store.load().providers[self.config.provider]
+                self.config.providers[self.config.provider] = profile
                 if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
                     replacement = build_provider(profile, self.config, self.openai_auth)
                     try:
@@ -971,7 +1000,7 @@ class Harness:
                     finally:
                         self.agent.provider = replacement
                 return
-            self.config.auth = "api-key"
+            self.config.providers[self.config.provider] = replace(self.config.provider_profile(), auth="api-key")
             if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
                 self.config.model = self._api_model
                 replacement = HarnessProvider(self.config, self.login_store)
@@ -983,8 +1012,8 @@ class Harness:
     def auth_status(self) -> str:
         if self.config.demo:
             return "Offline demo; authentication is disabled"
-        if self.config.provider_id:
-            profile = self.provider_store.load().providers[self.config.provider_id]
+        if self.config.provider:
+            profile = self.provider_store.load().providers[self.config.provider]
             if profile.auth == "entra":
                 return "Microsoft Entra ID via DefaultAzureCredential (token resolved at request time)"
             if profile.auth == "codex" or (
@@ -998,11 +1027,11 @@ class Harness:
                 return f"API key from ${profile.key_env} (value never displayed)"
         if (
             isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth
-        ) or self.config.auth == "chatgpt":
+        ) or self.config.provider_profile().auth == "chatgpt":
             return self.openai_auth.status()
-        if self.login_store.key_for(self.config.provider):
-            return f"{self.config.provider} API key saved in ngn's private credential store (value never displayed)"
-        return f"API key from ${self.config.api_key_env} (value never displayed)"
+        if self.login_store.key_for(self.config.provider_profile().kind):
+            return f"{self.config.provider_profile().kind} API key saved in ngn's private credential store (value never displayed)"
+        return f"API key from ${self.config.provider_profile().key_env} (value never displayed)"
 
     def login_status(self) -> str:
         if self.config.demo:
@@ -1014,7 +1043,7 @@ class Harness:
         loaded = ", ".join(str(path) for path in self.config.config_paths) or "built-in defaults"
         model = self.agent.provider.model or self.config.model
         lines = [
-            f"Provider: {self.config.provider}",
+            f"Provider: {self.config.provider_profile().kind}",
             f"Model: {model}",
             f"Config: {loaded}",
         ]
@@ -1029,8 +1058,8 @@ class Harness:
                 "OFFLINE DEMO" if self.config.demo else "Live coding harness (network only on a live request)",
                 f"Workspace: {self.workspace}",
                 f"Session: {self.session_id}",
-                f"Provider/model: {self.config.provider} / {self.agent.provider.model}",
-                f"HTTP API: {self.config.api}",
+                f"Provider/model: {self.config.provider_profile().kind} / {self.agent.provider.model}",
+                f"HTTP API: {self.config.provider_profile().api}",
                 f"Endpoint: {self.agent.provider.base_url}",
                 f"Authentication: {self.auth_status()}",
                 f"Theme: {self.config.theme}; background: {self.config.theme_background}; animations: {self.config.animations}",

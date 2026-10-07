@@ -194,3 +194,63 @@ async def test_wakeup_metadata_is_inherited_by_native_children_without_rewriting
     finally:
         await child.close()
         await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["schedule_wakeup", "wake_up_in"])
+@pytest.mark.parametrize("change", ["replace", "description", "parameters"])
+async def test_wakeup_schema_dedup_preserves_custom_contracts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, change: str
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Unused")
+
+    async def custom(reason: str) -> str:
+        return reason
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+
+    async def schedule(owner: str, seconds: float, reason: str) -> dict[str, str]:
+        raise AssertionError("Schema checks must not schedule work")
+
+    harness.wakeup_handler = schedule
+    try:
+        registry = harness.agent.tool_registry
+        assert "wake_up_in" not in {tool.name for tool in registry.get_all()}
+        assert registry.get("wake_up_in") is not None
+        definition = registry.get(name)
+        assert definition is not None
+        if change == "replace":
+            registry.register(custom, name=name)
+        elif change == "description":
+            definition.description = "Custom scheduling behavior."
+        else:
+            definition.parameters["properties"]["reason"]["description"] = "Custom purpose."
+        assert {"schedule_wakeup", "wake_up_in"} <= {tool.name for tool in registry.get_all()}
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["schedule_wakeup", "wake_up_in"])
+async def test_wakeup_schema_dedup_keeps_workspace_disable_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+
+    async def schedule(owner: str, seconds: float, reason: str) -> dict[str, str]:
+        raise AssertionError("Schema checks must not schedule work")
+
+    harness.wakeup_handler = schedule
+    try:
+        harness.tool_settings.save({"assistant": {name: False}}, "")
+        visible = {tool.name for tool in harness.agent.tool_registry.get_all()}
+        assert "wake_up_in" not in visible
+        assert ("schedule_wakeup" in visible) is (name == "wake_up_in")
+        result = await harness.agent.tool_executor.execute(ToolCall("disabled", name, {"reason": "test", "seconds": 1}))
+        assert result.error
+    finally:
+        await harness.close()

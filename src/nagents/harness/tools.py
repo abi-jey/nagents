@@ -264,6 +264,7 @@ class CodingTools:
         self.call_id: ContextVar[str] = ContextVar("harness_tool_call_id", default="")
         self.builtins: dict[str, Callable[..., object]] = {}
         self._limit_definitions: dict[str, ToolDefinition] = {}
+        self._wakeup_definitions: dict[str, ToolDefinition] = {}
         self.skills: dict[str, tuple[str, str]] = {}
         self.workspace_skills: dict[str, tuple[str, str]] = {}
         self.skill_diagnostics: tuple[str, ...] = ()
@@ -293,6 +294,7 @@ class CodingTools:
         self.builtins[name] = function
         if function == self.schedule_wakeup and name in {"schedule_wakeup", "wake_up_in"}:
             definition.parameters["required"] = ["reason"]
+            self._wakeup_definitions[name] = definition
         if name in {"read_file", "shell"}:
             self._limit_definitions[name] = definition
         return definition
@@ -302,14 +304,10 @@ class CodingTools:
         config = self.harness.config
         descriptions = {
             "read_file": (
-                "Read UTF-8 text with line numbers and a SHA-256 snapshot required for editing. "
-                f"The entire file must fit within {config.max_file_bytes} bytes, even when requesting a line slice. "
-                f"Returned content is capped at {config.max_output} bytes. Lines are 1-based. "
-                "Displayed separators are normalized to LF; newline_style and newline_counts describe the "
-                "original CR/LF terminators across the entire file. For exact edits, omit line-number prefixes "
-                "and preserve original terminators in old (JSON \\r\\n for CRLF, \\r for CR). "
-                "Mixed files have no single separator to substitute; use an exact, unique single-line snippet "
-                "when the required terminators are unknown."
+                "Read numbered UTF-8 lines; the SHA-256 snapshot is remembered internally for edit. "
+                f"The entire file must fit within {config.max_file_bytes} bytes, including for slices. "
+                f"Returned content is capped at {config.max_output} bytes. "
+                "Displayed lines use LF; newline_style and newline_counts report original CR/LF terminators."
             ),
             "shell": (
                 "Run a local POSIX shell in the workspace after approval. NOT SANDBOXED. "
@@ -319,8 +317,8 @@ class CodingTools:
         }
         parameters = {
             "read_file": {
-                "start_line": "First line to return, starting at 1. Defaults to 1.",
-                "limit": "Number of lines to return, from 1 through 1000. Defaults to 200; does not relax the whole-file size limit.",
+                "start_line": "1-based first line; default 1.",
+                "limit": "Line count, not ending line: 1..1000; default 200.",
             },
             "shell": {
                 "command": "Nonblank POSIX shell command, at most 16384 characters and without NUL characters.",
@@ -730,7 +728,13 @@ class CodingTools:
             raise PermissionError("reviewer profile is read-only; edits and shell are denied")
 
     async def edit(self, path: str, old: str, new: str) -> dict[str, JsonValue]:
-        """Replace exactly one nonempty literal occurrence after read, conflict check, diff preview and approval."""
+        r"""Edit an existing file after read, conflict check, diff preview and approval.
+
+        Args:
+            path: Existing workspace file, already read with read_file.
+            old: Unique nonempty literal without displayed line numbers. Preserve original CR/LF (JSON \r\n for CRLF, \r for CR); use a unique single-line match when mixed terminators are unknown.
+            new: Literal replacement; empty deletes the match. Preserve original line endings unless changing them intentionally.
+        """
         self.writable()
         relative = self.relative(path)
         known = dict(self.harness.instructions)

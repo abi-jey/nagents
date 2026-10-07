@@ -19,10 +19,13 @@ from nagents.events import ErrorEvent
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
 from nagents.harness.auth import OpenAIAuth
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.tools import CodingTools
 from nagents.provider.openai import CodexCredentials
 from nagents.tui import NagentsApp
 from nagents.web.provider_setup import provider_error
+from tests.support.config import connection
 from tests.support.tui import idle
 from tests.support.web import client_app
 
@@ -162,7 +165,16 @@ def native_timeout(monkeypatch: pytest.MonkeyPatch) -> Mock:
 
 
 def native_config(workspace: Path) -> HarnessConfig:
-    return HarnessConfig(workspace=workspace, data_dir=workspace / "sessions", auth="chatgpt", model="fixture")
+    providers = connection(name="fixture", auth="chatgpt")
+    store = ScopedProviderRegistryStore(workspace).workspace_store
+    store.save(ProviderRegistry(active="fixture", providers=providers), expected=store.load().revision)
+    return HarnessConfig(
+        workspace=workspace,
+        data_dir=workspace / "sessions",
+        provider="fixture",
+        providers=providers,
+        model="fixture",
+    )
 
 
 @pytest.mark.asyncio

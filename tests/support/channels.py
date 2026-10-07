@@ -28,7 +28,10 @@ from nagents.events import ToolCallEvent
 from nagents.harness import Harness
 from nagents.harness import runtime
 from nagents.harness.config import HarnessConfig
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.app import create_app
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 
@@ -233,11 +236,19 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
         return fake
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)
+    monkeypatch.setattr(runtime, "build_provider", lambda profile, config, auth: provider(config))
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-scripted-provider-key")
     assets = tmp_path / "static"
     (assets / "assets").mkdir(parents=True, exist_ok=True)
     (assets / "index.html").write_text("fixture")
-    config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", auth="api-key")
+    selected = connection(name="fixture", auth="api-key")
+    store = ScopedProviderRegistryStore(tmp_path)
+    saved = store.global_store.load()
+    if "fixture" in saved.providers:
+        selected = {"fixture": saved.providers["fixture"]}
+    else:
+        store.global_store.save(ProviderRegistry(active="fixture", providers=selected), expected=saved.revision)
+    config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", provider="fixture", providers=selected)
 
     def harness(config: HarnessConfig) -> Harness:
         instance = Harness(config)

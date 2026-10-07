@@ -18,6 +18,7 @@ from tests.providers.test_openai_provider import credentials
 from tests.providers.test_openai_provider import endpoint
 from tests.providers.test_openai_provider import sse
 from tests.providers.test_openai_provider import text_item
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
@@ -56,7 +57,10 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
 
     async def scenario() -> None:
         config = HarnessConfig(
-            tmp_path, data_dir=tmp_path / "data", auth="api-key", profiles={"reviewer": AgentProfile(mode="reviewer")}
+            tmp_path,
+            data_dir=tmp_path / "data",
+            providers=connection(auth="api-key"),
+            profiles={"reviewer": AgentProfile(mode="reviewer")},
         )
         async with (
             endpoint(monkeypatch, handle),
@@ -84,7 +88,8 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
             catalog = (await client.get("/api/tools", headers=headers)).json()
             ui = tool_map(catalog)
             wire = await capture()
-            assert set(wire) == set(ui)
+            assert set(wire) == set(ui) - {"wake_up_in"}
+            assert harness.agent.tool_registry.get("wake_up_in") is not None
             for name, definition in wire.items():
                 assert definition["description"] == ui[name]["description"]
                 assert definition["parameters"] == ui[name]["parameters"]

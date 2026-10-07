@@ -174,9 +174,11 @@ class SubagentManager:
 
     async def delegate(self, prompt: str, agent: str = "assistant") -> dict[str, str]:
         """Start a general-purpose child and immediately return task_id, name, status.
-        Continue your own work; its bounded result arrives as untrusted background
-        data after your turn. Children inherit your permission ceiling; writes
-        and shell pass through the host approval policy. The whole tree shares 3 concurrent
+        Continue useful independent work. When only waiting, end the current model
+        turn without tool calls; the harness waits and resumes you with untrusted
+        results. Then complete the task.
+        Children inherit your permission ceiling; writes and shell pass through
+        the host approval policy. The whole tree shares 3 concurrent
         slots and 8 executions per root run; full quotas fail immediately.
 
         Args:
@@ -366,7 +368,7 @@ class SubagentManager:
             defined.refresh_instructions()
             return defined
         chatgpt = isinstance(parent.agent.provider, OpenAIProvider) and parent.agent.provider.uses_chatgpt_auth
-        if not isinstance(parent.agent.provider, HarnessProvider) and not chatgpt and not parent.config.provider_id:
+        if not isinstance(parent.agent.provider, HarnessProvider) and not chatgpt and not parent.config.provider:
             raise ValueError(
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
@@ -381,7 +383,17 @@ class SubagentManager:
             plugins=(),
             diagnostics=(),
             demo=parent.config.demo or self.root.harness.config.demo,
-            auth="chatgpt" if chatgpt else "api-key",
+            providers={
+                **parent.config.providers,
+                parent.config.provider: replace(
+                    parent.config.provider_profile(),
+                    auth=parent.config.provider_profile().auth
+                    if parent.config.provider
+                    else "chatgpt"
+                    if chatgpt
+                    else "api-key",
+                ),
+            },
             max_tool_rounds=min(parent.config.max_tool_rounds, 12),
             max_subagent_depth=min(parent.config.max_subagent_depth, self.root.harness.config.max_subagent_depth),
         )
@@ -412,7 +424,9 @@ class SubagentManager:
         child.tasks = SubagentManager(child, self.root)
         child._owns_auth = False
         child.openai_auth = self.root.harness.openai_auth
-        child._parent_instructions = parent._parent_instructions if continuing else parent.agent.system_prompt or ""
+        child._parent_instructions, child._inherited_profile_instructions = parent.inherited_run_instructions(
+            continuing=continuing
+        )
         child.instructions = dict(parent.instructions)
         child.agent.tool_registry.clear()
         child.tools.builtins.pop("delegate", None)

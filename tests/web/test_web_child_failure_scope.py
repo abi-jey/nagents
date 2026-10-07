@@ -13,10 +13,13 @@ from nagents.events import ErrorEvent
 from nagents.events import ToolCallProgressEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.service import WebState
 from tests.harness.test_harness import ScriptedProvider
 from tests.support.child_failures import ChildFailureScenario
+from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 
@@ -24,6 +27,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.web.service import Run
+
+
+def fixture_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HarnessConfig:
+    """A named configured connection admits chat while transport stays scripted."""
+    monkeypatch.setenv("NGN_CHILD_FAILURE_TEST_KEY", "test-only-scripted-key")
+    selected = connection(name="fixture", auth="api-key", api_key_env="NGN_CHILD_FAILURE_TEST_KEY")
+    store = ScopedProviderRegistryStore(tmp_path).workspace_store
+    store.save(ProviderRegistry(active="fixture", providers=selected), expected=store.load().revision)
+    return HarnessConfig(tmp_path, data_dir=tmp_path / "state", provider="fixture", providers=selected)
 
 
 @pytest.mark.asyncio
@@ -49,7 +61,8 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
             protected_drafts.extend(drafts)
 
     monkeypatch.setattr(WebState, "send", capture)
-    config = HarnessConfig(tmp_path, data_dir=tmp_path / "state", auth="api-key", max_tool_rounds=6)
+    config = fixture_config(tmp_path, monkeypatch)
+    config.max_tool_rounds = 6
     async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, harnesses):
         harness = harnesses[0]
         state = cast("WebState", app.state.web)
@@ -68,7 +81,7 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
                 response = await client.post(
                     "/api/run", headers=headers, json={"session_id": harness.session_id, "prompt": "ROOT"}
                 )
-                assert response.status_code == 200
+                assert response.status_code == 200, response.text
                 wire = [json.loads(line) for line in response.text.splitlines() if line]
                 assert next(record for record in wire if record["event"] == "run_finished")["status"] == expected
         scenario.assert_recovered()
@@ -112,7 +125,7 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
 async def test_upstream_error_code_cannot_spoof_task_scope_or_hide_a_root_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
 ) -> None:
-    config = HarnessConfig(tmp_path, data_dir=tmp_path / "state", auth="api-key")
+    config = fixture_config(tmp_path, monkeypatch)
     async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
         harness = harnesses[0]
         harness.run = Harness.run.__get__(harness)  # type: ignore[method-assign]
@@ -146,7 +159,8 @@ async def test_stop_still_cancels_chat_and_voice_trees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool
 ) -> None:
     scenario = ChildFailureScenario(monkeypatch, hold_child=True)
-    config = HarnessConfig(tmp_path, data_dir=tmp_path / "state", auth="api-key", max_tool_rounds=6)
+    config = fixture_config(tmp_path, monkeypatch)
+    config.max_tool_rounds = 6
     async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, harnesses):
         harness = harnesses[0]
         state = cast("WebState", app.state.web)
@@ -163,7 +177,7 @@ async def test_stop_still_cancels_chat_and_voice_trees(
             await scenario.root_preview.wait()
             assert state.active is not None
             response = await client.post("/api/cancel", headers=headers, json={"run_id": state.active.id})
-            assert response.status_code == 200
+            assert response.status_code == 200, response.text
             if voice:
                 assert "stopped" in await speech
                 assert reports[-1]["status"] == "cancelled" and "result_text" not in reports[-1]

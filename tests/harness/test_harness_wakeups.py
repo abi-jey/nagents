@@ -75,7 +75,9 @@ def test_native_scheduler_callback_acknowledges_without_holding_run(
         try:
             events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert calls == [(harness.tasks.list()[0].id if child else "", 90120.5, "Check progress")]
-            assert all({"schedule_wakeup", "wake_up_in"} <= set(schema) for p in providers for schema in p.schemas)
+            assert all(
+                "schedule_wakeup" in schema and "wake_up_in" not in schema for p in providers for schema in p.schemas
+            )
             history = await harness.task_history(calls[0][0]) if child else await harness.history()
             assert_balanced(history)
             results = [message for message in history if message.role == "tool" and message.name == alias]
