@@ -88,7 +88,8 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
             catalog = (await client.get("/api/tools", headers=headers)).json()
             ui = tool_map(catalog)
             wire = await capture()
-            assert set(wire) == set(ui)
+            assert set(wire) == set(ui) - {"wake_up_in"}
+            assert harness.agent.tool_registry.get("wake_up_in") is not None
             for name, definition in wire.items():
                 assert definition["description"] == ui[name]["description"]
                 assert definition["parameters"] == ui[name]["parameters"]

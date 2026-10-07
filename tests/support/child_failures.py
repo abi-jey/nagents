@@ -68,6 +68,7 @@ class ChildFailureScenario:
                     self.descendant_published.set()
 
         monkeypatch.setattr(runtime, "HarnessProvider", provider_factory)
+        monkeypatch.setattr(runtime, "build_provider", lambda profile, config, auth: provider_factory(config))
         monkeypatch.setattr(runtime.Harness, "load_project_instructions", lambda self: None)
         monkeypatch.setattr(CodingTools, "read_file", read_file)
         monkeypatch.setattr(SubagentManager, "_publish", observed_publish)
