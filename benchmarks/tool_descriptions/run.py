@@ -472,6 +472,10 @@ async def run(
         if usage_records
         else {},
         "cases_with_usage": sum(result["usage_reported"] is True for result in results),
+        "usage_complete": all(result["usage_reported"] is True for result in results),
+        "provider_error_cases": sum(bool(result["errors"]) for result in results),
+        "rubric_failure_cases": sum(bool(result["failures"]) and not result["errors"] for result in results),
+        "uncached_prompt_tokens": sum(record["prompt_tokens"] - record["cached_tokens"] for record in usage_records),
         "concurrency": concurrency,
         "repeats": repeats,
         "cases": len(results),

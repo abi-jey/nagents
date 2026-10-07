@@ -158,6 +158,34 @@ def test_provider_text_done_event_is_terminal(tmp_path: Path, monkeypatch: pytes
         "audio_tokens": 0,
     }
     assert result["cases_with_usage"] == 12
+    assert result["usage_complete"] is True
+    assert result["uncached_prompt_tokens"] == 72
+    assert result["provider_error_cases"] == 0
+    assert result["rubric_failure_cases"] == 0
+
+
+def test_provider_failure_is_not_a_cheap_completed_evaluation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections.abc import AsyncIterator
+
+    import benchmarks.tool_descriptions.run as benchmark
+    from nagents.events import ErrorEvent
+    from nagents.events import Event
+    from nagents.provider.openai import OpenAIProvider
+
+    async def failed_generate(self: OpenAIProvider, *args: object, **kwargs: object) -> AsyncIterator[Event]:
+        yield ErrorEvent(message="Rate limited", code="CODEX_HTTP_429")
+
+    def fake_provider(**kwargs: object) -> OpenAIProvider:
+        return OpenAIProvider(api_key="test-key", model="offline")
+
+    monkeypatch.setattr(OpenAIProvider, "generate", failed_generate)
+    monkeypatch.setattr(benchmark, "OpenAIProvider", fake_provider)
+    result = asyncio.run(benchmark.run("offline", 2, tmp_path / "results", 1, "current"))
+    assert result["passed"] == 0
+    assert result["cases_with_usage"] == 0
+    assert result["usage_complete"] is False
+    assert result["provider_error_cases"] == len(CASES)
+    assert result["rubric_failure_cases"] == 0
 
 
 def test_equivalent_recursive_glob_is_accepted() -> None:
