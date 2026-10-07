@@ -2428,7 +2428,7 @@ def _save_and_return(result_event: Any, save_path: str, session_id: str) -> str:
     from pathlib import Path
 
     logger = logging.getLogger(__name__)
-    result_str = _serialize_tool_result(result_event.result) if result_event.result is not None else "(no output)"
+    result_str = str(result_event.result) if result_event.result is not None else "(no output)"
 
     try:
         p = Path(save_path).expanduser().resolve()

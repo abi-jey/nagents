@@ -113,13 +113,12 @@ def test_compound_tools_preserve_events_and_session_context(tmp_path: Path, stre
     asyncio.run(drive())
 
 
-def test_saved_results_use_same_lossless_encoding(tmp_path: Path) -> None:
+def test_saved_results_preserve_legacy_representation(tmp_path: Path) -> None:
     result = {"rows": ["✓", None, False], "metadata": {"count": 3}}
     event = ToolResultEvent(id="read", name="read", result=result)
     path = tmp_path / "output.txt"
     assert "saved" in _save_and_return(event, str(path), "s")
-    assert json.loads(path.read_text()) == result
-    assert path.read_text() == _serialize_tool_result(result)
+    assert path.read_text() == str(result)
     large = {"body": "✓" * 2000}
     failure = _save_and_return(ToolResultEvent(id="read", name="read", result=large), str(path / "bad"), "s")
-    assert failure.split("\n", 1)[1] == _serialize_tool_result(large)[:1000]
+    assert failure.split("\n", 1)[1] == str(large)[:1000]
