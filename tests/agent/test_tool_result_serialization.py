@@ -118,7 +118,7 @@ def test_saved_results_preserve_legacy_representation(tmp_path: Path) -> None:
     event = ToolResultEvent(id="read", name="read", result=result)
     path = tmp_path / "output.txt"
     assert "saved" in _save_and_return(event, str(path), "s")
-    assert path.read_text() == str(result)
+    assert path.read_text(encoding="utf-8") == str(result)
     large = {"body": "✓" * 2000}
     failure = _save_and_return(ToolResultEvent(id="read", name="read", result=large), str(path / "bad"), "s")
     assert failure.split("\n", 1)[1] == str(large)[:1000]

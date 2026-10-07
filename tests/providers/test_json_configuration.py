@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -12,6 +13,7 @@ from nagents.harness.config import load_config
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ProviderRegistryStore
 from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.harness.tools import CodingTools
 from tests.support.web import client_app
 
 
@@ -126,7 +128,11 @@ def test_connection_fields_are_rejected_in_general_config(tmp_path: Path, field:
         load_config(tmp_path, path)
 
 
-def test_unconfigured_web_starts_for_provider_setup(tmp_path: Path) -> None:
+def test_unconfigured_web_starts_for_provider_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Provider setup does not exercise the POSIX-only workspace discovery tools.
+    monkeypatch.setattr(CodingTools, "instructions", Mock(return_value=""))
+    monkeypatch.setattr(CodingTools, "discover_skills", Mock())
+
     async def check() -> None:
         async with client_app(
             tmp_path, config=HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data"), controlled=False
