@@ -422,7 +422,9 @@ class SubagentManager:
         child.tasks = SubagentManager(child, self.root)
         child._owns_auth = False
         child.openai_auth = self.root.harness.openai_auth
-        child._parent_instructions = parent._parent_instructions if continuing else parent.agent.system_prompt or ""
+        child._parent_instructions, child._inherited_profile_instructions = parent.inherited_run_instructions(
+            continuing=continuing
+        )
         child.instructions = dict(parent.instructions)
         child.agent.tool_registry.clear()
         child.tools.builtins.pop("delegate", None)

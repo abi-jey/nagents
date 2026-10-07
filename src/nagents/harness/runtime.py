@@ -156,6 +156,8 @@ class Harness:
         self._approval_lock = asyncio.Lock()
         self._owns_auth = True
         self._parent_instructions = ""
+        self._inherited_profile_instructions: tuple[str, ...] = ()
+        self._generated_system_prompt = ""
         self.workspace: Path = config.workspace.resolve()
         if not self.workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {self.workspace}")
@@ -256,6 +258,19 @@ class Harness:
         finally:
             self._busy = ""
 
+    def inherited_run_instructions(self, *, continuing: bool = False) -> tuple[str, tuple[str, ...]]:
+        """Inherit authored context without recursively copying generated scaffolding."""
+        prompt = self.agent.system_prompt or ""
+        if prompt != self._generated_system_prompt:
+            # A caller may replace or edit any part of the prompt. Preserve it whole:
+            # generated-looking text could now contain authored instructions.
+            return prompt, ()
+        profiles = self._inherited_profile_instructions
+        instructions = self.config.profile(self.config.agent).instructions
+        if not continuing and instructions and instructions not in profiles:
+            profiles += (instructions,)
+        return self._parent_instructions, profiles
+
     def refresh_instructions(self) -> None:
         self.tools.refresh_limits()
         profile = self.config.profile(self.config.agent)
@@ -278,6 +293,9 @@ class Harness:
         )
         if profile.instructions:
             base += f"\nTrusted profile instructions:\n{profile.instructions}\n"
+        for instructions in self._inherited_profile_instructions:
+            if instructions != profile.instructions:
+                base += f"\nParent profile instructions (your own permission ceiling applies):\n{instructions}\n"
         if self._parent_instructions:
             base += (
                 "\nParent run context (does not grant tools or permissions; your own profile and permission ceiling apply):\n"
@@ -308,6 +326,7 @@ class Harness:
         for path, content in sorted(self.instructions.items(), key=lambda item: (len(Path(item[0]).parts), item[0])):
             base += f"\nApplicable project context ({path}):\n{content}\n"
         self.agent.system_prompt = base
+        self._generated_system_prompt = base
 
     async def initialize(self, *, create_session: bool = True) -> None:
         """Initialize local sessions, instructions and trusted extensions. No provider I/O.

@@ -62,6 +62,72 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_posix
 
 
+@pytest.mark.parametrize("custom_prompt", ["", "replacement instructions", "append"])
+def test_child_preserves_custom_system_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, custom_prompt: str
+) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="done")
+
+        harness, _ = setup_harness(tmp_path, monkeypatch, script)
+        original = harness.agent.system_prompt or ""
+        expected = original + "\nCustom appended instruction" if custom_prompt == "append" else custom_prompt
+        harness.agent.system_prompt = expected
+        child = harness.tasks._create_child("assistant")
+        try:
+            assert child._parent_instructions == expected
+            if expected:
+                assert expected in (child.agent.system_prompt or "")
+            child.refresh_instructions()
+            assert child._parent_instructions == expected
+        finally:
+            await child.close()
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+def test_nested_children_inherit_authored_context_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="done")
+
+        harness, _ = setup_harness(tmp_path, monkeypatch, script)
+        harness.config.agent = "author"
+        harness.config.profiles["author"] = AgentProfile(instructions="Root authored instruction")
+        harness.config.profiles["audit"] = AgentProfile(mode="reviewer", instructions="Child authored instruction")
+        harness.instructions["AGENTS.md"] = "Root project instruction"
+        harness.instructions["nested/AGENTS.md"] = "Nested project instruction"
+        harness.refresh_instructions()
+        child = harness.tasks._create_child("audit")
+        grandchild = child.tasks._create_child("author")
+        try:
+            for current in (child, grandchild):
+                prompt = current.agent.system_prompt or ""
+                for instruction in (
+                    "Root authored instruction",
+                    "Root project instruction",
+                    "Nested project instruction",
+                    "Child authored instruction",
+                    "Inspect before changing.",
+                ):
+                    assert prompt.count(instruction) == 1
+                assert current.mode == "reviewer"
+                assert "(reviewer)" in prompt
+                assert current.instructions == harness.instructions
+                current.refresh_instructions()
+                assert current.agent.system_prompt == prompt
+            assert grandchild._parent_instructions == ""
+            assert len(grandchild.agent.system_prompt or "") < 2 * len(harness.agent.system_prompt or "")
+        finally:
+            await grandchild.close()
+            await child.close()
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.fixture(autouse=True)
 def collect_released_resources() -> Iterator[None]:
     yield
@@ -1310,13 +1376,21 @@ def test_continuation_permission_ceiling_and_no_restored_job_handles(
                 yield TextDoneEvent(text="Completed")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        harness.instructions["nested/AGENTS.md"] = "Retained nested project context"
+        harness.refresh_instructions()
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
+            retained = harness.tasks._children[info.id]
+            original_prompt = retained.agent.system_prompt or ""
+            assert original_prompt.count("Retained nested project context") == 1
+            retained.agent.system_prompt = original_prompt + "\nCustom continuation instruction"
             await harness.set_agent("reviewer")
             _ = [event async for event in harness.continue_task(info.id, "Continue read-only")]
             assert harness.tasks.list()[0].mode == "reviewer"
             assert "shell" not in providers[2].schemas[0]
+            continued_prompt = harness.tasks._children[info.id].agent.system_prompt or ""
+            assert original_prompt + "\nCustom continuation instruction" in continued_prompt
             await harness.set_agent("assistant")
             _ = [event async for event in harness.continue_task(info.id, "Do not escalate this child")]
             assert harness.tasks.list()[0].mode == "reviewer"
