@@ -13,6 +13,7 @@ Paraphrases, config fields and directory layouts differ across these fixed sets.
 knowledge/conversation, context-known answers, filename versus literal-content
 search, inspection questions, advice-only requests, cancelled work, ambiguous target selection
 and authorized saved edits.
+Harmless extra JSON fields are allowed when required fields are correct.
 They are not a general intent accuracy estimate or a multi-turn interruption test.
 Machine-readable output fields permit deterministic outcome grading without
 matching prose or prescribing a particular tool sequence. Clarification keyword
@@ -20,7 +21,8 @@ checks only detect obviously unrelated questions: all ambiguity answers require
 manual review of whether the question resolves the missing target choice.
 Denied mutation attempts still fail intent compliance on read-only, advice and
 cancellation cases; task-answer correctness is retained separately. Equivalent tool choices
-are allowed. Tool-free answers require zero calls. Other minimum-action targets are
+are allowed. Knowledge, conversation, context-known and cancellation answers require zero calls.
+Advice-only inspection is allowed but compared against its zero-call target. Other minimum-action targets are
 reported separately, not used to excuse incorrect answers. Saved edits require a
 successful read after the last mutation and preserve other fixture content.
 

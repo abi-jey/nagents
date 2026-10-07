@@ -153,5 +153,7 @@ def cases() -> tuple[Case, ...]:
                 expected,
                 corrected,
             )
-            result.append(Case(split, scenario, maximum, maximum == 0))
+            result.append(
+                Case(split, scenario, maximum, name in {"definition", "conversation", "known_context", "cancellation"})
+            )
     return tuple(result)

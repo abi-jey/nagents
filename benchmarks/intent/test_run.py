@@ -93,3 +93,31 @@ def test_denied_edit_attempt_is_intent_failure_despite_correct_answer() -> None:
     assert assessed["correct"] is False
     assert assessed["intent_failures"] == ["unrequested_mutation_attempt"]
     assert assessed["efficiency_eligible"] is False
+
+
+def test_harmless_explanatory_fields_do_not_fail_required_contract(tmp_path: Path) -> None:
+    case = cases()[0]
+    assert (
+        grade(
+            case.scenario, tmp_path, '{"idempotent":true,"explanation":"Repeating assignment changes nothing."}', set()
+        )
+        == []
+    )
+    assert "wrong_final_answer" in grade(case.scenario, tmp_path, '{"explanation":"No answer."}', set())
+
+
+def test_advice_inspection_is_correct_but_exceeds_soft_efficiency_target() -> None:
+    case = next(case for case in cases() if case.scenario.name == "development_advice_only")
+    result: dict[str, object] = {
+        "task_correct": True,
+        "failures": [],
+        "tool_events": [{"tool": "read_file", "error": ""}],
+        "usage": {"usage_complete": True},
+        "run_complete": True,
+        "source_changed": False,
+        "provider_errors": [],
+        "child_failures": 0,
+    }
+    assessed = assess(case, result)
+    assert assessed["correct"] is True
+    assert assessed["within_action_target"] is False

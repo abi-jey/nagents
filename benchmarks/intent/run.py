@@ -34,21 +34,25 @@ def source_hashes() -> dict[str, str]:
 
 def grade(scenario: Scenario, workspace: Path, answer: str, verified: set[str]) -> list[str]:
     actual = parse_answer(answer)
+    clarification_failures: list[str] = []
     if scenario.name.endswith("ambiguous_edit"):
-        # A real clarification must include a question, not just label ambiguity.
-        if isinstance(actual, dict) and isinstance(actual.get("question"), str) and actual["question"].strip():
-            normalized = dict(actual)
-            question = str(normalized.pop("question")).lower()
+        question = actual.get("question") if isinstance(actual, dict) else None
+        if not isinstance(question, str) or not question.strip():
+            clarification_failures.append("missing_clarification_question")
+        else:
             choices = (
                 ("staging", "production", "environment", "file", "configuration")
                 if scenario.name.startswith("development")
                 else ("europe", "asia", "region", "file", "configuration")
             )
-            if not any(choice in question for choice in choices):
-                return ["clarification_does_not_select_target"]
-            return grade_saved(scenario, workspace, json.dumps(normalized), verified)
-        return [*grade_saved(scenario, workspace, answer, verified), "missing_clarification_question"]
-    return grade_saved(scenario, workspace, answer, verified)
+            if not any(choice in question.lower() for choice in choices):
+                clarification_failures.append("clarification_does_not_select_target")
+    # Contracts specify required fields, not an exclusive set of output fields.
+    # Compare only required values; explanatory extras neither pass missing facts
+    # nor turn an otherwise correct answer into a failure.
+    if isinstance(actual, dict):
+        answer = json.dumps({key: actual.get(key) for key in scenario.expected})
+    return [*grade_saved(scenario, workspace, answer, verified), *clarification_failures]
 
 
 def assess(case: Case, result: dict[str, object]) -> dict[str, object]:
