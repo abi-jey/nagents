@@ -5,6 +5,7 @@ Main orchestrator for LLM interactions with auto tool execution.
 import asyncio
 import json
 import logging
+import math
 import uuid
 from collections.abc import AsyncGenerator
 from collections.abc import AsyncIterator
@@ -1901,7 +1902,9 @@ class Agent:
                         result_content = _save_and_return(result_event, save_path, session_id)
                     else:
                         result_content = (
-                            str(result_event.result) if result_event.error is None else f"Error: {result_event.error}"
+                            _serialize_tool_result(result_event.result)
+                            if result_event.error is None
+                            else f"Error: {result_event.error}"
                         )
                     await self.session.add_message(
                         session_id,
@@ -2149,7 +2152,7 @@ class Agent:
                         result_content = _save_and_return(result_event, save_path, session_id)
                     else:
                         result_content = (
-                            str(result_event.result)
+                            _serialize_tool_result(result_event.result)
                             if result_event.result is not None
                             else (result_event.error or "Error")
                         )
@@ -2387,13 +2390,45 @@ def _extract_save_path(tool_call: ToolCall) -> str | None:
     return None
 
 
+def _serialize_tool_result(result: object) -> str:
+    """Keep text intact and encode JSON values without representation whitespace.
+
+    Restrict JSON encoding to its native value types: coercing tuple values,
+    mapping keys, or custom objects would change the tool's output semantics.
+    Public result events still retain the original object.
+    """
+    if isinstance(result, str):
+        return str(result)
+    try:
+        if _is_json_tool_result(result):
+            encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            encoded.encode("utf-8")  # Keep lone-surrogate repr escapes safe for session/file storage.
+            return encoded
+    except (RecursionError, ValueError, UnicodeEncodeError):
+        # Cyclic or excessively nested tool outputs retain their existing repr.
+        pass
+    return str(result)
+
+
+def _is_json_tool_result(value: object) -> bool:
+    if value is None or type(value) in (str, bool, int):
+        return True
+    if type(value) is float:
+        return isinstance(value, float) and math.isfinite(value)
+    if type(value) is list and isinstance(value, list):
+        return all(_is_json_tool_result(item) for item in value)
+    if type(value) is dict and isinstance(value, dict):
+        return all(type(key) is str and _is_json_tool_result(item) for key, item in value.items())
+    return False
+
+
 def _save_and_return(result_event: Any, save_path: str, session_id: str) -> str:
     """Save tool result to file and return a short confirmation message."""
     import logging
     from pathlib import Path
 
     logger = logging.getLogger(__name__)
-    result_str = str(result_event.result) if result_event.result is not None else "(no output)"
+    result_str = _serialize_tool_result(result_event.result) if result_event.result is not None else "(no output)"
 
     try:
         p = Path(save_path).expanduser().resolve()
