@@ -12,7 +12,9 @@ from nagents.events import DoneEvent
 from nagents.events import FinishReason
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness import runtime
 
+from . import run
 from . import telemetry
 from .fixtures import grade
 from .fixtures import scenarios
@@ -163,3 +165,24 @@ def test_only_noncompaction_root_done_qualifies() -> None:
     assert not root_completion(DoneEvent(session_id="child"), "root", False)
     assert not root_completion(DoneEvent(session_id="root"), "root", True)
     assert not root_completion(DoneEvent(session_id=None), "root", False)
+
+
+def test_provenance_tracks_imported_runtime_outside_benchmark_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_root = tmp_path / "alternate-checkout" / "src" / "nagents"
+    runtime_path = imported_root / "harness" / "runtime.py"
+    runtime_path.parent.mkdir(parents=True)
+    runtime_path.write_text("# imported runtime\n")
+    (imported_root / "agent.py").write_text("# imported agent\n")
+    monkeypatch.setattr(runtime, "__file__", str(runtime_path))
+    hashes = run.source_hashes()
+    assert set(key for key in hashes if key.startswith("src/nagents/")) == {
+        "src/nagents/agent.py",
+        "src/nagents/harness/runtime.py",
+    }
+    assert run.source_roots()["src/nagents"] == str(imported_root)
+    assert "benchmarks/orchestration/run.py" in hashes
+    previous = hashes["src/nagents/agent.py"]
+    (imported_root / "agent.py").write_text("# changed imported agent\n")
+    assert run.source_hashes()["src/nagents/agent.py"] != previous

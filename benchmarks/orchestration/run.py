@@ -63,11 +63,19 @@ def maximum_overlap(intervals: list[tuple[float, float]]) -> int:
     return maximum
 
 
-def source_hashes() -> dict[str, str]:
-    root = Path(__file__).resolve().parents[2]
+def source_roots() -> dict[str, str]:
+    """Identify the imported implementation independently of the benchmark checkout."""
     return {
-        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for directory in (root / "src/nagents", Path(__file__).resolve().parent)
+        "src/nagents": str(Path(runtime.__file__).resolve().parents[1]),
+        "benchmarks/orchestration": str(Path(__file__).resolve().parent),
+    }
+
+
+def source_hashes() -> dict[str, str]:
+    return {
+        f"{prefix}/{path.relative_to(directory).as_posix()}": hashlib.sha256(path.read_bytes()).hexdigest()
+        for prefix, root in source_roots().items()
+        for directory in (Path(root),)
         for path in sorted(directory.rglob("*.py"))
     }
 
@@ -77,6 +85,7 @@ def root_completion(event: object, session_id: str, compacting: bool) -> bool:
 
 
 async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -> dict[str, object]:
+    source_roots_at_start = source_roots()
     source_at_start = source_hashes()
     meter = Meter()
     tool_events: list[dict[str, object]] = []
@@ -206,7 +215,7 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
         task_correct = not failures
         inspection_complete = set(scenario.files).issubset(inspected)
         child_failures = sum(outcome["status"] != "completed" or bool(outcome["error"]) for outcome in child_outcomes)
-        source_changed = source_at_start != source_hashes()
+        source_changed = source_at_start != source_hashes() or source_roots_at_start != source_roots()
         provider_errors = [error for call in meter.calls for error in call.errors]
         run_complete = root_done and root_finish_reason == FinishReason.STOP.value and not errors
         usage_complete = meter.summary()["usage_complete"] is True
@@ -260,6 +269,7 @@ async def trial(scenario: Scenario, strategy: str, model: str, timeout: float) -
             "tool_events": tool_events,
             "usage": meter.summary(),
             "source_sha256": source_at_start,
+            "source_roots": source_roots_at_start,
             "goal_sha256": sha256(scenario.goal),
             "strategy_sha256": sha256(instruction),
             "fixture_sha256": {name: sha256(content) for name, content in scenario.files.items()},
