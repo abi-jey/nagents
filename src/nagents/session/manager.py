@@ -61,7 +61,7 @@ class SessionManager:
 
         # Create migration manager with session-specific migrations
         self._migration_manager = MigrationManager(
-            self.db_path, db_name="sessions", migrations=list(session_migrations)
+            self.db_path, db_name="sessions", migrations=list(session_migrations), atomic=True
         )
         await self._migration_manager.initialize()
 
