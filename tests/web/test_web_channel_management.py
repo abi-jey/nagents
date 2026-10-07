@@ -485,9 +485,11 @@ def test_discover_and_later_status_use_real_harness_approval(tmp_path: Path, mon
         assert _approval(app, socket)["tool"] == "channel_configuration"
         app.idle()
         results = [message for message in app.providers[0].requests[-1] if message.role == "tool"][-2:]
-        assert "'writeOnly': True" in str(results[0].content)
-        assert "'revision'" in str(results[0].content)
-        assert "'APPLIED'" in str(results[1].content) and "'running'" in str(results[1].content)
+        discovered = json.loads(str(results[0].content))
+        assert discovered["plugins"][0]["schema"]["properties"]["token"]["writeOnly"] is True
+        assert "revision" in discovered
+        statuses = json.loads(str(results[1].content))["requests"]
+        assert any(status["status"] == "APPLIED" and status["connector_status"] == "running" for status in statuses)
         assert FAKE_SECRET not in str([message.content for message in results])
         assert host.opens == [(True, True)]
 

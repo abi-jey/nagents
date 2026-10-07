@@ -122,7 +122,7 @@ async def test_normal_harness_recovers_from_displayed_lf_to_exact_crlf_before_ap
                 id="read", name="read_file", arguments={"path": "fixture.txt", "start_line": 2, "limit": 2}
             )
         elif len(provider.requests) == 2:
-            assert "'newline_style': 'CRLF'" in str(messages[-1].content)
+            assert json.loads(str(messages[-1].content))["newline_style"] == "CRLF"
             yield ToolCallEvent(
                 id="displayed-lf",
                 name="edit",

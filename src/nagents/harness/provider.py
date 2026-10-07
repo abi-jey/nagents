@@ -161,10 +161,13 @@ class HarnessProvider(Provider):
             if message.role != "tool" or not isinstance(message.content, str):
                 continue
             try:
-                # Core persists tool results as Python literals, not JSON.
-                result = ast.literal_eval(message.content)
-            except (ValueError, SyntaxError):
-                continue
+                result = json.loads(message.content)
+            except json.JSONDecodeError:
+                # Persisted histories from older agents used Python literals.
+                try:
+                    result = ast.literal_eval(message.content)
+                except (ValueError, SyntaxError):
+                    continue
             if isinstance(result, dict) and message.name == "list_files":
                 files = [str(path) for path in result.get("paths", [])]
             if isinstance(result, dict) and message.name == "demo_preview":

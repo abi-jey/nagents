@@ -34,6 +34,7 @@ from nagents.harness import Notice
 from nagents.harness import ToolOutput
 from nagents.harness import load_config
 from nagents.harness.config import AgentProfile
+from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import PROVIDERS
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
@@ -1201,5 +1202,32 @@ def test_offline_demo_approval_sessions_and_no_plugins(config: HarnessConfig, tm
                 assert result_event.error and "OFFLINE DEMO" in result_event.error
         finally:
             await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_demo_reads_current_json_and_legacy_tool_history(config: HarnessConfig, accepted: bool, legacy: bool) -> None:
+    async def scenario() -> None:
+        provider = HarnessProvider(replace(config, demo=True))
+        listing = {"paths": ["sample.txt"], "truncated": False, "cursor": None}
+        approval = {"approved": accepted, "preview_only": True, "path": None}
+        encode = str if legacy else json.dumps
+        messages = [
+            Message("user", "demo approval"),
+            Message("tool", encode(listing), name="list_files", tool_call_id="list"),
+            Message("tool", encode(approval), name="demo_preview", tool_call_id="preview"),
+            Message("tool", "Error: rejected", name="list_files", tool_call_id="error"),
+            Message("tool", "{", name="demo_preview", tool_call_id="invalid"),
+        ]
+        try:
+            events = [event async for event in provider.generate(messages)]
+            final = next(event.text for event in events if isinstance(event, TextDoneEvent))
+            assert "sample.txt" in final
+            assert ("**approved**" if accepted else "**declined**") in final
+            assert "Error: rejected" not in final
+        finally:
+            await provider.close()
 
     asyncio.run(scenario())
