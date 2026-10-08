@@ -1,6 +1,8 @@
 import type { AudioDeviceSelection, Caption, LiveCreated, LiveDelegation, LiveDelegationStatus, LiveEvent, LiveMedia, LiveSnapshot, LiveState, LiveTransport, MediaHandlers } from "./types.js";
 import { readAudioDevices } from "./devices.js";
 import { readVoiceContext } from "./context.js";
+import type { AudioSource } from "../../components/voiceSphere/useVoiceSphere.js";
+import { silentSignal, type AudioFrame, type SignalFrame } from "../../components/voiceSphere/types.js";
 
 interface Dependencies {
   media(handlers: MediaHandlers, transport: LiveTransport, devices: AudioDeviceSelection): LiveMedia;
@@ -104,8 +106,24 @@ export class LiveController {
   private chatSessionId = "";
   private endingDeadline = 0;
   private disposed = false;
+  readonly audio: AudioSource = Object.freeze({ sample: (): AudioFrame => this.sampleAudio() });
 
   constructor(private readonly deps: Dependencies) {}
+  private sampleAudio(): AudioFrame {
+    const silent = (): AudioFrame => ({ input: silentSignal(), output: silentSignal() });
+    const media = this.media, epoch = this.epoch;
+    if (this.disposed || this.state.phase !== "connected" || !media?.sampleAudio) return silent();
+    try {
+      const frame = media.sampleAudio();
+      if (this.disposed || epoch !== this.epoch || media !== this.media || this.state.phase !== "connected") return silent();
+      const clean = (signal: SignalFrame, enabled: boolean): SignalFrame => {
+        if (!enabled || !signal.active) return silentSignal();
+        const level = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+        return { active: true, rms: level(signal.rms), low: level(signal.low), mid: level(signal.mid), high: level(signal.high) };
+      };
+      return { input: clean(frame.input, !this.state.micMuted), output: clean(frame.output, !this.state.outputMuted && !this.state.playbackBlocked) };
+    } catch { return silent(); }
+  }
   getSnapshot = (): LiveState => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private update(change: Partial<LiveState>) {

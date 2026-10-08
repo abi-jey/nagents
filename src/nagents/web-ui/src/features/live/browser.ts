@@ -3,6 +3,8 @@ import { readAudioDevices } from "./devices.js";
 import { captureMicrophone, DeviceChangeQueue, replaceMicrophone, selectAudioOutput, type AudioSink } from "./device-routing.js";
 import { audioLevels, type AudioLevels } from "./audio-levels.js";
 import { serverSocketUrl } from "../../api/origin.js";
+import { createPcmAudio, type PcmAudio } from "../../components/voiceSphere/audioStreams.js";
+import { silentSignal, type AudioFrame } from "../../components/voiceSphere/types.js";
 
 export function liveSupport(transport: LiveTransport = "websocket"): string {
   if (transport !== "websocket") return "Update ngn serve to use the server voice relay.";
@@ -22,13 +24,37 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
   let stream: MediaStream | undefined, context: AudioContext | undefined, capture: AudioWorkletNode | undefined, socket: WebSocket | undefined;
   let captureSource: MediaStreamAudioSourceNode | undefined;
   let meter: AudioLevels | undefined;
+  let pcm: PcmAudio | undefined;
   let closed = false, inputMuted = false, outputMuted = false, playbackTime = 0;
   let switchingInput = false, outputId = devices.outputId;
   const inputs = new DeviceChangeQueue(), outputs = new DeviceChangeQueue();
   let abortSignal: AbortSignal | undefined, rejectConnection: ((cause: Error) => void) | undefined;
   const playing = new Map<AudioBufferSourceNode, (() => void) | undefined>();
 
+  // Visualization is optional: a queue/analysis failure must never terminate
+  // microphone capture, scheduled playback, or the server-owned connection.
+  const releasePcm = () => {
+    const previous = pcm; pcm = undefined;
+    try { previous?.dispose(); } catch { /* The audio transport remains usable. */ }
+  };
+  const withPcm = (operation: (audio: PcmAudio) => void) => {
+    if (!pcm) return;
+    try { operation(pcm); } catch { releasePcm(); }
+  };
+  const resetInput = () => withPcm((audio) => audio.input.reset());
+  const resetOutput = () => withPcm((audio) => audio.output.reset());
+  const sampleAudio = (): AudioFrame => {
+    const silent = (): AudioFrame => ({ input: silentSignal(), output: silentSignal() });
+    if (closed || context?.state !== "running" || !pcm || socket?.readyState !== WebSocket.OPEN) return silent();
+    try {
+      const frame = pcm.sample();
+      return { input: inputMuted || switchingInput ? silentSignal() : frame.input,
+        output: outputMuted || playing.size === 0 ? silentSignal() : frame.output };
+    } catch { releasePcm(); return silent(); }
+  };
+
   const stopPlayback = () => {
+    resetOutput();
     for (const [source, releaseLevel] of playing) { releaseLevel?.(); source.stop(); source.disconnect(); }
     playing.clear(); playbackTime = 0;
   };
@@ -37,6 +63,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     if (closed) return;
     closed = true;
     meter?.close();
+    releasePcm();
     inputs.stop(); outputs.stop();
     abortSignal?.removeEventListener("abort", close);
     rejectConnection?.(new DOMException("Cancelled", "AbortError")); rejectConnection = undefined;
@@ -77,6 +104,9 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     playing.set(source, releaseLevel);
     const start = Math.max(context.currentTime + 0.02, playbackTime);
     source.start(start);
+    // These bytes become audible on AudioContext time, not when the socket
+    // receives them. The queue copies the PCM before this ArrayBuffer is reused.
+    withPcm((audio) => audio.output.write(new Uint8Array(data), { at: start }));
     playbackTime = start + buffer.duration;
     if (context.state !== "running") handlers.playbackBlocked(true);
   };
@@ -89,6 +119,10 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
       // Resume during the explicit Start click, before an asynchronous permission
       // prompt consumes browser user activation. A blocked resume stays retryable.
       const audio = new AudioContext(); context = audio;
+      try {
+        const format = { encoding: "s16le" as const, sampleRate: 24_000, channels: 1 as const };
+        pcm = createPcmAudio({ inputFormat: format, outputFormat: format, clock: () => audio.currentTime, maxBufferedSeconds: 2 });
+      } catch { releasePcm(); }
       meter = audioLevels(audio, handlers.levels, () => [
         !closed && !inputMuted && socket?.readyState === WebSocket.OPEN,
         !closed && !outputMuted && playing.size > 0,
@@ -97,7 +131,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         if (closed) return;
         // A backgrounded tab or device change can suspend an already-running
         // context. Discard stale speech and expose the resume action again.
-        if (audio.state !== "running") stopPlayback();
+        if (audio.state !== "running") { stopPlayback(); resetInput(); }
         meter?.sync();
         handlers.playbackBlocked(audio.state !== "running");
       };
@@ -118,6 +152,10 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
           if (socket.bufferedAmount > 192_000) { handlers.failed("The audio relay is falling behind. Reconnect to try again."); return; }
           // A worklet frame queued before a mute click must not leak after it.
           socket.send(inputMuted ? new ArrayBuffer(event.data.byteLength) : event.data);
+          if (!inputMuted && !switchingInput && audio.state === "running") {
+            const at = audio.currentTime - event.data.byteLength / (24_000 * 2);
+            withPcm((queue) => queue.input.write(new Uint8Array(event.data), { at }));
+          }
         };
         // Keep capture running without playing microphone audio locally.
         const silent = audio.createGain(); silent.gain.value = 0;
@@ -127,6 +165,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     },
     async connect(sessionId, token) {
       if (closed || !context) throw new DOMException("Cancelled", "AbortError");
+      resetInput(); stopPlayback();
       const channel = new WebSocket(serverSocketUrl(`/api/live/sessions/${encodeURIComponent(sessionId)}/audio`), ["ngn.live.v1", `ngn.token.${token}`]);
       socket = channel; channel.binaryType = "arraybuffer";
       channel.onmessage = (event: MessageEvent<ArrayBuffer>) => {
@@ -161,17 +200,18 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         };
       });
     },
-    muteInput(muted) { inputMuted = muted; stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); meter?.sync(); },
+    muteInput(muted) { inputMuted = muted; resetInput(); stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); meter?.sync(); },
     muteOutput(muted) {
       outputMuted = muted;
       if (muted) stopPlayback();
+      else resetOutput();
       meter?.sync();
     },
     setInputDevice(deviceId) {
       return inputs.run(async (signal) => {
         if (closed || !context || !capture || !captureSource || !stream) throw new DOMException("Voice is not active", "AbortError");
         const audio = context, processor = capture;
-        switchingInput = true;
+        switchingInput = true; resetInput();
         try {
           await replaceMicrophone(deviceId, signal, async (replacement) => {
             signal.throwIfAborted();
@@ -182,6 +222,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
             try { source.connect(processor); previousSource.disconnect(); }
             catch { source.disconnect(); throw new Error("Could not switch microphones. Your previous microphone is still selected. Try another microphone or System default."); }
             captureSource = source; stream = replacement; observeMicrophone(replacement);
+            resetInput();
             meter?.input(source);
             for (const track of replacement.getAudioTracks()) track.enabled = !inputMuted;
             previous.getTracks().forEach((track) => track.stop());
@@ -198,9 +239,9 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         if (closed || !context) throw new DOMException("Voice is not active", "AbortError");
         if (deviceId === outputId) return;
         await selectAudioOutput(context as AudioContext & AudioSink, deviceId, signal, true);
-        signal.throwIfAborted(); outputId = deviceId;
+        signal.throwIfAborted(); outputId = deviceId; resetOutput();
       });
     },
-    play, close,
+    play, close, sampleAudio,
   };
 }

@@ -144,7 +144,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     return () => clearInterval(timer);
   }, [connected]);
   useEffect(() => { if (state.phase === "ended" || state.phase === "error") void refresh(); }, [state.phase]);
-  return <><LiveComposer state={state} status={status} elapsed={duration(elapsed)}
+  return <><LiveComposer state={state} audio={controller.audio} status={status} elapsed={duration(elapsed)}
     disabled={settingsOpen || settingsSaving || loading || !config?.available || !!unavailable}
     unavailable={unavailable} loading={loading} voice={voice}
     settingsOpen={settingsOpen} settingsSaving={settingsSaving} inspectionOpen={inspectionOpen} inspect={inspect}
