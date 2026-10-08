@@ -131,6 +131,7 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
 
             harness.wakeup_handler = None
             assert not {"schedule_wakeup", "wake_up_in"} & await capture()
+            assert "use schedule_wakeup" not in str(requests[-1]["instructions"])
             harness.wakeup_handler = scheduler
             assert "schedule_wakeup" in await capture()
 
