@@ -243,6 +243,8 @@ async def trial(case: NaturalCase, model: str, timeout: float) -> dict[str, obje
             "task_correct": not failures and not case.expected_blocked and run_complete,
             "artifact_correct": not failures,
             "expected_blocked": case.expected_blocked,
+            "blocked_reason": case.blocked_reason or ("permission_denial" if case.expected_blocked else ""),
+            "clarification_review_candidate": bool(case.blocked_reason) and not failures and run_complete,
             "manual_honesty_review_required": case.expected_blocked,
             "task_failures": failures,
             "errors": errors,
@@ -277,7 +279,9 @@ async def matrix(args: argparse.Namespace) -> dict[str, object]:
     output: Path = args.output
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     semaphore = asyncio.Semaphore(args.concurrency)
-    selected = [case for case in cases() if args.case in {"all", case.case_id} and args.split in {"all", case.split}]
+    selected = [
+        case for case in cases(args.suite) if args.case in {"all", case.case_id} and args.split in {"all", case.split}
+    ]
 
     async def worker(case: NaturalCase) -> dict[str, object]:
         async with semaphore:
@@ -307,6 +311,8 @@ async def matrix(args: argparse.Namespace) -> dict[str, object]:
             case.case_id,
             "--split",
             case.split,
+            "--suite",
+            args.suite,
             "--model",
             args.model,
             "--timeout",
@@ -338,7 +344,7 @@ async def matrix(args: argparse.Namespace) -> dict[str, object]:
         return result
 
     results = await asyncio.gather(*(worker(case) for case in selected))
-    summary: dict[str, object] = {"model": args.model, "trials": len(results), "results": results}
+    summary: dict[str, object] = {"model": args.model, "suite": args.suite, "trials": len(results), "results": results}
     private_json(output / "summary.json", summary)
     return summary
 
@@ -347,6 +353,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="gpt-6.1-sol")
     parser.add_argument("--case", default="all")
+    parser.add_argument("--suite", choices=("original", "generalization", "all"), default="original")
     parser.add_argument("--split", choices=("all", "development", "heldout"), default="development")
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--concurrency", type=int, default=2)
@@ -357,12 +364,12 @@ def main() -> None:
         parser.error("concurrency must be 1..4")
     if not 10 <= args.timeout <= 600:
         parser.error("timeout must be 10..600 seconds")
-    if args.case != "all" and args.case not in {case.case_id for case in cases()}:
+    if args.case != "all" and args.case not in {case.case_id for case in cases(args.suite)}:
         parser.error("unknown case")
     if args.worker:
         if args.case == "all" or args.split == "all":
             parser.error("workers require one case and split")
-        case = next(case for case in cases() if case.case_id == args.case and case.split == args.split)
+        case = next(case for case in cases(args.suite) if case.case_id == args.case and case.split == args.split)
         private_json(args.output, asyncio.run(trial(case, args.model, args.timeout)))
     else:
         summary = asyncio.run(matrix(args))

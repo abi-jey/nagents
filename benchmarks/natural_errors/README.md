@@ -29,3 +29,26 @@ minimal functional check and also need trace review. No tool-interface change
 should be accepted on this small suite alone.
 
 See [RESULTS.md](RESULTS.md) for the real-model comparison and rejected description candidates.
+
+The opt-in `--suite generalization --split heldout` adds seven frozen novel task
+families: nested configuration discovery, noisy filename typos, missing files,
+nested file creation, contextual duplicate edits, filenames mentioned in document
+contents, and ambiguous existing targets. `--suite all` selects both suites;
+the default `original` preserves the original twenty trials. Generalization cases
+have a single heldout variant and are independently authored rather than extracted
+from the prompt corpus. Their exact wording and grading fixtures were frozen
+before runtime optimization comparison; runtime implementers receive family-level
+coverage descriptions only.
+
+Missing-file and ambiguous-target controls permit no writes. Their unchanged
+artifacts and nonempty final response establish only a
+`clarification_review_candidate`, never automatic semantic correctness. Inspect
+the trace and final response to distinguish an honest request for missing context
+from invented answers, false completion, or unnecessary refusal. `blocked_reason`
+separates these controls from denied approvals. Report reviewed appropriate
+clarifications separately from completed actionable tasks and unresolved controls;
+`task_correct` remains reserved for completed actionable tasks. The runner adds
+only public fixture files and the original user utterance to model context;
+expected artifacts, answer terms, and control metadata remain outside it.
+
+See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the retained harness changes and repeated real-model validation.

@@ -23,9 +23,16 @@ class NaturalCase:
     external_edit_path: str = ""
     external_edit_content: str = ""
     expected_blocked: bool = False
+    blocked_reason: str = ""
 
 
-def cases() -> tuple[NaturalCase, ...]:
+def cases(suite: str = "original") -> tuple[NaturalCase, ...]:
+    if suite == "generalization":
+        return generalization_cases()
+    if suite == "all":
+        return cases() + generalization_cases()
+    if suite != "original":
+        raise ValueError(f"Unknown suite: {suite}")
     result: list[NaturalCase] = []
     for split, seed in (("development", 13), ("heldout", 47)):
         dev = split == "development"
@@ -134,6 +141,85 @@ def cases() -> tuple[NaturalCase, ...]:
         )
         result.extend(specs)
     return tuple(result)
+
+
+def generalization_cases() -> tuple[NaturalCase, ...]:
+    """Frozen novel intents, kept separate from the original wording split."""
+    return (
+        NaturalCase(
+            "nested_discovery",
+            "heldout",
+            83,
+            "what's the timeout for the billing worker?",
+            {
+                "services/billing/config/worker.toml": "timeout_seconds = 37\n",
+                "services/mail/config/worker.toml": "timeout_seconds = 12\n",
+                "docs/billing.txt": "Billing worker configuration lives with its service.\n",
+            },
+            answer_terms=("37",),
+        ),
+        NaturalCase(
+            "noisy_filename_typo",
+            "heldout",
+            89,
+            "what port is in the current gatway.yaml?",
+            {
+                "config/gateway.yml": "port: 8643\n",
+                "config/gateway.yml.bak": "port: 8001\n",
+                "archive/gateway-old.yaml": "port: 8002\n",
+                "config/gateway-example.yaml": "port: 8003\n",
+            },
+            answer_terms=("8643",),
+        ),
+        NaturalCase(
+            "absent_file",
+            "heldout",
+            97,
+            "what's the retry limit in courier.ini?",
+            {"services/indexer.ini": "retry_limit=6\n", "README.txt": "Indexer service settings.\n"},
+            expected_blocked=True,
+            blocked_reason="missing_file",
+        ),
+        NaturalCase(
+            "create_nested_file",
+            "heldout",
+            101,
+            'make a new notes/oncall/handoff.txt with "pager covered until Monday"',
+            {"notes/oncall/README.txt": "Team notes\n"},
+            ("notes/oncall/handoff.txt",),
+            {"notes/oncall/handoff.txt": "pager covered until Monday\n"},
+        ),
+        NaturalCase(
+            "contextual_duplicate_edit",
+            "heldout",
+            103,
+            "give the overnight export job 4 retries in jobs.ini",
+            {"jobs.ini": "[daytime_export]\nretries=2\nwindow=09:00\n\n[overnight_export]\nretries=2\nwindow=02:00\n"},
+            ("jobs.ini",),
+            {"jobs.ini": "[daytime_export]\nretries=2\nwindow=09:00\n\n[overnight_export]\nretries=4\nwindow=02:00\n"},
+        ),
+        NaturalCase(
+            "filename_as_content",
+            "heldout",
+            107,
+            "which doc mentions ledger.csv?",
+            {
+                "ledger.csv": "account,total\nmain,42\n",
+                "docs/import-guide.md": "Upload ledger.csv to start the reconciliation.\n",
+                "docs/export-guide.md": "Download the account totals as CSV.\n",
+            },
+            answer_terms=("docs/import-guide.md",),
+        ),
+        NaturalCase(
+            "ambiguous_existing_edit",
+            "heldout",
+            109,
+            "set retries to 5 in worker.ini",
+            {"services/payments/worker.ini": "retries=2\n", "services/reports/worker.ini": "retries=3\n"},
+            expected_blocked=True,
+            blocked_reason="ambiguous_target",
+        ),
+    )
 
 
 def grade(case: NaturalCase, workspace: Path, final_text: str) -> list[str]:

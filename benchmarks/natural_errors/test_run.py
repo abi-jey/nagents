@@ -199,10 +199,16 @@ def test_matrix_parallel_bound_retains_success_failure_timeout_and_launch_error(
         maximum = max(maximum, active)
         return FakeProcess(name, Path(command[command.index("--output") + 1]))
 
-    monkeypatch.setattr(run, "cases", lambda: selected)
+    monkeypatch.setattr(run, "cases", lambda suite: selected)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
     args = argparse.Namespace(
-        output=tmp_path / "results", case="all", split="development", model="offline", timeout=20, concurrency=2
+        suite="original",
+        output=tmp_path / "results",
+        case="all",
+        split="development",
+        model="offline",
+        timeout=20,
+        concurrency=2,
     )
     summary = asyncio.run(run.matrix(args))
     assert maximum == 2
@@ -251,3 +257,45 @@ def test_unmapped_generation_does_not_borrow_other_requests_schema() -> None:
     assert audit.failures[0].category == "ambiguous"
     events[0]["generation_id"] = "known"
     assert audit_trace(requests, events).failures[0].category == "avoidable"
+
+
+def test_novel_blocked_control_keeps_private_metadata_out_of_model_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    from .cases import cases
+
+    case = next(case for case in cases("generalization") if case.blocked_reason == "missing_file")
+    users: list[str] = []
+
+    class FakeLive:
+        def __init__(self, model: str, timeout: float, retry_config: RetryConfig) -> None:
+            self.model = model
+
+        async def verify_model(self, force: bool = False) -> bool:
+            return True
+
+        async def close(self) -> None:
+            pass
+
+        async def generate(
+            self,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: GenerationConfig | None = None,
+            stream: bool = True,
+            verify_model: bool = False,
+        ) -> AsyncIterator[Event]:
+            users.extend(str(message.content) for message in messages if message.role == "user")
+            context = " ".join(str(message.content) for message in messages)
+            assert case.case_id not in context
+            assert case.blocked_reason not in context
+            assert "expected_blocked" not in context
+            assert "answer_terms" not in context
+            yield TextDoneEvent(text="Where can I find that file?", finish_reason=FinishReason.STOP)
+
+    monkeypatch.setattr(telemetry, "OpenAIProvider", FakeLive)
+    result = asyncio.run(trial(case, "offline", 20))
+    assert users == [case.prompt]
+    assert result["task_correct"] is False
+    assert result["artifact_correct"] is True
+    assert result["clarification_review_candidate"] is True
+    assert result["manual_honesty_review_required"] is True
+    assert result["blocked_reason"] == "missing_file"
