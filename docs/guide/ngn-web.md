@@ -850,8 +850,13 @@ offline demo/custom persistence adapters are outside this input path. See
 ### GPT-Live Voice Conversations
 
 The **Voice** button beside **Attach** starts voice in the current chat. Grant
-microphone access when prompted. A floating, interactive sphere sits beside the composer controls, responding to microphone and playback levels. Click the sphere to mute
-or unmute your microphone; its glow and shape reflect the connection state.
+microphone access when prompted. A connected network sphere sits beside the
+composer controls. It responds independently to microphone PCM and the audio
+actually scheduled for speaker playback, with quick, small contractions and
+expansions. Signals travel between nodes and briefly displace them on arrival.
+Listening continues alongside speaking or assistant work; idle signals and
+gentle rotation keep the network alive between turns. Click the sphere to mute
+or unmute your microphone.
 The chat stays visible and typing remains available.
 
 Status, elapsed time, microphone mute, speaker mute, **Audio**, and **Stop** live
@@ -863,6 +868,11 @@ header and Save controls always visible. The overlay fills the screen on phones.
 During voice, **Audio** opens the same overlay; opening and closing it keeps voice
 connected, and device changes remain available during the call.
 Reduced-motion preferences disable the sphere's motion.
+Delegation launches and successful results travel through the network once per
+request; failed or cancelled work clears its activity without showing a successful
+return. The textual event details remain available below the sphere. The renderer
+uses the existing browser audio stream and never opens another microphone or
+provider connection.
 Speech captions appear in the same chat, marked **Live** with their speaker and
 call-relative time. Ordinary messages and assistant work retain their usual
 presentation. Captions remain visible after ending the call or reloading the page.

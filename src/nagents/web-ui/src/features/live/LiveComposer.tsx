@@ -4,6 +4,7 @@ import { currentLiveDelegation } from "./controller.js";
 import { LiveSphere } from "./LiveSphere.js";
 import { contextLabel } from "./context.js";
 import type { LiveState } from "./types.js";
+import type { AudioSource } from "../../components/voiceSphere/useVoiceSphere.js";
 
 export interface LiveComposerProps {
   state: LiveState;
@@ -31,10 +32,11 @@ export interface LiveComposerProps {
   showContext?(): void;
   contextDetails?: ReactNode;
   audioNotice?: ReactNode;
+  audio?: AudioSource;
 }
 
 /** The voice presence and controls share the composer's layout, never cover chat. */
-export function LiveComposer({ state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice }: LiveComposerProps) {
+export function LiveComposer({ state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice, audio }: LiveComposerProps) {
   const connected = state.phase === "connected";
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const delegation = currentLiveDelegation(state.delegations);
@@ -57,6 +59,7 @@ export function LiveComposer({ state, status, elapsed, disabled, unavailable, lo
       <LiveSphere phase={state.phase} micMuted={state.micMuted} outputMuted={state.outputMuted}
         busy={!!unfinished && connected} disabled={interactionDisabled}
         inputLevel={state.inputLevel || 0} outputLevel={state.outputLevel || 0}
+        audio={audio} sessionId={state.sessionId} delegations={state.delegations}
         onActivate={connected ? muteInput : start} />
     </div>
     <div className="voice-composer-bar">

@@ -3,6 +3,7 @@ import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { appendCaptions, currentLiveDelegation, LiveController, liveFailure } from "./controller.js";
 import type { LiveCreated, LiveDelegationRecord, LiveDelegationStatus, LiveSnapshot, LiveTransport, MediaHandlers, VoiceContext } from "./types.js";
+import type { AudioFrame } from "../../components/voiceSphere/types.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (error: Error) => void;
@@ -18,7 +19,7 @@ const handoff = (id: string, seq: number, status: LiveDelegationStatus, extra: P
   text: `Assistant ${status}`, ...extra,
 });
 
-function fixture(pollMs = 60_000) {
+function fixture(pollMs = 60_000, sampleAudio?: () => AudioFrame) {
   const prepare = deferred<void>(), create = deferred<LiveCreated>(), read = deferred<LiveSnapshot>();
   const calls: string[] = [];
   const transports: LiveTransport[] = [];
@@ -30,11 +31,13 @@ function fixture(pollMs = 60_000) {
   let nextRead = read.promise;
   let nextPlay = Promise.resolve();
   let nextDevice = Promise.resolve();
+  let nextAudio = sampleAudio;
   const controller = new LiveController({
     media: (callbacks, transport) => {
       transports.push(transport);
       handlers = callbacks;
       return {
+        ...(sampleAudio ? { sampleAudio: () => nextAudio!() } : {}),
         prepare: async (signal) => { mediaSignal = signal; calls.push("prepare"); return prepare.promise; },
         connect: async (id, token) => { calls.push(`connect:${id}:${token}`); if (rejectConnect) throw new Error("Audio relay rejected connection"); },
         muteInput: (muted) => { calls.push(`mic:${muted}`); },
@@ -56,8 +59,53 @@ function fixture(pollMs = 60_000) {
     closeSnapshot: (reply: LiveSnapshot | Promise<LiveSnapshot>) => { closeSnapshot = reply; }, nextRead: (reply: Promise<LiveSnapshot>) => { nextRead = reply; },
     nextPlay: (reply: Promise<void>) => { nextPlay = reply; },
     nextDevice: (reply: Promise<void>) => { nextDevice = reply; },
+    nextAudio: (sample: () => AudioFrame) => { nextAudio = sample; },
     failClose: () => { rejectClose = true; }, failConnect: () => { rejectConnect = true; } };
 }
+
+test("the stable sphere audio facade samples only the connected owner and never publishes frame state", async () => {
+  const frame: AudioFrame = { input: { active: true, rms: .25, low: .2, mid: .1, high: .05 }, output: { active: true, rms: .5, low: .4, mid: .3, high: .2 } };
+  let samples = 0;
+  const f = fixture(60_000, () => { samples++; return frame; }), audio = f.controller.audio;
+  let changes = 0; const unsubscribe = f.controller.subscribe(() => { changes++; });
+  try {
+    assert.equal(audio.sample().input.active, false); assert.equal(samples, 0);
+    const start = f.controller.start("marin", revision, "ngn-chat-root");
+    assert.equal(audio.sample().input.active, false); assert.equal(samples, 0);
+    f.prepare.resolve(); f.create.resolve(created); await start;
+    assert.equal(audio.sample().output.active, false); assert.equal(samples, 0);
+    f.handlers().connected(); const beforeFrames = changes;
+    const copy = audio.sample(); assert.deepEqual(copy, frame); copy.input.rms = 0;
+    assert.equal(frame.input.rms, .25, "renderers must not mutate transport-owned frames");
+    for (let i = 0; i < 30; i++) audio.sample();
+    assert.equal(changes, beforeFrames, "per-frame audio sampling must not rerender the controller");
+    f.controller.muteInput(); assert.equal(audio.sample().input.active, false); assert.equal(audio.sample().output.rms, .5);
+    f.controller.muteOutput(); assert.equal(audio.sample().output.active, false);
+    f.controller.muteInput(); f.controller.muteOutput(); f.handlers().playbackBlocked(true);
+    assert.equal(audio.sample().input.rms, .25); assert.equal(audio.sample().output.rms, 0);
+    f.handlers().playbackBlocked(false);
+    f.nextAudio(() => ({ input: { active: true, rms: NaN, low: -1, mid: 2, high: Infinity }, output: frame.output }));
+    assert.deepEqual(audio.sample().input, { active: true, rms: 0, low: 0, mid: 1, high: 0 });
+    f.nextAudio(() => { throw new Error("Optional visualizer unavailable"); });
+    assert.equal(audio.sample().input.active, false); assert.equal(f.controller.getSnapshot().phase, "connected");
+    f.nextAudio(() => { void f.controller.end(); return frame; });
+    assert.equal(audio.sample().output.active, false, "ownership is rechecked after a sampler changes the session epoch");
+    await setImmediate(); assert.equal(f.controller.getSnapshot().phase, "ended");
+    f.nextAudio(() => frame); await f.controller.start("marin", revision, "ngn-chat-root");
+    assert.equal(f.controller.audio, audio); assert.equal(audio.sample().input.active, false);
+    f.handlers().connected(); assert.equal(audio.sample().input.rms, .25);
+    f.controller.dispose(); assert.equal(audio.sample().input.active, false); assert.equal(audio.sample().output.active, false);
+  } finally { unsubscribe(); f.controller.dispose(); }
+});
+
+test("media adapters without optional PCM sampling remain compatible", async () => {
+  const f = fixture();
+  try {
+    const start = f.controller.start("marin", revision); f.prepare.resolve(); f.create.resolve(created); await start; f.handlers().connected();
+    assert.equal(f.controller.audio.sample().input.active, false); assert.equal(f.controller.audio.sample().output.active, false);
+    assert.equal(f.controller.getSnapshot().phase, "connected");
+  } finally { f.controller.dispose(); }
+});
 
 test("only an explicit start acquires the mic; double starts cannot create two sessions", async () => {
   const f = fixture();

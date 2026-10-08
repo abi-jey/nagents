@@ -43,7 +43,7 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
   const microphone = makeTrack();
   const stream = { getTracks: () => [microphone], getAudioTracks: () => [microphone] };
   const sent: ArrayBuffer[] = [], playback: boolean[] = [];
-  const failures: string[] = [], sources: { stops: number }[] = [];
+  const failures: string[] = [], sources: { stops: number; starts: number[]; onended(): void }[] = [];
   const constraints: MediaStreamConstraints[] = [], sinks: string[] = [];
   const levels: [number, number][] = [];
   let inputError: Error | undefined, outputError: Error | undefined, sinkResult = Promise.resolve();
@@ -84,7 +84,8 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
       return { duration: size / rate, getChannelData: () => new Float32Array(size) };
     }
     createBufferSource() {
-      const source = Object.assign(new Node(), { buffer: null, onended: () => {}, stops: 0, start: () => {}, stop() { this.stops++; } });
+      const starts: number[] = [];
+      const source = Object.assign(new Node(), { buffer: null, onended: () => {}, starts, stops: 0, start: (at: number) => { starts.push(at); }, stop() { this.stops++; } });
       sources.push(source); return source;
     }
     async resume() { this.state = "running"; }
@@ -130,6 +131,88 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
     },
   };
 }
+
+function pcmFrame(value: number, samples = 480): ArrayBuffer {
+  const bytes = new ArrayBuffer(samples * 2), view = new DataView(bytes);
+  for (let i = 0; i < samples; i++) view.setInt16(i * 2, value, true);
+  return bytes;
+}
+
+test("sphere PCM samples only sent capture and scheduled playback, copying each source buffer", async (t) => {
+  const f = browserFixture(); t.after(f.restore);
+  assert(f.media.sampleAudio);
+  await f.media.prepare(new AbortController().signal);
+  const context = f.context(); context.currentTime = 1;
+  const input = pcmFrame(8192);
+  f.node().port.onmessage({ data: input } as MessageEvent<ArrayBuffer>);
+  assert.equal(f.sent.length, 0); assert.equal(f.media.sampleAudio().input.active, false);
+  const opening = f.media.connect("voice-id", "web-token");
+  f.socket().readyState = 0;
+  f.node().port.onmessage({ data: input } as MessageEvent<ArrayBuffer>);
+  assert.equal(f.sent.length, 0);
+  f.socket().readyState = 1; f.socket().onopen(); await opening;
+  f.node().port.onmessage({ data: input } as MessageEvent<ArrayBuffer>);
+  const captured = f.media.sampleAudio().input;
+  assert(captured.active && captured.rms > .18 && captured.rms < .21);
+  new Uint8Array(input).fill(0);
+  assert.equal(f.media.sampleAudio().input.rms, captured.rms, "queued capture must not alias the worklet buffer");
+
+  const first = pcmFrame(8192, 4800), second = pcmFrame(-16384, 4800);
+  f.socket().onmessage({ data: first } as MessageEvent<ArrayBuffer>);
+  f.socket().onmessage({ data: second } as MessageEvent<ArrayBuffer>);
+  assert.deepEqual(f.sources.map(source => source.starts[0]), [1.02, 1.22]);
+  new Uint8Array(first).fill(0); new Uint8Array(second).fill(0);
+  assert.equal(f.media.sampleAudio().output.active, false, "received speech must not animate before scheduled playback");
+  context.currentTime = 1.019; assert.equal(f.media.sampleAudio().output.rms, 0);
+  context.currentTime = 1.055; assert(Math.abs(f.media.sampleAudio().output.rms - .25) < .002);
+  context.currentTime = 1.255; assert(Math.abs(f.media.sampleAudio().output.rms - .5) < .002);
+  f.sources.forEach(source => source.onended());
+  assert.equal(f.media.sampleAudio().output.active, false, "ended playback clears its visualization immediately");
+  assert.equal(f.constraints.length, 1, "PCM analysis does not acquire another microphone");
+  assert.deepEqual(f.failures, []);
+});
+
+test("sphere PCM ownership resets on mute, context suspension, device changes, reconnect and close", async (t) => {
+  const f = browserFixture(); t.after(f.restore); await f.open();
+  assert(f.media.sampleAudio); const context = f.context(); context.currentTime = 1;
+  const feed = () => {
+    f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+    f.socket().onmessage({ data: pcmFrame(16384, 4800) } as MessageEvent<ArrayBuffer>);
+  };
+  feed(); context.currentTime += .025; assert(f.media.sampleAudio().input.rms > 0); assert(f.media.sampleAudio().output.rms > 0);
+  f.media.muteInput(true); f.media.muteOutput(true);
+  assert.equal(f.media.sampleAudio().input.rms, 0); assert.equal(f.media.sampleAudio().output.rms, 0);
+  f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  assert(new Uint8Array(f.sent.at(-1)!).every(value => value === 0));
+  f.media.muteInput(false); f.media.muteOutput(false);
+  assert.equal(f.media.sampleAudio().input.active, false); assert.equal(f.media.sampleAudio().output.active, false);
+  feed(); context.currentTime += .025;
+  context.state = "suspended"; context.onstatechange?.();
+  assert.equal(f.media.sampleAudio().input.rms, 0); assert.equal(f.media.sampleAudio().output.rms, 0);
+  await f.media.play(); assert.equal(f.media.sampleAudio().input.active, false); assert.equal(f.media.sampleAudio().output.active, false);
+  feed(); assert(f.media.sampleAudio().input.active);
+  const replacement = f.newMicrophone(); f.inputResult(Promise.resolve(replacement.stream));
+  await f.media.setInputDevice("new-input"); assert.equal(f.media.sampleAudio().input.rms, 0);
+  context.currentTime += .025; assert(f.media.sampleAudio().output.rms > 0);
+  await f.media.setOutputDevice("new-output"); assert.equal(f.media.sampleAudio().output.rms, 0);
+  feed(); const next = f.media.connect("second-session", "web-token"); f.socket().onopen(); await next;
+  assert.equal(f.media.sampleAudio().input.active, false); assert.equal(f.media.sampleAudio().output.active, false);
+  feed(); f.media.close(); assert.equal(f.media.sampleAudio().input.rms, 0); assert.equal(f.media.sampleAudio().output.rms, 0);
+  assert.deepEqual(f.failures, []);
+});
+
+test("unavailable optional PCM queues never interrupt the existing voice transport", async (t) => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "WritableStream");
+  Object.defineProperty(globalThis, "WritableStream", { configurable: true, value: undefined });
+  t.after(() => { if (saved) Object.defineProperty(globalThis, "WritableStream", saved); else Reflect.deleteProperty(globalThis, "WritableStream"); });
+  const f = browserFixture(); t.after(f.restore); await f.open();
+  assert(f.media.sampleAudio);
+  f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  f.socket().onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  assert.equal(f.sent.length, 1); assert.equal(f.sources.length, 1);
+  assert.equal(f.media.sampleAudio().input.active, false); assert.equal(f.media.sampleAudio().output.active, false);
+  assert.deepEqual(f.failures, []); assert.equal(f.connected(), true);
+});
 
 for (const invalid of ["ended", "missing"] as const) test(`relay refuses an initially ${invalid} microphone before connecting audio`, async (t) => {
   const f = browserFixture(); t.after(f.restore);

@@ -1,3 +1,5 @@
+import type { AudioFrame } from "../../components/voiceSphere/types.js";
+
 export type LiveTransport = "websocket";
 export type VoiceContextMode = "recent" | "summary" | "none";
 
@@ -229,6 +231,8 @@ export interface MediaHandlers {
 }
 
 export interface LiveMedia {
+  /** Optional, read-only visualization of the media owned by this connection. */
+  sampleAudio?(): AudioFrame;
   prepare(signal: AbortSignal): Promise<void>;
   connect(sessionId: string, token: string): Promise<void>;
   muteInput(muted: boolean): void;

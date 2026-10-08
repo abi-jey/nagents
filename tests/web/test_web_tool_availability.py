@@ -94,6 +94,26 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                     assert not any(name.startswith("channel_") for name in wire)
                 else:
                     assert {"edit", "write", "shell", "custom_read"} <= wire
+                instructions = requests[-1]["instructions"]
+                assert isinstance(instructions, str)
+                # Match orchestration guidance to native contracts in this actual
+                # provider request, not just familiar names in the editable catalog.
+                if not shadowed and {"schedule_wakeup", "wake_up_in"} & wire:
+                    assert "only when a scheduler tool is advertised in this request" in instructions
+                    assert "Scheduling acknowledges immediately" in instructions
+                    assert "Scheduling and waking grant no additional tool permissions" in instructions
+                    assert "No native wake-up scheduler is advertised" not in instructions
+                else:
+                    assert "No native wake-up scheduler is advertised" in instructions
+                    assert "do not promise delayed self-follow-up" in instructions
+                    assert "Scheduling acknowledges immediately" not in instructions
+                    assert "Delayed self-follow-up is available only when" not in instructions
+                if not shadowed and "delegate" in wire:
+                    assert "use delegate(prompt, agent='assistant')" in instructions
+                    assert "Children cannot exceed your permission ceiling" in instructions
+                else:
+                    assert "cannot delegate using native tools in this request" in instructions
+                    assert "use delegate(" not in instructions
                 return wire
 
             async def settings(*, agent: str, depth: int) -> None:
@@ -111,13 +131,9 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
 
             harness.wakeup_handler = None
             assert not {"schedule_wakeup", "wake_up_in"} & await capture()
-            assert "No native wake-up scheduler is advertised" in str(requests[-1]["instructions"])
-            assert "do not promise delayed self-follow-up" in str(requests[-1]["instructions"])
-            assert "Scheduling acknowledges immediately" not in str(requests[-1]["instructions"])
             assert "use schedule_wakeup" not in str(requests[-1]["instructions"])
             harness.wakeup_handler = scheduler
             assert "schedule_wakeup" in await capture()
-            assert "only when a scheduler tool is advertised in this request" in str(requests[-1]["instructions"])
 
             catalog = (await client.get("/api/tools", headers=headers)).json()
             response = await client.post(
@@ -141,6 +157,8 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
             build = await capture()
             assert {"read_file", "schedule_wakeup", "wake_up_in"} <= build
             assert "delegate" not in build  # The existing executor reserves this name at the depth limit.
+            await settings(agent="assistant", depth=2)
+            assert "delegate" in await capture()  # Its custom contract must not inherit native lifecycle guidance.
             await settings(agent="reviewer", depth=2)
             # This reviewer has no native delegate anymore, so all four shadows must disappear.
             assert not {"read_file", "schedule_wakeup", "wake_up_in", "delegate"} & await capture()
