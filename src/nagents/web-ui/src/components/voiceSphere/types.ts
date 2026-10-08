@@ -89,6 +89,7 @@ export interface SphereEngine {
   pulse(node?: number): void;
   zoomBy(delta: number): void;
   resetView(): void;
+  /** Rejects displayed IDs and the 128 most recently retired IDs; reset clears this history. */
   startDelegation(id?: string, label?: string): boolean;
   deliverResult(id?: string): boolean;
   finishDelegation(id: string, outcome: DelegationOutcome): boolean;

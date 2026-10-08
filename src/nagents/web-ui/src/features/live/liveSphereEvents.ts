@@ -24,11 +24,21 @@ interface Entry {
 
 const terminal = (status: LiveDelegationStatus): status is "completed" | "failed" | "cancelled" => status === "completed" || status === "failed" || status === "cancelled";
 const statuses = new Set<LiveDelegationStatus>(["queued", "working", "completed", "failed", "cancelled"]);
+const settledHistoryLimit = 64;
 
 /** Converts observed Live lifecycle changes into bounded visual events, never backend work. */
 export function createLiveSphereEvents(): LiveSphereEvents {
-  let session = "", resetPending = true, flushing = false;
+  let session = "", resetPending = true, flushing = false, retiredThrough = -1;
   const entries = new Map<string, Entry>();
+
+  function trimHistory(): void {
+    // Active work and unacknowledged terminal events must survive any history churn.
+    const settled = [...entries].filter(([, entry]) => entry.settled && terminal(entry.status)).sort((a, b) => a[1].seq - b[1].seq);
+    for (const [id, entry] of settled.slice(0, Math.max(0, settled.length - settledHistoryLimit))) {
+      retiredThrough = Math.max(retiredThrough, entry.seq);
+      entries.delete(id);
+    }
+  }
 
   function flush(dispatch: LiveSphereDispatch): void {
     // dispatch may synchronously publish a snapshot which asks us to flush again.
@@ -53,16 +63,19 @@ export function createLiveSphereEvents(): LiveSphereEvents {
         if (entry.started || entry.settled || terminal(entry.status)) continue;
         if (dispatch({ type: "delegation-start", id, label: entry.label })) entry.started = true;
       }
-    } finally { flushing = false; }
+    } finally { trimHistory(); flushing = false; }
   }
 
   return {
     reconcile(sessionId, records, dispatch) {
-      if (sessionId !== session) { session = sessionId; entries.clear(); resetPending = true; }
+      if (sessionId !== session) { session = sessionId; entries.clear(); retiredThrough = -1; resetPending = true; }
       if (session) {
         const ordered = records.filter(record => record.sessionId === session && record.id.trim() && Number.isSafeInteger(record.seq) && record.seq >= 0 && statuses.has(record.status)).slice().sort((a, b) => a.seq - b.seq);
         for (const record of ordered) {
           const id = record.id.trim(), previous = entries.get(id);
+          // A forgotten record older than this floor is replayed history. Existing
+          // active IDs bypass the floor so late terminal snapshots can still settle them.
+          if (!previous && record.seq <= retiredThrough) continue;
           if (previous && (record.seq <= previous.seq || terminal(previous.status) ||
               record.chatSessionId !== previous.chatSessionId || (previous.runId && record.runId !== previous.runId) ||
               (previous.status === "working" && record.status === "queued"))) continue;
@@ -77,6 +90,6 @@ export function createLiveSphereEvents(): LiveSphereEvents {
       flush(dispatch);
     },
     flush,
-    reset() { session = ""; entries.clear(); resetPending = true; },
+    reset() { session = ""; entries.clear(); retiredThrough = -1; resetPending = true; },
   };
 }

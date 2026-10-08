@@ -12,7 +12,7 @@
     "demo:voice:build": "tsc --noEmit -p demos/deep-resonance/tsconfig.json && vite build --config demos/deep-resonance/vite.config.ts",
     "demo:voice:test": "node --test demos/deep-resonance/test.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/app/*.test.js .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/designer/*.test.js .test-build/features/live/*.test.js && npm run demo:voice:test"
+    "test": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/app/*.test.js .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/designer/*.test.js .test-build/features/live/*.test.js && npm run demo:voice:test"
   },
   "dependencies": {
     "react": "^19.2.4",

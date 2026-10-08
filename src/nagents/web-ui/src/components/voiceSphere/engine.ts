@@ -106,6 +106,7 @@ const palettes: Record<SphereConfig["color"], readonly [
 const extraColors: readonly RGB[] = [[185, 163, 239], [230, 187, 135]];
 const finite = (value: number, fallback: number, min: number, max: number): number => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 const terminalTask = (phase: TaskPhase): boolean => phase === "complete" || phase === "failed" || phase === "cancelled";
+const delegationHistoryLimit = 128;
 function cleanConfig(config: SphereConfig): SphereConfig {
     const min = finite(config.thinkMin, .45, .1, 3), max = finite(config.thinkMax, 1.65, .1, 3);
     return { ...config, density: Math.round(finite(config.density, 3, 1, 7)), speed: finite(config.speed, 1, .2, 2.4), glow: finite(config.glow, .65, .1, 1), thinkMin: Math.min(min, max), thinkMax: Math.max(min, max) };
@@ -128,6 +129,7 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
     const breath = { outer: 0, inner: 0, outerVelocity: 0, innerVelocity: 0 };
     const voiceSignals: SignalState = { graph: [], adjacency: [], packets: [], position: [], velocity: [], glow: [], clock: 0, serial: 0, inner: [], outer: [], inward: [], outward: [], communities: [], edgeUse: new Map(), originUse: new Map(), input: { previous: 0, cooldown: 0, rise: 0, riseEnergy: 0 }, output: { previous: 0, cooldown: 0, rise: 0, riseEnergy: 0 } };
     const delegationDemo: DelegationState = { graph: [], tasks: [], nextId: 1, inner: [], allowed: new Set(), recentEdges: new Map(), recentEndpoints: [] };
+    // Current task IDs live in tasks; only recently retired IDs need extra storage.
     const seenIds = new Set<string>(), delegationNames = ['Agent A', 'Agent B', 'Agent C'];
     let delegationStatus = 'Send a task through the inner network, then return its result.';
     const rgb = (): RGB => palettes[state.color][dark ? 0 : 1];
@@ -1041,11 +1043,23 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
             arriveVoiceSignal(packet, index, other);
         return true;
     }
+    function knownDelegationId(id: string): boolean {
+        return seenIds.has(id) || delegationDemo.tasks.some(task => task.id === id);
+    }
+    function rememberRetiredId(id: string): void {
+        seenIds.delete(id);
+        seenIds.add(id);
+        while (seenIds.size > delegationHistoryLimit) {
+            const oldest = seenIds.values().next().value;
+            if (oldest === undefined) break;
+            seenIds.delete(oldest);
+        }
+    }
     function fireDelegation(id?: string, label?: string): boolean {
         if (disposed)
             return false;
         ensureDelegationGraph();
-        if (id !== undefined && (id.trim() === '' || seenIds.has(id)))
+        if (id !== undefined && (id.trim() === '' || knownDelegationId(id)))
             return false;
         const occupied = new Set(delegationDemo.tasks.filter(task => !terminalTask(task.phase)).map(task => task.slot)), slot = [0, 1, 2].find(value => !occupied.has(value));
         if (slot === undefined)
@@ -1056,11 +1070,11 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
         let taskId = id;
         while (taskId === undefined) {
             const proposed = 'demo-' + delegationDemo.nextId++;
-            if (!seenIds.has(proposed))
+            if (!knownDelegationId(proposed))
                 taskId = proposed;
         }
         const task: Task = { id: taskId, label: label?.trim() || delegationNames[slot], slot, path: Object.freeze(path), phase: reduced.matches ? 'pending' : 'launch', age: 0, duration: 1.45 + slot * .18, impactRoute: [], impactStep: 0, sourceImpacted: false, resultQueued: false };
-        seenIds.add(taskId);
+        for (const retired of delegationDemo.tasks.filter(item => item.slot === slot)) rememberRetiredId(retired.id);
         delegationDemo.tasks = delegationDemo.tasks.filter(item => item.slot !== slot);
         rememberDelegationPath(path);
         delegationDemo.tasks.push(task);

@@ -161,3 +161,68 @@ test("terminal outcomes remain truthful in reduced motion and when cancelling a 
     assert.match(f.engine.snapshot().delegationStatus, /cancelled/);
   } finally { f.engine.dispose(); }
 });
+
+test("settled-history eviction rejects old replay but preserves active work and unacknowledged terminals", () => {
+  const bridge = createLiveSphereEvents(), accepted: SphereEvent[] = [];
+  let admitWaiting = false, acknowledgeFailure = false;
+  const dispatch: LiveSphereDispatch = event => {
+    if (event.type === "delegation-start" && event.id === "waiting" && !admitWaiting) return false;
+    if (event.type === "delegation-finished" && event.id === "awaiting-ack" && !acknowledgeFailure) return false;
+    accepted.push(event); return true;
+  };
+  const update = (records: LiveDelegation[], session = "live-a") => bridge.reconcile(session, records, dispatch);
+  update([record("active", 1), record("waiting", 2), record("awaiting-ack", 3)]);
+  update([record("awaiting-ack", 4, "failed")]);
+  for (let i = 1; i <= 96; i++) update([record(`history-${i}`, 100 + i, "completed")]);
+
+  // Only the 32 oldest settled records have been evicted: their highest seq is 132.
+  update([record("history-1", 101, "queued"), record("unseen-stale", 132), record("recent-unseen", 133)]);
+  assert(!accepted.some(event => event.type === "delegation-start" && ["history-1", "unseen-stale"].includes(event.id)));
+  assert(accepted.some(event => event.type === "delegation-start" && event.id === "recent-unseen"));
+
+  // Known active IDs remain valid even when their terminal update is below the floor.
+  update([record("active", 5, "cancelled")]);
+  assert(accepted.some(event => event.type === "delegation-finished" && event.id === "active"));
+  admitWaiting = true; acknowledgeFailure = true; bridge.flush(dispatch);
+  assert.equal(accepted.filter(event => event.type === "delegation-start" && event.id === "waiting").length, 1);
+  assert.equal(accepted.filter(event => event.type === "delegation-finished" && event.id === "awaiting-ack").length, 1);
+
+  const starts = accepted.filter(event => event.type === "delegation-start").length;
+  update([record("active", 1), record("awaiting-ack", 3), record("history-96", 999)]);
+  assert.equal(accepted.filter(event => event.type === "delegation-start").length, starts);
+  update([record("new-session", 1, "working", { sessionId: "live-b" })], "live-b");
+  assert(accepted.some(event => event.type === "delegation-start" && event.id === "new-session"));
+  bridge.reset(); update([record("same-session-new-engine", 1, "working", { sessionId: "live-b" })], "live-b");
+  assert(accepted.some(event => event.type === "delegation-start" && event.id === "same-session-new-engine"));
+});
+
+test("history churn never evicts an active backlog larger than the settled history window", () => {
+  const bridge = createLiveSphereEvents(); let ready = false;
+  const launched: string[] = [];
+  const dispatch: LiveSphereDispatch = event => {
+    if (event.type === "delegation-start") { if (!ready) return false; launched.push(event.id); }
+    return true;
+  };
+  bridge.reconcile("live-a", Array.from({ length: 100 }, (_, i) => record(`active-${i}`, i + 1)), dispatch);
+  for (let i = 0; i < 200; i++) bridge.reconcile("live-a", [record(`old-${i}`, i + 1000, "failed")], dispatch);
+  ready = true; bridge.flush(dispatch);
+  assert.equal(launched.length, 100); assert.equal(new Set(launched).size, 100);
+});
+
+test("engine dedup keeps current IDs and only the 128 most recently retired IDs", () => {
+  const engine = createSphereEngine({ ...config, density: 1, reducedMotion: true });
+  try {
+    assert(engine.startDelegation("long-lived-a")); assert(engine.startDelegation("long-lived-b"));
+    for (let i = 0; i < 160; i++) {
+      assert(engine.startDelegation(`retired-${i}`)); assert(engine.finishDelegation(`retired-${i}`, "failed"));
+      assert.equal(engine.snapshot().tasks.length, 3);
+    }
+    assert.equal(engine.startDelegation("long-lived-a"), false);
+    assert.equal(engine.startDelegation("long-lived-b"), false);
+    assert.equal(engine.startDelegation("retired-159"), false, "Displayed terminal ID remains protected");
+    assert.equal(engine.startDelegation("retired-158"), false, "Recent retired ID remains protected");
+    assert(engine.startDelegation("retired-0"), "IDs outside the documented retention window may be reused");
+    assert.equal(engine.startDelegation("retired-0"), false);
+    engine.resetDelegations(); assert(engine.startDelegation("long-lived-a"));
+  } finally { engine.dispose(); }
+});

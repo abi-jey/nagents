@@ -295,7 +295,9 @@ def test_pane_focus_and_tool_keyboard_navigation(tmp_path: Path, size: tuple[int
             assert app.focused is conversation
             assert conversation.scroll_y == before
             await pilot.press("pageup")
-            await pilot.pause()
+            # A CPU-idle pause can precede the first scroll animation frame on
+            # Windows. Assert the completed keyboard action instead.
+            await pilot.wait_for_scheduled_animations()
             assert conversation.scroll_y < before
             await pilot.press("tab")
             first, second = list(app.query(ToolCard))[:2]

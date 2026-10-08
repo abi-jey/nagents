@@ -48,6 +48,7 @@ interface Surface {
   width: number;
   height: number;
   compact: boolean;
+  visible: boolean;
 }
 
 export const initialSnapshot: SphereSnapshot = {
@@ -82,6 +83,7 @@ export function useVoiceSphere(options: VoiceSphereOptions = {}): VoiceSphereCon
   const latest = useRef(options); latest.current = options;
   const engine = useRef<SphereEngine | undefined>(undefined);
   const surfaces = useRef(new Map<HTMLCanvasElement, Surface>());
+  const synchronizeLoop = useRef<(() => void) | undefined>(undefined);
   const [snapshot, setSnapshot] = useState<SphereSnapshot>(initialSnapshot);
   const lastSnapshot = useRef(initialSnapshot);
   const publish = useCallback(() => {
@@ -92,11 +94,17 @@ export function useVoiceSphere(options: VoiceSphereOptions = {}): VoiceSphereCon
 
   useEffect(() => {
     const instance = createSphereEngine(configuration(latest.current)); engine.current = instance;
-    let frame = 0, last = 0, published = -Infinity, disposed = false;
+    let frame: number | undefined, last = 0, published = -Infinity, disposed = false;
+    const drawable = () => {
+      if (document.hidden) return false;
+      for (const surface of surfaces.current.values()) if (surface.visible && surface.width > 0 && surface.height > 0) return true;
+      return false;
+    };
     const tick = (now: number) => {
+      frame = undefined;
       if (disposed) return;
+      if (!drawable()) { last = 0; return; }
       frame = requestAnimationFrame(tick);
-      if (document.hidden) { last = 0; return; }
       if (last && now - last < 15) return;
       const delta = last ? Math.min(.05, (now - last) / 1000) : 0; last = now;
       let audio: AudioFrame = { input: silentSignal(), output: silentSignal() };
@@ -105,14 +113,26 @@ export function useVoiceSphere(options: VoiceSphereOptions = {}): VoiceSphereCon
         if (read) audio = { input: normalizeSignal(read.input), output: normalizeSignal(read.output) };
       } catch { /* Optional visualization must survive a host audio adapter failure. */ }
       instance.tick(delta, audio);
-      for (const surface of surfaces.current.values()) if (surface.width && surface.height) instance.render(surface.context, surface.width, surface.height, surface.compact);
+      for (const surface of surfaces.current.values()) if (surface.visible && surface.width && surface.height) instance.render(surface.context, surface.width, surface.height, surface.compact);
       if (now - published >= 100) { publish(); published = now; }
     };
-    const visible = () => { last = 0; };
-    document.addEventListener("visibilitychange", visible);
-    publish(); frame = requestAnimationFrame(tick);
+    const synchronize = () => {
+      if (disposed) return;
+      if (!drawable()) {
+        if (frame !== undefined) cancelAnimationFrame(frame);
+        frame = undefined; last = 0;
+      } else if (frame === undefined) {
+        last = 0; frame = requestAnimationFrame(tick);
+      }
+    };
+    synchronizeLoop.current = synchronize;
+    document.addEventListener("visibilitychange", synchronize);
+    if (drawable()) publish();
+    synchronize();
     return () => {
-      disposed = true; cancelAnimationFrame(frame); document.removeEventListener("visibilitychange", visible);
+      disposed = true; if (frame !== undefined) cancelAnimationFrame(frame);
+      document.removeEventListener("visibilitychange", synchronize);
+      if (synchronizeLoop.current === synchronize) synchronizeLoop.current = undefined;
       instance.dispose(); if (engine.current === instance) engine.current = undefined;
     };
   }, [publish]);
@@ -125,19 +145,31 @@ export function useVoiceSphere(options: VoiceSphereOptions = {}): VoiceSphereCon
     if (!context) { ready?.(false); return () => {}; }
     const painter = context;
     const view = canvas.ownerDocument.defaultView;
-    const surface: Surface = { context, width: 0, height: 0, compact };
+    const Intersection = view?.IntersectionObserver ?? globalThis.IntersectionObserver;
+    const surface: Surface = { context, width: 0, height: 0, compact, visible: !Intersection };
     const resize = () => {
       surface.width = canvas.clientWidth || (compact ? 80 : 0); surface.height = canvas.clientHeight || (compact ? 80 : 0);
       const scale = Math.min(view?.devicePixelRatio || 1, 2);
       canvas.width = Math.round(surface.width * scale); canvas.height = Math.round(surface.height * scale);
       painter.setTransform(scale, 0, 0, scale, 0, 0);
+      synchronizeLoop.current?.();
     };
     surfaces.current.set(canvas, surface); resize(); ready?.(true);
     const Observer = view?.ResizeObserver ?? globalThis.ResizeObserver;
     const observer = Observer ? new Observer(resize) : undefined;
     observer?.observe(canvas);
     if (!observer) view?.addEventListener("resize", resize);
-    return () => { observer?.disconnect(); view?.removeEventListener("resize", resize); surfaces.current.delete(canvas); ready?.(false); };
+    const intersection = Intersection ? new Intersection(entries => {
+      for (const entry of entries) if (entry.target === canvas) surface.visible = entry.isIntersecting;
+      synchronizeLoop.current?.();
+    }) : undefined;
+    intersection?.observe(canvas);
+    synchronizeLoop.current?.();
+    return () => {
+      observer?.disconnect(); intersection?.disconnect(); view?.removeEventListener("resize", resize);
+      if (surfaces.current.get(canvas) === surface) { surfaces.current.delete(canvas); ready?.(false); }
+      synchronizeLoop.current?.();
+    };
   }, []);
 
   const dispatch = useCallback((event: SphereEvent) => {

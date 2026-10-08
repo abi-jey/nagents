@@ -90,7 +90,9 @@ sphere.current?.dispatch({ type: "delegations-reset" });
 sphere.current?.dispatch({ type: "view-reset" });
 ```
 
-`dispatch` returns whether the command was accepted. Delegation IDs are stable: duplicate starts/results and unknown results are rejected. Results received during launch are queued and animate after launch finishes. Density changes preserve task identities and pending results. `delegation-finished` accepts `failed` or `cancelled`, clears pending motion and queued success results, and frees the slot without animating a successful return. Three visual task slots are available; an additional start returns `false`. Explicit reset clears tasks and remembered IDs.
+`dispatch` returns whether the command was accepted. Duplicate starts are rejected for every displayed task and the 128 most recently retired task IDs; applications own any longer-lived business deduplication. Duplicate results and unknown results are rejected. Results received during launch are queued and animate after launch finishes. Density changes preserve task identities and pending results. `delegation-finished` accepts `failed` or `cancelled`, clears pending motion and queued success results, and frees the slot without animating a successful return. Three visual task slots are available; an additional start returns `false`. Explicit reset clears tasks and remembered IDs.
+
+The Live UI bridge retains all active/unacknowledged tasks and 64 settled records per voice session. Evicting settled records advances a sequence watermark, so old queued/working snapshots cannot restart forgotten work. Already-known active tasks can still settle from later lifecycle records below that watermark. A new voice session or engine generation clears the watermark.
 
 `rotate`, `nextNode`, `zoomBy`, and `getSnapshot` are also available. `onSnapshot` publishes animation metadata at most ten times per second; imperative commands also publish immediately. Frame-level audio and canvas drawing do not rerender the React tree every frame.
 
