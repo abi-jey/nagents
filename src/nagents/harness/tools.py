@@ -305,6 +305,7 @@ class CodingTools:
         descriptions = {
             "read_file": (
                 "Read numbered UTF-8 lines; the SHA-256 snapshot is remembered internally for edit. "
+                "Creating a new file does not require a preliminary read. "
                 f"The entire file must fit within {config.max_file_bytes} bytes, including for slices. "
                 f"Returned content is capped at {config.max_output} bytes. "
                 "Displayed lines use LF; newline_style and newline_counts report original CR/LF terminators."
@@ -515,8 +516,17 @@ class CodingTools:
         if not 1 <= limit <= 1000 or start_line < 1:
             raise ValueError("start_line must be >= 1 and limit must be 1..1000")
         relative = self.relative(path)
-        instructions = self.instructions(relative)
-        data, _ = self.snapshot(path)
+        try:
+            instructions = self.instructions(relative)
+            data, _ = self.snapshot(path)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                exc.errno,
+                f"{exc.strerror}. For an existing file, use list_files on its parent (or an existing ancestor), "
+                "or broaden the find glob to check spelling and extensions. Resolve the intended path from "
+                "available context; ask the user only if ambiguity remains.",
+                exc.filename,
+            ) from None
         digest = hashlib.sha256(data).hexdigest()
         self.read_hashes[str(relative)] = digest
         crlf = data.count(b"\r\n")
@@ -607,7 +617,11 @@ class CodingTools:
         return await self._find("*", path, limit, recursive=False)
 
     async def find(self, pattern: str = "**/*", path: str = ".", limit: int = 200) -> dict[str, JsonValue]:
-        """Find paths by glob, relative to path. Use **/*.py for recursive Python files; results are bounded."""
+        """Find unknown paths by glob, relative to path; results are bounded.
+        For existing-file inspection or editing, read_file directly when a path is supplied.
+        A new target file does not require a preliminary read.
+        Use **/*.py for recursive Python files; broaden the glob if an exact filename has no match.
+        """
         return await self._find(pattern, path, limit, recursive=True)
 
     async def _find(self, pattern: str, path: str, limit: int, *, recursive: bool) -> dict[str, JsonValue]:

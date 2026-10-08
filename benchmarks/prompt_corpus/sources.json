@@ -1,0 +1,67 @@
+{
+  "collected_on": "2026-10-08",
+  "sources": [
+    {
+      "repository": "laude-institute/terminal-bench",
+      "revision": "d28711d0da2675d0bb1d56de45ae5df6082438a3",
+      "source_url": "https://github.com/laude-institute/terminal-bench",
+      "license_notice_url": "https://github.com/laude-institute/terminal-bench/blob/d28711d0da2675d0bb1d56de45ae5df6082438a3/LICENSE",
+      "license": "Apache-2.0",
+      "retention": "exact prompt text locally; retain license notices",
+      "data_license_caveat": null
+    },
+    {
+      "repository": "xlang-ai/OSWorld",
+      "revision": "b138d348256078fa634fc3b73567a7337c793e6b",
+      "source_url": "https://github.com/xlang-ai/OSWorld",
+      "license_notice_url": "https://github.com/xlang-ai/OSWorld/blob/b138d348256078fa634fc3b73567a7337c793e6b/LICENSE",
+      "license": "Apache-2.0",
+      "retention": "exact prompt text locally; retain license notices",
+      "data_license_caveat": null
+    },
+    {
+      "repository": "apple/ToolSandbox",
+      "revision": "c8571d7854316d2e1c5f288e59fe1e34e53f6dd1",
+      "source_url": "https://github.com/apple/ToolSandbox",
+      "license_notice_url": "https://github.com/apple/ToolSandbox/blob/c8571d7854316d2e1c5f288e59fe1e34e53f6dd1/LICENSE",
+      "license": "Apple ToolSandbox permissive license",
+      "retention": "exact prompt text locally; retain license notices",
+      "data_license_caveat": null
+    },
+    {
+      "repository": "sierra-research/tau2-bench",
+      "revision": "4ce7c0397c1eb65c9bbe59aeacfe1ca44a1cd699",
+      "source_url": "https://github.com/sierra-research/tau2-bench",
+      "license_notice_url": "https://github.com/sierra-research/tau2-bench/blob/4ce7c0397c1eb65c9bbe59aeacfe1ca44a1cd699/LICENSE",
+      "license": "MIT",
+      "retention": "exact prompt text locally; retain license notices",
+      "data_license_caveat": null
+    },
+    {
+      "repository": "ServiceNow/WorkArena",
+      "revision": "e885130962f61fb64ac305497996a46cfc7d18f0",
+      "source_url": "https://github.com/ServiceNow/WorkArena",
+      "license_notice_url": "https://github.com/ServiceNow/WorkArena/blob/e885130962f61fb64ac305497996a46cfc7d18f0/LICENSE",
+      "license": "Apache-2.0",
+      "retention": "exact prompt text locally; retain license notices",
+      "data_license_caveat": null
+    },
+    {
+      "repository": "SWE-bench/SWE-bench",
+      "revision": "02e7a74ffd0b707aab73d203fe87bdc7c76afc8e",
+      "source_url": "https://github.com/SWE-bench/SWE-bench",
+      "license_notice_url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/LICENSE",
+      "license": "MIT",
+      "retention": "framework metadata only; SWE-bench Verified dataset issue text not retained",
+      "data_license_caveat": "framework license is not a dataset text redistribution grant"
+    },
+    {
+      "dataset": "princeton-nlp/SWE-bench_Verified",
+      "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+      "source_url": "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified",
+      "license": "unresolved",
+      "retention": "500 metadata-only records",
+      "pinning_caveat": "viewer endpoint current content, SHA recorded before collection"
+    }
+  ]
+}

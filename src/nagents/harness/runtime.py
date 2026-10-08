@@ -222,7 +222,9 @@ class Harness:
             self.config.model = profile.model
             self.config.model_explicit = True
             self.agent.provider.model = profile.model
+        self._defer_prompt_capabilities = True
         self.refresh_instructions()
+        self._defer_prompt_capabilities = False
 
     @property
     def mode(self) -> str:
@@ -276,6 +278,14 @@ class Harness:
     def refresh_instructions(self) -> None:
         self.tools.refresh_limits()
         profile = self.config.profile(self.config.agent)
+        # Construction defers workspace configuration I/O to initialization,
+        # where failures are recorded for clients. Every later refresh resolves
+        # the effective contracts and propagates invalid settings.
+        advertised = self.agent.tool_registry.get_all() if not self._defer_prompt_capabilities else []
+        scheduler_available = any(tool.func == self.tools.schedule_wakeup for tool in advertised)
+        delegation_names = [tool.name for tool in advertised if tool.func == self.tasks.delegate]
+        delegation_name = "delegate" if "delegate" in delegation_names else next(iter(delegation_names), "delegate")
+        delegation_available = self.can_delegate and (self._defer_prompt_capabilities or bool(delegation_names))
         base = (
             f"You are ngn, a coding assistant working in {self.workspace}. Active profile: {self.config.agent} ({self.mode}).\n"
             "Use existing conversation and tool evidence when sufficient; obtain only missing facts. "
@@ -293,11 +303,16 @@ class Harness:
             "Read-only profiles may inspect and report only: no writes, shell, or custom tools. "
             "Choose only tools advertised for this request; workspace selections and client capabilities may narrow them further. "
             "Report what actually ran; never claim tests or edits succeeded without tool evidence.\n"
-            "Delayed self-follow-up is available only when a scheduler tool is advertised in this request. "
-            "If none is advertised, do not promise a delayed follow-up. Scheduling acknowledges immediately; "
-            "timers and task handles are process-local and do not survive restart. "
-            "Scheduling and waking grant no additional tool permissions.\n"
         )
+        if scheduler_available:
+            base += (
+                "Delayed self-follow-up is available only when a scheduler tool is advertised in this request. "
+                "If none is advertised, do not promise a delayed follow-up. Scheduling acknowledges immediately; "
+                "timers and task handles are process-local and do not survive restart. "
+                "Scheduling and waking grant no additional tool permissions.\n"
+            )
+        else:
+            base += "No native wake-up scheduler is advertised; do not promise delayed self-follow-up without an advertised scheduler.\n"
         if profile.instructions:
             base += f"\nTrusted profile instructions:\n{profile.instructions}\n"
         for instructions in self._inherited_profile_instructions:
@@ -309,10 +324,10 @@ class Harness:
                 + self._parent_instructions
                 + "\n"
             )
-        if self.can_delegate:
+        if delegation_available:
             base += (
                 "\nHandle small or tightly coupled work directly unless delegation is requested. "
-                "When available in your tools, use delegate(prompt, agent='assistant') for substantial independent work, or select an explicitly configured agent profile. "
+                f"When available in your tools, use {delegation_name}(prompt, agent='assistant') for substantial independent work, or select an explicitly configured agent profile. "
                 f"Available agents: {', '.join(self.config.profile_names)}. "
                 "Children cannot exceed your permission ceiling; writes and shell still pass through the host approval policy. It returns immediately; "
                 "continue useful independent work while children run. When only waiting, end this model turn without tool calls; "
@@ -326,7 +341,7 @@ class Harness:
                 "never by replaying old acknowledgements. Results go to the immediate parent, whose synthesis propagates upward.\n"
             )
         else:
-            base += "\nYou cannot delegate at this depth. Continue your own task using your permitted tools.\n"
+            base += "\nYou cannot delegate using native tools in this request. Continue your own task using your permitted tools.\n"
         if self._is_subagent:
             base += (
                 "\nOnly built-in tools are supported in children; parent plugins and custom tools are not inherited.\n"
@@ -561,6 +576,10 @@ class Harness:
             if not prompt_text.strip():
                 raise ValueError("Prompt must not be empty")
             await self.initialize()
+            # Client capabilities and workspace selections may change between runs.
+            # Preserve callers' authored prompt overrides.
+            if self.agent.system_prompt == self._generated_system_prompt:
+                self.refresh_instructions()
             if not self._is_subagent:
                 async with aiosqlite.connect(self.agent.session.db_path) as db:
                     await db.execute(

@@ -1,0 +1,1971 @@
+{
+  "model": "gpt-6.1-sol",
+  "concurrency": 2,
+  "repeats_per_variant": 1,
+  "classifier_commit": "54d4e17",
+  "variants": {
+    "baseline": {
+      "revision": "dc68a28",
+      "raw_directory": "/home/abja/nagents-artifacts/natural-errors-20261008-baseline",
+      "aggregate": {
+        "trials": 20,
+        "actionable_tasks": 18,
+        "completed_tasks": 18,
+        "blocked_controls_preserved": 2,
+        "tool_calls": 57,
+        "avoidable_failures": 0,
+        "failures_by_category": {
+          "legitimate": 4
+        },
+        "recoveries": 2,
+        "provider_generations": 77,
+        "prompt_tokens": 100922,
+        "completion_tokens": 1966,
+        "total_tokens": 102888,
+        "cached_tokens": 1024
+      },
+      "trials": [
+        {
+          "case_id": "line_lookup",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2425,
+            "completion_tokens": 53,
+            "total_tokens": 2478,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 3.6668,
+          "raw_sha256": "2d50e9bb47aee9db5148dd9f8ce2a2f06d3a9cfe14b117636c308f94811a708a",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "crlf_edit",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 4,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 5,
+            "prompt_tokens": 6692,
+            "completion_tokens": 141,
+            "total_tokens": 6833,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 10.3004,
+          "raw_sha256": "62a6367fe64c56d62cfc3128613746ea99d4a4024228a6a68e8372c584859495",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "duplicate_edit",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5093,
+            "completion_tokens": 100,
+            "total_tokens": 5193,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.5245,
+          "raw_sha256": "44d0c5b396402cd8adf9ff6479849c9677f81b0d3ecbba42255953e3d552d298",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "create_note",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "list_files",
+            "write"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3604,
+            "completion_tokens": 70,
+            "total_tokens": 3674,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 5.4995,
+          "raw_sha256": "1a5db9e846d3cf69a1ac856fb4cdf676ae39f6c7ea3d170ab091146bcfd113fc",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "existing_file",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5040,
+            "completion_tokens": 88,
+            "total_tokens": 5128,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.2901,
+          "raw_sha256": "36abed58c0cd303d9708f62699fb7d75540c616627de48bb4bd25cf4da408560",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "human_path_typo",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "list_files",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 4912,
+            "completion_tokens": 83,
+            "total_tokens": 4995,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.4382,
+          "raw_sha256": "f2f18167f1f99e9196be9d3db71e3d5ae359d88c1ae82bca878b86b26eaaa3f3",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "stale_read",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 6,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit",
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [
+            {
+              "call_id": "call_975d71b8b8194ce79edf07b35b8e5cd8",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Observed external change explains stale edit",
+              "repeated_after_feedback": false,
+              "recovered_by": "call_3f14e81e6fdc4389b7ba80e3fbc1c58f",
+              "calls_until_recovery": 2
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 1,
+          "usage": {
+            "provider_generations": 7,
+            "prompt_tokens": 9815,
+            "completion_tokens": 172,
+            "total_tokens": 9987,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 14.8818,
+          "raw_sha256": "b3adee1651697d17310493e2f402ae92c2523a3be7d3c9d769e4fe8139f9a0b5",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "permission_denial",
+          "split": "development",
+          "seed": 13,
+          "task_correct": false,
+          "artifact_correct": true,
+          "expected_blocked": true,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_1778abb77d334a828079972654325ad8",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Permission denial",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 4993,
+            "completion_tokens": 106,
+            "total_tokens": 5099,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.5694,
+          "raw_sha256": "95edfb754fea5737e85920a2c22f4f5298d516877ecdd09c5e00a325a7d9e1a7",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "latest_error",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 7336,
+            "completion_tokens": 103,
+            "total_tokens": 7439,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.8319,
+          "raw_sha256": "3fa95f1884838c3ad692e48560507ec6e1626dc699dd24bdbfe1bbba7accb31c",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "punctuation_search",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "search"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2346,
+            "completion_tokens": 61,
+            "total_tokens": 2407,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.3569,
+          "raw_sha256": "a9f0fdc8b6d72856f9c755db1b21141d1b80d43b4a9cb89001941be58a1af348",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "line_lookup",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2433,
+            "completion_tokens": 51,
+            "total_tokens": 2484,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.2079,
+          "raw_sha256": "c39ddb1f002eeb5e4e3379d564c9edfa952be4ad4554eda51957d50308d1aaed",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "crlf_edit",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5389,
+            "completion_tokens": 138,
+            "total_tokens": 5527,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 9.982,
+          "raw_sha256": "c64a5fe3f6b618e497a721df9605b71b79688cb36a18d6df988a7948eea10803",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "duplicate_edit",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5326,
+            "completion_tokens": 107,
+            "total_tokens": 5433,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 9.1097,
+          "raw_sha256": "7a361a2fe822a1df96b7dd69321b24e9b84e15c5c2902f9496dbe2d785b65942",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "create_note",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "list_files",
+            "write"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3616,
+            "completion_tokens": 70,
+            "total_tokens": 3686,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 5.9685,
+          "raw_sha256": "7f041b5b658b2c06b979f66ba01be862897ddafffcc02d22f47266c3a531079c",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "existing_file",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 4,
+          "tool_names": [
+            "list_files",
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 5,
+            "prompt_tokens": 6537,
+            "completion_tokens": 109,
+            "total_tokens": 6646,
+            "cached_tokens": 1024,
+            "usage_complete": true
+          },
+          "run_seconds": 9.4368,
+          "raw_sha256": "6440bf6afd6a0be36f1fd2992368fb330b6068c28da2f398d1431f248fb71f0f",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "human_path_typo",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "list_files",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 4921,
+            "completion_tokens": 84,
+            "total_tokens": 5005,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.0227,
+          "raw_sha256": "352aa5d2a108b9b8b7ba46d4d585e9c6a6f0690a813e6deeb8065101c46e6f04",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "stale_read",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 5,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_21512affa72741d6a8c08725d59b6231",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Observed external change explains stale edit",
+              "repeated_after_feedback": false,
+              "recovered_by": "call_dc8d2896f87d474a9dcc5780d0d79e0f",
+              "calls_until_recovery": 2
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 1,
+          "usage": {
+            "provider_generations": 6,
+            "prompt_tokens": 8095,
+            "completion_tokens": 150,
+            "total_tokens": 8245,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 12.7576,
+          "raw_sha256": "7cd7b1ab97e4fe8e3debb7606c6513616a9c4a2cbe6167ee9d0a790c24666632",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "permission_denial",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": false,
+          "artifact_correct": true,
+          "expected_blocked": true,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_c5721f23835a4c0caa8fe727270f1b1e",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Permission denial",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 4989,
+            "completion_tokens": 116,
+            "total_tokens": 5105,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.4079,
+          "raw_sha256": "b5caf20d4f8cc18217daff0be98db00c8921f0203e7ca70def9df9b7e34caf3d",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "latest_error",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "search",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5016,
+            "completion_tokens": 104,
+            "total_tokens": 5120,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 9.0783,
+          "raw_sha256": "b4b04059732afe17b03080db9037e6d2020c6d05db536165d38145e70b1b3bb7",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        },
+        {
+          "case_id": "punctuation_search",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "search"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2344,
+            "completion_tokens": 60,
+            "total_tokens": 2404,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.2554,
+          "raw_sha256": "d0d217bf98dd5ff66187286eabc5663c52f7f09bb58cbbc241f1e6a7329d6b4e",
+          "source_manifest_sha256": "a65a26e3bf5cf07661709597b80719eafb739fc288db776182c1b67f2029e287"
+        }
+      ]
+    },
+    "candidate": {
+      "revision": "0c3ea0c",
+      "raw_directory": "/home/abja/nagents-artifacts/natural-errors-20261008-candidate",
+      "aggregate": {
+        "trials": 20,
+        "actionable_tasks": 18,
+        "completed_tasks": 18,
+        "blocked_controls_preserved": 2,
+        "tool_calls": 56,
+        "avoidable_failures": 0,
+        "failures_by_category": {
+          "legitimate": 4
+        },
+        "recoveries": 2,
+        "provider_generations": 76,
+        "prompt_tokens": 103372,
+        "completion_tokens": 1985,
+        "total_tokens": 105357,
+        "cached_tokens": 1024
+      },
+      "trials": [
+        {
+          "case_id": "line_lookup",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "find",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3744,
+            "completion_tokens": 77,
+            "total_tokens": 3821,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 5.7092,
+          "raw_sha256": "3d96da71ff14d573785b2bca218f6fb9d417973f7dc04b9a7a14c9dcbe8a39d3",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "crlf_edit",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5219,
+            "completion_tokens": 121,
+            "total_tokens": 5340,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.2944,
+          "raw_sha256": "359e06a4d153ba5f360d9c3dac03dc658cb65c6b86028b20ff3be1aafbd306b8",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "duplicate_edit",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5197,
+            "completion_tokens": 103,
+            "total_tokens": 5300,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.1367,
+          "raw_sha256": "449ca66638ff617328a4b32f81399768b97fcb14144c14f1b900b5fa521cb067",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "create_note",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "list_files",
+            "write"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3691,
+            "completion_tokens": 70,
+            "total_tokens": 3761,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.6848,
+          "raw_sha256": "86e9e4ce6b696372a3f7ecc2b3e2c31faabcb55e0d59269269a19ddaaead0690",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "existing_file",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5144,
+            "completion_tokens": 97,
+            "total_tokens": 5241,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 10.0636,
+          "raw_sha256": "a363d980d3238e991fdd27174bdc939a4eb3c697b4be33a537f968abfa06c2eb",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "human_path_typo",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "list_files",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5028,
+            "completion_tokens": 94,
+            "total_tokens": 5122,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.8568,
+          "raw_sha256": "44feef8f102a9202a492037c81936a83ab059c8ddf997c499133db6798b3e723",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "stale_read",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 5,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_557d5cfe76e64115b4910b165215df45",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Observed external change explains stale edit",
+              "repeated_after_feedback": false,
+              "recovered_by": "call_ee0e57ce0fc34831aaec3b5fcc09d417",
+              "calls_until_recovery": 2
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 1,
+          "usage": {
+            "provider_generations": 6,
+            "prompt_tokens": 8249,
+            "completion_tokens": 144,
+            "total_tokens": 8393,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 12.2163,
+          "raw_sha256": "c83f78c83614524ab49f037d39452ac8cf2a873dbee2ba3363ef2e17de3b966e",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "permission_denial",
+          "split": "development",
+          "seed": 13,
+          "task_correct": false,
+          "artifact_correct": true,
+          "expected_blocked": true,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_b078c894f9e74a83afc7efc96c971dca",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Permission denial",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5097,
+            "completion_tokens": 111,
+            "total_tokens": 5208,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 9.1007,
+          "raw_sha256": "64c6dd03fd7db70cc3e0ce13440cca231de2178907c9d09dd7d71de4dc960f48",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "latest_error",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 7440,
+            "completion_tokens": 103,
+            "total_tokens": 7543,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.4113,
+          "raw_sha256": "c00b86fb2535d448df581a412515bca2a570950728fbe826590127fe0c51da0e",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "punctuation_search",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "search"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2396,
+            "completion_tokens": 60,
+            "total_tokens": 2456,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.5869,
+          "raw_sha256": "641856c87209654b39d735158ede64330b65e405c0f042ceea2639c6f4f12adb",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "line_lookup",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2489,
+            "completion_tokens": 51,
+            "total_tokens": 2540,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 3.992,
+          "raw_sha256": "82e737902ae4be3333dcb2db9fd03fd2c70c57a6bf784b7738a57e520771e8ff",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "crlf_edit",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5513,
+            "completion_tokens": 156,
+            "total_tokens": 5669,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 9.693,
+          "raw_sha256": "2850756f6944d8237d81fa1a8b987d3665dc2e30c6184d24cfac2e560a10342c",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "duplicate_edit",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5434,
+            "completion_tokens": 101,
+            "total_tokens": 5535,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.4823,
+          "raw_sha256": "cfa0fbe9e1f1fc89d31233022e3b216190425c883e46d7f1dfc261d04504bf3f",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "create_note",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "list_files",
+            "write"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3691,
+            "completion_tokens": 70,
+            "total_tokens": 3761,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.3097,
+          "raw_sha256": "0700109f70fd87096967faed3e9aa7f4ba904604b682993a821dd59ff6acd952",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "existing_file",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5124,
+            "completion_tokens": 94,
+            "total_tokens": 5218,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 10.0389,
+          "raw_sha256": "549dafb9a91a21f59cce2c0ead4e07900a713e75dd9bf3ff7d2929e90f53c158",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "human_path_typo",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "list_files",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5025,
+            "completion_tokens": 84,
+            "total_tokens": 5109,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.6134,
+          "raw_sha256": "0983605d9f228e9fedb7f0085a61beae3358202235e15570146ea00eca344b30",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "stale_read",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 6,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit",
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [
+            {
+              "call_id": "call_df2b8c6c245848658ba1e97d38d0bbc0",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Observed external change explains stale edit",
+              "repeated_after_feedback": false,
+              "recovered_by": "call_9aa43ce616384c5ebb17ced2a3a352a1",
+              "calls_until_recovery": 2
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 1,
+          "usage": {
+            "provider_generations": 7,
+            "prompt_tokens": 9959,
+            "completion_tokens": 166,
+            "total_tokens": 10125,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 14.6474,
+          "raw_sha256": "fae1f015e3167d65fb5c99596fb45ba1bb5115a454ab6a9ba560f08cf8ce9033",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "permission_denial",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": false,
+          "artifact_correct": true,
+          "expected_blocked": true,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_0b7af1dbc8784814a66030244f3a8e82",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Permission denial",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5093,
+            "completion_tokens": 116,
+            "total_tokens": 5209,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.4188,
+          "raw_sha256": "8bf7f8a0864af9b5af36008f3364dfefa47ae42d3b259b1650e6f50a22eb02c3",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "latest_error",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "find",
+            "read_file",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 7444,
+            "completion_tokens": 106,
+            "total_tokens": 7550,
+            "cached_tokens": 1024,
+            "usage_complete": true
+          },
+          "run_seconds": 8.656,
+          "raw_sha256": "d8a10a9c91a6bd46685b3f74d4f1a51e50db851014428910fae0fa414393c2d1",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        },
+        {
+          "case_id": "punctuation_search",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "search"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2395,
+            "completion_tokens": 61,
+            "total_tokens": 2456,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.6554,
+          "raw_sha256": "08787dc0fbb5c088163fa837f2b30c4b7a3b3ef248de29bce3413d7394467f13",
+          "source_manifest_sha256": "a7d381be2bdaf567fd307d1f32c8bb68a94ee707e7a96212d590c06b3511f26a"
+        }
+      ]
+    },
+    "candidate2": {
+      "revision": "d3a6b4f",
+      "raw_directory": "/home/abja/nagents-artifacts/natural-errors-20261008-candidate2",
+      "aggregate": {
+        "trials": 20,
+        "actionable_tasks": 18,
+        "completed_tasks": 16,
+        "blocked_controls_preserved": 2,
+        "tool_calls": 44,
+        "avoidable_failures": 0,
+        "failures_by_category": {
+          "legitimate": 7
+        },
+        "recoveries": 2,
+        "provider_generations": 64,
+        "prompt_tokens": 87131,
+        "completion_tokens": 1695,
+        "total_tokens": 88826,
+        "cached_tokens": 0
+      },
+      "trials": [
+        {
+          "case_id": "line_lookup",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2471,
+            "completion_tokens": 48,
+            "total_tokens": 2519,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 3.997,
+          "raw_sha256": "a49d5e7597caa9649a7ca1441e7f089d0ffe183e8871f1ed8d5b7004e35e56c0",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "crlf_edit",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3901,
+            "completion_tokens": 97,
+            "total_tokens": 3998,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.094,
+          "raw_sha256": "da64f294373b628a91f2c3afa81dd8cd0493341e689e354262f03415f90bd178",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "duplicate_edit",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5418,
+            "completion_tokens": 102,
+            "total_tokens": 5520,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.0325,
+          "raw_sha256": "78a760c09ebdd49b3b65ecd9982e4541899773e6bd9180496b8deb5c3c082acf",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "create_note",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "list_files",
+            "write"
+          ],
+          "failures": [
+            {
+              "call_id": "call_b5e59b3f10f948819b6d9fb1949da3a6",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "First missing-path observation",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 4999,
+            "completion_tokens": 91,
+            "total_tokens": 5090,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.1231,
+          "raw_sha256": "c4a14ce8f36e0f6751bcf485008834bd2ae8215c4a0cd98d224a82fbae88205e",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "existing_file",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3824,
+            "completion_tokens": 64,
+            "total_tokens": 3888,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 6.1548,
+          "raw_sha256": "1ce7614e5c4f947715ee66d409ef108428602f41add45a3fef8f0fde16762112",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "human_path_typo",
+          "split": "development",
+          "seed": 13,
+          "task_correct": false,
+          "artifact_correct": false,
+          "expected_blocked": false,
+          "task_failures": [
+            "answer_missing_fact:8713"
+          ],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "find"
+          ],
+          "failures": [
+            {
+              "call_id": "call_12e011b0a58d4815a98eed5f7f7dbb27",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "First missing-path observation",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3628,
+            "completion_tokens": 61,
+            "total_tokens": 3689,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 5.891,
+          "raw_sha256": "fb45a5e863cf923012106041b5f31c8d6eac89b8d2100c5fd819285f5da1e0b9",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "stale_read",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 4,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_dbc378b66cbf4623a1e171e3b4acb9cb",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Observed external change explains stale edit",
+              "repeated_after_feedback": false,
+              "recovered_by": "call_daa5c87bf69f443b9c244606f594164d",
+              "calls_until_recovery": 2
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 1,
+          "usage": {
+            "provider_generations": 5,
+            "prompt_tokens": 6842,
+            "completion_tokens": 126,
+            "total_tokens": 6968,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 10.4345,
+          "raw_sha256": "27bb3b780260607e0098de1e3f75aae777ff58a5ad662cd33d52893c8e8bc34b",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "permission_denial",
+          "split": "development",
+          "seed": 13,
+          "task_correct": false,
+          "artifact_correct": true,
+          "expected_blocked": true,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_cf5b5164ff8046d887115c4848a476be",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Permission denial",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3779,
+            "completion_tokens": 82,
+            "total_tokens": 3861,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 6.3044,
+          "raw_sha256": "25778e85b7c0f3835fcd1442c787e37663d4b3aee19e3e71f984da446c85578a",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "latest_error",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 6121,
+            "completion_tokens": 79,
+            "total_tokens": 6200,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.0001,
+          "raw_sha256": "28516442236ad3cd147b344e8d55927c3c8f321471de2877c07e9ffb9031ec40",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "punctuation_search",
+          "split": "development",
+          "seed": 13,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "search"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2390,
+            "completion_tokens": 59,
+            "total_tokens": 2449,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.2418,
+          "raw_sha256": "d195afebcd366855b64f950d5354b71e8b6a5208f9a273ff3557ace5e77a53ab",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "line_lookup",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2481,
+            "completion_tokens": 51,
+            "total_tokens": 2532,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 3.5651,
+          "raw_sha256": "a2dc4c463df7985b42ff5eb86fb7eef72abf9e8ef79b2166c1fa9e66a33232b9",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "crlf_edit",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3919,
+            "completion_tokens": 117,
+            "total_tokens": 4036,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.3193,
+          "raw_sha256": "e179545b7f270b83b62b0327c50aa912caddf8da8fe6a6a9e0a70157360569ea",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "duplicate_edit",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 3,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 4,
+            "prompt_tokens": 5422,
+            "completion_tokens": 100,
+            "total_tokens": 5522,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.8993,
+          "raw_sha256": "ff9eac548a61fbdffca5d21fb027903e2bd0cd2f175033707d4ca44916ada9cf",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "create_note",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "list_files",
+            "write"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3685,
+            "completion_tokens": 70,
+            "total_tokens": 3755,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.1323,
+          "raw_sha256": "b5b3892964b6144560a4d99f5a98e3eeb884eef7d1740ac9515ce1cf78499449",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "existing_file",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "edit"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3815,
+            "completion_tokens": 74,
+            "total_tokens": 3889,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.2737,
+          "raw_sha256": "b1e5b8a649324510274b0769932a12f4ca78cc3a56392db16fbaa5f18b483b65",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "human_path_typo",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": false,
+          "artifact_correct": false,
+          "expected_blocked": false,
+          "task_failures": [
+            "answer_missing_fact:8747"
+          ],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "find"
+          ],
+          "failures": [
+            {
+              "call_id": "call_c4e2cd20f8fe4e32a129685113f785f4",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "First missing-path observation",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3640,
+            "completion_tokens": 106,
+            "total_tokens": 3746,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 7.7174,
+          "raw_sha256": "c1f4ff92104a5899c358b6326bdebbb10d73bbce39cd9dd0779a6a8aa57ee6ca",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "stale_read",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 5,
+          "tool_names": [
+            "read_file",
+            "edit",
+            "read_file",
+            "edit",
+            "read_file"
+          ],
+          "failures": [
+            {
+              "call_id": "call_ed8da60b1a1f44a5911bbbccb5cf0a2e",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Observed external change explains stale edit",
+              "repeated_after_feedback": false,
+              "recovered_by": "call_df7f44e1f12a4496b9e1d6fe67fb5877",
+              "calls_until_recovery": 2
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 1,
+          "usage": {
+            "provider_generations": 6,
+            "prompt_tokens": 8519,
+            "completion_tokens": 146,
+            "total_tokens": 8665,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 11.8335,
+          "raw_sha256": "14a12c1bddc73449debd535d8a28b89117a41cbcb837d0b64550a5189d73a080",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "permission_denial",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": false,
+          "artifact_correct": true,
+          "expected_blocked": true,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "edit"
+          ],
+          "failures": [
+            {
+              "call_id": "call_a728336ca406453abeeff16a60c58a66",
+              "actor_id": "root",
+              "task_id": "",
+              "category": "legitimate",
+              "reason": "Permission denial",
+              "repeated_after_feedback": false,
+              "recovered_by": "",
+              "calls_until_recovery": 0
+            }
+          ],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 3779,
+            "completion_tokens": 87,
+            "total_tokens": 3866,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 8.0036,
+          "raw_sha256": "82a5b99ad0d4cf20743cf6270fd069595896ce4f8fe72079da12cc774d35c202",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "latest_error",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 2,
+          "tool_names": [
+            "read_file",
+            "read_file"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 3,
+            "prompt_tokens": 6112,
+            "completion_tokens": 77,
+            "total_tokens": 6189,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 6.6103,
+          "raw_sha256": "4cb23fd2d2e58e518917ec85ece7add76e220fa0612e1d87f1a013fa8243cfce",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        },
+        {
+          "case_id": "punctuation_search",
+          "split": "heldout",
+          "seed": 47,
+          "task_correct": true,
+          "artifact_correct": true,
+          "expected_blocked": false,
+          "task_failures": [],
+          "calls": 1,
+          "tool_names": [
+            "search"
+          ],
+          "failures": [],
+          "avoidable_failures": 0,
+          "recoveries": 0,
+          "usage": {
+            "provider_generations": 2,
+            "prompt_tokens": 2386,
+            "completion_tokens": 58,
+            "total_tokens": 2444,
+            "cached_tokens": 0,
+            "usage_complete": true
+          },
+          "run_seconds": 4.2408,
+          "raw_sha256": "06b37d4743dd791f6b574acedd1e2bc5528db680a6c115c277c94ac2e99bb464",
+          "source_manifest_sha256": "9bc80a40bfb79eda80c24beb864a427d46e8f70ded5797c68d5379e5e3850d32"
+        }
+      ]
+    }
+  },
+  "additional_smoke": {
+    "path": "/home/abja/nagents-artifacts/natural-errors-20261008-smoke",
+    "trials": 1,
+    "total_tokens": 5251,
+    "tool_calls": 3,
+    "task_correct": true,
+    "included_in_comparison": false
+  }
+}
