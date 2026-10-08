@@ -111,7 +111,9 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
 
             harness.wakeup_handler = None
             assert not {"schedule_wakeup", "wake_up_in"} & await capture()
-            assert "only when a scheduler tool is advertised in this request" in str(requests[-1]["instructions"])
+            assert "No native wake-up scheduler is advertised" in str(requests[-1]["instructions"])
+            assert "do not promise delayed self-follow-up" in str(requests[-1]["instructions"])
+            assert "Scheduling acknowledges immediately" not in str(requests[-1]["instructions"])
             assert "use schedule_wakeup" not in str(requests[-1]["instructions"])
             harness.wakeup_handler = scheduler
             assert "schedule_wakeup" in await capture()
