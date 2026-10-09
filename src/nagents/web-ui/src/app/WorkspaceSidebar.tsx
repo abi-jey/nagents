@@ -4,6 +4,7 @@ import { SessionSidebar } from "../features/sessions/SessionSidebar";
 import { TrashNotice } from "../features/sessions/TrashDialog";
 import { restoreDeletionFocus } from "../api/deletion";
 import type { Client } from "./useClient";
+import { useChatFolders } from "../features/sessions/useChatFolders.js";
 
 export function WorkspaceSidebar({ client, composer, open, close, select, collapsed, toggleCollapsed }: {
   client: Client;
@@ -15,6 +16,7 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
   toggleCollapsed: () => void;
 }) {
   const { sessions, available } = client;
+  const folders = useChatFolders(sessions.config?.token || "", sessions.sessions.map(session => session.id));
   async function moveToTrash(session: typeof sessions.sessions[number]) {
     const previous = document.activeElement;
     if (await client.softDelete(session)) requestAnimationFrame(() => {
@@ -26,6 +28,7 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
   return <>
     <SessionSidebar
       workspace={sessions.config?.workspace || ""} sessions={sessions.sessions} selected={sessions.sessionId}
+      folders={folders}
       disabled={!available.navigate} newDisabled={!available.create} open={open} close={close}
       select={(id) => void select(id)} remove={(session) => void moveToTrash(session)}
       permanent={(session) => client.deletionController.show(session)}

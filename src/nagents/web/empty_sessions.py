@@ -23,6 +23,7 @@ _REFERENCES = (
     ("ngn_web_inbox", "session_id = ?"),
     ("nagents_channel_inbox", "session_id = ?"),
     ("ngn_web_uploads", "session_id = ?"),
+    ("ngn_web_group_members", "session_id = ?"),
     ("ngn_local_deliveries", "root_session_id = ? OR actor_session_id = ?"),
     ("ngn_web_session_owners", "session_id = ?"),
     ("ngn_web_bindings", "session_id = ? OR default_session_id = ?"),

@@ -216,6 +216,24 @@ Message badges distinguish **Sending…**, confirmed **Queued**, and **Delivery
 unconfirmed** states. Working sessions have an indicator in the sidebar; when
 another session is running, **View active session** takes you to it.
 
+### Chat Folders
+
+Use **New folder** beside Sessions to group chats by project or topic. Open a
+chat's actions menu and choose **Move to folder…** to move it, or choose
+**Ungrouped** to remove its folder assignment. Moving a chat changes only its
+sidebar organization; its selected conversation, active work, approvals, and
+history are unaffected.
+
+Folders can be renamed, collapsed, or removed. Search matches chat titles and
+folder names, temporarily revealing matching chats inside collapsed folders.
+Folder membership and collapse state are stored with the workspace, survive a
+server restart, and remain attached through Trash and restore. Removing a folder
+moves its chats to Ungrouped; it never deletes conversations. Permanently deleting
+a chat also removes its folder membership. Updates are revision-checked so two
+browser windows cannot silently overwrite each other's folder edits.
+An otherwise empty draft explicitly moved to a folder is kept as an organized
+chat; untouched, ungrouped drafts continue to use normal empty-session cleanup.
+
 ### Browser Slash Commands
 
 Type `/` in the composer for suggestions, or submit `/help` to see the supported
@@ -507,6 +525,11 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
+| `GET session-groups` | Folder metadata `{revision, groups: [{id, name, collapsed}], memberships: {session_id: group_id}}` for this workspace |
+| `POST session-groups/create` | `{revision, name}` creates a folder; names are unique ignoring case, 1-80 characters; up to 128 folders |
+| `POST session-groups/update` | `{revision, group_id, name, collapsed}` renames or collapses a folder |
+| `POST session-groups/move` | `{revision, session_id, group_id}` moves an existing root; an empty `group_id` means Ungrouped; allowed while chats run |
+| `POST session-groups/remove` | `{revision, group_id}` removes only the folder and its assignments, including assignments retained in Trash; chats are preserved |
 | `DELETE sessions/{session_id}` | `{}` or `{permanent: false}` moves an idle, unbound root to Trash; returns `Snapshot & {deleted_session_id: string, trash: TrashItem}` |
 | `DELETE sessions/{session_id}` | `{permanent: true}` permanently deletes an active-list root; returns `Snapshot & {deleted_session_id: string}` |
 | `GET trash` | Returns `{revision: string, retention_days: number, items: TrashItem[]}` |

@@ -65,6 +65,8 @@ from .security import LocalOnly
 from .service import Run as Run
 from .service import RunResponse
 from .service import WebState as WebState
+from .session_groups import SessionGroups
+from .session_groups import register_session_groups
 from .settings import SettingsInput
 from .settings import SettingsRevision
 from .settings import WebSettings
@@ -182,10 +184,11 @@ def create_app(
     live: LiveService
     live_settings: LiveSettings
     provider_login: ProviderLogin
+    session_groups: SessionGroups
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, designer, live, live_settings, provider_login
+        nonlocal state, designer, live, live_settings, provider_login, session_groups
         harness = harness_factory(copy.deepcopy(config))
         harness.resources.logger = logger
         logger.info(
@@ -195,6 +198,7 @@ def create_app(
             config.demo,
         )
         state = WebState(harness)
+        session_groups = SessionGroups(state.channels.store)
         voice_summaries = VoiceContextSummarizer()
         live_settings = LiveSettings(
             harness.agent.session.db_path,
@@ -293,6 +297,7 @@ def create_app(
             designer = Designer(state)
             await designer.traces.initialize()
             await state.history.initialize()
+            await session_groups.initialize()
             state.tool_approvals.initialize()
             harness.agent.plugins.append(state.history.identity)
             state.settings = WebSettings(harness)
@@ -387,6 +392,7 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
+    register_session_groups(app, lambda: session_groups)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 

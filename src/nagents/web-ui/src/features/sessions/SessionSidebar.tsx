@@ -3,6 +3,8 @@ import { Icon } from "../../components/Icon.js";
 import type { Session } from "../../types";
 import type { ReactNode } from "react";
 import { SessionMenu } from "./SessionMenu.js";
+import { SessionFolders } from "./SessionFolders.js";
+import type { ChatFolderActions } from "./useChatFolders.js";
 
 function WorkspaceDialog({ workspace, name, demo, count, close }: {
   workspace: string; name: string; demo: boolean; count: number; close: () => void;
@@ -33,6 +35,7 @@ function WorkspaceDialog({ workspace, name, demo, count, close }: {
 export function SessionSidebar({
   workspace,
   sessions,
+  folders,
   selected,
   disabled,
   newDisabled = disabled,
@@ -57,6 +60,7 @@ export function SessionSidebar({
 }: {
   workspace: string;
   sessions: Session[];
+  folders?: ChatFolderActions;
   selected: string;
   disabled: boolean;
   newDisabled?: boolean;
@@ -101,7 +105,7 @@ export function SessionSidebar({
       if (document.querySelector("dialog[open], [popover]:popover-open")) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
       if (event.key !== "Tab") return;
-      const targets = [...element.querySelectorAll<HTMLElement>("button:not(:disabled), summary, [tabindex='0']")]
+      const targets = [...element.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex='0']")]
         .filter((item) => {
           if (!item.getClientRects().length || item.checkVisibility?.() === false) return false;
           // Closed details can retain layout rectangles while their contents
@@ -149,10 +153,7 @@ export function SessionSidebar({
         <Icon name="plus" /> <span>New session</span>
       </button>
       </div>
-      <div className="workspace-label session-label"><span>Sessions</span><span className="session-count">{sessions.length}</span></div>
-      <nav className="session-list" aria-label="Sessions">
-        <ul>
-        {sessions.map((session) => (
+      <SessionFolders sessions={sessions} selected={selected} folders={folders} renderSession={(session, move) => (
           <li key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
           <button
             className={`session ${selected === session.id ? "selected" : ""}`}
@@ -170,12 +171,9 @@ export function SessionSidebar({
           <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
             title="Move to Trash" disabled={!canDelete(session.id) || !!session.active_run_id}
             onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
-          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} />
+          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} move={move} />
           </li>
-        ))}
-        </ul>
-        {!sessions.length && <p className="empty-sessions">Your conversations will appear here.</p>}
-      </nav>
+        )} />
       <div className="sidebar-footer">
         {notice}
         <nav className="sidebar-utilities" aria-label="Workspace controls">
