@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
 from contextlib import asynccontextmanager
 from time import monotonic
+from types import ModuleType
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from weakref import ref
 
 import pytest
 from aiohttp import web
 
+from nagents.adapters import _validation
 from nagents.provider import _codex_catalog as catalog
 from nagents.provider import openai
 from nagents.provider.openai import CodexCredentials
@@ -213,11 +217,12 @@ async def test_metadata_decoding_and_body_are_bounded(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_deep_metadata_within_byte_limit_is_a_sanitized_fallback(
+async def test_deep_malformed_metadata_within_byte_limit_is_a_sanitized_fallback(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # Size validation alone cannot protect the JSON parser's recursion depth.
-    body = b'{"name":"@openai/codex","version":"0.163.0","extra":' + b"[" * 10000 + b'"private"' + b"]" * 10000 + b"}"
+    # This is truly malformed (one array is not closed), independently of the
+    # interpreter's depth limit. Python 3.14 can parse valid 10k-deep arrays.
+    body = b'{"name":"@openai/codex","version":"0.163.0","extra":' + b"[" * 10000 + b'"private"' + b"]" * 9999 + b"}"
     assert len(body) < catalog.MAX_METADATA_BYTES
     calls = 0
 
@@ -234,6 +239,32 @@ async def test_deep_metadata_within_byte_limit_is_a_sanitized_fallback(
         assert calls == 1
         assert versions.retry_at > monotonic()
     assert "private" not in caplog.text
+
+
+@pytest.mark.parametrize("stage", ["loads", "dumps"])
+@pytest.mark.asyncio
+async def test_metadata_parser_recursion_errors_are_sanitized_without_assuming_a_depth_limit(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, stage: str
+) -> None:
+    # Replace only the validation module's reference, never Python's shared
+    # json module (the local HTTP fixture and other tasks still need it).
+    parser = ModuleType("catalog_test_json")
+    vars(parser).update(vars(json))
+    rejected = Mock(side_effect=RecursionError("private-parser-detail"))
+    monkeypatch.setattr(parser, stage, rejected)
+    monkeypatch.setattr(_validation, "json", parser)
+
+    async def handle(request: web.Request) -> web.Response:
+        return web.json_response({"name": "@openai/codex", "version": "0.163.0"})
+
+    async with endpoint(handle) as base:
+        monkeypatch.setattr(catalog, "METADATA_URL", base)
+        versions = catalog.CatalogVersion()
+        assert await versions.resolve() == catalog.FALLBACK_VERSION
+        assert await versions.resolve() == catalog.FALLBACK_VERSION
+        assert versions.retry_at > monotonic()
+    rejected.assert_called_once()
+    assert "private-parser-detail" not in caplog.text
 
 
 @pytest.mark.asyncio
