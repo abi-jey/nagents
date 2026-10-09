@@ -44,3 +44,16 @@
 .tool-saved-approvals code { overflow-wrap: anywhere; font-size: 12px; }
 .tool-saved-approvals small { display: block; font-size: 11px; }
 .tool-saved-approvals button { flex-shrink: 0; font-size: 12px; }
+
+.tools-mcp { padding: 14px 16px; border: 1px solid var(--border-group); border-radius: 8px; font-size: 12px; line-height: 1.5; }
+.tools-mcp h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.tools-mcp p { margin: 8px 0; color: var(--text-secondary); }
+.tools-mcp-count strong, .tools-mcp-count span { display: block; }
+.tools-mcp-count strong { color: var(--text-reading); font-weight: 500; }
+.tools-mcp summary { cursor: pointer; min-height: 32px; align-content: center; }
+.tools-mcp ul { list-style: none; margin: 6px 0; padding: 0; }
+.tools-mcp li { display: flex; flex-wrap: wrap; gap: 3px 10px; padding: 5px 0; }
+.tools-mcp li span { color: var(--text-secondary); }
+.tools-mcp code { font-size: 11px; overflow-wrap: anywhere; }
+.tools-mcp-ignored { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-group); }
+.tools-mcp-ignored > strong { color: var(--state-pending); font-weight: 500; }

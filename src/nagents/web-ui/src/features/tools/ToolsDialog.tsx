@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { request, RequestError } from "../../api/client";
 import { Icon } from "../../components/Icon";
+import { McpDiscovery, type McpDiagnostics } from "./McpDiagnostics";
 import "./tools.css";
 
 interface ToolInfo {
@@ -13,6 +14,7 @@ interface ToolSettings {
   agents: Record<string, Record<string, boolean>>;
   profiles: { id: string; mode: string }[]; tools: ToolInfo[];
   tool_approvals?: SavedToolApproval[];
+  mcp_diagnostics?: McpDiagnostics;
 }
 
 export function ToolsDialog({ token, blocked, close }: { token: string; blocked: boolean; close: () => void }) {
@@ -101,6 +103,7 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     {error && <p role="alert" className="tools-feedback error-text">{error}</p>}
     {notice && <p role="status" className="tools-feedback">{notice}</p>}
     <div className="tools-list">
+      <McpDiscovery value={catalog?.mcp_diagnostics} />
       <section className="tool-saved-approvals" aria-labelledby="tool-saved-approvals-title">
         <h3 id="tool-saved-approvals-title">Saved tool approvals</h3>
         <p>Saved for the approved tool definition across chats and agents in this workspace. Changed tools require approval again. Tool selections and read-only restrictions still apply.</p>

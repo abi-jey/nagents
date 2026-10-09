@@ -538,13 +538,23 @@ directories in an explicit symlink config retain their target-directory meaning.
 Each extension reload resolves that logical source again and reads the same target
 used as its relative-path base. Startup-only settings still require their normal
 restart or settings action.
-`ngn serve` logs source and resolved paths, the effective MCP source, server names,
-and registered/advertised tool counts when that state changes. A higher-priority
-`"mcp_servers": {}` still clears earlier declarations; the effective-source log
-makes that precedence visible. Warnings distinguish configuration parsing, MCP
+`ngn serve` logs an MCP discovery summary at startup and on every reload, including
+unchanged settings and **zero configured servers**. The summary includes configured
+and connected server counts, registered/available tool counts, logical ngn config
+paths and their read/trust status, and the effective MCP source. `ngn doctor` and
+the web **Tools → MCP discovery** section show the same metadata. When a reload
+fails, the counts and source list describe the retained working generation and the
+failure is reported separately. A higher-priority `"mcp_servers": {}` still clears
+earlier declarations; the effective source makes that precedence visible. Warnings distinguish configuration parsing, MCP
 startup and tool discovery failures. Tool-call authorization failures are separate
 from registration. Diagnostics do not echo server arguments, environment values,
 request/response bodies or credentials.
+
+Workspace `.vscode/mcp.json` and `opencode.json` files produce an ignored-config
+notice when present. ngn checks their existence without reading or importing their
+contents. Add only the approved `mcp_servers` declarations to a trusted ngn config;
+foreign files do not grant project trust. An explicitly selected `--config` path
+still follows ngn's configuration schema, regardless of its filename.
 
 Verify activation in the running web **Tools** catalog and a subsequent model
 request. A successful connection from a separate `MCPManager` or CLI process only

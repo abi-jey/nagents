@@ -402,8 +402,7 @@ class Harness:
                         self.diagnostics.append(
                             "OFFLINE DEMO: configured Python plugins were not imported (trusted code could perform I/O)."
                         )
-                    else:
-                        await self.resources.reload(initial=True)
+                    await self.resources.reload(initial=True)
                     self.agent.plugins.append(self.resources)
                     self._initialized = True
                 except BaseException as exc:
@@ -1100,6 +1099,7 @@ class Harness:
                 f"Subagents: max depth {self.config.max_subagent_depth} (root=0); shared 3 concurrent / 8 executions per run",
                 f"Project configuration trusted: {self.config.trust_project}",
                 f"Config files: {', '.join(str(path) for path in self.config.config_paths) or 'built-in defaults'}",
+                *self.resources.mcp_diagnostics().describe(),
                 f"Registered tools: {', '.join(self.agent.tool_registry.names())}",
                 f"Commands: {', '.join('/' + command.name for command in self.commands.list())}",
                 f"Plugins configured: {', '.join(self.config.plugins) or 'none'}",
