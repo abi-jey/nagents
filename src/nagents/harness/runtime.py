@@ -3,10 +3,6 @@
 import asyncio
 import copy
 import hashlib
-import importlib
-import importlib.util
-import inspect
-import sys
 import uuid
 from collections.abc import AsyncGenerator
 from collections.abc import Awaitable
@@ -25,7 +21,6 @@ from nagents._async import join_owned as _await_cleanup
 from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
-from nagents.extensions import AgentPlugin
 from nagents.observation import scope as observation_scope
 from nagents.provider.openai import OpenAIProvider
 from nagents.session import SessionManager
@@ -49,6 +44,7 @@ from .provider import HarnessProvider
 from .providers import ProviderProfile
 from .providers import ProviderRegistry
 from .providers import ScopedProviderRegistryStore
+from .resources import HarnessResources
 from .skills import HarnessSkillDiscoverer
 from .subagents import SubagentManager
 from .tool_config import HarnessToolRegistry
@@ -180,7 +176,8 @@ class Harness:
             if selected is None:
                 raise ValueError(f"Unknown provider connection {initial_profile.provider!r} for agent {config.agent!r}")
             config.provider = initial_profile.provider
-        self._built_provider_profile = self.providers.providers.get(config.provider)
+        self._built_provider_name = config.provider
+        self._built_provider_profile = config.provider_profile()
         self._api_model = config.model
         self._selected_model = config.model
         self._selected_model_explicit = config.model_explicit
@@ -215,6 +212,7 @@ class Harness:
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
         self.tasks.register()
+        self.resources = HarnessResources(self)
         self.agent.tool_executor = HarnessExecutor(self, self.tools)
         self.agent.workspace = self.workspace
         profile = config.profile(config.agent)
@@ -400,8 +398,8 @@ class Harness:
                             "OFFLINE DEMO: configured Python plugins were not imported (trusted code could perform I/O)."
                         )
                     else:
-                        for reference in self.config.plugins:
-                            await self.load_plugin(reference)
+                        await self.resources.reload(initial=True)
+                    self.agent.plugins.append(self.resources)
                     self._initialized = True
                 except BaseException as exc:
                     self._initialization_error = f"Harness initialization failed: {type(exc).__name__}: {exc}"
@@ -412,42 +410,15 @@ class Harness:
                 self._session_created = True
 
     async def load_plugin(self, reference: str) -> None:
-        module_name, separator, entry = reference.rpartition(":")
-        if not separator or not module_name or not entry.isidentifier():
-            raise ValueError(f"Invalid plugin {reference!r}; expected path.py:setup or installed.module:setup")
+        """Add an explicitly trusted extension through the same staged loader."""
+        previous = self.config.plugins, self.config.cli_plugins
+        self.config.plugins = (*self.config.plugins, reference)
+        self.config.cli_plugins = (*self.config.cli_plugins, reference)
         try:
-            if module_name.endswith(".py"):
-                path = Path(module_name).expanduser()
-                if not path.is_absolute():
-                    path = self.workspace / path
-                name = f"_ngn_plugin_{uuid.uuid4().hex}"
-                spec = importlib.util.spec_from_file_location(name, path)
-                if spec is None or spec.loader is None:
-                    raise ValueError(f"Cannot load Python file {path}")
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[name] = module
-                try:
-                    spec.loader.exec_module(module)
-                except BaseException:
-                    sys.modules.pop(name, None)
-                    raise
-            else:
-                module = importlib.import_module(module_name)
-            setup = getattr(module, entry)
-            if not callable(setup):
-                raise TypeError(f"{entry} is not callable")
-            with self.commands.plugin_source(reference):
-                result = setup(self)
-                if inspect.isawaitable(result):
-                    result = await result
-            if result is not None:
-                if not isinstance(result, AgentPlugin):
-                    raise TypeError("setup(harness) must return AgentPlugin or None")
-                self.agent.plugins.append(result)
-            self.loaded_plugins.append(reference)
-            self.diagnostics.append(f"Loaded trusted Python plugin: {reference}")
-        except Exception as exc:
-            raise RuntimeError(f"Plugin {reference!r} failed: {type(exc).__name__}: {exc}") from exc
+            await self.resources.reload(initial=True)
+        except BaseException:
+            self.config.plugins, self.config.cli_plugins = previous
+            raise
 
     async def create_session(self, session_id: str) -> None:
         await self.agent.session.get_or_create_session(session_id, "harness")
@@ -768,24 +739,20 @@ class Harness:
         config.validate()
         if config.demo is not self.config.demo:
             raise ValueError("Provider overrides cannot change demo mode")
-        changing = (config.provider, config.provider_profile()) != (
-            self.config.provider,
-            self.config.provider_profile(),
-        )
-        if config.provider and self._built_provider_profile is not None:
-            current = self.provider_store.load().providers.get(config.provider)
-            changing = changing or (
-                current is not None
-                and (current.scope, current.request_timeout)
-                != (self._built_provider_profile.scope, self._built_provider_profile.request_timeout)
-            )
+        profile = config.provider_profile()
+        if config.provider:
+            selected = self.provider_store.load().providers.get(config.provider)
+            if selected is None:
+                raise ValueError("Named provider connection was removed; reload settings")
+            profile = selected
+        # Saving a connection publishes its registry before selecting it. The
+        # mutable config can therefore already describe the new connection while
+        # the running client still uses the old auth/endpoint. Compare against
+        # the immutable profile that actually constructed that client.
+        changing = (config.provider, profile) != (self._built_provider_name, self._built_provider_profile)
         if changing:
             replacement: Provider
             if config.provider:
-                registry = self.provider_store.load()
-                profile = registry.providers.get(config.provider)
-                if profile is None:
-                    raise ValueError("Named provider connection was removed; reload settings")
                 replacement = build_provider(profile, config, self.openai_auth)
             elif config.provider_profile().auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
@@ -797,7 +764,8 @@ class Harness:
                 await self.agent.close()
             finally:
                 self.agent.provider = replacement
-            self._built_provider_profile = profile if config.provider else None
+            self._built_provider_name = config.provider
+            self._built_provider_profile = profile
         self.config.provider = config.provider
         self.config.providers = dict(config.providers)
         self.config.model = config.model
@@ -874,7 +842,9 @@ class Harness:
             self.providers = self.provider_store.load()
             agent_provider = self.config.profile(self.config.agent).provider
             if (
-                agent_provider == name or (not agent_provider and self.providers.active == name)
+                self.config.provider == name
+                or agent_provider == name
+                or (not agent_provider and self.providers.active == name)
             ) and self.providers.providers[name] == profile:
                 await self._select_provider(name)
             return saved
@@ -926,6 +896,8 @@ class Harness:
             await self.agent.close()
         finally:
             self.agent.provider = replacement
+        self._built_provider_name = self.config.provider
+        self._built_provider_profile = replace(self.config.provider_profile(), auth="chatgpt")
 
     async def login(self, show_code: Callable[["DeviceAuthorization"], Awaitable[None]]) -> None:
         """User-initiated device login. Codes and tokens never enter agent history."""
@@ -1018,6 +990,8 @@ class Harness:
                         await self.agent.close()
                     finally:
                         self.agent.provider = replacement
+                    self._built_provider_name = self.config.provider
+                    self._built_provider_profile = profile
                 return
             self.config.providers[self.config.provider] = replace(self.config.provider_profile(), auth="api-key")
             if isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth:
@@ -1027,6 +1001,8 @@ class Harness:
                     await self.agent.close()
                 finally:
                     self.agent.provider = replacement
+                self._built_provider_name = self.config.provider
+                self._built_provider_profile = self.config.provider_profile()
 
     def auth_status(self) -> str:
         if self.config.demo:
@@ -1123,8 +1099,11 @@ class Harness:
                         try:
                             await self.agent.close()
                         finally:
-                            if self._owns_auth:
-                                await self.openai_auth.close()
+                            try:
+                                await self.resources.aclose()
+                            finally:
+                                if self._owns_auth:
+                                    await self.openai_auth.close()
 
             self._closing = asyncio.create_task(stop(), name=f"ngn-close-{self.session_id}")
         await _await_cleanup(self._closing)

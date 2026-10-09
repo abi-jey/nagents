@@ -997,3 +997,39 @@ def test_provider_error_still_notifies_and_cleans_up(tmp_path: Path) -> None:
         await agent.close()
 
     asyncio.run(drive())
+
+
+@pytest.mark.parametrize("ending", ["final", "fatal", "retry"])
+def test_after_model_runs_on_every_completed_response_before_calls(tmp_path: Path, ending: str) -> None:
+    async def drive() -> None:
+        steps: list[str] = []
+
+        class Boundary(AgentPlugin):
+            async def after_model(self, context: RunContext) -> None:
+                steps.append(f"response:{context.round_number}")
+
+        async def tool() -> str:
+            steps.append("tool")
+            return "ok"
+
+        rounds: list[list[Event]] = [[ToolCallEvent(id="call", name="tool", arguments={})]]
+        if ending == "fatal":
+            rounds.append([ErrorEvent(message="stopped", recoverable=False)])
+        elif ending == "retry":
+            rounds.extend([[ErrorEvent(message="retry", recoverable=True)], [TextDoneEvent(text="done")]])
+        else:
+            rounds.append([TextDoneEvent(text="done")])
+        agent = Agent(
+            OfflineProvider(rounds),
+            SessionManager(tmp_path / "boundaries.db"),
+            tools=[tool],
+            plugins=[Boundary()],
+            compactor=None,
+        )
+        try:
+            await collect(agent)
+            assert steps == ["response:0", "tool", "response:1", *(["response:2"] if ending == "retry" else [])]
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())

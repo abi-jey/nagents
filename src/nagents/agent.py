@@ -1787,6 +1787,7 @@ class Agent:
             pending_tool_events: list[ToolCallEvent] = []
             full_text = ""
             has_error = False
+            fatal_error = False
             finish_reason = FinishReason.UNKNOWN
             last_usage = Usage()
 
@@ -1903,13 +1904,20 @@ class Agent:
                         if not event.recoverable:
                             if self._execution_bridge:
                                 await self._execution_bridge.abandon(tuple(pending_tool_events))
-                            yield DoneEvent(
-                                final_text="",
-                                session_id=session_id,
-                                finish_reason=FinishReason.UNKNOWN,
-                                usage=replace(last_usage, session=replace(session_usage)),
-                            )
-                            return
+                            fatal_error = True
+                            break
+
+            for plugin in plugins:
+                await plugin.after_model(context)
+
+            if fatal_error:
+                yield DoneEvent(
+                    final_text="",
+                    session_id=session_id,
+                    finish_reason=FinishReason.UNKNOWN,
+                    usage=replace(last_usage, session=replace(session_usage)),
+                )
+                return
 
             # If we hit an error, don't continue
             if has_error:
@@ -1985,6 +1993,9 @@ class Agent:
                             available_tools=self.tool_registry.names(),
                             message=result_event.error,
                         )
+
+                for plugin in plugins:
+                    await plugin.after_tools(context)
 
                 # Continue to next round (model will see tool results)
                 continue

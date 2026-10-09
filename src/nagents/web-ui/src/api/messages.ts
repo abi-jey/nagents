@@ -1,6 +1,6 @@
 import { request } from "./client.js";
 
-export type QueuedMessage = { session_id: string; prompt: string; message_id: string; attachments?: string[] };
+export type QueuedMessage = { session_id: string; prompt: string; message_id: string; attachments?: string[]; command?: "compact" };
 export const MESSAGE_ID_RESERVE = "00000000-0000-4000-8000-000000000000";
 export function queuedMessageFailure(prompt: string, sessionId: string, attachments: string[] = []): string {
   return new TextEncoder().encode(JSON.stringify({ session_id: sessionId, prompt, message_id: MESSAGE_ID_RESERVE, ...(attachments.length ? { attachments } : {}) })).byteLength > 65536
@@ -23,13 +23,13 @@ export class MessageQueue {
   forget(sessionId: string) {
     for (const [key, message] of this.uncertain) if (message.session_id === sessionId) this.uncertain.delete(key);
   }
-  prepare(sessionId: string, prompt: string, uuid: () => string = () => crypto.randomUUID(), attachments: string[] = []): QueuedMessage {
-    const key = JSON.stringify([sessionId, prompt, attachments]);
-    const message = this.uncertain.get(key) || { session_id: sessionId, prompt, message_id: uuid(), ...(attachments.length ? { attachments: [...attachments] } : {}) };
+  prepare(sessionId: string, prompt: string, uuid: () => string = () => crypto.randomUUID(), attachments: string[] = [], command?: "compact"): QueuedMessage {
+    const key = JSON.stringify([sessionId, prompt, attachments, command || ""]);
+    const message = this.uncertain.get(key) || { session_id: sessionId, prompt, message_id: uuid(), ...(command ? { command } : {}), ...(attachments.length ? { attachments: [...attachments] } : {}) };
     this.uncertain.set(key, message);
     return message;
   }
   confirmed(message: QueuedMessage) {
-    this.uncertain.delete(JSON.stringify([message.session_id, message.prompt, message.attachments || []]));
+    this.uncertain.delete(JSON.stringify([message.session_id, message.prompt, message.attachments || [], message.command || ""]));
   }
 }

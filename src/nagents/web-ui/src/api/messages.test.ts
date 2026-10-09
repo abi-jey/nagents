@@ -30,3 +30,15 @@ test("queued messages reserve the UUID's bytes in the existing 64 KiB JSON limit
   assert.equal(queuedMessageFailure(exact, "root"), "");
   assert.match(queuedMessageFailure(exact + "x", "root"), /64 KiB/);
 });
+
+test("command admission keeps a distinct retry identity from identical literal chat text", () => {
+  const queue = new MessageQueue();
+  const text = queue.prepare("root", "/compact", () => "text");
+  const command = queue.prepare("root", "/compact", () => "command", [], "compact");
+  assert.notEqual(command.message_id, text.message_id);
+  assert.equal(command.command, "compact");
+  assert.equal(queue.prepare("root", "/compact", () => "unused", [], "compact"), command);
+  queue.confirmed(command);
+  assert.equal(queue.prepare("root", "/compact", () => "unused"), text);
+  assert.equal(queue.prepare("root", "/compact", () => "next", [], "compact").message_id, "next");
+});

@@ -778,7 +778,8 @@ class WebState:
                 self.harness.session_id = self.selected_session_id
                 self.harness.tools.read_hashes.clear()
                 self.running_harness = self.harness
-            await self.channels.reply(work, note)
+            if work.channel:
+                await self.channels.reply(work, note)
 
         run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")
         try:

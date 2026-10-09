@@ -10,6 +10,7 @@ import time
 
 from ..events import ToolResultEvent
 from ..types import ToolCall
+from ..types import ToolDefinition
 from .registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,11 @@ class ToolExecutor:
         Returns:
             ToolResultEvent with result or error
         """
+        return await self._execute_definition(tool_call, self._registry.get(tool_call.name))
+
+    async def _execute_definition(self, tool_call: ToolCall, tool: ToolDefinition | None) -> ToolResultEvent:
+        """Execute the exact resolved definition; do not look it up again after approval."""
         start = time.monotonic()
-        tool = self._registry.get(tool_call.name)
 
         if not tool or not tool.func:
             available_tools = [definition.name for definition in self._registry.get_all()]

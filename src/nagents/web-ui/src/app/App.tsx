@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Conversation } from "../features/chat/Conversation";
 import { useClient } from "./useClient";
 import { WorkspaceHeader } from "./WorkspaceHeader";
@@ -12,6 +12,9 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const closeNavigation = useCallback(() => setNavOpen(false), []);
   const composer = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (client.navigationRequest) { setNavOpen(true); setSidebarCollapsed(false); }
+  }, [client.navigationRequest]);
 
   async function select(id?: string) {
     if (await client.select(id)) {

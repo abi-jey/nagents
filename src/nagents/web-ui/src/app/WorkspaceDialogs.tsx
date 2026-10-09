@@ -1,3 +1,6 @@
+import { CommandHelp } from "../features/chat/CommandHelp.js";
+import { LoginDialog } from "../features/settings/LoginDialog.js";
+import "../features/chat/commands.css";
 import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
@@ -17,6 +20,8 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
   const config = sessions.config;
   function openRestored(id: string) { client.trashController.close(); void select(id); }
   return <>
+    {client.commandHelp && <CommandHelp close={client.closeCommandHelp} />}
+    {client.loginOpen && config && <LoginDialog token={config.token} close={client.closeLogin} applied={client.connect} />}
     {client.panel === "designer" && config && <Designer token={config.token} configureChannels={client.channels.show} close={closePanel} />}
     {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={client.busy} close={closePanel} />}
     {client.settings.open && <SettingsDialog settings={client.settings} />}

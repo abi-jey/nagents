@@ -12,6 +12,7 @@ import uuid
 from contextlib import closing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import Literal
 
 from fastapi import HTTPException
 
@@ -329,23 +330,28 @@ class RoutingStore(InboxStore):
         prompt: str,
         attachments: tuple[str, ...] = (),
         supported_media_types: tuple[str, ...] = (),
+        *,
+        command: Literal["", "compact"] = "",
     ) -> tuple[str, bool]:
         """Return the root and whether this is newly admitted (not an HTTP retry)."""
+        if command not in {"", "compact"} or (command and (prompt != "/compact" or attachments)):
+            raise HTTPException(422, "The compact command accepts no arguments or attachments.")
 
         def admit(db: sqlite3.Connection) -> tuple[str, bool]:
             self.execution_root(db, session_id)
             row = db.execute(
-                "SELECT session_id, prompt, attachments FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
+                "SELECT session_id, prompt, attachments, command FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
                 (message_id,),
             ).fetchone()
             if row:
-                if row[:2] != (session_id, prompt) or tuple(json.loads(row[2])) != attachments:
+                if row[:2] != (session_id, prompt) or tuple(json.loads(row[2])) != attachments or row[3] != command:
                     raise HTTPException(409, "Message ID already belongs to a different submission.")
                 return session_id, False
             self.capacity(db)
             cursor = db.execute(
-                "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments) VALUES (?, '', ?, ?, ?)",
-                (session_id, message_id, prompt, json.dumps(attachments)),
+                "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments, command) "
+                "VALUES (?, '', ?, ?, ?, ?)",
+                (session_id, message_id, prompt, json.dumps(attachments), command),
             )
             assert cursor.lastrowid is not None
             bind_uploads(db, session_id, cursor.lastrowid, attachments, supported_media_types)

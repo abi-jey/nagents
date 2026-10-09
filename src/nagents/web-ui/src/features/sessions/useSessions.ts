@@ -1,12 +1,13 @@
-import { useRef, useState } from "react";
-import { request, RequestError } from "../../api/client";
-import { validSnapshot, type EventFrame } from "../../api/subscription";
-import type { Bootstrap, Session, Snapshot } from "../../types";
-import type { SettingsReply } from "../settings/types";
-import { rootSessions } from "../channels/draft";
-import { idle, sessionActivity } from "./activity";
-import { deleteSession, type DeletedSnapshot, type DeletionSelection } from "../../api/deletion";
-import type { RestoreReply } from "../../api/trash";
+import { useEffect, useRef, useState } from "react";
+import { request } from "../../api/client.js";
+import { readSessionHistory } from "../../api/sessionHistory.js";
+import { validSnapshot, type EventFrame } from "../../api/subscription.js";
+import type { Bootstrap, Session, Snapshot } from "../../types.js";
+import type { SettingsReply } from "../settings/types.js";
+import { rootSessions } from "../channels/draft.js";
+import { idle, sessionActivity } from "./activity.js";
+import { deleteSession, type DeletedSnapshot, type DeletionSelection } from "../../api/deletion.js";
+import type { RestoreReply } from "../../api/trash.js";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
@@ -15,6 +16,18 @@ export function useSessions() {
   const selection = useRef("");
   const selectionRevision = useRef(0);
   const [active, setActive] = useState(idle);
+  const connection = useRef<AbortController>(undefined);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const current = connection.current;
+      // React's development effect probe immediately remounts this same owner;
+      // a real unmount still cancels before another fetch/timer can run.
+      queueMicrotask(() => { if (!mounted.current) current?.abort(); });
+    };
+  }, []);
   function selectRoot(id: string) { selection.current = id; selectionRevision.current++; setSessionId(id); }
   function currentSelection(): DeletionSelection { return { id: selection.current, revision: selectionRevision.current }; }
   function accept(snapshot: Snapshot): Snapshot {
@@ -28,17 +41,14 @@ export function useSessions() {
     return data;
   }
   async function connect(): Promise<Snapshot | undefined> {
-    const data = (await (await request("bootstrap")).json()) as Bootstrap;
+    connection.current?.abort();
+    const controller = new AbortController();
+    connection.current = controller;
+    const data = (await (await request("bootstrap", "", undefined, controller.signal)).json()) as Bootstrap;
+    controller.signal.throwIfAborted();
     setConfig(data); setActive({ id: data.active_run_id, sessionId: data.active_session_id || "", busy: !!data.active_run_id });
-    let snapshot: Snapshot;
-    try { snapshot = await snapshotResponse(await request("sessions", data.token)); }
-    catch (cause) {
-      // Older compatibility/background runs can still lock the default route.
-      // Read a validated root directly without resuming the executing Harness.
-      const root = selection.current || data.active_session_id;
-      if (!(cause instanceof RequestError) || cause.status !== 409 || !root) throw cause;
-      snapshot = await snapshotResponse(await request(`sessions/${encodeURIComponent(root)}`, data.token));
-    }
+    const snapshot = await readSessionHistory(data.token, controller.signal, selection.current || data.active_session_id || "");
+    controller.signal.throwIfAborted();
     setSessions(rootSessions(snapshot.sessions));
     if (!selection.current || selection.current === snapshot.session_id ||
         !snapshot.sessions.some((session) => session.id === selection.current)) return accept(snapshot);

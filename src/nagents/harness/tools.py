@@ -197,7 +197,7 @@ class HarnessExecutor(ToolExecutor):
             self.harness.tool_settings.load()
             if not self.harness.tool_settings.enabled(self.harness.config.agent, call.name):
                 raise PermissionError(f"Tool {call.name} is disabled for this agent in .ngn/tools.yaml")
-            tool = self._registry.get(call.name)
+            tool = self.harness.resources.definition(call.name)
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)
             if call.name == "delegate" and not self.harness.can_delegate:
                 raise PermissionError("Delegation is disabled at the configured subagent depth limit")
@@ -212,10 +212,15 @@ class HarnessExecutor(ToolExecutor):
             if tool is None or tool.func is None:
                 # Preserve permission/depth denials above. An otherwise unknown
                 # tool cannot execute, so it needs correction, not approval.
-                return await super().execute(call)
+                return await self._execute_definition(call, tool)
             try:
-                _validate(call.arguments, tool.parameters)
-                inspect.signature(tool.func).bind(**call.arguments)
+                if self.harness.resources.is_mcp(tool):
+                    # MCP schemas may use refs, unions and arbitrary JSON keys.
+                    # The server validates its full schema; preserve the payload.
+                    json.dumps(call.arguments, allow_nan=False)
+                else:
+                    _validate(call.arguments, tool.parameters)
+                    inspect.signature(tool.func).bind(**call.arguments)
             except (TypeError, ValueError) as error:
                 raise ValueError(_argument_failure(tool, error)) from None
             if not builtin:
@@ -232,7 +237,7 @@ class HarnessExecutor(ToolExecutor):
                 if self.harness.config.demo or self.harness.mode == "reviewer":
                     raise PermissionError("Active profile no longer allows custom tools")
                 # Approval applies to the validated definition, not a replacement registered while waiting.
-                if self._registry.get(call.name) is not tool or (
+                if not self.harness.resources.unchanged(call.name, tool) or (
                     tool is not None and (tool.func is not function or tool.parameters != parameters)
                 ):
                     raise PermissionError("Tool definition changed during approval; retry the call for fresh approval")
@@ -247,7 +252,7 @@ class HarnessExecutor(ToolExecutor):
                 return ToolResultEvent(
                     id=call.id, name=call.name, result=result, duration_ms=(time.monotonic() - started) * 1000
                 )
-            return await super().execute(call)
+            return await self._execute_definition(call, tool)
         except Exception as exc:
             return ToolResultEvent(
                 id=call.id, name=call.name, error=str(exc), duration_ms=(time.monotonic() - started) * 1000

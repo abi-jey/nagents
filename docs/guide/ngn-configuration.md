@@ -369,6 +369,7 @@ at either scope. See [GPT-Live setup](ngn-web.md#gpt-live-voice-conversations).
 | Field | JSON type | Default | Accepted values and meaning |
 | --- | --- | --- | --- |
 | `data_dir` | string path | `$XDG_DATA_HOME/ngn` or `~/.local/share/ngn` | Full session-state root; converted to an absolute `Path`. JSON-relative paths use the file's directory. |
+| `mcp_servers` | mapping | `{}` | Named stdio MCP servers (`command`, `args`, optional `env` and `cwd`). Higher-priority maps replace lower-priority maps. |
 | `plugins` | list of strings | `[]` | Ordered `"path.py:setup"` or `"installed.module:setup"` references. Converted to a tuple internally. Each higher-priority JSON list replaces the previous list. |
 | `profiles` | mapping of profile mappings | No custom profiles | Entries under `profiles.NAME`, merged by name with whole-profile replacement. Built-in profiles remain available. |
 
@@ -477,6 +478,54 @@ a reviewer parent cannot create a build-capable child by selecting `agent`,
 `build`, or a custom profile. Depth limits count the root as zero. Profile
 instructions cannot bypass approvals, depth limits, or the permission ceiling.
 
+## MCP servers and live reload
+
+Both `ngn serve` and the TUI load MCP tools through the same harness. Configure
+stdio servers in the user config or an explicitly trusted project config:
+
+```json
+{
+  "mcp_servers": {
+    "docs": {
+      "command": "python",
+      "args": ["/opt/my-mcp-server.py"],
+      "cwd": ".."
+    }
+  }
+}
+```
+
+`cwd` resolves relative to the configuration file; omitted `cwd` uses the workspace.
+`command` and `args` are executed directly, without a shell. Servers inherit the
+ngn process environment; optional `env` entries override it. Keep secret values
+in the deployment environment instead of committing them to configuration.
+Remote HTTP/SSE transports are not supported by this stdio loader.
+
+The harness rereads the trusted configuration sources, tool selections, discovered
+skills and applicable instructions **after every completed model response**, even
+when files are unchanged and even for a final answer. It starts fresh MCP processes
+and reloads Python extension source. Added, changed and removed definitions become
+available without restarting the UI or losing conversation history. User-message
+boundaries also refresh. This deliberately costs a server restart/discovery per
+response and completed tool batch; MCP servers should tolerate overlapping old
+and new instances briefly. The tool-batch boundary ensures that a tool's own
+configuration/source edits are visible to the immediately following model request.
+
+Tool calls returned by a response execute against that response's original
+implementation and schema. Its old MCP process stays alive until those calls and
+approvals finish; current permissions still apply. Saved tool allowances match
+captured source/configuration/schema identities, so unchanged reloads preserve
+permissions and changed implementations require approval again. Changes to project
+instructions invalidate old file-edit snapshots. Replacement errors retain the
+last working generation and produce a warning. Cancellation/shutdown closes owned
+processes. Offline demo starts no MCP servers, and read-only profiles cannot launch
+custom server subprocesses. Native child agents do not inherit parent MCP servers.
+
+Reloading never expands trusted paths or replaces provider/login, session storage,
+permission ceilings, task ownership, or host approval handlers. Newly created files
+are discovered only at the trusted paths selected at startup. Changes to those
+host settings still use their existing settings/restart mechanisms.
+
 ## Plugins
 
 ```json
@@ -485,8 +534,8 @@ instructions cannot bypass approvals, depth limits, or the permission ceiling.
 
 The setup name must be a Python identifier. Installed module names must be
 dot-separated identifiers. References are checked when loading configuration;
-Python import and setup happen when the harness initializes, not during JSON
-parsing. A setup function may be synchronous or asynchronous and may return an
+Python import and setup happen when the harness initializes and at each model
+response boundary, not during JSON parsing. A setup function may be synchronous or asynchronous and may return an
 `AgentPlugin` or `None`.
 
 JSON plugin lists **replace** the previous list, including `"plugins": []` to clear

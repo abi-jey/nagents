@@ -16,6 +16,8 @@ from dataclasses import field
 from typing import Any
 from typing import cast
 
+from nagents._async import finish_on_cancel
+
 logger = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
@@ -80,6 +82,7 @@ class MCPClient:
         self._pending: dict[int, _PendingRequest] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._connected = False
+        self._stderr_task: asyncio.Task[None] | None = None
         self._server_capabilities: dict[str, Any] = {}
         self._server_info: dict[str, Any] = {}
 
@@ -125,25 +128,35 @@ class MCPClient:
             " ".join(self.config.args),
         )
 
-        self._process = await asyncio.create_subprocess_exec(
-            self.config.command,
-            *self.config.args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            cwd=self.config.cwd,
-            limit=MAX_MESSAGE_SIZE,
-        )
+        async def start() -> None:
+            self._process = await asyncio.create_subprocess_exec(
+                self.config.command,
+                *self.config.args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=self.config.cwd,
+                limit=MAX_MESSAGE_SIZE,
+            )
 
-        # Start the response reader
-        self._reader_task = asyncio.create_task(self._read_responses())
-
-        # Perform initialization handshake
-        await self._initialize()
-
-        self._connected = True
+        try:
+            # Retain ownership even when cancellation races process creation.
+            await finish_on_cancel(start())
+            self._reader_task = asyncio.create_task(self._read_responses())
+            self._stderr_task = asyncio.create_task(self._drain_stderr())
+            await self._initialize()
+            self._connected = True
+        except BaseException:
+            await finish_on_cancel(self.disconnect())
+            raise
         logger.info("Connected to MCP server '%s'", self.config.name)
+
+    async def _drain_stderr(self) -> None:
+        """Drain diagnostics without leaking server environment/secrets to clients."""
+        if self._process is not None and self._process.stderr is not None:
+            while await self._process.stderr.read(65536):
+                pass
 
     async def _initialize(self) -> None:
         """Perform the MCP initialization handshake."""
@@ -333,6 +346,11 @@ class MCPClient:
             pass
         except Exception:
             logger.exception("Error reading MCP responses from '%s'", self.config.name)
+        finally:
+            self._connected = False
+            for pending in self._pending.values():
+                if not pending.future.done():
+                    pending.future.set_exception(RuntimeError(f"MCP server '{self.config.name}' disconnected"))
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Discover available tools from the MCP server.
@@ -423,7 +441,7 @@ class MCPClient:
         Closes stdin to signal EOF, waits briefly for the process to exit,
         then terminates if still running. Cancels the reader task.
         """
-        if not self._connected or not self._process:
+        if not self._process:
             return
 
         logger.info("Disconnecting from MCP server '%s'", self.config.name)
@@ -465,6 +483,11 @@ class MCPClient:
                 await self._process.wait()
 
         self._process = None
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._stderr_task
+            self._stderr_task = None
 
     async def __aenter__(self) -> "MCPClient":
         await self.connect()
