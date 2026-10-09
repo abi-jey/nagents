@@ -375,7 +375,9 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
                 work = asyncio.create_task(
                     bridge.handle_native(request) if native else bridge.handle(speech("A long task"))
                 )
-                async with asyncio.timeout(5):
+                # These waits guard progress, not model-startup latency. Loaded
+                # Windows runners can spend over five seconds preparing a run.
+                async with asyncio.timeout(HANG_GUARD):
                     await entered.wait()
                 run = state.active
                 assert run is not None
@@ -391,7 +393,7 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
                 assert reports[-1]["run_id"] == run.id
                 if outcome == "complete":
                     release.set()
-                    async with asyncio.timeout(5):
+                    async with asyncio.timeout(HANG_GUARD):
                         await run.task
                     assert run.finished and run.outcome == "completed"
                     assert run.final_text == "Completed after voice ended"
