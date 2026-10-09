@@ -133,6 +133,11 @@ def read_resource_configuration(config: HarnessConfig) -> ResourceConfiguration:
                 with source_path.open(encoding="utf-8") as stream:
                     source = stream.read(1048577)
             except FileNotFoundError:
+                if path in config.explicit_config_paths and path.exists():
+                    # A projected target can be removed between resolve/open
+                    # while the logical source already points at its successor.
+                    # Reject this generation; absence must not erase live tools.
+                    raise
                 sources.append(ResourceSource(path, path.resolve(), False))
                 continue
             revision = hashlib.sha256(source.encode()).hexdigest()

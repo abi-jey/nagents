@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -85,6 +86,77 @@ async def test_configmap_rotation_updates_next_request_and_retains_old_called_se
         assert harness.session_id == session
         assert [item.result for item in events if isinstance(item, ToolResultEvent)] == ["one:{}"]
         assert read_resource_configuration(config).sources[-1].resolved == volume / "..generation-two" / "config.json"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_configmap_resolve_open_race_retains_tools_until_next_successful_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pathlib import Path
+
+    configured = server(tmp_path)
+    volume = tmp_path / "configmap"
+    volume.mkdir()
+    for target, name in (("..one", "before"), ("..two", "after")):
+        directory = volume / target
+        directory.mkdir()
+        (directory / "config.json").write_text(
+            json.dumps(
+                {"mcp_servers": {name: {"command": configured.command, "args": configured.args, "cwd": configured.cwd}}}
+            )
+        )
+    rotate(volume, "..one")
+    source = volume / "config.json"
+    source.symlink_to("..data/config.json")
+    config = load_config(tmp_path, source)
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.config.resource_paths = config.resource_paths
+    harness.config.explicit_config_paths = config.explicit_config_paths
+    try:
+        await harness.initialize()
+        previous = harness.resources.current
+        original = harness.agent.tool_registry.get("mcp__before__echo")
+        assert original is not None
+        opened = Path.open
+
+        def rotate_before_open(
+            path: Path,
+            mode: str = "r",
+            buffering: int = -1,
+            encoding: str | None = None,
+            errors: str | None = None,
+            newline: str | None = None,
+        ) -> object:
+            if path == volume / "..one/config.json":
+                rotate(volume, "..two")
+                shutil.rmtree(volume / "..one")
+            return opened(path, mode, buffering, encoding, errors, newline)
+
+        with patch.object(Path, "open", rotate_before_open):
+            await harness.resources.reload()
+        assert harness.resources.current is previous
+        assert harness.agent.tool_registry.get("mcp__before__echo") is original
+        assert "stage=configuration" in harness.resources.last_error
+        assert "error=FileNotFoundError" in harness.resources.last_error
+        assert previous.manager._clients["before"].is_connected
+
+        await harness.resources.reload()
+        assert harness.agent.tool_registry.get("mcp__after__echo") is not None
+        assert harness.agent.tool_registry.get("mcp__before__echo") is None
+        assert not harness.resources.last_error
+
+        # Deliberate deletion still removes the declarations on the next reload.
+        source.unlink()
+        await harness.resources.reload()
+        assert not harness.resources.current.mcp_names
+        assert not harness.resources.last_error
     finally:
         await harness.close()
 
