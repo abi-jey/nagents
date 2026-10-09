@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import uuid
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 import aiosqlite
@@ -1317,46 +1318,116 @@ def test_tree_shutdown_under_backpressure_and_repeated_close_cancellation(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("descendant_first", [False, True])
 def test_child_timeout_cancels_descendants_but_not_independent_sibling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, descendant_first: bool
 ) -> None:
     async def scenario() -> None:
         grandchild_started = asyncio.Event()
+        descendant_constructing = asyncio.Event()
+        sibling_constructing = asyncio.Event()
+        sibling_closed = asyncio.Event()
+        deadlines: dict[str, asyncio.Timeout] = {}
+
+        def actor(messages: list[Message]) -> str:
+            return str(next(message.content for message in messages if message.role == "user"))
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-            if provider.index == 0 and len(provider.requests) == 1:
+            branch = actor(messages)
+            if branch == "Root task" and len(provider.requests) == 1:
                 yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Branch A"})
                 yield ToolCallEvent(id="b", name="delegate", arguments={"prompt": "Branch B"})
-            elif provider.index == 1 and len(provider.requests) == 1:
-                monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 30.0)
+            elif branch == "Branch A" and len(provider.requests) == 1:
                 yield ToolCallEvent(id="nested", name="delegate", arguments={"prompt": "Waiting descendant"})
-            elif provider.index in {1, 3}:
-                if provider.index == 3:
+            elif branch in {"Branch A", "Waiting descendant"}:
+                if branch == "Waiting descendant":
                     grandchild_started.set()
                 await asyncio.Event().wait()
             else:
-                if provider.index == 2:
+                if branch == "Branch B":
                     await grandchild_started.wait()
                 yield TextDoneEvent(text="Independent work finished")
 
-        # A generous margin keeps the timeout branch deterministic under loaded CI
-        # runners: branch A still expires, while the independent sibling has time
-        # to reach completion after the grandchild starts.
-        monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 2.0)
+        original_close = FakeProvider.close
+
+        async def observe_close(provider: FakeProvider) -> None:
+            await original_close(provider)
+            if provider.requests and actor(provider.requests[0]) == "Branch B":
+                sibling_closed.set()
+
+        original_run = subagents.SubagentManager._run_child
+
+        async def ordered_run(
+            manager: subagents.SubagentManager,
+            info: subagents.TaskInfo,
+            prompt: str,
+            *,
+            followup: TaskMessage | None = None,
+            notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
+        ) -> None:
+            # Exercise the legal construction order that used to give the
+            # descendant provider index 2 and the independent sibling index 3.
+            if descendant_first:
+                if prompt == "Branch B":
+                    await descendant_constructing.wait()
+                elif prompt == "Waiting descendant":
+                    descendant_constructing.set()
+            elif prompt == "Waiting descendant":
+                await sibling_constructing.wait()
+            elif prompt == "Branch B":
+                sibling_constructing.set()
+            await original_run(manager, info, prompt, followup=followup, notifications=notifications)
+
+        def controlled_timeout(delay: float) -> asyncio.Timeout:
+            assert delay == subagents.CHILD_TIMEOUT
+            task = asyncio.current_task()
+            assert task is not None and task.get_name().startswith("ngn-subagent-")
+            deadline = asyncio.timeout(None)
+            deadlines[task.get_name()] = deadline
+            return deadline
+
+        # Patch only this module's reference, not asyncio.timeout globally.
+        # All contexts are real asyncio.Timeout instances; the test arms A's
+        # deadline only after the intended tree and sibling progress exist.
+        local_asyncio = ModuleType("subagent_test_asyncio")
+        vars(local_asyncio).update(vars(asyncio))
+        monkeypatch.setattr(local_asyncio, "timeout", controlled_timeout)
+        monkeypatch.setattr(subagents, "asyncio", local_asyncio)
+        monkeypatch.setattr(subagents.SubagentManager, "_run_child", ordered_run)
+        monkeypatch.setattr(FakeProvider, "close", observe_close)
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        collecting = asyncio.create_task(collect(harness, "Root task"))
         try:
-            events = await asyncio.wait_for(collect(harness), 15)
-            infos = harness.tasks.list()
+            async with asyncio.timeout(HANG_GUARD):
+                await grandchild_started.wait()
+                await sibling_closed.wait()
+                infos = {info.prompt: info for info in harness.tasks.list()}
+                branch_deadline = deadlines[f"ngn-subagent-{infos['Branch A'].id}"]
+                branch_deadline.reschedule(asyncio.get_running_loop().time())
+                events = await collecting
+            infos = {info.prompt: info for info in harness.tasks.list()}
             assert len(infos) == 3
-            assert infos[0].status == "failed" and "time limit" in infos[0].error
-            assert infos[1].status == "completed"
-            assert infos[2].status == "cancelled"
+            assert infos["Branch A"].status == "failed" and "time limit" in infos["Branch A"].error
+            assert infos["Branch B"].status == "completed"
+            assert infos["Waiting descendant"].status == "cancelled"
+            assert branch_deadline.expired()
+            assert all(
+                not deadlines[f"ngn-subagent-{info.id}"].expired()
+                for prompt, info in infos.items()
+                if prompt != "Branch A"
+            )
+            expected_order = (
+                ["Waiting descendant", "Branch B"] if descendant_first else ["Branch B", "Waiting descendant"]
+            )
+            assert [actor(provider.requests[0]) for provider in providers[1:]] == ["Branch A", *expected_order]
             assert all(provider.closed for provider in providers[1:])
             completions = [event for event in events if isinstance(event, TaskCompleted)]
             assert len(completions) == 3
             assert any(event.status == "cancelled" for event in completions)
             assert_balanced(await harness.history())
         finally:
+            collecting.cancel()
+            await asyncio.gather(collecting, return_exceptions=True)
             await harness.close()
 
     asyncio.run(scenario())
