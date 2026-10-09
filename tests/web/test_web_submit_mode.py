@@ -17,6 +17,7 @@ import pytest
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from tests.support.channels import site
+from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -82,7 +83,7 @@ def begin_active_run(app: Site) -> tuple[Run, str]:
 
 
 def stop_active(app: Site, active: Run) -> None:
-    if app.state.active is active:
+    if app.state.run_for(active.session_id) is active:
         response = app.client.post("/api/cancel", headers=app.headers, json={"run_id": active.id})
         assert response.status_code == 200
     app.idle()
@@ -136,7 +137,7 @@ def test_duplicate_retry_never_interrupts_active_run(tmp_path: Path, monkeypatch
 @pytest.mark.requires_posix
 def test_other_session_input_never_cancels_active_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with site(tmp_path, monkeypatch) as app:
-        active, _ = begin_active_run(app)
+        active, root = begin_active_run(app)
         app.state.harness.config.submit_mode = "interrupt"
         store = app.state.channels.store
         assert app.client.portal is not None
@@ -147,9 +148,38 @@ def test_other_session_input_never_cancels_active_work(tmp_path: Path, monkeypat
         other: str = app.client.portal.call(store._transaction, create)
         try:
             app.submit("unrelated", other, id=M3)
-            # Different-session input cannot stop this session's run.
-            assert not active.task.cancelling() and app.state.active is active
-            assert inbox_rows(app).get(M3) == "queued"
+
+            async def completed() -> None:
+                async with asyncio.timeout(HANG_GUARD):
+                    while True:
+                        async with (
+                            aiosqlite.connect(store.db_path) as db,
+                            db.execute(
+                                "SELECT session_id, status FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
+                                (M3,),
+                            ) as cursor,
+                        ):
+                            row = await cursor.fetchone()
+                        assert row is not None and row[0] == other
+                        if row[1] == "completed" and app.state.run_for(other) is None:
+                            return
+                        assert row[1] in {"queued", "running", "completed"}
+                        await asyncio.sleep(0.001)
+
+            app.client.portal.call(completed)
+            # Unrelated work completes independently even in interrupt mode;
+            # its durable receipt and history cannot cancel or enter this run.
+            assert not active.task.cancelling() and app.state.run_for(root) is active
+            assert not active.task.done() and app.state.run_for(other) is None
+            assert inbox_rows(app)[M1] == "running" and inbox_rows(app)[M3] == "completed"
+            other_history = cast("list[dict[str, object]]", app.history(other)["history"])
+            assert [(row["role"], row["content"]) for row in other_history] == [
+                ("user", "unrelated"),
+                ("assistant", "answer"),
+            ]
+            assert other_history[0]["message_id"] == M3
+            original_history = cast("list[dict[str, object]]", app.history(root)["history"])
+            assert [(row["role"], row["content"]) for row in original_history] == [("user", "first work")]
         finally:
             stop_active(app, active)
 
