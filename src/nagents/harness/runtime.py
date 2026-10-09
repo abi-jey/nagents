@@ -842,7 +842,9 @@ class Harness:
             self.providers = self.provider_store.load()
             agent_provider = self.config.profile(self.config.agent).provider
             if (
-                agent_provider == name or (not agent_provider and self.providers.active == name)
+                self.config.provider == name
+                or agent_provider == name
+                or (not agent_provider and self.providers.active == name)
             ) and self.providers.providers[name] == profile:
                 await self._select_provider(name)
             return saved

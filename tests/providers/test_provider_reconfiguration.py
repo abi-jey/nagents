@@ -31,8 +31,9 @@ if TYPE_CHECKING:
         ProviderProfile(kind="openai_compatible", base_url="https://changed.invalid/v1"),
     ],
 )
+@pytest.mark.parametrize("explicit_selection", [False, True])
 def test_save_selected_profile_rebuilds_auth_api_key_source_kind_and_endpoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: ProviderProfile
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: ProviderProfile, explicit_selection: bool
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
@@ -40,7 +41,11 @@ def test_save_selected_profile_rebuilds_auth_api_key_source_kind_and_endpoint(
     monkeypatch.setattr(aiohttp.ClientSession, "_request", AsyncMock(side_effect=AssertionError("No network calls")))
     profile = ProviderProfile(kind="openai", auth="api-key")
     store = ScopedProviderRegistryStore(tmp_path)
-    saved = store.workspace_store.save(ProviderRegistry(active="main", providers={"main": profile}), expected="0" * 64)
+    default = "other" if explicit_selection else "main"
+    saved = store.workspace_store.save(
+        ProviderRegistry(active=default, providers={"main": profile, "other": ProviderProfile(kind="anthropic")}),
+        expected="0" * 64,
+    )
 
     async def check() -> None:
         harness = Harness(
@@ -56,6 +61,7 @@ def test_save_selected_profile_rebuilds_auth_api_key_source_kind_and_endpoint(
             close.assert_awaited_once()
             assert harness._built_provider_profile == changed
             assert harness.config.provider_profile() == changed
+            assert harness.config.provider == "main" and store.load().active == default
             assert harness.session_id == session_id and harness.agent.session is session_owner
             assert harness.approval_handler is approvals
             if changed.auth == "chatgpt":
