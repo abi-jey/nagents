@@ -9,10 +9,12 @@ from typing import cast
 
 import pytest
 
+from nagents._async import join_owned
 from nagents.harness.auth import DeviceAuthorization
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers import ProviderProfile
 from nagents.provider import OpenAIProvider
+from nagents.web import provider_login
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
@@ -214,3 +216,50 @@ def test_login_expires_and_clears_code(tmp_path: Path, monkeypatch: pytest.Monke
         expired = wait_status(app, "failed")
         assert expired["user_code"] == expired["verification_url"] == ""
         assert not app.state.mutating
+
+
+@pytest.mark.parametrize("cancel_after_commit", [False, True])
+def test_login_completion_waits_for_idle_release_even_after_late_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_after_commit: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        release_login = pending_login(app, monkeypatch)
+        assert app.client.portal is not None
+        applied: asyncio.Event = app.client.portal.call(asyncio.Event)
+        release_apply: asyncio.Event = app.client.portal.call(asyncio.Event)
+
+        async def join_with_completion_gate(task: asyncio.Task[None]) -> None:
+            await join_owned(task)
+            # Gate only the owned apply, not the outer login task joined by
+            # cancel/close. This exposes the exact scheduling gap deterministically.
+            if task.get_name() != "ngn-web-device-login":
+                applied.set()
+                await release_apply.wait()
+
+        monkeypatch.setattr(provider_login, "join_owned", join_with_completion_gate)
+        assert app.client.post("/api/login/chatgpt", headers=app.headers, json={}).status_code == 200
+        pending = wait_status(app, "pending")
+        app.client.portal.call(release_login.set)
+
+        async def wait_applied() -> None:
+            async with asyncio.timeout(HANG_GUARD):
+                await applied.wait()
+
+        app.client.portal.call(wait_applied)
+        try:
+            assert app.state.mutating
+            assert app.state.harness.config.provider_profile().auth == "chatgpt"
+            before_release = app.client.get("/api/login/chatgpt", headers=app.headers).json()
+            assert before_release["status"] != "completed"
+            assert app.client.post("/api/sessions/new", headers=app.headers, json={}).status_code == 409
+            if cancel_after_commit:
+                result = app.client.post("/api/login/chatgpt/cancel", headers=app.headers, json={"id": pending["id"]})
+                assert result.status_code == 200 and result.json()["status"] == "completed"
+            else:
+                app.client.portal.call(release_apply.set)
+            completed = wait_status(app, "completed")
+            assert completed["user_code"] == completed["verification_url"] == ""
+            assert not app.state.mutating
+            assert app.client.post("/api/sessions/new", headers=app.headers, json={}).status_code == 200
+        finally:
+            app.client.portal.call(release_apply.set)

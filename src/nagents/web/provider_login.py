@@ -85,6 +85,7 @@ class ProviderLogin:
         return self.snapshot()
 
     async def run(self, ready: asyncio.Future[None]) -> None:
+        committed = False
         try:
             with self.state.idle():
                 if self.live_active():
@@ -139,18 +140,20 @@ class ProviderLogin:
                 async with asyncio.timeout(min(900.0, authorization.expires_at - monotonic())):
                     await harness.openai_auth.complete_device_login(authorization)
                 self.clear_code()
+                self.status = "starting"
+                self.message = "Saving login and refreshing the connection."
 
                 async def apply() -> None:
+                    nonlocal committed
                     saved = await harness.save_provider(name, replace(profile, auth="chatgpt"), revision, scope)
                     if not harness.config.provider:
                         await harness.activate_provider(name, saved.revision, scope)
                     self.state.settings.sync_provider()
-                    self.status = "completed"
-                    self.message = "ChatGPT login saved. The selected connection is ready."
+                    committed = True
 
                 await join_owned(asyncio.create_task(apply()))
         except asyncio.CancelledError:
-            if self.status != "completed":
+            if not committed:
                 self.status = "cancelled"
                 self.message = "Device login cancelled."
             if not ready.done():
@@ -171,6 +174,13 @@ class ProviderLogin:
             if not ready.done():
                 ready.set_exception(HTTPException(502, self.message))
         finally:
+            # A terminal success is actionable: the browser immediately reloads
+            # configuration. Publish it only after the owned apply has finished
+            # and the host mutation boundary has been released, including when
+            # cancellation arrived after the successful commit.
+            if committed:
+                self.status = "completed"
+                self.message = "ChatGPT login saved. The selected connection is ready."
             if self.status != "pending":
                 self.clear_code()
 
