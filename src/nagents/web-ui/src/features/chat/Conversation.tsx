@@ -10,6 +10,7 @@ import { TextLinks } from "../../components/TextLinks.js";
 import { commandOutcomeDescription } from "./executionPresentation.js";
 import { captionTime, conversationEntries } from "./captionPresentation.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
+import { scrollWithin } from "../../components/scrollWithin.js";
 import type { Bootstrap } from "../../types.js";
 import {
   groupTranscript,
@@ -220,7 +221,7 @@ export function Conversation({
     if (!feed.current) return;
     const keys = revealAncestors(target, feed.current);
     setDisclosures((current) => keys.reduce((next, key) => rememberDisclosure(next, key, true), current));
-    target.scrollIntoView({ block: "start" });
+    scrollWithin(feed.current, target, "start");
   }
   const lastActivity = useRef(0);
   const lastUser = useRef("");

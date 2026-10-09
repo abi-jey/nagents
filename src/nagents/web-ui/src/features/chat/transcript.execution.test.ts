@@ -175,7 +175,8 @@ test("mounted conversation preserves disclosure choices and nodes across progres
     assert.equal(branches.length, 2);
     assert.ok(branches.every((branch) => !branch.open), "Incoming child activity never auto-expands ancestors");
     let navigated = false;
-    target.scrollIntoView = () => { navigated = true; };
+    target.scrollIntoView = () => { assert.fail("Activity navigation must not scroll ancestor containers"); };
+    feed.scrollTo = () => { navigated = true; };
     const navigate = container.querySelector<HTMLButtonElement>(".activity-announcement button")!;
     assert.equal(navigate.textContent, "New task activity");
     await act(async () => navigate.click());
