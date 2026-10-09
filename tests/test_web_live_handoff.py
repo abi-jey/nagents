@@ -238,3 +238,35 @@ def test_native_pending_requests_remain_bounded_and_duplicates_do_not_consume_sl
     with pytest.raises(RuntimeError, match="queue is full"):
         observe(lane, notice("overflow", "Cannot queue this request"))
     assert lane.pending.qsize() == 32
+
+
+@pytest.mark.parametrize("identifier", [None, True, 1, "", " \t", "x" * 257])
+def test_native_ingress_rejects_invalid_ids_before_observation_or_admission(identifier: object) -> None:
+    observed: list[LoginHandoff] = []
+
+    async def backend(request: LoginHandoff) -> str:
+        raise AssertionError("No worker was started")
+
+    async def send(event: dict[str, object]) -> None:
+        raise AssertionError("No worker was started")
+
+    lane = LoginDelegations(backend, send, observer=observed.append)
+    with pytest.raises(ValueError, match="Invalid Live client delegation ID"):
+        lane.observe(
+            {"type": "session.delegation.created", "delegation": {"id": identifier, "target": "client"}},
+            notice("ignored", "No admission"),
+        )
+    assert not observed and not lane.seen and lane.pending.empty()
+
+
+@pytest.mark.parametrize("identifier", ["x" * 256, "opaque:provider/id.with.dots"])
+def test_native_ingress_preserves_valid_opaque_ids(identifier: str) -> None:
+    async def backend(request: LoginHandoff) -> str:
+        raise AssertionError("No worker was started")
+
+    async def send(event: dict[str, object]) -> None:
+        raise AssertionError("No worker was started")
+
+    lane = LoginDelegations(backend, send)
+    observe(lane, notice(identifier, "Request"))
+    assert lane.pending.get_nowait().identifier == identifier

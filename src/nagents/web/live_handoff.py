@@ -107,7 +107,9 @@ class LoginDelegations:
             if not isinstance(delegation, dict) or delegation.get("target") != "client":
                 return
             identifier = delegation.get("id")
-            if not isinstance(identifier, str) or identifier in self.seen:
+            if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 256:
+                raise ValueError("Invalid Live client delegation ID")
+            if identifier in self.seen:
                 return
             text = _request_text(raw.get("item"))
             fragments = sorted(self.fragments, key=lambda part: cast("float", part["start_ms"]))
