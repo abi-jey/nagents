@@ -209,7 +209,9 @@ def test_setup_plugin_instructions_survive_runs_and_scheduler_changes(
                 assert response.status_code == 200, response.text
                 assert not any(json.loads(line)["event"] == "error" for line in response.text.splitlines() if line)
                 assert len(requests) == count + 1
-                assert harness.agent.system_prompt == authored
+                assert str(harness.agent.system_prompt).count(marker) == 1
+                if replace_prompt:
+                    assert harness.agent.system_prompt == authored
                 assert str(requests[-1]["instructions"]).count(marker) == 1
                 tools = requests[-1]["tools"]
                 assert isinstance(tools, list)
@@ -218,8 +220,11 @@ def test_setup_plugin_instructions_survive_runs_and_scheduler_changes(
                 assert "wake_up_in" not in advertised
                 assert harness.agent.tool_registry.get("wake_up_in") is not None
                 if not replace_prompt:
-                    assert "only when a scheduler tool is advertised in this request" in str(
-                        requests[-1]["instructions"]
+                    expected = (
+                        "only when a scheduler tool is advertised in this request"
+                        if callback
+                        else "No native wake-up scheduler is advertised"
                     )
+                    assert expected in str(requests[-1]["instructions"])
 
     asyncio.run(scenario())

@@ -721,9 +721,10 @@ sessions, tasks, or approval handlers. An unsupported mutation rejects the entir
 candidate and retains the last working tools, commands and MCP connections.
 
 Retained tool closures forward to the live harness after setup, so they see the
-current session and approval policy. Source files are compiled fresh, including
-same-size edits made within one filesystem timestamp tick. Imported dependencies
-follow normal Python import semantics. Put owned resource cleanup in the async
+current session and approval policy. Source files and package-relative imports
+are compiled in private generation namespaces, including same-size edits made
+within one filesystem timestamp tick. Unrelated absolute imports retain normal
+Python ownership; host and framework modules are never evicted. Put owned resource cleanup in the async
 `AgentPlugin.aclose` method; import/setup failures must clean up resources acquired
 before a hook is registered. Trusted Python still has full process privileges;
 this registration contract is not a sandbox.
@@ -778,6 +779,7 @@ from `nagents`. They do not depend on the coding harness or TUI.
 | `AgentPlugin.before_run` | Transform an incoming message |
 | `AgentPlugin.before_model` | Transform request-local messages, tools, and generation configuration |
 | `AgentPlugin.after_model` | Observe each completed response, including final text, before calls execute |
+| `AgentPlugin.after_tools` | Observe the completed tool batch before building the next request |
 | `AgentPlugin.aclose` | Release a retired harness extension generation’s resources |
 | `AgentPlugin.before_tool` | Transform tool arguments before the execution permission boundary |
 | `AgentPlugin.after_tool` | Transform the tool result |

@@ -507,7 +507,9 @@ when files are unchanged and even for a final answer. It starts fresh MCP proces
 and reloads Python extension source. Added, changed and removed definitions become
 available without restarting the UI or losing conversation history. User-message
 boundaries also refresh. This deliberately costs a server restart/discovery per
-response; MCP servers should tolerate overlapping old and new instances briefly.
+response and completed tool batch; MCP servers should tolerate overlapping old
+and new instances briefly. The tool-batch boundary ensures that a tool's own
+configuration/source edits are visible to the immediately following model request.
 
 Tool calls returned by a response execute against that response's original
 implementation and schema. Its old MCP process stays alive until those calls and

@@ -159,14 +159,14 @@ async def test_every_response_reloads_mcp_plugins_and_final_with_pinned_calls(
         assert harness.agent.tool_registry.get("mcp__fixture__echo").description == "tri"  # type: ignore[union-attr]
         assert harness.commands.get("custom-alias").description.startswith("Alias for /custom. tri")  # type: ignore[union-attr]
         assert (
-            len((tmp_path / "starts").read_text().splitlines()) == 4
-        )  # initialization, entry, and two populated responses
+            len((tmp_path / "starts").read_text().splitlines()) == 5
+        )  # initialization, entry, populated responses and completed tool batches
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
         (tmp_path / "stops").read_text().splitlines()
     )
-    assert sorted((tmp_path / "closed").read_text().splitlines()) == ["one", "one", "tri", "two"]
+    assert sorted((tmp_path / "closed").read_text().splitlines()) == ["one", "one", "tri", "two", "two"]
 
 
 @pytest.mark.requires_posix
@@ -188,7 +188,7 @@ async def test_unchanged_mcp_restarts_after_each_response(tmp_path: Path, monkey
     try:
         events = await collect(harness)
         assert not [event.error for event in events if isinstance(event, ToolResultEvent) and event.error]
-        assert len((tmp_path / "starts").read_text().splitlines()) == 5
+        assert len((tmp_path / "starts").read_text().splitlines()) == 7
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
@@ -399,7 +399,7 @@ async def test_repeated_refresh_inside_tool_retires_unadvertised_candidates(
     harness.approval_handler = approve
     try:
         await collect(harness)
-        assert len((tmp_path / "starts").read_text().splitlines()) == 6
+        assert len((tmp_path / "starts").read_text().splitlines()) == 7
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
@@ -593,5 +593,191 @@ async def test_instruction_refresh_invalidates_unseen_edit_snapshot(
         events = await collect(harness)
         edited = next(event for event in events if isinstance(event, ToolResultEvent) and event.name == "edit")
         assert edited.error and target.read_text() == "before"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_close_cancels_initial_reload_and_forbids_new_processes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.mcp.client import MCPClient
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    configured = server(tmp_path)
+    harness.config.mcp_servers = (configured,)
+    connected = asyncio.Event()
+    clients: list[MCPClient] = []
+    original = MCPClient.connect
+
+    async def hold(self: MCPClient) -> None:
+        await original(self)
+        clients.append(self)
+        connected.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(MCPClient, "connect", hold)
+    initializing = asyncio.create_task(harness.initialize())
+    try:
+        await asyncio.wait_for(connected.wait(), 10)
+        await asyncio.wait_for(harness.close(), 10)
+        with pytest.raises(asyncio.CancelledError):
+            await initializing
+        assert all(client._process is None for client in clients)
+        with pytest.raises(RuntimeError, match="closed"):
+            await harness.resources.reload()
+    finally:
+        initializing.cancel()
+        await harness.close()
+    assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
+        (tmp_path / "stops").read_text().splitlines()
+    )
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_installed_submodule_refreshes_same_size_relative_helper_without_evicting_host_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib
+    import os
+
+    package = tmp_path / "local_generation_package"
+    package.mkdir()
+    (package / "__init__.py").write_text("PACKAGE = 'fixture'\n")
+    (package / "plugin.py").write_text(
+        "from .helper import value\ndef setup(harness):\n    harness.agent.register_tool(value)\n"
+    )
+    helper = package / "helper.py"
+    helper.write_text("def value() -> str:\n    return 'one'\n")
+    previous_stat = helper.stat()
+    monkeypatch.syspath_prepend(str(tmp_path))
+    host_helper = importlib.import_module("local_generation_package.helper")
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if len(provider.requests) == 1:
+            helper.write_text("def value() -> str:\n    return 'two'\n")
+            os.utime(helper, ns=(previous_stat.st_atime_ns, previous_stat.st_mtime_ns))
+            yield ToolCallEvent(id="old", name="value", arguments={})
+        elif len(provider.requests) == 2:
+            assert messages[-1].content == "one"
+            yield ToolCallEvent(id="new", name="value", arguments={})
+        else:
+            assert messages[-1].content == "two"
+            yield TextDoneEvent(text="done")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.config.plugins = ("local_generation_package.plugin:setup",)
+    identities: list[str] = []
+
+    async def approve(request: ApprovalRequest) -> bool:
+        definition = harness.resources.definition(request.tool)
+        assert definition is not None
+        identities.append(harness.resources.approval_identity(definition))
+        return True
+
+    harness.approval_handler = approve
+    try:
+        events = await collect(harness)
+        assert [event.result for event in events if isinstance(event, ToolResultEvent)] == ["one", "two"]
+        assert identities[0] != identities[1]
+        assert sys.modules["local_generation_package.helper"] is host_helper
+        assert host_helper.value() == "one"
+    finally:
+        await harness.close()
+        sys.modules.pop("local_generation_package.helper", None)
+        sys.modules.pop("local_generation_package", None)
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_value", [7, 17])
+async def test_removed_plugin_override_restores_current_host_limit_and_generated_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_value: int
+) -> None:
+    extension = tmp_path / "settings.py"
+    extension.write_text(
+        "def setup(harness):\n    harness.agent.max_tool_rounds = 7\n    harness.agent.system_prompt = 'Plugin prompt'\n"
+    )
+    (tmp_path / "AGENTS.md").write_text("Old project instructions")
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.config.plugins = (str(extension) + ":setup",)
+    try:
+        await harness.initialize()
+        assert harness.agent.max_tool_rounds == 7 and harness.agent.system_prompt == "Plugin prompt"
+        harness.config.max_tool_rounds = host_value
+        harness.agent.max_tool_rounds = host_value
+        (tmp_path / "AGENTS.md").write_text("New project instructions")
+        harness.config.plugins = ()
+        await harness.resources.reload()
+        assert harness.agent.max_tool_rounds == host_value
+        assert "New project instructions" in str(harness.agent.system_prompt)
+        assert "Old project instructions" not in str(harness.agent.system_prompt)
+        assert harness.agent.system_prompt == harness._generated_system_prompt
+    finally:
+        await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_tool_side_source_and_mcp_configuration_edits_reach_immediately_next_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extension = tmp_path / "editable.py"
+    extension.write_text(
+        "def old_tool() -> str:\n    return 'one'\ndef setup(harness):\n    harness.agent.register_tool(old_tool)\n"
+    )
+    configuration = tmp_path / "trusted.json"
+    configuration.write_text(json.dumps({"plugins": [str(extension) + ":setup"]}))
+    configured = server(tmp_path)
+
+    async def update_configuration() -> str:
+        """Actually perform edits from a model-selected tool invocation."""
+        extension.write_text(
+            "def new_tool() -> str:\n    return 'two'\ndef setup(harness):\n    harness.agent.register_tool(new_tool)\n"
+        )
+        configuration.write_text(
+            json.dumps(
+                {
+                    "plugins": [str(extension) + ":setup"],
+                    "mcp_servers": {
+                        "fixture": {"command": configured.command, "args": configured.args, "cwd": configured.cwd}
+                    },
+                }
+            )
+        )
+        return "updated"
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if len(provider.requests) == 1:
+            assert "old_tool" in provider.schemas[-1] and "new_tool" not in provider.schemas[-1]
+            yield ToolCallEvent(id="update", name="update_configuration", arguments={})
+        elif len(provider.requests) == 2:
+            assert "old_tool" not in provider.schemas[-1] and "new_tool" in provider.schemas[-1]
+            assert "mcp__fixture__echo" in provider.schemas[-1]
+            yield ToolCallEvent(id="new", name="new_tool", arguments={})
+            yield ToolCallEvent(id="mcp", name="mcp__fixture__echo", arguments={})
+        else:
+            yield TextDoneEvent(text="done")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    harness.config.resource_paths = (configuration,)
+    harness.agent.register_tool(update_configuration)
+
+    async def approve(request: ApprovalRequest) -> bool:
+        return True
+
+    harness.approval_handler = approve
+    try:
+        events = await collect(harness)
+        assert [event.result for event in events if isinstance(event, ToolResultEvent)] == ["updated", "two", "one:{}"]
     finally:
         await harness.close()

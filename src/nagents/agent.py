@@ -1994,6 +1994,9 @@ class Agent:
                             message=result_event.error,
                         )
 
+                for plugin in plugins:
+                    await plugin.after_tools(context)
+
                 # Continue to next round (model will see tool results)
                 continue
 

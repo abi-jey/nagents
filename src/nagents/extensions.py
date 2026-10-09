@@ -59,6 +59,10 @@ class AgentPlugin:
         """A completed text response, before its calls execute (including final replies)."""
         pass
 
+    async def after_tools(self, context: RunContext) -> None:
+        """A response's complete tool batch finished, before the next request is built."""
+        pass
+
     async def aclose(self) -> None:
         """Release resources when a reloadable harness extension is retired."""
         pass

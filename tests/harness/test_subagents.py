@@ -799,7 +799,7 @@ def test_plugin_commands_attributed_and_not_reimported_into_child(
         try:
             await collect(harness)
             # The parent reloads on each response; children never import it.
-            assert len(marker.read_text().splitlines()) == len(providers[0].requests) + 3
+            assert len(marker.read_text().splitlines()) == len(providers[0].requests) + 4
             command = harness.commands.get("review-note")
             assert command is not None and command.source == "plugin:subagent_test_plugin.py"
             assert providers[1].harness_config.plugins == ()

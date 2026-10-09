@@ -10,21 +10,18 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-import importlib.util
 import inspect
 import json
 import marshal
-import sys
-import uuid
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING
 
 from nagents._async import finish_on_cancel
+from nagents._async import join_owned
 from nagents.extensions import AgentPlugin
 from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
@@ -35,6 +32,8 @@ from nagents.types import Message
 from nagents.types import ToolDefinition
 
 from .commands import CommandRegistry
+from .plugin_loader import PluginModule
+from .plugin_loader import load_plugin
 from .resource_config import resource_settings
 from .types import Notice
 
@@ -56,11 +55,14 @@ class ReloadContractError(ValueError):
 
 
 class _AgentScope:
-    def __init__(self, owner: Harness, registry: ToolRegistry, hooks: list[AgentPlugin]) -> None:
+    def __init__(
+        self, owner: Harness, registry: ToolRegistry, hooks: list[AgentPlugin], baselines: dict[str, object]
+    ) -> None:
         object.__setattr__(self, "_owner", owner)
         object.__setattr__(self, "_registry", registry)
         object.__setattr__(self, "_hooks", hooks)
         object.__setattr__(self, "_settings", {})
+        object.__setattr__(self, "_baselines", baselines)
         object.__setattr__(self, "_ready", False)
 
     def __getattr__(self, name: str) -> object:
@@ -73,7 +75,7 @@ class _AgentScope:
         if name == "plugins":
             return self._hooks
         if name in _AGENT_SETTINGS:
-            return self._settings.get(name, getattr(self._owner.agent, name))
+            return self._settings.get(name, self._baselines[name])
         raise ReloadContractError(
             f"Reloadable plugin setup cannot access agent.{name}; use lifecycle hooks for runtime access"
         )
@@ -90,6 +92,7 @@ class _AgentScope:
     _registry: ToolRegistry
     _hooks: list[AgentPlugin]
     _settings: dict[str, object]
+    _baselines: dict[str, object]
     _ready: bool
 
 
@@ -133,6 +136,7 @@ class _Generation:
     manager: MCPManager = field(default_factory=lambda: MCPManager([]))
     hooks: list[AgentPlugin] = field(default_factory=list)
     modules: list[str] = field(default_factory=list)
+    module_owners: list[PluginModule] = field(default_factory=list)
     references: tuple[str, ...] = ()
     settings: dict[str, object] = field(default_factory=dict)
     closed: bool = False
@@ -155,9 +159,8 @@ class _Generation:
             await self.manager.disconnect_all()
         except BaseException as error:
             errors.append(error)
-        for name in tuple(sys.modules):
-            if any(name == root or name.startswith(root + ".") for root in self.modules):
-                sys.modules.pop(name, None)
+        for module in self.module_owners:
+            module.close()
         if errors:
             raise BaseExceptionGroup("Extension generation cleanup failed", errors)
 
@@ -166,16 +169,18 @@ def _fingerprint(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
-def _callable_origin(tool: ToolDefinition) -> str:
+def _callable_origin(tool: ToolDefinition, sources: dict[str, str]) -> str:
     """Include imported callable code, rather than just the setup entry point."""
     function = tool.func.__func__ if inspect.ismethod(tool.func) else tool.func
     if not inspect.isfunction(function):
         return _fingerprint({"module": getattr(function, "__module__", ""), "type": type(function).__qualname__})
     source = inspect.getsourcefile(function)
     content = ""
-    if source and Path(source).is_file():
-        with Path(source).open("rb") as stream:
-            content = hashlib.file_digest(stream, "sha256").hexdigest()
+    if source:
+        content = sources.get(str(Path(source).resolve()), "")
+        if not content and Path(source).is_file():
+            with Path(source).open("rb") as stream:
+                content = hashlib.file_digest(stream, "sha256").hexdigest()
     return _fingerprint(
         {
             "code": hashlib.sha256(marshal.dumps(function.__code__)).hexdigest(),
@@ -200,46 +205,6 @@ def _mcp_origin(server: MCPServerConfig) -> str:
     return _fingerprint({"config": asdict(server), "scripts": scripts})
 
 
-def _fresh_module(reference: str, workspace: Path) -> tuple[str, ModuleType, str, str]:
-    module_name, separator, entry = reference.rpartition(":")
-    if not separator or not module_name or not entry.isidentifier():
-        raise ValueError("Invalid plugin reference; expected path.py:setup or installed.module:setup")
-    package = ""
-    package_paths: list[str] = []
-    if module_name.endswith(".py"):
-        path = (workspace / Path(module_name).expanduser()).resolve()
-    else:
-        spec = importlib.util.find_spec(module_name)
-        if spec is None or not spec.origin or not spec.origin.endswith(".py"):
-            raise ValueError("Reloadable plugins require a Python source module")
-        path = Path(spec.origin)
-        package = module_name.rpartition(".")[0]
-        if spec.submodule_search_locations is not None:
-            package_paths = list(spec.submodule_search_locations)
-    name = f"{package + '.' if package else ''}_ngn_plugin_{uuid.uuid4().hex}"
-    module = ModuleType(name)
-    module.__spec__ = importlib.util.spec_from_file_location(
-        name, path, submodule_search_locations=package_paths or None
-    )
-    if module.__spec__ is not None:
-        module.__loader__ = module.__spec__.loader
-    module.__file__, module.__package__ = str(path), name if package_paths else package
-    if package_paths:
-        module.__path__ = package_paths
-    sys.modules[name] = module
-    try:
-        # Compile the current bytes, bypassing timestamp/size .pyc caches. Old
-        # wrappers retain their distinct module globals until their calls finish.
-        source = path.read_bytes()
-        exec(compile(source, str(path), "exec"), module.__dict__)
-    except BaseException:
-        for loaded in tuple(sys.modules):
-            if loaded == name or loaded.startswith(name + "."):
-                sys.modules.pop(loaded, None)
-        raise
-    return name, module, entry, hashlib.sha256(source).hexdigest()
-
-
 class HarnessResources(AgentPlugin):
     """Stable lifecycle dispatcher for newly loaded generations on every response."""
 
@@ -256,9 +221,14 @@ class HarnessResources(AgentPlugin):
         self._commands: set[str] = set()
         self._aliases: set[str] = set()
         self._baseline_settings: dict[str, object] = {}
+        self._baseline_generated_prompt = False
+        self._config_round_limit = harness.config.max_tool_rounds
         self._message = Message(role="user", content="")
         self._running = False
         self._reload_lock = asyncio.Lock()
+        self._reload_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
+        self._closed = False
         self.last_error = ""
 
     def definition(self, name: str) -> ToolDefinition | None:
@@ -302,8 +272,16 @@ class HarnessResources(AgentPlugin):
         )
 
     async def reload(self, *, initial: bool = False) -> None:
+        if self._closed:
+            raise RuntimeError("Harness resources are closed")
         async with self._reload_lock:
-            await self._reload(initial=initial)
+            if self._closed:
+                raise RuntimeError("Harness resources are closed")
+            self._reload_task = asyncio.create_task(self._reload(initial=initial), name="ngn-resource-reload")
+            try:
+                await self._reload_task
+            finally:
+                self._reload_task = None
 
     async def _reload(self, *, initial: bool) -> None:
         harness = self.harness
@@ -332,19 +310,44 @@ class HarnessResources(AgentPlugin):
         instructions_before = dict(harness.instructions)
         prompt_before = harness.agent.system_prompt
         generated_before = harness._generated_system_prompt
-        agent_scope = _AgentScope(harness, fresh.registry, fresh.hooks)
+        old = self.current
+        baselines = {name: getattr(harness.agent, name) for name in _AGENT_SETTINGS}
+        generated_baseline = prompt_before == generated_before
+        for name, value in old.settings.items():
+            if baselines[name] == value:
+                baselines[name] = self._baseline_settings.get(name, baselines[name])
+                if name == "system_prompt":
+                    generated_baseline = self._baseline_generated_prompt
+        if harness.config.max_tool_rounds != self._config_round_limit:
+            baselines["max_tool_rounds"] = harness.config.max_tool_rounds
+        agent_scope = _AgentScope(harness, fresh.registry, fresh.hooks, baselines)
         scope = _HarnessScope(harness, agent_scope, commands)
         try:
+            # Rebuild the host baseline before setup reads it. Replaying an
+            # append-style setup against its old override would accumulate text.
+            harness.tool_settings.load()
+            await harness.agent.refresh_skills()
+            authored = prompt_before != generated_before
+            harness.load_project_instructions()
+            for name in tuple(harness.instructions):
+                if name != "AGENTS.md":
+                    harness.tools.instructions(Path(name))
+            harness.refresh_instructions()
+            if generated_baseline:
+                baselines["system_prompt"] = harness._generated_system_prompt
+            if authored:
+                harness.agent.system_prompt = prompt_before
             references, servers = resource_settings(harness.config)
             fresh.references = references
             scope._config.plugins = references
             scope._config.mcp_servers = servers
             config_identity = _fingerprint(asdict(scope._config))
             for reference in references:
-                name, module, entry, source_digest = _fresh_module(reference, harness.workspace)
+                loaded = load_plugin(reference, harness.workspace)
                 before_plugin = dict(fresh.registry._tools)
-                fresh.modules.append(name)
-                setup = getattr(module, entry)
+                fresh.modules.append(loaded.name)
+                fresh.module_owners.append(loaded)
+                setup = getattr(loaded.module, loaded.entry)
                 if not callable(setup):
                     raise TypeError("Plugin setup entry must be callable")
                 with commands.plugin_source(reference):
@@ -361,11 +364,11 @@ class HarnessResources(AgentPlugin):
                             {
                                 "kind": "python",
                                 "reference": reference,
-                                "source": source_digest,
+                                "source": loaded.source_digest,
                                 "config": config_identity,
                                 "tool": tool.name,
                                 "function": getattr(tool.func, "__qualname__", ""),
-                                "implementation": _callable_origin(tool),
+                                "implementation": _callable_origin(tool, loaded.sources),
                             }
                         )
             if _fingerprint(asdict(scope._config)) != config_identity:
@@ -409,17 +412,6 @@ class HarnessResources(AgentPlugin):
                 type(fresh.settings["max_tool_rounds"]) is not int or not 1 <= fresh.settings["max_tool_rounds"] <= 1000
             ):
                 raise ValueError("Plugin max_tool_rounds must be an integer between 1 and 1000")
-            # Validate all policy/instruction/skill inputs before committing.
-            harness.tool_settings.load()
-            await harness.agent.refresh_skills()
-            authored = harness.agent.system_prompt != harness._generated_system_prompt
-            prompt = harness.agent.system_prompt
-            harness.load_project_instructions()
-            for name in tuple(harness.instructions):
-                if name != "AGENTS.md":
-                    harness.tools.instructions(Path(name))
-            if authored:
-                harness.agent.system_prompt = prompt
         except BaseException as error:
             cleanup_failed = False
             try:
@@ -471,10 +463,11 @@ class HarnessResources(AgentPlugin):
         registry._tools = dict(fresh.registry._tools)
         self._expected = {name: registry.get(name) for name in self.pinned}
         harness.commands._registered, harness.commands._aliases = commands._registered, commands._aliases
+        self._baseline_settings = baselines
+        self._baseline_generated_prompt = generated_baseline
         for name in old.settings.keys() | fresh.settings.keys():
-            if name not in self._baseline_settings:
-                self._baseline_settings[name] = getattr(harness.agent, name)
-            setattr(harness.agent, name, fresh.settings.get(name, self._baseline_settings[name]))
+            setattr(harness.agent, name, fresh.settings.get(name, baselines[name]))
+        self._config_round_limit = harness.config.max_tool_rounds
         object.__setattr__(agent_scope, "_ready", True)
         self.current = fresh
         harness.loaded_plugins[:] = references
@@ -539,6 +532,13 @@ class HarnessResources(AgentPlugin):
             await hook.after_model(context)
         await self.reload()
 
+    async def after_tools(self, context: RunContext) -> None:
+        for hook in self.active.hooks:
+            await hook.after_tools(context)
+        # Tools can edit their own sources/configuration. Rebuild before the
+        # next request is assembled, while this batch still retains its handles.
+        await self.reload()
+
     async def before_tool(self, context: RunContext, call: ToolCall) -> ToolCall:
         for hook in self.active.hooks:
             call = await hook.before_tool(context, call)
@@ -580,7 +580,27 @@ class HarnessResources(AgentPlugin):
             self._snapshot_ready = False
 
     async def aclose(self) -> None:
-        try:
-            await self.active.close()
-        finally:
-            await self.current.close()
+        self._closed = True
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close_resources(), name="ngn-resource-close")
+        await join_owned(self._close_task)
+
+    async def _close_resources(self) -> None:
+        errors: list[BaseException] = []
+        reload = self._reload_task
+        if reload is not None:
+            reload.cancel()
+            try:
+                await reload
+            except asyncio.CancelledError:
+                pass
+            except BaseException as error:
+                errors.append(error)
+        async with self._reload_lock:
+            for generation in dict.fromkeys((self.active, self.current)):
+                try:
+                    await generation.close()
+                except BaseException as error:
+                    errors.append(error)
+        if errors:
+            raise BaseExceptionGroup("Harness resources cleanup failed", errors)
