@@ -12,6 +12,7 @@ import pytest
 from nagents.harness.auth import DeviceAuthorization
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers import ProviderProfile
+from nagents.provider import OpenAIProvider
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
@@ -68,6 +69,7 @@ def test_login_completes_selected_provider_and_hides_secrets(
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
         release = pending_login(app, monkeypatch)
+        previous_provider = app.state.harness.agent.provider
         assert app.client.get("/api/login/chatgpt", headers=app.headers).json()["status"] == "idle"
         response = app.client.post("/api/login/chatgpt", headers=app.headers, json={})
         assert response.status_code == 200
@@ -84,6 +86,9 @@ def test_login_completes_selected_provider_and_hides_secrets(
         assert not app.state.mutating
         assert app.state.harness.config.provider == "fixture"
         assert app.state.harness.config.provider_profile().auth == "chatgpt"
+        assert app.state.harness.agent.provider is not previous_provider
+        assert isinstance(app.state.harness.agent.provider, OpenAIProvider)
+        assert app.state.harness.agent.provider.uses_chatgpt_auth
         assert app.state.harness.provider_store.load().providers["fixture"].auth == "chatgpt"
         assert app.history(app.main)["history"] == []
         assert "private-device-id" not in caplog.text and "TEST-CODE" not in caplog.text
