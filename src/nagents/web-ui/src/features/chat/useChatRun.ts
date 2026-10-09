@@ -94,7 +94,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     if (discardDraft) drafts.forget(id);
     if (id === selected.current) { approval.close(); setActivityError(""); }
   }
-  async function submit(value: string, attachments: string[] = []) {
+  async function submit(value: string, attachments: string[] = [], command?: "compact") {
     if (sending.current) return;
     const failure = queuedMessageFailure(value, sessionId, attachments);
     if (failure) throw new Error(failure);
@@ -102,7 +102,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     setSubmitting(true);
     const root = sessionId;
     const draft = drafts.get(root);
-    const message = queue.current.prepare(root, value, undefined, attachments);
+    const message = queue.current.prepare(root, value, undefined, attachments, command);
     setView(cache.current.enqueue(message)); setStatus("Queueing message");
     try {
       await queueMessage(token, message);

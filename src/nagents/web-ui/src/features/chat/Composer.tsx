@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ComponentProps, ReactNode, Ref } from "react";
 import { Icon } from "../../components/Icon.js";
+import { commandMatches } from "./commands.js";
 
 function ComposerInput({ inputRef, ...props }: ComponentProps<"textarea"> & { inputRef: Ref<HTMLTextAreaElement> }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -68,6 +69,20 @@ export function Composer({
   stopping?: boolean;
   voiceControl?: ReactNode;
 }) {
+  const [dismissed, setDismissed] = useState("");
+  const [selection, setSelection] = useState({ prompt: "", index: 0 });
+  const matches = !disabled && prompt !== dismissed ? commandMatches(prompt) : [];
+  const selected = selection.prompt === prompt ? Math.min(selection.index, matches.length - 1) : 0;
+  useLayoutEffect(() => {
+    const command = matches[selected];
+    if (command) document.getElementById(`slash-command-${command.name}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [prompt, selected, matches.length]);
+  function choose(index: number) {
+    const command = matches[index];
+    if (!command) return;
+    setPrompt(`/${command.name} `);
+    setDismissed("");
+  }
   return (
     <form
       onPaste={(event) => {
@@ -81,6 +96,13 @@ export function Composer({
         if (canSubmit && (prompt.trim() || hasAttachments)) submit();
       }}
     >
+      {!!matches.length && <ul id="slash-commands" className="slash-menu" role="listbox" aria-label="Browser commands">
+        {matches.map((command, index) => <li key={command.name} role="presentation"><button type="button"
+          id={`slash-command-${command.name}`} role="option" aria-selected={index === selected} tabIndex={-1}
+          onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}>
+          <code>/{command.name}</code><span>{command.description}</span>
+        </button></li>)}
+      </ul>}
       <label htmlFor="composer" className="sr-only">
         Message ngn
       </label>
@@ -88,17 +110,30 @@ export function Composer({
         inputRef={inputRef}
         id="composer"
         aria-describedby="composer-help"
+        aria-autocomplete="list"
+        aria-controls={matches.length ? "slash-commands" : undefined}
+        aria-activedescendant={matches[selected] ? `slash-command-${matches[selected].name}` : undefined}
         placeholder={
           demo
             ? "Ask about the workspace, or try 'demo approval'..."
-            : "What should we work on?"
+            : "What should we work on? Type / for commands"
         }
         value={prompt}
         maxLength={32000}
         rows={1}
         disabled={disabled}
-        onChange={(event) => setPrompt(event.target.value)}
+        onChange={(event) => { setDismissed(""); setPrompt(event.target.value); }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (matches.length && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+            if (event.key === "Escape") { event.preventDefault(); setDismissed(prompt); return; }
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              setSelection({ prompt, index: (selected + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length });
+              return;
+            }
+            if (event.key === "Tab" || (event.key === "Enter" && prompt !== `/${matches[selected]?.name}`)) { event.preventDefault(); choose(selected); return; }
+          }
           if (
             event.key === "Enter" &&
             !event.shiftKey &&
@@ -119,7 +154,7 @@ export function Composer({
         {voiceControl}
         </div>
         {status}
-        <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.</span>
+        <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line. Type / for commands; use arrows and Tab or Enter to choose, then Enter to run. Escape closes suggestions.</span>
         {running && (
           <button type="button" className="cancel" onClick={cancel} disabled={stopping}>
             {stopping ? "Stopping…" : "Stop run"}

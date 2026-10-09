@@ -56,6 +56,7 @@ from .live_context import with_summary
 from .live_runtime import LiveService
 from .live_settings import LiveSettings
 from .live_summary import VoiceContextSummarizer
+from .provider_login import ProviderLogin
 from .provider_setup import provider_setup
 from .routing import RoutingStore
 from .security import SECURITY_HEADERS
@@ -108,6 +109,7 @@ class MessageInput(SessionInput):
     prompt: str = Field(default="", max_length=32000)
     attachments: list[str] = Field(default_factory=list, max_length=3)
     message_id: str = Field(pattern=r"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$")
+    command: Literal["", "compact"] = ""
 
 
 class RunInput(Input):
@@ -127,6 +129,10 @@ class ProviderInput(Input):
 
 class ProviderRevision(Input):
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class LoginCancel(Input):
+    id: str = Field(min_length=1, max_length=128)
 
 
 def _provider_profile(fields: dict[str, object]) -> ProviderProfile:
@@ -174,10 +180,11 @@ def create_app(
     designer: Designer
     live: LiveService
     live_settings: LiveSettings
+    provider_login: ProviderLogin
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, designer, live, live_settings
+        nonlocal state, designer, live, live_settings, provider_login
         harness = harness_factory(copy.deepcopy(config))
         logger.info(
             "ngn serve starting: workspace=%s state_dir=%s demo=%s",
@@ -267,6 +274,8 @@ def create_app(
         app.state.web = state
         app.state.live = live
         app.state.live_settings = live_settings
+        provider_login = ProviderLogin(state, lambda: live.active_session_id)
+        app.state.provider_login = provider_login
         try:
             await harness.initialize(create_session=not (resume_session or continue_session))
             await live_settings.load()
@@ -343,15 +352,18 @@ def create_app(
 
             async def close_resources() -> None:
                 try:
-                    await live_settings.shutdown()
+                    await provider_login.close()
                 finally:
                     try:
-                        await live.shutdown()
+                        await live_settings.shutdown()
                     finally:
                         try:
-                            await state.trash.close()
+                            await live.shutdown()
                         finally:
-                            await close_host()
+                            try:
+                                await state.trash.close()
+                            finally:
+                                await close_host()
 
             cleanup = asyncio.create_task(close_resources())
             try:
@@ -410,9 +422,15 @@ def create_app(
             raise HTTPException(409, "Select a named provider connection before sending a message.")
         if not body.prompt.strip() and not body.attachments:
             raise HTTPException(422, "Prompt must not be blank.")
+        if body.command and (body.prompt != "/compact" or body.attachments):
+            raise HTTPException(422, "The compact command accepts no arguments or attachments.")
 
         async def accept() -> dict[str, str]:
-            if body.attachments:
+            if body.command:
+                session_id, admitted = await state.channels.store.web(
+                    body.session_id, body.message_id, body.prompt, command=body.command
+                )
+            elif body.attachments:
                 media = await state.uploads.capabilities(body.session_id)
                 session_id, admitted = await state.channels.store.web(
                     body.session_id, body.message_id, body.prompt, tuple(body.attachments), media
@@ -525,6 +543,18 @@ def create_app(
             ) from None
         logger.info("Model catalog completed: source=%s count=%d", source, len(model_ids))
         return {"models": model_ids, "source": source}
+
+    @app.get("/api/login/chatgpt")
+    async def login_status() -> dict[str, object]:
+        return dict(provider_login.snapshot())
+
+    @app.post("/api/login/chatgpt")
+    async def login_start(body: Input) -> dict[str, object]:
+        return dict(await provider_login.start())
+
+    @app.post("/api/login/chatgpt/cancel")
+    async def login_cancel(body: LoginCancel) -> dict[str, object]:
+        return dict(await provider_login.cancel(body.id))
 
     @app.get("/api/providers")
     async def workspace_providers() -> dict[str, object]:

@@ -3,11 +3,12 @@ import test from "node:test";
 import {
   createElement,
   type ComponentProps,
-  type SubmitEvent,
-  type ReactElement,
+  act,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Conversation } from "./Conversation.js";
+import { createRoot } from "react-dom/client";
+import { JSDOM } from "jsdom";
 import { Composer } from "./Composer.js";
 import { appendEvent, fromHistory, type Entry } from "./transcript.js";
 import type { RetainedTask, Snapshot } from "../../types.js";
@@ -460,9 +461,8 @@ test("registry entries belonging to another root session cannot leak into the se
   assert.equal(renderedParents(markup(entries)).size, 0);
 });
 
-test("an idle activity-only composer retains its draft but blocks form submission until snapshot recovery enables sending", () => {
+test("an idle activity-only composer retains its draft but blocks form submission until snapshot recovery enables sending", async () => {
   let submissions = 0;
-  let prevented = 0;
   const props: ComponentProps<typeof Composer> = {
     inputRef: null,
     prompt: "Keep this unsent draft",
@@ -476,29 +476,27 @@ test("an idle activity-only composer retains its draft but blocks form submissio
     },
     cancel: () => undefined,
   };
-  const event = {
-    preventDefault: () => {
-      prevented++;
-    },
-  } as SubmitEvent<HTMLFormElement>;
-  const blocked = renderToStaticMarkup(createElement(Composer, props));
-  assert.match(blocked, /<textarea[^>]*>Keep this unsent draft<\/textarea>/);
-  assert.doesNotMatch(blocked, /<textarea[^>]*disabled/);
-  assert.match(blocked, /<button[^>]*type="submit"[^>]*disabled=""/);
-  const blockedForm = Composer(props) as ReactElement<ComponentProps<"form">>;
-  blockedForm.props.onSubmit?.(event);
-  assert.equal(prevented, 1);
-  assert.equal(submissions, 0);
-
-  const recovered = { ...props, canSubmit: true };
-  assert.doesNotMatch(
-    renderToStaticMarkup(createElement(Composer, recovered)),
-    /<button[^>]*type="submit"[^>]*disabled/,
-  );
-  const recoveredForm = Composer(recovered) as ReactElement<
-    ComponentProps<"form">
-  >;
-  recoveredForm.props.onSubmit?.(event);
-  assert.equal(prevented, 2);
-  assert.equal(submissions, 1);
+  const dom = new JSDOM("<div id='root'></div>");
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true,
+    ResizeObserver: class { observe() {} disconnect() {} } });
+  const container = dom.window.document.getElementById("root")!, root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(Composer, props)));
+    assert.equal(container.querySelector("textarea")!.value, props.prompt);
+    assert.equal(container.querySelector("textarea")!.disabled, false);
+    assert.equal(container.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled, true);
+    const submit = () => container.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+    await act(async () => { assert.equal(submit(), false); });
+    assert.equal(submissions, 0);
+    await act(async () => root.render(createElement(Composer, { ...props, canSubmit: true })));
+    assert.equal(container.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled, false);
+    await act(async () => { assert.equal(submit(), false); });
+    assert.equal(submissions, 1);
+  } finally {
+    await act(async () => root.unmount()); dom.window.close();
+    for (const key of ["window", "document", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"]) {
+      if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });

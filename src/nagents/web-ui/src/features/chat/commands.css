@@ -1,0 +1,18 @@
+.composer-area form { position: relative; }
+.slash-menu { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; z-index: 12; margin: 0; padding: 6px; max-height: min(340px, 45dvh); overflow: auto; list-style: none; border: 1px solid var(--border-control); border-radius: 12px; background: var(--surface-navigation); box-shadow: 0 12px 36px #0005; }
+.slash-menu li { margin: 0; padding: 0; }
+.slash-menu button { display: flex; align-items: center; gap: 14px; width: 100%; padding: 10px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--text-reading); text-align: left; }
+.slash-menu button[aria-selected="true"], .slash-menu button:hover { background: var(--surface-hover, #ffffff12); }
+.slash-menu button code { min-width: 90px; font-size: 13px; }
+.slash-menu button span { color: var(--text-secondary); font-size: 12px; }
+.command-help { width: min(560px, calc(100vw - 32px)); }
+.command-help p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.command-help dl { display: grid; gap: 12px; }
+.command-help dl div { display: grid; grid-template-columns: 170px 1fr; gap: 14px; }
+.command-help dt, .command-help dd { margin: 0; font-size: 13px; }
+@media (max-width: 480px) { .command-help dl div { grid-template-columns: 1fr; gap: 2px; } .slash-menu button { gap: 8px; } }
+.login-dialog > p, .device-login-code p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.device-login-code { padding: 16px; margin: 18px 0; border: 1px solid var(--border-control); border-radius: 10px; text-align: center; }
+.device-login-code output { display: block; font-family: monospace; font-size: 28px; font-weight: 600; letter-spacing: .1em; user-select: all; }
+.device-login-code a { display: inline-block; margin: 10px; }
+.login-dialog footer { flex-wrap: wrap; }

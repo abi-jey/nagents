@@ -37,8 +37,8 @@ def provider_setup(harness: Harness) -> ProviderSetup:
             return {"configured": True, "message": ""}
         return {
             "configured": False,
-            "message": "ChatGPT login is missing or unreadable in this container. Run ngn login chatgpt "
-            "with persistent XDG_DATA_HOME, or choose API-key authentication in Settings.",
+            "message": "ChatGPT login is missing or unreadable in this container. Use /login in this chat, "
+            "or run ngn login chatgpt on the server with persistent XDG_DATA_HOME.",
         }
     if not isinstance(provider, HarnessProvider) and not (
         config.provider and config.provider_profile().auth == "api-key"
@@ -75,8 +75,8 @@ def provider_error(event: ErrorEvent) -> tuple[str, str]:
     if code == "CODEX_AUTH" or code == "CODEX_HTTP_401":
         return (
             "chatgpt_auth",
-            "ChatGPT login is unavailable, expired, or rejected. Sign in again with ngn login chatgpt "
-            "in the container using persistent XDG_DATA_HOME, or switch to API-key authentication.",
+            "ChatGPT login is unavailable, expired, or rejected. Use /login in this chat to sign in again, "
+            "or run ngn login chatgpt in the container using persistent XDG_DATA_HOME.",
         )
     if code == "CODEX_HTTP_403":
         return "chatgpt_access", "Codex access was denied. Check the ChatGPT account, plan, workspace and model access."

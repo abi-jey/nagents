@@ -104,19 +104,32 @@ For your own installation, choose your own connection deliberately:
   OpenAI connection with `auth: api-key` and `api_key_env: OPENAI_API_KEY`, then
   choose your model. Platform API usage and billing are separate from a
   ChatGPT subscription. Never put key values into browser settings, URLs, or Git.
-- **ChatGPT/Codex login:** run `ngn login --device-auth`, approve only the code you
-  requested, and use `ngn login --status` to check the saved login. Add and
-  activate a named OpenAI connection with `auth: chatgpt` and `api: auto` in
-  Provider connections. Interactive `/login` remains available in the terminal client.
+- **ChatGPT/Codex login:** enter `/login` in the browser composer and choose
+  **Sign in with ChatGPT**. Open the displayed OpenAI device page and approve
+  the code you requested. ngn performs the exchange and saves credentials on the
+  server. Completion updates the selected default OpenAI connection to
+  `auth: chatgpt`; an unconfigured server gets a named `chatgpt` connection.
+  Custom endpoints and API overrides must be changed in Provider connections first.
+  Terminal `ngn login --device-auth` and `ngn login --status` remain available.
   Use your own eligible ChatGPT account; protected credential storage currently
-  requires POSIX. See [device login](ngn.md#openai-device-login) for limitations.
+  requires POSIX and persistent `XDG_DATA_HOME` in containers. See
+  [device login](ngn.md#openai-device-login) for limitations.
 
 The API-key and Codex catalogs are not interchangeable, and discovery never falls
 back between them. In particular, a Codex OAuth access token is **not** an OpenAI
 API key. Login/refresh remains on the backend; the browser receives only model
-IDs and a non-secret source label. Administrator-managed containers use their
-existing backend credential environment/store, not credentials supplied by a web
-visitor. This does not add multi-user account isolation to a shared deployment.
+IDs and a non-secret source label. Device login exposes only the verification
+URL, one-time user code, expiration and status; it never returns tokens or the
+private device authorization ID. Signing in changes the server's selected
+connection. This does not add multi-user account isolation to a shared deployment.
+
+`POST /api/login/chatgpt` with `{}` starts one server-owned flow; repeated starts
+while it is active return that attempt. `GET /api/login/chatgpt` only reads its
+status. `POST /api/login/chatgpt/cancel` with `{"id":"<attempt id>"}` cancels and
+joins the matching attempt. These routes require the normal same-origin web
+token. Finish active assistant or Live work first: sign-in holds the host's
+configuration boundary until completion, cancellation or expiration. Server
+shutdown cancels the flow, and terminal states clear the displayed code.
 
 ### Frontend Build
 
@@ -202,6 +215,33 @@ acknowledgement clears only the unchanged submitted draft, preserving newer typi
 Message badges distinguish **Sending…**, confirmed **Queued**, and **Delivery
 unconfirmed** states. Working sessions have an indicator in the sidebar; when
 another session is running, **View active session** takes you to it.
+
+### Browser Slash Commands
+
+Type `/` in the composer for suggestions, or submit `/help` to see the supported
+browser actions. Commands execute through the same controls and permissions as
+their corresponding buttons; unsupported names and invalid arguments keep the
+draft and display an error.
+
+| Command | Browser action |
+| --- | --- |
+| `/login` | Open server-side ChatGPT device sign-in. |
+| `/new` | Start or reuse a blank conversation. |
+| `/sessions [session ID]`, `/resume [session ID]` | Browse conversations or select one. |
+| `/compact` | Queue compaction of the submitted conversation. |
+| `/model [model ID]`, `/agent [name]`, `/provider [name]` | Open settings or select a model, agent, or connection. |
+| `/context` | Show the conversation's context estimate. |
+| `/settings`, `/tools`, `/channels`, `/voice` | Open the corresponding settings. |
+| `/stop` | Stop the active run. |
+
+`/compact` accepts no arguments or attachments. The browser submits
+`command: "compact"` alongside the exact `/compact` prompt to `POST /api/messages`;
+the server includes that field in the message's retry identity and processes it
+through the existing serialized queue. The ordinary API prompt `/compact`, with
+no explicit command field, remains model input. Compaction preserves the selected
+session when it runs against another submitted root, and reports normal
+compaction/error events. There is no browser endpoint for arbitrary Python command
+callbacks or terminal-only actions.
 
 ### Delete A Session
 
