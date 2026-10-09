@@ -123,8 +123,8 @@ export function useClient() {
     }
     if (name === "compact") return operate(async () => { await chat.submit("/compact", [], "compact"); });
     if (name === "stop") {
-      if (!chat.runId && !sessions.externalRun) throw new Error("There is no active run to stop.");
-      return operate(async () => { await chat.cancel(chat.runId || sessions.externalRun); });
+      if (!chat.runId) throw new Error("There is no active run in this chat to stop.");
+      return operate(async () => { await chat.cancel(chat.runId); });
     }
     if (name === "context") { context.setOpen(true); context.refresh(); return true; }
     if (name === "tools") { setPanel("tools"); return true; }
@@ -205,7 +205,7 @@ export function useClient() {
 
   async function cancel() {
     try {
-      await chat.cancel(chat.runId || sessions.externalRun);
+      await chat.cancel(chat.runId);
       if (!chat.connected) await connect();
     } catch (cause) {
       setError(

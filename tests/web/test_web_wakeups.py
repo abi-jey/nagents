@@ -506,7 +506,7 @@ def test_large_real_tool_results_are_byte_bounded_without_subscribers(
 
 @pytest.mark.requires_posix
 @pytest.mark.parametrize("cancel_background", [False, True])
-def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
+def test_due_wakeup_runs_beside_other_session_and_can_be_cancelled_independently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_background: bool
 ) -> None:
     async def check() -> None:
@@ -514,7 +514,7 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             latest = next(str(message.content) for message in reversed(messages) if message.role == "user")
-            if len(provider.requests) == 1:
+            if latest == "start" and messages[-1].role == "user":
                 yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "wake first"})
             elif latest == "busy second":
                 busy.set()
@@ -541,27 +541,30 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
             started = await stream.event("run_started")
             await asyncio.wait_for(busy.wait(), HANG_GUARD)
             clock.now += 10
-            await state.wakeups.tick()
-            assert not waking.is_set() and len(state.wakeups.pending) == 1
+            tick = asyncio.create_task(state.wakeups.tick())
+            await asyncio.wait_for(waking.wait(), HANG_GUARD)
+            assert state.run_for(first) is not None and state.run_for(second) is not None
             assert (
                 await client.post("/api/cancel", json={"run_id": started["run_id"]}, headers=headers)
             ).status_code == 200
             await stream.task
             assert len(state.wakeups.pending) == 1  # Unrelated human chain cancellation.
             cursor = state.wakeups.cursor
-            tick = asyncio.create_task(state.wakeups.tick())
-            await asyncio.wait_for(waking.wait(), HANG_GUARD)
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["active_session_id"] == first and bootstrap["active_run_background"] is True
             active = state.active
             assert active is not None and active.queue.empty()
             assert len(state.wakeups.pending) == 1
-            for path, body in (
-                ("/api/sessions/new", {}),
-                ("/api/sessions/resume", {"session_id": second}),
-                ("/api/run", {"session_id": second, "prompt": "conflict"}),
-            ):
-                assert (await client.post(path, json=body, headers=headers)).status_code == 409
+            assert (await client.post("/api/sessions/new", json={}, headers=headers)).status_code == 200
+            assert (
+                await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)
+            ).status_code == 200
+            assert (
+                await client.post("/api/run", json={"session_id": first, "prompt": "conflict"}, headers=headers)
+            ).status_code == 409
+            assert (
+                await client.post("/api/sessions/resume", json={"session_id": second}, headers=headers)
+            ).status_code == 200
             settings = (await client.get("/api/settings", headers=headers)).json()
             assert (
                 await client.post(
@@ -570,7 +573,7 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
                     headers=headers,
                 )
             ).status_code == 409
-            assert (await client.get("/api/sessions", headers=headers)).status_code == 409
+            assert (await client.get("/api/sessions", headers=headers)).status_code == 200
             other = (await client.get(f"/api/activity/{second}/{cursor}", headers=headers)).json()
             assert other["events"] == [] and other["active_run_id"] == ""
             if cancel_background:
@@ -581,8 +584,8 @@ def test_due_wakeup_defers_busy_session_restores_selection_and_can_be_cancelled(
             await asyncio.wait_for(tick, HANG_GUARD)
             assert cleaned.is_set() and active.task.done() and state.active is None
             assert len(state.wakeups.pending) == (0 if cancel_background else 1)
-            assert state.harness.session_id == second
-            history = await state.harness.history()
+            assert state.selected_session_id == second
+            history = await state.history.get_history(second)
             assert "first session wake result" not in str(history)
             activity = (await client.get(f"/api/activity/{first}/{cursor}", headers=headers)).json()
             assert activity["events"][-1]["status"] == ("cancelled" if cancel_background else "completed")

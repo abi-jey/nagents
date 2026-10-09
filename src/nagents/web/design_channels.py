@@ -146,25 +146,29 @@ class DesignedChannels:
                         tool.func, name=tool.name, description=tool.description, parameters=tool.parameters
                     )
                 )
-        harness.agent.plugins.append(self.state.channels.instructions)
+        harness.agent.plugins.append(self.state.channels.instructions_for(harness))
         return harness, installed
 
     async def context_stats(self, session_id: str) -> ContextStats:
         agent, source = await self.definition(session_id)
         if not source:
             return await self.state.harness.agent.context_stats(session_id)
-        harness, _ = self.assemble(session_id, agent, source, Recorder())
+        harness, installed = self.assemble(session_id, agent, source, Recorder())
         try:
             # Metadata/history only: no initialization, provider request or MCP startup.
             return await harness.agent.context_stats(session_id)
         finally:
-            await _join(asyncio.create_task(harness.close()))
+            try:
+                await _join(asyncio.create_task(harness.close()))
+            finally:
+                self.state.channels.unregister_runtime(harness, installed)
 
     @asynccontextmanager
     async def execution(self, run: Run) -> AsyncIterator[Harness]:
         agent, source = await self.pin(run.session_id)
         if not source:
-            yield self.state.harness
+            async with self.state.executions.harness(run) as harness:
+                yield harness
             return
         recorder = Recorder()
         harness, installed = self.assemble(run.session_id, agent, source, recorder)
@@ -183,6 +187,7 @@ class DesignedChannels:
 
         writers: list[asyncio.Task[None]] = []
         try:
+            await self.state.executions.borrow_auth(harness)
             await self.traces.start(run.id, run.session_id, agent, source)
             recorder("channel_run", {"agent_id": agent, "session_id": run.session_id, "source": run.source})
             writers.append(asyncio.create_task(persist()))
@@ -200,7 +205,7 @@ class DesignedChannels:
                 try:
                     await harness.close()
                 finally:
-                    host.tools[:] = [tool for tool in host.tools if not any(tool is item for item in installed)]
+                    host.unregister_runtime(harness, installed)
                     finished.set()
                     for writer in writers:
                         await writer

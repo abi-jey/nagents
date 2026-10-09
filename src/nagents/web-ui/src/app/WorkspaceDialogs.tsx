@@ -1,7 +1,7 @@
 import { CommandHelp } from "../features/chat/CommandHelp.js";
 import { LoginDialog } from "../features/settings/LoginDialog.js";
 import "../features/chat/commands.css";
-import { ApprovalDialog } from "../features/approvals/ApprovalDialog";
+import { ApprovalReview } from "../features/approvals/ApprovalReview.js";
 import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
@@ -30,8 +30,8 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
        blocked={client.busy} openDisabled={false} />}
     {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessions.sessionId} />}
     {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessions.sessionId} />}
-    {chat.approval.pending && <ApprovalDialog key={chat.approval.pending.approval_id} approval={chat.approval.pending}
+    <ApprovalReview sessionId={sessions.sessionId} pending={chat.approval.pending}
       busy={chat.approval.deciding} error={chat.approval.error} decide={(decision) => void chat.approval.decide(decision)}
-      cancel={() => void client.cancel()} />}
+      cancel={() => void client.cancel()} />
   </>;
 }

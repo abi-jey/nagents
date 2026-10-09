@@ -266,7 +266,7 @@ def test_catalog_cancellation_joins_unread_cursor_before_writer_commit(
 
 
 @pytest.mark.parametrize("departure", ["disconnect", "unsubscribe", "switch", "invalidate"])
-def test_hydration_departure_revokes_approval_before_db_cleanup_and_keeps_run(
+def test_hydration_departure_retains_pending_decision_but_cannot_authorize_without_subscriber(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, departure: str
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
@@ -312,8 +312,8 @@ def test_hydration_departure_revokes_approval_before_db_cleanup_and_keeps_run(
                     socket.send_json({"type": "subscribe", "session_id": target})
                 else:
                     app.client.portal.call(app.state.bus.invalidate_session, app.main)
-                app.client.portal.call(until, lambda: not app.state.bus.listening(app.main) and answer.done())
-                assert answer.result() is False and not release.is_set()
+                app.client.portal.call(until, lambda: not app.state.bus.listening(app.main))
+                assert not answer.done() and not release.is_set()
                 result = app.client.post(
                     "/api/approval",
                     headers=app.headers,
@@ -325,6 +325,7 @@ def test_hydration_departure_revokes_approval_before_db_cleanup_and_keeps_run(
                     },
                 )
                 assert result.status_code == 409
+                assert answer.result() is False
                 app.idle()
                 assert run.outcome == "completed" and not run.task.cancelled()
                 assert not app.channels[0].deliveries

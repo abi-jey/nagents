@@ -537,12 +537,21 @@ class RoutingStore(InboxStore):
         return predicate, parameters
 
     async def claim_work(
-        self, *, web_only: bool = False, available_channels: tuple[str, ...] | None = None, session_id: str = ""
+        self,
+        *,
+        web_only: bool = False,
+        available_channels: tuple[str, ...] | None = None,
+        session_id: str = "",
+        excluded_sessions: tuple[str, ...] = (),
     ) -> Work | None:
         predicate, parameters = self.eligible(web_only, available_channels)
         if session_id:
             predicate += " AND session_id = ? AND channel = ''"
             parameters += (session_id,)
+        if excluded_sessions:
+            slots = ",".join("?" for _ in excluded_sessions)
+            predicate += f" AND session_id NOT IN ({slots})"
+            parameters += excluded_sessions
 
         def claim(db: sqlite3.Connection) -> Work | None:
             self._quarantine_work(db)

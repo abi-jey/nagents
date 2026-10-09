@@ -10,16 +10,25 @@ test("a running conversation permits follow-ups, navigation and voice while idle
   assert.equal(access.submit, true);
   assert.equal(access.navigate, true);
   assert.equal(access.channels, true);
-  assert.equal(access.create, false);
+  assert.equal(access.create, true);
   assert.equal(access.settings, false);
   assert.equal(access.designer, false);
   assert.equal(access.live, true);
 });
 
-test("open panels, approvals and pending mutations block both command and navigation affordances", () => {
+test("open panels and pending mutations block both command and navigation affordances", () => {
   for (const running of [false, true])
-    for (const blocking of [{ modal: true }, { approval: true }, { operating: true }, { ready: false }])
+    for (const blocking of [{ modal: true }, { operating: true }, { ready: false }])
       assert.ok(Object.values(availability({ ...idle, running, ...blocking })).every((value) => !value));
+});
+
+test("a pending approval permits navigating or creating another chat without permitting tool decisions", () => {
+  const access = availability({ ...idle, running: true, approval: true });
+  assert.equal(access.navigate, true);
+  assert.equal(access.create, true);
+  assert.equal(access.submit, false);
+  assert.equal(access.settings, false);
+  assert.equal(access.live, false);
 });
 
 test("uploads not ready prevent submission but allow navigation and Trash", () => {

@@ -42,6 +42,8 @@ from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
+from .executions import MAX_PARALLEL_RUNS
+from .executions import Executions
 from .history import WebHistory
 from .live_inspection import model_requests
 from .provider_setup import provider_error
@@ -67,6 +69,7 @@ if TYPE_CHECKING:
     from starlette.types import Send
 
     from nagents.harness import Harness
+    from nagents.harness.config import HarnessConfig
     from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import SessionInfo
@@ -108,6 +111,8 @@ class Run:
     server_owned: bool = False
     voice: bool = False
     work: Work | None = field(default=None, repr=False)
+    wakeup_id: str = ""
+    harness: Harness | None = field(default=None, repr=False)
     message_id: str = ""
     source: dict[str, str] = field(default_factory=dict)
     chain: Chain = field(default_factory=Chain)
@@ -245,13 +250,13 @@ class Run:
 class WebState:
     settings: WebSettings
 
-    def __init__(self, harness: Harness) -> None:
+    def __init__(self, harness: Harness, factory: Callable[[HarnessConfig], Harness] | None = None) -> None:
         self.harness = harness
-        self.running_harness = harness
+        self._running_harness = harness
         self.approval_timeout: Callable[[], float] = lambda: APPROVAL_TIMEOUT
         self.selected_session_id = harness.session_id
         self.session_revision = 0
-        self.active: Run | None = None
+        self.executions = Executions(self, factory or type(harness))
         self.mutating = False
         self.bus = EventBus()
         self.run_observers: set[Callable[[Run | None, dict[str, object]], None]] = set()
@@ -265,7 +270,16 @@ class WebState:
         if type(harness.agent.session) is _HarnessSession:
             harness.agent.session = self.history
         self.wakeups = Wakeups(
-            lambda: self.active is None and not self.mutating, self.wake, observer=self.activity_event
+            lambda: not self.mutating,
+            self.wake,
+            observer=self.activity_event,
+            available=lambda session_id: (
+                session_id not in self.executions.runs
+                and session_id not in self.channels.work_tasks
+                and len(set(self.executions.runs) | set(self.channels.work_tasks)) < MAX_PARALLEL_RUNS
+            ),
+            parallel=True,
+            reserve=self.reserve_wakeup,
         )
         self.channels = ChannelHost(self)
         self.designed_channels = DesignedChannels(self)
@@ -274,13 +288,81 @@ class WebState:
         harness.approval_handler = self.approve
         harness.wakeup_handler = self.schedule
 
+    @property
+    def active(self) -> Run | None:
+        return self.executions.active()
+
+    @active.setter
+    def active(self, run: Run | None) -> None:
+        if run is not None:
+            self.executions.reserve(run)
+        elif (current := self.active) is not None:
+            self.executions.release(current)
+
+    @property
+    def running_harness(self) -> Harness:
+        current = self.executions.current.get()
+        if current is not None and current.harness is not None:
+            return current.harness
+        active = self.active
+        return active.harness if active is not None and active.harness is not None else self._running_harness
+
+    @running_harness.setter
+    def running_harness(self, harness: Harness) -> None:
+        current = self.executions.current.get()
+        if current is not None:
+            current.harness = harness
+        else:
+            self._running_harness = harness
+
+    def run_for(self, session_id: str) -> Run | None:
+        return self.executions.runs.get(session_id)
+
+    def run_by_id(self, run_id: str) -> Run | None:
+        return next((run for run in self.executions.runs.values() if run.id == run_id), None)
+
+    def active_runs(self) -> list[dict[str, str]]:
+        return [
+            {"id": run.id, "session_id": run.session_id, "status": "approval" if run.pending else "running"}
+            for run in self.executions.runs.values()
+        ]
+
+    def harness_for(self, session_id: str) -> Harness:
+        run = self.run_for(session_id)
+        return (run.harness if run is not None else None) or self.executions.owners.get(session_id, self.harness)
+
+    def reserve_work(self, work: Work) -> Run:
+        run = Run(
+            work.session_id, server_owned=True, message_id=work.message_id, voice=bool(work.voice_session_id), work=work
+        )
+        if work.channel:
+            run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
+        self.executions.reserve(run)
+        self.queued_inputs.admitted(run, work, initial=True)
+        self.publish(run, {"event": "run_started", "message_id": work.message_id, "channel": work.channel})
+        return run
+
+    def reserve_wakeup(self, wakeup: Wakeup, task: asyncio.Task[None]) -> bool:
+        if (
+            self.mutating
+            or self.executions.closed
+            or wakeup.session_id in self.channels.work_tasks
+            or wakeup.session_id in self.executions.runs
+            or len(set(self.executions.runs) | set(self.channels.work_tasks)) >= MAX_PARALLEL_RUNS
+        ):
+            return False
+        run = Run(wakeup.session_id, background=True, chain=wakeup.chain, wakeup_id=wakeup.id)
+        run.task = task
+        self.executions.reserve(run)
+        return True
+
     def changed(self) -> None:
         self.wakeups.changed.set()
         self.channels.changed.set()
 
     @contextmanager
     def idle(self, *, allow_running: bool = False) -> Iterator[None]:
-        if (self.active is not None and not allow_running) or self.mutating:
+        if (self.executions.runs and not allow_running) or self.mutating:
             raise HTTPException(409, "Harness busy. Cancel or finish the active operation first.")
         self.mutating = True
         try:
@@ -319,18 +401,21 @@ class WebState:
         if session_id not in {session.id for session in sessions}:
             raise HTTPException(404, "Session not found in this workspace.")
         history = await self.history.snapshot(session_id)
-        active = self.active
+        active = self.run_for(session_id)
         return {
             "session_id": session_id,
             "activity_cursor": self.wakeups.cursor,
             "retained_tasks": [
-                asdict(info) for info in self.harness.tasks._infos.values() if info.session_id == session_id
+                asdict(info)
+                for info in self.harness_for(session_id).tasks._infos.values()
+                if info.session_id == session_id
             ],
             "sessions": [asdict(session) for session in sessions],
             "history": history,
             "active_run": active.snapshot() if active is not None and active.session_id == session_id else None,
             "active_session_id": active.session_id if active else "",
             "active_run_id": active.id if active else "",
+            "active_runs": self.active_runs(),
         }
 
     async def context_stats(self, session_id: str) -> dict[str, object]:
@@ -341,12 +426,12 @@ class WebState:
         """
         if session_id not in {session.id for session in await self.list_sessions()}:
             raise HTTPException(404, "Session not found in this workspace.")
-        active = self.active
-        if active is not None and active.session_id == session_id and self.running_harness.session_id == session_id:
-            stats = await self.running_harness.agent.context_stats(session_id)
+        active = self.run_for(session_id)
+        if active is not None and self.harness_for(session_id).session_id == session_id:
+            stats = await self.harness_for(session_id).agent.context_stats(session_id)
         else:
             stats = await self.designed_channels.context_stats(session_id)
-        if active is not None and self.active is active and active.session_id == session_id and active.context_reply:
+        if active is not None and self.run_for(session_id) is active and active.context_reply:
             tokens = estimate_tokens(active.context_reply) + 4
             stats = replace(
                 stats,
@@ -360,7 +445,7 @@ class WebState:
         return stats.as_dict()
 
     def user_message(self, run_id: str, record: dict[str, object]) -> None:
-        run = self.active
+        run = self.run_by_id(run_id)
         if run is not None and run.id == run_id:
             self.publish(run, {**record, "event": "user_message", "text": record["content"]})
 
@@ -392,16 +477,10 @@ class WebState:
         return self.live_captions(session_id, voice_session_id)
 
     def disconnected(self) -> None:
-        run = self.active
-        if (
-            run is not None
-            and (run.server_owned or run.background)
-            and not self.bus.listening(run.session_id)
-            and run.pending is not None
-            and not run.pending.answer.done()
-            and not run.pending.in_chat
-        ):
-            run.pending.answer.set_result(False)
+        # Durable runs and their bounded pending decisions belong to their
+        # chats, not to whichever browser subscription happens to be visible.
+        # HTTP approval still requires a live subscriber and the exact nonce.
+        pass
 
     async def send(self, run: Run, record: dict[str, object]) -> None:
         self.publish(run, record)
@@ -500,6 +579,7 @@ class WebState:
             "allow_tool_persistent": binding.persistent if binding else False,
         }
         run.pending = pending
+        self.status()
         approved = False
         expired = False
         try:
@@ -516,6 +596,7 @@ class WebState:
             if not pending.answer.done():
                 pending.answer.set_result(False)
             run.pending = None
+            self.status()
             if not run.task.cancelling():
                 await self.send(
                     run,
@@ -533,7 +614,7 @@ class WebState:
 
     async def schedule(self, task_id: str, delay: float, reason: str) -> dict[str, str]:
         run = self.active
-        if run is None or run.task.cancelling() or run.task.done() or run.session_id != self.harness.session_id:
+        if run is None or run.task.cancelling() or run.task.done() or run.session_id != self.running_harness.session_id:
             raise RuntimeError("Wakeups require an active run in their originating session")
         return self.wakeups.schedule(run.session_id, run.id, run.chain, task_id, delay, reason)
 
@@ -557,7 +638,7 @@ class WebState:
     def activity_event(self, record: dict[str, object]) -> None:
         # This also captures lifecycle records emitted directly by the scheduler,
         # such as scheduled/fired, without duplicating background model events.
-        run = self.active
+        run = self.run_by_id(str(record.get("run_id", "")))
         if run is not None and record.get("run_id") == run.id:
             run.remember(record)
         self.bus.event(record)
@@ -573,17 +654,16 @@ class WebState:
                 "type": "status",
                 "active_session_id": active.session_id if active else "",
                 "active_run_id": active.id if active else "",
+                "active_runs": self.active_runs(),
             }
         )
 
     async def produce_session(self, run: Run, prompt: str | list[ContentPart]) -> None:
-        try:
+        with self.executions.scope(run):
             async with self.designed_channels.execution(run) as harness:
                 self.running_harness = harness
                 await harness.resume(run.session_id)
                 await self.produce(run, prompt)
-        finally:
-            self.running_harness = self.harness
 
     async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
         notices = run.notices = ChannelNotices(self, run)
@@ -742,13 +822,8 @@ class WebState:
         # await. The inbox worker returns this unstarted claim to queued.
         if self.channels.closed:
             return "queued"
-        run = Run(
-            work.session_id, server_owned=True, message_id=work.message_id, voice=bool(work.voice_session_id), work=work
-        )
-        if work.channel:
-            run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
-        self.active = run
-        self.queued_inputs.admitted(run, work, initial=True)
+        reserved = self.run_for(work.session_id)
+        run = reserved if reserved is not None and reserved.work is work else self.reserve_work(work)
         logger.info(
             "Queued run started: session=%s run=%s message=%s channel=%s",
             work.session_id,
@@ -756,21 +831,12 @@ class WebState:
             work.message_id,
             work.channel or "web",
         )
-        self.publish(run, {"event": "run_started", "message_id": work.message_id, "channel": work.channel})
         self.status()
 
         async def execute() -> None:
             try:
-                async with self.designed_channels.execution(run) as harness:
-                    self.running_harness = harness
-                    await harness.resume(run.session_id)
-                    async with self.queued_inputs.context(run, work):
-                        prompt: str | list[ContentPart] = (
-                            await self.channels.inbound_content(work.channel, work.prompt)
-                            if work.channel
-                            else await self.uploads.content(work, harness)
-                        )
-                        await self.produce(run, prompt)
+                with self.executions.scope(run):
+                    await execute_owned()
             except asyncio.CancelledError:
                 run.outcome = "cancelled"
                 raise
@@ -779,12 +845,18 @@ class WebState:
                 self.publish(
                     run, {"event": "error", "message": "Queued run failed. Completed actions were not rolled back."}
                 )
-            finally:
-                # A UI selection made during this run takes effect only after
-                # producer cleanup, never underneath the shared Harness.
-                self.harness.session_id = self.selected_session_id
-                self.harness.tools.read_hashes.clear()
-                self.running_harness = self.harness
+
+        async def execute_owned() -> None:
+            async with self.designed_channels.execution(run) as harness:
+                self.running_harness = harness
+                await harness.resume(run.session_id)
+                async with self.queued_inputs.context(run, work):
+                    prompt: str | list[ContentPart] = (
+                        await self.channels.inbound_content(work.channel, work.prompt)
+                        if work.channel
+                        else await self.uploads.content(work, harness)
+                    )
+                    await self.produce(run, prompt)
 
         run.task = asyncio.create_task(execute(), name=f"ngn-web-{run.id}")
         try:
@@ -793,6 +865,7 @@ class WebState:
             run.outcome = "cancelled"
         finally:
             self.finish(run)
+            await self.executions.release_idle(run.session_id)
         return "interrupted" if run.outcome == "cancelled" else run.outcome
 
     async def compact_work(self, work: Work) -> str:
@@ -800,20 +873,18 @@ class WebState:
         await self.channels.store.validate_work(work)
         if self.channels.closed:
             return "queued"
-        run = Run(work.session_id, server_owned=True, message_id=work.message_id)
-        if work.channel:
-            run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
-        self.active = run
-        self.publish(run, {"event": "run_started", "message_id": work.message_id, "channel": work.channel})
+        reserved = self.run_for(work.session_id)
+        run = reserved if reserved is not None and reserved.work is work else self.reserve_work(work)
         self.status()
 
         async def execute() -> None:
             note = "Compaction failed. Context was not changed."
             try:
-                async with self.designed_channels.execution(run) as harness:
-                    self.running_harness = harness
-                    await harness.resume(run.session_id)
-                    done = await harness.compact()
+                with self.executions.scope(run):
+                    async with self.designed_channels.execution(run) as harness:
+                        self.running_harness = harness
+                        await harness.resume(run.session_id)
+                        done = await harness.compact()
                 run.outcome = "completed"
                 await self.send(run, _event_record(done))
                 note = f"Context compacted: {done.original_message_count} messages summarized into {done.new_message_count}."
@@ -825,12 +896,6 @@ class WebState:
                 await self.send(
                     run, {"event": "error", "message": "Compaction failed. Session history was not changed."}
                 )
-            finally:
-                # A UI selection made during this run takes effect only after
-                # producer cleanup, never underneath the shared Harness.
-                self.harness.session_id = self.selected_session_id
-                self.harness.tools.read_hashes.clear()
-                self.running_harness = self.harness
             if work.channel:
                 await self.channels.reply(work, note)
 
@@ -841,6 +906,7 @@ class WebState:
             run.outcome = "cancelled"
         finally:
             self.finish(run)
+            await self.executions.release_idle(run.session_id)
         return "interrupted" if run.outcome == "cancelled" else run.outcome
 
     def finish(self, run: Run) -> None:
@@ -856,14 +922,18 @@ class WebState:
         )
         self.channels.management.run_finished(run)
         self.publish(run, {"event": "run_finished", "status": run.outcome})
-        if self.active is run:
-            self.active = None
+        self.executions.release(run)
         self.status()
         self.changed()
 
     async def wake(self, wakeup: Wakeup) -> None:
-        run = Run(wakeup.session_id, background=True, chain=wakeup.chain)
-        self.active = run
+        run = self.run_for(wakeup.session_id)
+        if run is None or run.wakeup_id != wakeup.id:
+            task = asyncio.current_task()
+            if task is None or not self.reserve_wakeup(wakeup, task):
+                raise RuntimeError("Wakeup root is already owned")
+            run = self.run_for(wakeup.session_id)
+            assert run is not None
         self.publish(run, {"event": "run_started"})
         self.status()
         run.task = asyncio.create_task(self._wake(run, wakeup), name=f"ngn-web-{run.id}")
@@ -876,19 +946,19 @@ class WebState:
             if run.outcome != "completed":
                 self.wakeups.lifecycle(wakeup, "cancelled" if run.outcome == "cancelled" else "failed", run_id=run.id)
             self.finish(run)
+            await self.executions.release_idle(run.session_id)
 
     async def _wake(self, run: Run, wakeup: Wakeup) -> None:
-        previous = self.harness.session_id
         try:
-            await self.harness.resume(wakeup.session_id)
-            self.wakeups.lifecycle(wakeup, "fired", run_id=run.id)
-            await self.produce(run, wakeup.reason, task_id=wakeup.task_id)
+            with self.executions.scope(run):
+                async with self.designed_channels.execution(run) as harness:
+                    self.running_harness = harness
+                    await harness.resume(wakeup.session_id)
+                    self.wakeups.lifecycle(wakeup, "fired", run_id=run.id)
+                    await self.produce(run, wakeup.reason, task_id=wakeup.task_id)
         except Exception:
             run.outcome = "failed"
             self.publish(run, {"event": "error", "message": "Wakeup failed. Completed actions were not rolled back."})
-        finally:
-            self.harness.session_id = previous
-            self.harness.tools.read_hashes.clear()
 
     async def stop(self, run: Run, *, cancel: bool = True) -> None:
         with anyio.CancelScope(shield=True):
@@ -899,11 +969,11 @@ class WebState:
                 run.task.cancel()
             with suppress(asyncio.CancelledError):
                 await _join(run.task)
-            if not run.server_owned and not run.background:
+            await self.channels.join_claim_cleanup(run.session_id)
+            if not run.finished:
                 self.finish(run)
-            elif self.active is run:
-                self.active = None
             self.changed()
+            await self.executions.release_idle(run.session_id)
 
 
 class RunResponse(StreamingResponse):

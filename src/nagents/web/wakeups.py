@@ -53,11 +53,18 @@ class Wakeups:
         *,
         clock: Callable[[], float] = time.monotonic,
         observer: Callable[[dict[str, object]], None] = lambda record: None,
+        available: Callable[[str], bool] = lambda session_id: True,
+        parallel: bool = False,
+        reserve: Callable[[Wakeup, asyncio.Task[None]], bool] = lambda wakeup, task: True,
     ) -> None:
         self.idle = idle
         self.execute = execute
         self.clock = clock
         self.observer = observer
+        self.available, self.parallel = available, parallel
+        self.reserve = reserve
+        self._running: set[asyncio.Task[None]] = set()
+        self._claimed: dict[str, Wakeup] = {}
         self.pending: dict[str, Wakeup] = {}
         self.changed = asyncio.Event()
         self.closed = False
@@ -147,21 +154,65 @@ class Wakeups:
             "truncated": after < self._discarded or after > self.cursor,
         }
 
-    async def tick(self) -> None:
+    async def tick(self, *, dispatch: bool = False) -> None:
         """Claim at most one due timer, synchronously, before executing any work."""
         if self.closed or not self.idle() or not self.pending:
             return
-        wakeup = min(self.pending.values(), key=lambda item: item.deadline)
+        eligible = self.eligible()
+        if not eligible:
+            return
+        wakeup = min(eligible, key=lambda item: item.deadline)
         if wakeup.deadline > self.clock():
             return
-        del self.pending[wakeup.id]
         if wakeup.chain.cancelled:
+            del self.pending[wakeup.id]
             self.lifecycle(wakeup, "cancelled")
             return
         if wakeup.chain.activations >= MAX_ACTIVATIONS:
+            del self.pending[wakeup.id]
             self.lifecycle(wakeup, "failed")
             return
+        if self.parallel and dispatch:
+            started = asyncio.Event()
+            task = asyncio.create_task(self._execute(wakeup, started), name=f"ngn-wakeup-{wakeup.session_id}")
+            if not self.reserve(wakeup, task):
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                return
+            self._claimed[wakeup.session_id] = wakeup
+            self._running.add(task)
+            task.add_done_callback(lambda completed: self._completed(wakeup, completed, started.is_set()))
+        else:
+            current = asyncio.current_task()
+            if current is None or not self.reserve(wakeup, current):
+                return
+        del self.pending[wakeup.id]
         wakeup.chain.activations += 1
+        if not (self.parallel and dispatch):
+            await self._execute(wakeup)
+
+    def _release_claim(self, wakeup: Wakeup) -> None:
+        if self._claimed.get(wakeup.session_id) is wakeup:
+            self._claimed.pop(wakeup.session_id)
+        self.changed.set()
+
+    def _completed(self, wakeup: Wakeup, task: asyncio.Task[None], started: bool) -> None:
+        self._running.discard(task)
+        self._release_claim(wakeup)
+        if task.cancelled() and not started:
+            self.lifecycle(wakeup, "cancelled")
+
+    def eligible(self) -> list[Wakeup]:
+        return [
+            item
+            for item in self.pending.values()
+            if item.session_id not in self._claimed and self.available(item.session_id)
+        ]
+
+    async def _execute(self, wakeup: Wakeup, started: asyncio.Event | None = None) -> None:
+        if started is not None:
+            started.set()
         try:
             await self.execute(wakeup)
         except asyncio.CancelledError:
@@ -169,6 +220,8 @@ class Wakeups:
         except Exception:
             # Never retry model/tool work or expose raw provider exceptions.
             self.lifecycle(wakeup, "failed")
+        finally:
+            self._release_claim(wakeup)
 
     def start(self) -> None:
         if not self._tasks and not self.closed:
@@ -177,9 +230,10 @@ class Wakeups:
     async def _serve(self) -> None:
         while not self.closed:
             self.changed.clear()
-            await self.tick()
-            if self.pending and self.idle():
-                delay = max(0, min(item.deadline for item in self.pending.values()) - self.clock())
+            await self.tick(dispatch=True)
+            eligible = self.eligible()
+            if eligible and self.idle():
+                delay = max(0, min(item.deadline for item in eligible) - self.clock())
                 with suppress(TimeoutError):
                     await asyncio.wait_for(self.changed.wait(), timeout=delay)
             else:
@@ -195,3 +249,4 @@ class Wakeups:
         self.shutdown()
         for task in self._tasks:
             await _join(task)
+        await asyncio.gather(*tuple(self._running), return_exceptions=True)

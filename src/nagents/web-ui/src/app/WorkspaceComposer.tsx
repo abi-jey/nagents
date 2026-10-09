@@ -24,6 +24,7 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
 
   return <footer className="composer-area">
+    <div id="approval-waiting-slot" style={{ display: "contents" }} />
     {client.error && <div className="error-banner" role="alert">
       <span>{client.error}</span>
       <div className="feedback-actions">
@@ -32,10 +33,9 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
       </div>
     </div>}
     {externalRun && <div className="activity-banner">
-      <span role="status">Working in <strong>{activeTitle}</strong>. Messages sent here will wait their turn.</span>
+      <span role="status">Work continues in <strong>{activeTitle}</strong>. You can work in this chat too.</span>
       <div className="feedback-actions">
         <button disabled={!client.available.navigate} onClick={() => void select(sessions.activeSessionId)}>View active session</button>
-        <button disabled={chat.stopping} onClick={() => void client.cancel()}>{chat.stopping ? "Stopping…" : "Stop active run"}</button>
       </div>
     </div>}
     {chat.activityError && <p className="activity-warning" role="status">{chat.activityError}</p>}

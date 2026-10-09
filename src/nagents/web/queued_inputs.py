@@ -75,7 +75,7 @@ class QueuedInputs:
                 voice_delegation_id=voice_delegation_id,
                 voice_display=voice_display,
             )
-            active = self.state.active
+            active = self.state.run_for(root)
             if (
                 admitted
                 and active is not None
@@ -91,8 +91,9 @@ class QueuedInputs:
                 ):
                     await self.state.stop(active)
                 else:
-                    self.state.running_harness.followups.changed()
-                    self.state.running_harness.tasks._changed.set()
+                    harness = self.state.harness_for(root)
+                    harness.followups.changed()
+                    harness.tasks._changed.set()
             self.state.channels.changed.set()
             return root, admitted
 

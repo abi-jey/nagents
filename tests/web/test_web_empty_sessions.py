@@ -226,8 +226,10 @@ def test_active_voice_protects_an_empty_root_but_closed_empty_voice_does_not(tmp
             with patch.object(
                 type(app.state.live), "active_session_id", new_callable=PropertyMock, return_value="active-empty-call"
             ):
-                response = await client.post("/api/sessions/new", headers=headers, json={})
-                selected = response.json()["session_id"]
+                # Exercise pruning with an admitted voice pin. HTTP navigation
+                # now deliberately closes voice before changing the selection.
+                with state.idle():
+                    selected = await empty_sessions.new_session(state, app.state.live.active_session_id)
                 assert selected != spoken
                 assert await roots(state) == {selected, spoken}
                 assert (await client.get("/api/sessions", headers=headers)).status_code == 200

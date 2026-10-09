@@ -144,8 +144,8 @@ class ChannelManagement(AgentPlugin):
             or run.outcome != "completed"
             or run.task.done()
             or run.task.cancelling()
-            or state.harness.session_id != run.session_id
-            or state.harness._is_subagent
+            or state.running_harness.session_id != run.session_id
+            or state.running_harness._is_subagent
         ):
             raise ChannelError("Channel management requires an active trusted unassigned web root.")
 
@@ -166,7 +166,7 @@ class ChannelManagement(AgentPlugin):
     async def before_model(self, context: RunContext, request: ModelRequest) -> ModelRequest:
         try:
             run = await self._active()
-            allowed = context.agent is self.host.state.harness.agent and context.session_id == run.session_id
+            allowed = context.agent is self.host.state.running_harness.agent and context.session_id == run.session_id
         except ChannelError:
             allowed = False
         if not allowed:

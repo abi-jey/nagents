@@ -150,14 +150,18 @@ def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
 
 
 def _guard_process(state: WebState, session_id: str) -> None:
-    harness = state.harness
+    harness = state.harness_for(session_id)
     if any(info.session_id == session_id for info in harness.tasks._infos.values()):
         raise HTTPException(
             409,
             "Session has retained descendant tasks. Finish or cancel them, then restart ngn before "
             "deleting this root. Retained task handles expire on restart; child history is kept.",
         )
-    if any(not worker.done() for worker in harness.tasks._workers.values()):
+    if any(
+        not worker.done()
+        for owner in {state.harness, *state.executions.owners.values()}
+        for worker in owner.tasks._workers.values()
+    ):
         raise HTTPException(409, "Descendant tasks are still running. Finish or cancel them before deleting.")
     if any(item.session_id == session_id for item in state.wakeups.pending.values()):
         raise HTTPException(409, "Session has pending wakeups. Let them finish or cancel their run before deleting.")

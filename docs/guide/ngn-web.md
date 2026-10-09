@@ -215,6 +215,9 @@ acknowledgement clears only the unchanged submitted draft, preserving newer typi
 Message badges distinguish **Sending…**, confirmed **Queued**, and **Delivery
 unconfirmed** states. Working sessions have an indicator in the sidebar; when
 another session is running, **View active session** takes you to it.
+Switching chats ends the current Live voice connection without cancelling the
+assistant's work. Its answers stay in the original chat. Other chats can run
+at the same time, and **Stop run** targets only the chat being viewed.
 
 ### Chat Folders
 
@@ -366,11 +369,16 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
 
 ### Execution And Access
 
-- One local app instance owns one Harness on one async lifespan/event loop. Web
-  messages and channel notifications queue for serialized execution. Each message
+- One local app instance owns up to four concurrent chat executions on one async
+  lifespan/event loop. Each active chat has its own Harness, tool-call state,
+  approvals and background-task handles. Web messages and channel notifications
+  keep FIFO order within their chat; additional chats wait in the durable inbox
+  when all four slots are occupied. Each message
   carries an explicit target session; changing the sidebar selection does not
-  reroute already accepted input. Settings and other session mutations still
-  require an idle boundary. Scheduled wakeups also wait for idle execution.
+  reroute already accepted input. Shared settings require all runs to be idle.
+  Scheduled wakeups wait for their own chat and an available execution slot.
+  Idle runtimes with retained children or pending wakeups keep those handles;
+  unused additional runtimes release their clients and MCP resources.
 - The browser subscribes to session updates over WebSocket. Navigating away or
   losing that subscription does not cancel server-owned queued work. Use **Stop
   run** to cancel an active run; server shutdown joins its owned work. Pending
@@ -383,6 +391,11 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   An unanswered approval expires after five minutes and is denied. Saved grants
   do not override read-only profiles, disabled tools, input validation, or file
   checks. Revoke them under **Tools → Saved tool approvals → Ask again**.
+  **Review later** dismisses only the approval dialog. Switching chats or losing
+  the browser subscription keeps the pending decision until its deadline; return
+  to that chat to review it. Browser decisions still require a live subscription
+  to the exact chat, its run, call and approval nonce. Explicit **Deny** and
+  **Stop run** retain their usual behavior.
 - Partial streamed output remains visible after failure/cancellation. Subscription
   reconnects use a cursor and server-instance epoch. A gap or restart requests a
   fresh snapshot instead of replaying model/tool work. Web input has a stable

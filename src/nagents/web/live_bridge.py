@@ -340,11 +340,12 @@ class MainAgentBridge:
     def _target(self) -> dict[str, str]:
         # Profiles can override the stored UI selection. Read the resolved
         # Harness provider/model that will execute this main-assistant run.
-        config = self.state.harness.config
+        harness = self.state.harness_for(self.session_id)
+        config = harness.config
         return {
             "agent": "Main assistant" if config.agent in {"", "assistant", "default"} else config.agent,
             "provider": config.provider or config.provider_profile().kind,
-            "model": self.state.harness.agent.provider.model,
+            "model": harness.agent.provider.model,
         }
 
     async def handle(self, transcript: str) -> str:

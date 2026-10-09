@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize("typed_first", [False, True])
 def test_typed_and_voice_fifo_reach_next_model_round_after_returned_tools(tmp_path: Path, typed_first: bool) -> None:
     async def scenario() -> None:
-        streaming, respond, finished = (asyncio.Event() for _ in range(3))
+        streaming, respond, finished, original_finished = (asyncio.Event() for _ in range(4))
         seen: list[str] = []
         (tmp_path / "fixture.txt").write_text("tool result before queued inputs")
 
@@ -67,6 +67,7 @@ def test_typed_and_voice_fifo_reach_next_model_round_after_returned_tools(tmp_pa
             elif "voice C" in prompt:
                 seen.append("C")
                 yield TextDoneEvent(text="Answer C")
+                original_finished.set()
             elif prompt == "other root":
                 seen.append("other")
                 yield TextDoneEvent(text="Other answer")
@@ -130,7 +131,9 @@ def test_typed_and_voice_fifo_reach_next_model_round_after_returned_tools(tmp_pa
                     respond.set()
                     async with asyncio.timeout(HANG_GUARD):
                         await finished.wait()
-                    assert seen == ["A", "B", "C", "other"]
+                        await original_finished.wait()
+                    assert [item for item in seen if item != "other"] == ["A", "B", "C"]
+                    assert seen.count("other") == 1
                     rows = await state.history.snapshot(root)
                     users = [row for row in rows if row["role"] == "user"]
                     assert [row["content"] for row in users] == ["voice A", "typed B", "voice C"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -77,10 +78,15 @@ def _empty_roots(db: sqlite3.Connection, active_voice: str) -> list[str]:
 
 def _protected(state: WebState) -> set[str]:
     return {
-        *(info.session_id for info in state.harness.tasks._infos.values()),
+        *(
+            info.session_id
+            for harness in {state.harness, *state.executions.owners.values()}
+            for info in harness.tasks._infos.values()
+        ),
         *(item.session_id for item in state.wakeups.pending.values()),
         *(connection.main_session_id for connection in state.channels.catalog.connections.values()),
-        *([state.active.session_id] if state.active is not None else []),
+        *state.executions.runs,
+        *state.channels.work_tasks,
     }
 
 
@@ -164,10 +170,10 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
         if type(harness.agent.session) is not WebHistory:
             state.selected_session_id = await harness.new_session()
             return state.selected_session_id
-        with harness.operation("new session"):
+        with nullcontext() if harness._busy else harness.operation("new session"):
             protected = _protected(state)
             in_use = _in_use(state)
-            workers = any(not task.done() for task in harness.tasks._workers.values())
+            workers = bool(state.executions.runs) or any(not task.done() for task in harness.tasks._workers.values())
 
             def select(db: sqlite3.Connection) -> tuple[str, list[str]]:
                 empty = _empty_roots(db, active_voice)
@@ -178,9 +184,11 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
                 return selected, removed
 
             selected, removed = await state.channels.store._transaction(select)
-            state.selected_session_id = harness.session_id = selected
-            harness._session_created = True
-            harness.tools.read_hashes.clear()
+            state.selected_session_id = selected
+            if not harness._busy:
+                harness.session_id = selected
+                harness._session_created = True
+                harness.tools.read_hashes.clear()
             state.session_revision += 1
             await _invalidate(state, removed)
             return selected
