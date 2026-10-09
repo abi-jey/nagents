@@ -65,12 +65,20 @@ def test_child_permission_rejects_stale_identity_and_ignores_parent_replacement(
             state.harness.agent.register_tool(parent_replacement, name="write")
             child_binding = state.tool_approvals.binding(child, "write")
             parent_binding = state.tool_approvals.binding(state.harness, "write")
-            assert child_binding is not None and parent_binding is not None and child_binding != parent_binding
+            assert child_binding is not None
+            if state.harness.resources._running and state.harness.resources._snapshot_ready:
+                # A replacement does not retroactively authorize the parent's
+                # previously advertised definition while that generation lives.
+                assert parent_binding is None
+            else:
+                assert parent_binding is not None and parent_binding != child_binding
             assert (await decide(client, headers, pending, "allow_tool")).status_code == 200
             assert (await stream.event("run_finished"))["status"] == "completed"
             await asyncio.wait_for(stream.task, HANG_GUARD)
             assert (tmp_path / "child.txt").read_text() == "child fixture"
             assert state.tool_approvals.allowed(child_binding)
+            parent_binding = state.tool_approvals.binding(state.harness, "write")
+            assert parent_binding is not None and parent_binding != child_binding
             assert not state.tool_approvals.allowed(parent_binding)
 
     asyncio.run(scenario())
