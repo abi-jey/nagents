@@ -21,6 +21,7 @@ from tests.support.channels import site
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+    from typing import Literal
 
     from nagents.events import Event
     from nagents.types import Message
@@ -183,10 +184,34 @@ def test_cancelled_http_admission_still_applies_interrupt_policy(
             entered, release = asyncio.Event(), asyncio.Event()
             original = state.channels.store.web
 
-            async def blocked(session_id: str, message_id: str, prompt: str) -> tuple[str, bool]:
+            async def blocked(
+                session_id: str,
+                message_id: str,
+                prompt: str,
+                attachments: tuple[str, ...] = (),
+                supported_media_types: tuple[str, ...] = (),
+                *,
+                command: Literal["", "compact"] = "",
+                voice_session_id: str = "",
+                voice_delegation_id: str = "",
+                voice_display: str = "",
+            ) -> tuple[str, bool]:
                 entered.set()
                 await release.wait()
-                return cast("tuple[str, bool]", await original(session_id, message_id, prompt))
+                return cast(
+                    "tuple[str, bool]",
+                    await original(
+                        session_id,
+                        message_id,
+                        prompt,
+                        attachments,
+                        supported_media_types,
+                        command=command,
+                        voice_session_id=voice_session_id,
+                        voice_delegation_id=voice_delegation_id,
+                        voice_display=voice_display,
+                    ),
+                )
 
             monkeypatch.setattr(state.channels.store, "web", blocked)
             request = asyncio.create_task(
@@ -196,7 +221,8 @@ def test_cancelled_http_admission_still_applies_interrupt_policy(
                     headers=headers,
                 )
             )
-            await entered.wait()
+            async with asyncio.timeout(HANG_GUARD):
+                await entered.wait()
             # The HTTP caller disconnects after the admission commit; the shielded
             # policy must still stop the same-session run.
             request.cancel()

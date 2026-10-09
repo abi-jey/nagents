@@ -88,8 +88,8 @@ def test_closed_call_reporter_never_updates_a_new_call_or_regresses_a_terminal_t
     [
         {"status": True},
         {"status": "speaking"},
-        {"delegation_id": "bad id"},
-        {"delegation_id": "x" * 129},
+        {"delegation_id": " \t"},
+        {"delegation_id": "x" * 257},
         {"chat_session_id": "another-chat"},
         {"voice_session_id": "another-voice"},
         {"agent": {}},
@@ -267,7 +267,8 @@ def test_inspector_route_is_opt_in_and_scoped_to_retained_call_and_delegation(tm
             assert (await client.get(path + "?after=0", headers=headers)).status_code == 400
             assert (await client.get(path.replace("/task", "/missing"), headers=headers)).status_code == 404
             assert (await client.get(path.replace(record.identifier, "missing"), headers=headers)).status_code == 404
-            assert (await client.get(path.replace("/task", "/invalid!"), headers=headers)).status_code == 422
+            assert (await client.get(path.replace("/task", "/unknown!"), headers=headers)).status_code == 404
+            assert (await client.get(path.replace("/task", "/" + "x" * 257), headers=headers)).status_code == 422
             record.delegation({**update(record, "task", "completed", "run"), "result_text": "Actual result"})
             record.transition("closed", "Voice ended")
             ended = (await client.get(path, headers=headers)).json()

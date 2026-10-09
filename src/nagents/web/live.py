@@ -19,6 +19,8 @@ from pydantic import Field
 from nagents.agent import Agent
 from nagents.harness.connection import build_live_provider
 from nagents.live import LiveConfig
+from nagents.live.delegation import ClientDelegationHandler
+from nagents.live.delegation import ClientDelegationObserver
 from nagents.provider import FoundryProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
@@ -145,6 +147,8 @@ def create_agent(
     *,
     demo: bool = False,
     client_handler: Callable[[str], Awaitable[str]] | None = None,
+    client_request_handler: ClientDelegationHandler | None = None,
+    client_request_observer: ClientDelegationObserver | None = None,
 ) -> Agent:
     """A fresh voice agent; client mode delegates inference to the selected Harness."""
     reason = unavailable_reason(connection, demo=demo)
@@ -153,7 +157,7 @@ def create_agent(
     if (voice or connection.values.voice) not in connection.voices:
         raise HTTPException(422, "Choose a supported Live voice.")
     values = connection.values
-    if values.backend_mode == "assistant" and client_handler is None:
+    if values.backend_mode == "assistant" and client_handler is None and client_request_handler is None:
         raise HTTPException(503, "Select an assistant conversation before connecting GPT-Live.")
     options = LiveConfig(
         delegation="client" if values.backend_mode == "assistant" else "responses",
@@ -162,6 +166,8 @@ def create_agent(
         store=False,
         backend_timeout=420 if values.backend_mode == "assistant" else 120,
         client_handler=client_handler if values.backend_mode == "assistant" else None,
+        client_request_handler=client_request_handler if values.backend_mode == "assistant" else None,
+        client_request_observer=client_request_observer if values.backend_mode == "assistant" else None,
     )
     key = connection.api_key.get_secret_value()
     provider: Provider
@@ -198,7 +204,11 @@ def create_agent(
 
 
 def create_login_config(
-    connection: "LiveConnection", voice: str, handler: Callable[[LoginHandoff], Awaitable[str]]
+    connection: "LiveConnection",
+    voice: str,
+    handler: Callable[[LoginHandoff], Awaitable[str]],
+    *,
+    observer: ClientDelegationObserver | None = None,
 ) -> LoginVoiceConfig:
     reason = unavailable_reason(connection, demo=False)
     if reason:
@@ -213,6 +223,7 @@ def create_login_config(
         voice=voice or connection.values.voice,
         instructions=voice_instructions(connection),
         handler=handler,
+        observer=observer,
     )
 
 
@@ -291,8 +302,18 @@ def register(
     async def snapshot(session_id: SessionId, after: Cursor = 0) -> dict[str, object]:
         return await service().snapshot(session_id, after)
 
-    @app.get("/api/live/sessions/{session_id}/delegations/{delegation_id}")
-    async def delegation_details(session_id: SessionId, delegation_id: SessionId) -> dict[str, object]:
+    @app.get("/api/live/sessions/{session_id}/delegations/{delegation_id:path}")
+    async def delegation_details(
+        session_id: SessionId, delegation_id: Annotated[str, PathParameter(min_length=1, max_length=256)]
+    ) -> dict[str, object]:
+        return await service().delegation_details(session_id, delegation_id)
+
+    @app.get("/api/live/sessions/{session_id}/delegation-details")
+    async def delegation_details_query(
+        session_id: SessionId, delegation_id: Annotated[str, Query(min_length=1, max_length=256)]
+    ) -> dict[str, object]:
+        if not delegation_id.strip():
+            raise HTTPException(422, "A nonblank delegation ID is required.")
         return await service().delegation_details(session_id, delegation_id)
 
     @app.get("/api/live/sessions/{session_id}/context")

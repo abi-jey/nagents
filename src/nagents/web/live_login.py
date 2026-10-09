@@ -19,6 +19,7 @@ from uuid import uuid4
 import aiohttp
 
 from nagents.live.runtime import _no_redirects
+from nagents.live.runtime import result_chunks
 
 from .live_handoff import LoginDelegations
 from .live_handoff import LoginHandoff
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
 
+    from nagents.live.delegation import ClientDelegationObserver
+    from nagents.live.delegation import LiveAppendKind
     from nagents.provider.openai import CodexCredentials
 
 Payload = dict[str, object]
@@ -46,6 +49,7 @@ class LoginVoiceConfig:
     instructions: str
     handler: Callable[[LoginHandoff], Awaitable[str]]
     history: tuple[Payload, ...] = ()
+    observer: ClientDelegationObserver | None = None
 
 
 class LoginVoiceError(RuntimeError):
@@ -124,6 +128,7 @@ class ChatGPTLiveConnection:
         self._workers: list[asyncio.Task[None]] = []
         self._reading = False
         self._send_lock = asyncio.Lock()
+        self._delegations: set[str] = set()
 
     async def _headers(self) -> dict[str, str]:
         credentials = await self.config.credentials()
@@ -180,18 +185,48 @@ class ChatGPTLiveConnection:
         except (aiohttp.ClientError, TimeoutError, UnicodeError):
             raise LoginVoiceError("The ChatGPT voice connection could not be established.") from None
 
-    async def _send(self, event: Payload) -> None:
-        if not self._sockets:
-            raise LoginVoiceError("The ChatGPT voice control connection is not ready.")
+    async def _send(self, event: Payload) -> bool:
         async with self._send_lock:
-            if self.closing and event.get("type") != "session.close":
-                return
+            if self.finalized or (self.closing and event.get("type") != "session.close"):
+                return False
+            if not self._sockets:
+                raise LoginVoiceError("The ChatGPT voice control connection is not ready.")
             await self._sockets[0].send_json(event)
+            return True
+
+    async def append(self, kind: LiveAppendKind, content: str, identifier: str = "") -> str:
+        """Write verified native context; return its wire type, or "" if suppressed.
+
+        Native commentary is quiet context, while speakable asks Live to speak.
+        This protocol has no verified instruction-append channel. A successful
+        write is not an acknowledgment of model injection or audio playback.
+        """
+        if self.closing or self.finalized or not self._sockets:
+            return ""
+        if kind not in {"thinking", "commentary", "instructions"}:
+            raise ValueError("Unknown Live append channel")
+        if kind == "instructions":
+            return ""
+        if identifier and identifier not in self._delegations:
+            raise ValueError("Unknown client delegation ID for this Live connection")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Live updates require nonempty text")
+        wire_type = "delegation.context.append" if identifier else "session.context.append"
+        for part in result_chunks(content):
+            event: Payload = {
+                "type": wire_type,
+                "channel": "commentary" if kind == "thinking" else "speakable",
+                "content": [{"type": "input_text", "text": part}],
+            }
+            if identifier:
+                event["delegation_item_id"] = identifier
+            if not await self._send(event):
+                return ""
+        return wire_type
 
     async def _result(self, event: Payload) -> None:
-        # Native v3 automatic handoffs use delegation.context.append in the
-        # default thinking channel. appendSpeech's session-wide speakable context
-        # is a different operation and does not resolve the requesting handoff.
+        # Keep automatic results on the requesting handoff and explicitly
+        # select native speakable context, independent of the server default.
         identifier, content = event.get("delegation_id"), event.get("content")
         if (
             not isinstance(identifier, str)
@@ -200,20 +235,15 @@ class ChatGPTLiveConnection:
             or not isinstance(content, str)
         ):
             raise LoginVoiceError("ChatGPT voice returned an invalid delegation result.")
-        await self._send(
-            {
-                "type": "delegation.context.append",
-                "delegation_item_id": identifier,
-                "content": [{"type": "input_text", "text": content}],
-            }
-        )
+        await self.append("commentary", content, identifier)
 
     async def events(self) -> AsyncGenerator[Payload, None]:
         if not self.identifier or self._reading:
             raise LoginVoiceError("ChatGPT voice needs one provisioned call and one control reader.")
         self._reading = True
 
-        delegations = LoginDelegations(self.config.handler, self._result)
+        delegations = LoginDelegations(self.config.handler, self._result, observer=self.config.observer)
+        self._delegations = delegations.seen
         worker = asyncio.create_task(delegations.run(), name="web-login-live-backend")
         self._workers.append(worker)
         try:
@@ -265,6 +295,7 @@ class ChatGPTLiveConnection:
         except (aiohttp.ClientError, TimeoutError, ValueError):
             raise LoginVoiceError("The ChatGPT voice control connection was interrupted.") from None
         finally:
+            delegations.closed = True
             self._sockets.clear()
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)

@@ -89,6 +89,7 @@ class SubagentManager:
         self._observed: deque[TaskCompleted | ErrorEvent] = deque()
         self._pending: dict[str, list[TaskCompleted | TaskMessage]] = {}
         self._changed = asyncio.Event()
+        self.notification_sources: tuple[str, ...] = ()
         self._session_id = ""
         self._active = False
         self._used = 0
@@ -614,6 +615,7 @@ class SubagentManager:
         """Drain outcomes only at an outer Agent.run boundary, batching ready jobs."""
         if self.harness.session_id != self._session_id:
             raise RuntimeError("Subagent results cannot be delivered to another session")
+        self.notification_sources = ()
         while True:
             if self is self.root:
                 await self.flush_observed()
@@ -641,6 +643,8 @@ class SubagentManager:
                                 "Descendant result was not forwarded to Main."
                             )
                         )
+            if self is self.root and self.harness.followups.pending:
+                return None
             if self._ready and not (wait_for_tasks and self._running()):
                 break
             if not self._running():
@@ -648,6 +652,7 @@ class SubagentManager:
             self._changed.clear()
             await self._changed.wait()
         ready = [self._ready.popleft() for _ in range(len(self._ready))]
+        self.notification_sources = tuple(event.task_id for event in ready)
         for event in ready:
             if isinstance(event, TaskCompleted):
                 await self.root.harness.emit(

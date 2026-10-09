@@ -39,6 +39,10 @@ from .execution import capture_write
 from .execution import host_run_id
 from .execution import observe_host_event
 from .execution import publish_anchor
+from .followups import FollowupReady
+from .followups import RunInput
+from .followups import RunInputs
+from .followups import RunTurn
 from .provider import DemoCompaction
 from .provider import HarnessProvider
 from .providers import ProviderProfile
@@ -187,7 +191,7 @@ class Harness:
         self._initialization_error = ""
         self._init_lock = asyncio.Lock()
         self._busy = ""
-        self._queue: asyncio.Queue[HarnessEvent] | None = None
+        self._queue: asyncio.Queue[HarnessEvent | RunTurn] | None = None
         self._worker: asyncio.Task[None] | None = None
         self._closing: asyncio.Task[None] | None = None
         self.tools = CodingTools(self)
@@ -211,6 +215,7 @@ class Harness:
         self.tools.register()
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
+        self.followups = RunInputs()
         self.tasks.register()
         self.resources = HarnessResources(self)
         self.agent.tool_executor = HarnessExecutor(self, self.tools)
@@ -482,6 +487,21 @@ class Harness:
             async for event in events:
                 yield event
 
+    def submit_followup(self, session_id: str, message: RunInput) -> bool:
+        """Admit a host-authored input to this root's next complete run boundary."""
+        if (
+            self._is_subagent
+            or self._closed
+            or self._worker is None
+            or self._worker.done()
+            or self._worker.cancelling()
+        ):
+            return False
+        if not self.followups.admit(session_id, message):
+            return False
+        self.tasks._changed.set()
+        return True
+
     async def wake(self, prompt: str, *, task_id: str = "") -> AsyncGenerator[HarnessEvent, None]:
         """Automatically activate this root or a retained child, without a budget reset.
 
@@ -547,6 +567,9 @@ class Harness:
             if not prompt_text.strip():
                 raise ValueError("Prompt must not be empty")
             await self.initialize()
+            if self.followups in self.agent.plugins:
+                self.agent.plugins.remove(self.followups)
+            self.agent.plugins.append(self.followups)  # Boundary signal follows every normal host/plugin hook.
             # Client capabilities and workspace selections may change between runs.
             # Preserve callers' authored prompt overrides.
             if self.agent.system_prompt == self._generated_system_prompt:
@@ -560,14 +583,15 @@ class Harness:
                     await db.commit()
             if self._closed:
                 raise RuntimeError("Harness was closed before the run started")
-            queue: asyncio.Queue[HarnessEvent] = asyncio.Queue(maxsize=64)
+            queue: asyncio.Queue[HarnessEvent | RunTurn] = asyncio.Queue(maxsize=64)
             self._queue = queue
             session_id = self.session_id
             run_id = host_run_id(self)
 
             async def produce() -> None:
                 self.tasks.begin(session_id, reset_budget=not self._is_subagent and not task_id and trigger == "human")
-                message: str | list[ContentPart] | None = prompt
+                self.followups.begin(session_id)
+                message: RunInput | None = self.followups.first(prompt)
                 final: DoneEvent | None = None
                 try:
                     if (
@@ -578,49 +602,58 @@ class Harness:
                         self.agent._execution_bridge = ExecutionBridge(self, self.agent.session, run_id)
                     if task_id:
                         self.tasks.continue_task(task_id, prompt_text, trigger=trigger)
-                        message = await self.tasks.notification(wait_for_tasks=True)
+                        message = await self.followups.next(self.tasks, wait_for_tasks=True)
                     elif notifications:
                         self.tasks._ready.extend(notifications)
-                        message = await self.tasks.notification()
+                        message = await self.followups.next(self.tasks)
                     elif trigger == "wakeup":
-                        message = await self.tasks.wakeup_notification(prompt_text)
+                        message = RunInput(await self.tasks.wakeup_notification(prompt_text), kind="wakeup")
                     while message is not None:
                         failed = False
-                        async with aclosing(
-                            self.agent.run(
-                                message, session_id=session_id, user_id="harness", config=self.generation_config()
-                            )
-                        ) as events:
-                            async for event in events:
-                                if isinstance(event, DoneEvent):
-                                    if event.session_id == session_id:
-                                        final = event
-                                else:
-                                    if isinstance(event, ErrorEvent) and not event.recoverable:
-                                        failed = True
-                                    await self.tasks.flush_observed()
-                                    await self.emit(event)
+                        await queue.put(self.followups.start_turn(message))
+                        try:
+                            async with (
+                                message.context(),
+                                aclosing(
+                                    self.agent.run(
+                                        message.prompt,
+                                        session_id=session_id,
+                                        user_id="harness",
+                                        config=self.generation_config(),
+                                    )
+                                ) as events,
+                            ):
+                                async for event in events:
+                                    if isinstance(event, DoneEvent):
+                                        if event.session_id == session_id:
+                                            final = event
+                                    else:
+                                        if isinstance(event, ErrorEvent) and not event.recoverable:
+                                            failed = True
+                                        await self.tasks.flush_observed()
+                                        await self.emit(event)
+                        except FollowupReady as boundary:
+                            if boundary.owner is not self.followups:
+                                raise
                         if failed:
                             # Preserve completed-task lifecycle evidence without
                             # constructing notifications or making another model call.
                             await self.tasks.flush_observed()
                             break
-                        notification = await self.tasks.notification()
-                        if notification is None:
-                            break
                         # A new Agent.run preserves all configured hooks and repairs
                         # incomplete persisted calls before adding the user notification.
-                        message = notification
+                        message = await self.followups.next(self.tasks)
                     await self.tasks.end()
                     if final is not None:
                         await self.emit(final)
                 finally:
+                    self.followups.end()
                     self.agent._execution_bridge = None
                     await self.tasks.end()
 
             worker = asyncio.create_task(produce(), name=f"ngn-run-{self.session_id}")
             self._worker = worker
-            pending: asyncio.Task[HarnessEvent] | None = None
+            pending: asyncio.Task[HarnessEvent | RunTurn] | None = None
             observed = False
             try:
                 for text in self.diagnostics:
@@ -637,7 +670,11 @@ class Harness:
                     pending = asyncio.create_task(queue.get())
                     await asyncio.wait((pending, worker), return_when=asyncio.FIRST_COMPLETED)
                     if pending.done():
-                        yield pending.result()
+                        event = pending.result()
+                        if isinstance(event, RunTurn):
+                            self.followups.notify(event)
+                        else:
+                            yield event
                         pending = None
                     else:
                         pending.cancel()

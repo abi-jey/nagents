@@ -1,6 +1,6 @@
-export type Mode = "listen" | "think" | "speak" | "delegate";
+export type Mode = "listen" | "think" | "speak" | "delegate" | "connect" | "error";
 /** Listening is an independent audio layer and can accompany any activity. */
-export type ActivityMode = "idle" | "thinking" | "speaking" | "delegating";
+export type ActivityMode = "idle" | "thinking" | "speaking" | "delegating" | "connecting" | "error";
 export type Palette = "mint" | "ice" | "iris";
 
 export interface SignalFrame {
@@ -59,6 +59,7 @@ export interface TaskView {
 }
 
 export interface SphereSnapshot {
+  mode: Mode;
   nodes: number;
   edges: number;
   origin: number;

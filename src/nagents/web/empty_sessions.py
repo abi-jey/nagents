@@ -104,6 +104,7 @@ async def _invalidate(state: WebState, removed: list[str]) -> None:
     state.session_revision += 1
     for session_id in removed:
         state.bus.delete_session(session_id)
+        state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
         state.wakeups.forget_session(session_id)
     state.bus.publish({"type": "sessions", "sessions": [asdict(item) for item in await state.list_sessions()]})
 

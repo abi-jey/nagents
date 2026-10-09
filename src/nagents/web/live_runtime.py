@@ -17,6 +17,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
+from time import monotonic
 from typing import TYPE_CHECKING
 from typing import Literal
 from typing import cast
@@ -52,7 +53,10 @@ if TYPE_CHECKING:
 
     from nagents import Agent
     from nagents.events import Event
+    from nagents.live.delegation import LiveAppend
+    from nagents.live.delegation import LiveAppendKind
 
+    from .live_bridge import MainAgentBridge
     from .live_login import LoginVoiceConfig
     from .live_relay import ChatGPTMediaRelay
 
@@ -95,6 +99,8 @@ class _DelegationDetails:
     model_requests: list[Payload] = field(default_factory=list)
     model_requests_truncated: bool = False
     model_bytes: int = 0
+    live_updates: deque[Payload] = field(default_factory=lambda: deque(maxlen=MAX_DELEGATION_TIMELINE))
+    live_updates_truncated: bool = False
 
     def capture_model(self, value: object, seq: int, status: str) -> Payload:
         if status != "working" or not isinstance(value, dict):
@@ -172,6 +178,8 @@ class _DelegationDetails:
             "timeline_truncated": self.timeline_truncated,
             "model_requests": deepcopy(self.model_requests),
             "model_requests_truncated": self.model_requests_truncated,
+            "live_updates": deepcopy(list(self.live_updates)),
+            "live_updates_truncated": self.live_updates_truncated,
         }
 
 
@@ -200,11 +208,15 @@ class _Record:
 
     def delegation(self, update: Payload) -> None:
         """Accept app-owned task state without conflating task and voice closure."""
+        if "live_append" in update:
+            self.live_append(update)
+            return
         identifier, status = update.get("delegation_id"), update.get("status")
         run_id, root = update.get("run_id", ""), update.get("chat_session_id")
         if (
             not isinstance(identifier, str)
-            or not _DELEGATION_ID.fullmatch(identifier)
+            or not identifier.strip()
+            or len(identifier) > 256
             or not isinstance(status, str)
             or status not in _DELEGATION_STATES
             or not isinstance(run_id, str)
@@ -273,6 +285,73 @@ class _Record:
             self.delegations.pop(removed)
             self.delegation_details.pop(removed, None)
 
+    def live_append(self, update: Payload) -> None:
+        payload, identifier = update.get("live_append"), update.get("delegation_id", "")
+        root = update.get("chat_session_id")
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(identifier, str)
+            or (identifier and identifier not in self.delegations)
+            or update.get("voice_session_id") != self.identifier
+            or not isinstance(root, str)
+            or not _CHAT_ID.fullmatch(root)
+        ):
+            return
+        kind, content, wire = payload.get("kind"), payload.get("content"), payload.get("wire_type")
+        failed = payload.get("failed") is True
+        if (
+            not isinstance(kind, str)
+            or kind not in {"thinking", "commentary", "instructions"}
+            or not isinstance(content, str)
+            or not isinstance(wire, str)
+            or (failed and wire)
+            or (
+                not failed
+                and wire
+                not in {
+                    f"session.{kind}.append",
+                    "delegation.context.append",
+                    "session.context.append",
+                }
+            )
+        ):
+            return
+        text = (
+            "An assistant update could not reach voice. Results remain available in this chat."
+            if failed
+            else f"Sent {kind} to voice."
+        )
+        outcome = "failed" if failed else "sent"
+        if identifier and self.delegations[identifier]["chat_session_id"] != root:
+            return
+        if failed or not identifier:
+            self.append(
+                "error" if failed else "assistant_update",
+                text,
+                delegation_id=identifier,
+                update_kind=kind,
+                wire_type=wire,
+                outcome=outcome,
+            )
+        if not identifier:
+            return
+        previous = self.delegations[identifier]
+        fields = {key: value for key, value in previous.items() if key not in {"seq", "type", "text", "detail_type"}}
+        self.append("delegation", text, **fields, detail_type="live_delivery_failed" if failed else "live_append")
+        self.delegations[identifier] = dict(self.events[-1])
+        details = self.delegation_details[identifier]
+        details.remember(dict(self.events[-1]))
+        details.live_updates_truncated |= len(details.live_updates) == MAX_DELEGATION_TIMELINE
+        details.live_updates.append(
+            {
+                "seq": self.cursor,
+                "kind": kind,
+                "wire_type": wire,
+                "outcome": outcome,
+                "content": text_preview(content, 2000),
+            }
+        )
+
     def snapshot(self, after: int = 0) -> Payload:
         return {
             "session_id": self.identifier,
@@ -308,6 +387,8 @@ class _Call:
     browser: bool = False
     captions: Callable[[Payload], Awaitable[None]] | None = field(default=None, repr=False)
     seed: LiveSeed = field(default_factory=LiveSeed, repr=False)
+    bridge: MainAgentBridge | None = field(default=None, repr=False)
+    last_speech: float = field(default_factory=monotonic, repr=False)
 
     def fail(self, message: str, status: int = 502) -> None:
         if not self.failure:
@@ -440,6 +521,39 @@ class LiveService:
     def active_session_id(self) -> str:
         """Discover the owned reservation, including provisioning and teardown."""
         return next(iter(self._active), "")
+
+    def bind_bridge(self, session_id: str, bridge: MainAgentBridge) -> None:
+        call = self._active.get(session_id)
+        if call is None or call.bridge is not None or bridge.voice_session_id != session_id:
+            raise RuntimeError("Voice bridge must belong to one newly reserved call")
+        call.bridge = bridge
+
+    def _attach_bridge(self, call: _Call, send: LiveAppend) -> None:
+        if call.bridge is None:
+            return
+        call.bridge.updates.ready = call.attached
+        call.bridge.updates.needs_attention = lambda: (
+            call.record.status == "connected" and monotonic() - call.last_speech >= 2.0
+        )
+
+        async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
+            await call.attached.wait()
+            if call.stop.is_set() or self._active.get(call.record.identifier) is not call or call.failure:
+                return ""
+            return await send(kind, content, identifier)
+
+        call.bridge.attach(append)
+
+    def _attach_agent_bridge(self, call: _Call, agent: Agent) -> None:
+        async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
+            await agent.live.append(kind, content, identifier)
+            return f"session.{kind}.append"
+
+        self._attach_bridge(call, append)
+
+    async def _detach_bridge(self, call: _Call) -> None:
+        if call.bridge is not None:
+            await call.bridge.close()
 
     def delegation_reporter(self, session_id: str) -> Callable[[Payload], None]:
         """Pin lifecycle observations to the original call, including after End."""
@@ -736,6 +850,8 @@ class LiveService:
         self, call: _Call, sdp: str, config: LoginVoiceConfig, media: ChatGPTMediaRelay | None = None
     ) -> None:
         connection = ChatGPTLiveConnection(config)
+        if call.bridge is not None:
+            self._attach_bridge(call, connection.append)
         observers: list[asyncio.Task[None]] = []
         call.record.model, call.record.voice = config.model, config.voice
 
@@ -816,6 +932,7 @@ class LiveService:
             for pending in preparing:
                 pending.cancel()
             await asyncio.gather(*preparing, return_exceptions=True)
+            await self._detach_bridge(call)
             if call.audio_out is not None:
                 await call.audio_out.close()
             if media is not None:
@@ -858,6 +975,7 @@ class LiveService:
                 return
             try:
                 agent = self._factory(voice)
+                self._attach_agent_bridge(call, agent)
                 if self._context_factory is not None and agent.provider.live_config is not None:
                     agent.provider.live_config = replace(
                         agent.provider.live_config, history=call.seed.history, history_in_client_context=False
@@ -878,8 +996,15 @@ class LiveService:
                     or config.delegation not in {"responses", "client"}
                     or config.attach_to
                     or config.fork_from
-                    or (config.delegation == "responses" and config.client_handler is not None)
-                    or (config.delegation == "client" and config.client_handler is None)
+                    or (
+                        config.delegation == "responses"
+                        and (config.client_handler is not None or config.client_request_handler is not None)
+                    )
+                    or (
+                        config.delegation == "client"
+                        and config.client_handler is None
+                        and config.client_request_handler is None
+                    )
                     or agent.delegation_agent is not None
                     or agent.tool_registry.get_all()
                     or not isinstance(config.voice, str)
@@ -918,6 +1043,7 @@ class LiveService:
                 except Exception:
                     call.fail("Live session setup failed.")
                 finally:
+                    await self._detach_bridge(call)
                     await self._finalize(call, agent, api, identifier, observers)
             except Exception:
                 call.fail("Live session creation failed. Provider finalization is unconfirmed.")
@@ -929,6 +1055,7 @@ class LiveService:
                     except Exception:
                         call.fail("Live resource cleanup could not be confirmed.")
         finally:
+            await self._detach_bridge(call)
             confirmation = "Finalization confirmed." if call.finalized else "Finalization is unconfirmed."
             call.record.transition(
                 "error" if call.failure else "closed", f"{call.failure or call.reason} {confirmation}"
@@ -947,6 +1074,7 @@ class LiveService:
                 if call.stop.is_set():
                     return
                 agent = self._factory(voice)
+                self._attach_agent_bridge(call, agent)
                 if self._context_factory is not None and agent.provider.live_config is not None:
                     agent.provider.live_config = replace(
                         agent.provider.live_config, history=call.seed.history, history_in_client_context=False
@@ -957,8 +1085,15 @@ class LiveService:
                     or config.delegation not in {"responses", "client"}
                     or config.attach_to
                     or config.fork_from
-                    or (config.delegation == "responses" and config.client_handler is not None)
-                    or (config.delegation == "client" and config.client_handler is None)
+                    or (
+                        config.delegation == "responses"
+                        and (config.client_handler is not None or config.client_request_handler is not None)
+                    )
+                    or (
+                        config.delegation == "client"
+                        and config.client_handler is None
+                        and config.client_request_handler is None
+                    )
                     or agent.delegation_agent is not None
                     or agent.tool_registry.get_all()
                     or not isinstance(config.voice, str)
@@ -992,6 +1127,7 @@ class LiveService:
                 if not call.failure:
                     call.fail("Live connection failed. Provider finalization is unconfirmed.")
         finally:
+            await self._detach_bridge(call)
             if call.audio_out is not None:
                 await call.audio_out.close()
             if agent is not None:
@@ -1051,6 +1187,11 @@ class LiveService:
                 call.fail("Live connection was interrupted.")
 
     async def _capture_event(self, call: _Call, event: Event, identifier: str, secret: str) -> bool:
+        if isinstance(event, (InputTranscriptDeltaEvent, AudioTranscriptDeltaEvent)) or (
+            isinstance(event, LiveEvent)
+            and event.event_type in {"session.input_transcript.delta", "session.output_transcript.delta"}
+        ):
+            call.last_speech = monotonic()
         previous = call.record.cursor
         stopped = self._event(call, event, identifier, secret)
         if call.captions is not None and call.record.cursor != previous:

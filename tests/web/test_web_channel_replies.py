@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -12,24 +13,32 @@ from pydantic import ValidationError
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness import runtime
 from nagents.harness.types import ApprovalRequest
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import ToolCall
 from nagents.web.catalog import ConnectionInput
 from nagents.web.catalog import SavedCatalog
 from nagents.web.channel_host import ChannelHost
+from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.service import Run
 from tests.support.channels import site
+from tests.support.hang_guard import HANG_GUARD
+from tests.support.providers import FakeProvider
 
 if TYPE_CHECKING:
     import sqlite3
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from nagents.channels import ChannelExecutionEvent
     from nagents.events import Event
+    from nagents.harness.config import HarnessConfig
+    from nagents.live.delegation import LiveAppendKind
     from nagents.types import Message
     from nagents.web.routing import ChatOwner
+    from tests.support.channels import FakeChannel
     from tests.support.channels import Site
-    from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix
 
@@ -517,6 +526,208 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
             ["channel_list", "channel_send"] if mode == "queued" else ["channel_list"]
         )
         assert all(record["session_id"] == root for record in automatic_events(app))
+
+
+@pytest.mark.parametrize("voice", [False, True])
+@pytest.mark.parametrize("proof", ["owned", "copied-work", "missing-history"])
+@pytest.mark.parametrize("direct", [False, True])
+def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool, proof: str, direct: bool
+) -> None:
+    with site(tmp_path, monkeypatch) as app, ThreadPoolExecutor(max_workers=1) as requests:
+        app.configure(auto_reply=True)
+        app.emit("seed")
+        app.idle()
+        root = app.bindings()["chat-a"]
+        if direct:
+            assert (
+                app.client.post("/api/sessions/resume", headers=app.headers, json={"session_id": root}).status_code
+                == 200
+            )
+            app.state.approval_timeout = lambda: 0.01
+        app.state.harness.config.submit_mode = "queue"
+        started, release = asyncio.Event(), asyncio.Event()
+        notices: list[ChannelExecutionEvent] = []
+        work_ids: list[str] = []
+        run_ids: list[str] = []
+        first_id = "" if direct else "11111111-1111-1111-1111-111111111111"
+        (tmp_path / "proof.txt").write_text("read-only fixture")
+
+        async def on_event(channel: FakeChannel, event: ChannelExecutionEvent) -> None:
+            notices.append(event)
+
+        monkeypatch.setattr(type(app.channels[0]), "on_event", on_event)
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            active = app.state.active
+            assert active is not None
+            if messages[-1].role == "tool":
+                yield TextDoneEvent(text="finished")
+                return
+            run_ids.append(active.id)
+            if messages[-1].content == "initial request":
+                started.set()
+                await release.wait()
+                yield ToolCallEvent(id="first-read", name="read_file", arguments={"path": "proof.txt"})
+                return
+            assert "followup request" in str(messages[-1].content)
+            ingress = app.state.history.ingress.get()
+            assert ingress is not None and ingress.consumed
+            assert active.message_id == first_id != ingress.work.message_id
+            assert app.state.queued_inputs.owns(active, ingress.work)
+            work_ids.append(ingress.work.message_id)
+            if proof == "copied-work":
+                ingress.work = replace(ingress.work)
+                assert not app.state.queued_inputs.owns(active, ingress.work)
+            elif proof == "missing-history":
+                await app.state.channels.store._transaction(
+                    lambda db: db.execute("DELETE FROM ngn_web_message_origins WHERE inbox_id = ?", (ingress.work.id,))
+                )
+            yield ToolCallEvent(id="next-read", name="read_file", arguments={"path": "proof.txt"})
+            yield ToolCallEvent(id="next-list", name="channel_list", arguments={})
+            if not direct:
+                # Direct /api/run has a separate, existing context-reply send
+                # capability; channel_list always exercises the approval gate.
+                yield ToolCallEvent(
+                    id="next-send",
+                    name="channel_send",
+                    arguments={"channel": "fixture", "destination": "chat-a", "text": "followup auto reply"},
+                )
+
+        async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
+            return f"session.{kind}.append"
+
+        async def attach() -> MainAgentBridge:
+            bridge = MainAgentBridge(app.state, root)
+            bridge.attach(append)
+            return bridge
+
+        async def ready() -> None:
+            async with asyncio.timeout(HANG_GUARD):
+                await started.wait()
+
+        async def resume() -> None:
+            release.set()
+
+        async def clean_context() -> None:
+            assert app.state.queued_inputs.current.get() is None
+            assert not app.state.queued_inputs.claimed
+
+        assert app.client.portal is not None
+        bridge = app.client.portal.call(attach) if voice else None
+        app.providers[0].script = script
+        before = len(app.channels[0].deliveries)
+        response = None
+        try:
+            if direct:
+                response = requests.submit(
+                    app.client.post,
+                    "/api/run",
+                    headers=app.headers,
+                    json={"session_id": root, "prompt": "initial request"},
+                )
+            else:
+                app.submit("initial request", session=root, id=first_id)
+            app.client.portal.call(ready)
+            if bridge is None:
+                app.submit("followup request", session=root)
+            else:
+                app.client.portal.call(bridge.handle_request, ClientDelegationRequest("followup", "followup request"))
+            app.client.portal.call(resume)
+            app.idle()
+            assert len(run_ids) == 2 and run_ids[0] == run_ids[1]
+            assert len(work_ids) == 1
+            assert len(app.channels[0].deliveries) == before + (proof == "owned" and not direct)
+            assert [record["tool"] for record in automatic_events(app)] == (
+                (["channel_list"] if direct else ["channel_list", "channel_send"]) if proof == "owned" else []
+            )
+            requested = {event.call_id: event.message_id for event in notices if event.phase == "tool_requested"}
+            assert requested == {"first-read": first_id, "next-read": work_ids[0]}
+            app.client.portal.call(clean_context)
+        finally:
+            app.client.portal.call(resume)
+            if bridge is not None:
+                app.client.portal.call(bridge.close)
+            if response is not None:
+                assert response.result(timeout=HANG_GUARD).status_code == 200
+
+
+def test_child_approval_keeps_initial_inbox_receipt_after_root_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with site(tmp_path, monkeypatch) as app:
+        app.configure(auto_reply=True)
+        app.emit("seed")
+        app.idle()
+        root = app.bindings()["chat-a"]
+        app.state.harness.config.submit_mode = "queue"
+        child_entered, release_child, noticed = (asyncio.Event() for _ in range(3))
+        notices: list[ChannelExecutionEvent] = []
+        first_id, second_id = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+        (tmp_path / "proof.txt").write_text("read-only fixture")
+
+        async def on_event(channel: FakeChannel, event: ChannelExecutionEvent) -> None:
+            notices.append(event)
+            if event.call_id == "second-read" and event.phase == "tool_completed":
+                assert event.message_id == second_id
+                release_child.set()
+            elif event.phase == "waiting_for_approval":
+                noticed.set()
+
+        monkeypatch.setattr(type(app.channels[0]), "on_event", on_event)
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            prompt = str(messages[-1].content)
+            if prompt == "held child":
+                child_entered.set()
+                await release_child.wait()
+                yield ToolCallEvent(id="child-write", name="write", arguments={"path": "denied.txt", "content": "no"})
+            elif prompt == "initial request":
+                yield ToolCallEvent(id="delegate-child", name="delegate", arguments={"prompt": "held child"})
+            elif prompt == "followup request":
+                yield ToolCallEvent(id="second-read", name="read_file", arguments={"path": "proof.txt"})
+            else:
+                yield TextDoneEvent(text="finished")
+
+        def provider(config: HarnessConfig) -> FakeProvider:
+            fake = FakeProvider(config, len(app.providers), script)
+            app.providers.append(fake)
+            return fake
+
+        monkeypatch.setattr(runtime, "build_provider", lambda profile, config, auth: provider(config))
+        app.providers[0].script = script
+
+        async def wait_for(event: asyncio.Event) -> None:
+            async with asyncio.timeout(HANG_GUARD):
+                await event.wait()
+
+        assert app.client.portal is not None
+        with app.socket() as socket:
+            socket.send_json({"type": "subscribe", "session_id": root, "after": 0})
+            assert socket.receive_json()["type"] == "snapshot"
+            app.submit("initial request", session=root, id=first_id)
+            app.client.portal.call(wait_for, child_entered)
+            app.submit("followup request", session=root, id=second_id)
+            app.client.portal.call(wait_for, noticed)
+            active = app.state.active
+            assert active is not None and active.pending is not None
+            record = active.pending.record
+            assert record["task_id"] and record["id"] == "child-write"
+            event = next(item for item in notices if item.phase == "waiting_for_approval")
+            assert event.message_id == first_id
+            response = app.client.post(
+                "/api/approval",
+                headers=app.headers,
+                json={
+                    "run_id": active.id,
+                    "approval_id": active.pending.id,
+                    "call_id": record["id"],
+                    "decision": "deny",
+                },
+            )
+            assert response.status_code == 200
+            app.idle()
+            assert not (tmp_path / "denied.txt").exists()
 
 
 @pytest.mark.parametrize(

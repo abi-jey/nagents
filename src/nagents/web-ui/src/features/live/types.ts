@@ -145,6 +145,7 @@ export interface LiveModelRequest {
 
 export interface LiveDelegationTimelineEvent extends LiveDelegationRecord {
   type?: InspectionEventType;
+  detail_type?: InspectionEventType | "live_append" | "live_delivery_failed";
   model_call_id?: string;
   round?: number;
   attempt_id?: string;
@@ -161,6 +162,18 @@ export interface VoiceContextDetailsRecord extends VoiceContext {
   reason: string;
 }
 
+export type LiveAppendKind = "thinking" | "commentary" | "instructions";
+export type LiveAppendWireType = "session.thinking.append" | "session.commentary.append" | "session.instructions.append" | "delegation.context.append" | "session.context.append";
+
+export interface LiveAppendRecord {
+  seq: number;
+  kind: LiveAppendKind;
+  wire_type: LiveAppendWireType | "";
+  /** Transport write outcome, never proof of provider acknowledgment or playback. */
+  outcome: "sent" | "failed";
+  content: DelegationText;
+}
+
 export interface LiveDelegationDetails extends LiveDelegationRecord {
   source: "app_callback";
   request: { transcript?: DelegationText; input?: DelegationText };
@@ -169,11 +182,13 @@ export interface LiveDelegationDetails extends LiveDelegationRecord {
   timeline_truncated: boolean;
   model_requests?: LiveModelRequest[];
   model_requests_truncated?: boolean;
+  live_updates?: LiveAppendRecord[];
+  live_updates_truncated?: boolean;
 }
 
 export interface LiveMessageEvent {
   seq: number;
-  type: "transcript" | "error" | "status";
+  type: "transcript" | "error" | "status" | "assistant_update";
   speaker?: "user" | "assistant";
   text?: string;
   message?: string;
@@ -224,6 +239,7 @@ export interface LiveState {
 }
 
 export interface MediaHandlers {
+  /** Provider/audio transport attached, with running audio and a live microphone or an intentional input mute. */
   connected(): void;
   ended(): void;
   failed(message: string): void;

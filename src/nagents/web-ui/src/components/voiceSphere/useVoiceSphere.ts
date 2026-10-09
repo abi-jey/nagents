@@ -52,13 +52,13 @@ interface Surface {
 }
 
 export const initialSnapshot: SphereSnapshot = {
-  nodes: 0, edges: 0, origin: 0, zoom: 1, tasks: [],
+  mode: "listen", nodes: 0, edges: 0, origin: 0, zoom: 1, tasks: [],
   delegationStatus: "Send a task through the network, then return its result.",
   inputLevel: 0, outputLevel: 0, outerScale: 1, innerScale: 1,
   ambientPackets: 0, voicePackets: 0, shock: 0,
 };
 
-const modes: Record<ActivityMode, Mode> = { idle: "listen", thinking: "think", speaking: "speak", delegating: "delegate" };
+const modes: Record<ActivityMode, Mode> = { idle: "listen", thinking: "think", speaking: "speak", delegating: "delegate", connecting: "connect", error: "error" };
 const finite = (value: number, fallback: number, min: number, max: number) => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 
 export function normalizeSignal(frame: SignalFrame): SignalFrame {

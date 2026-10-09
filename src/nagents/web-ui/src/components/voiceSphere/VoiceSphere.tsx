@@ -33,7 +33,7 @@ export function VoiceSphereCanvas({ controller, compact = false, className, styl
   const end = () => { drag.current = undefined; controller.setDragging(false); };
   return <canvas ref={canvas} className={className} style={style} role="img"
     aria-label={label ?? (compact ? "Network sphere at 80 pixels" : "Interactive connected network sphere. Drag to rotate; click a node to send a pulse.")}
-    data-nodes={controller.snapshot.nodes} data-outer-scale={controller.snapshot.outerScale}
+    data-mode={controller.snapshot.mode} data-nodes={controller.snapshot.nodes} data-outer-scale={controller.snapshot.outerScale}
     data-inner-scale={controller.snapshot.innerScale} data-ambient-packets={controller.snapshot.ambientPackets}
     data-voice-packets={controller.snapshot.voicePackets} data-shock={controller.snapshot.shock}
     onPointerDown={compact ? undefined : event => {

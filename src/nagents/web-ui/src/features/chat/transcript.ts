@@ -248,6 +248,14 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
         : { ...entry, historyId, callPosition: call.call_position };
     });
   }
+  if (event.event === "input_admitted") {
+    const messageId = text(event, "message_id");
+    if (!runId || !messageId || taskId || text(event, "channel")) return entries;
+    const matches = entries.filter(entry => entry.kind === "user" && entry.queued && !entry.runId &&
+      !entry.historyId && !entry.ingressId && sameTranscriptUser(entry, { messageId, taskId: "" }));
+    return matches.length === 1 ? entries.map(entry => entry === matches[0]
+      ? { ...entry, runId, queued: false, admission: undefined, state: "Preparing" } : entry) : entries;
+  }
   if (event.event === "run_started") {
     const ingressId = ingressIdentity(event.ingress_id);
     const input = { historyId, ingressId, messageId: !text(event, "channel") ? text(event, "message_id") : "", taskId };
@@ -343,6 +351,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     if (index >= 0 && !entries[index].queued) {
       const previous = entries[index];
       return save({ ...previous, historyId: previous.historyId || historyId, ingressId: previous.ingressId || ingressId,
+        state: undefined, admission: undefined,
         text: typeof event.text === "string" ? message.text : previous.text,
         sourceVerified, origin: message.origin, originId: message.originId,
         ...(voice || previous.voice ? { voice: voice || undefined } : {}),

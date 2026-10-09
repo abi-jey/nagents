@@ -561,7 +561,12 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                         await queued.wait()
                         run = state.active
                         assert run is not None
-                        assert [record["status"] for record in reports if "model_request" not in record] == [
+                        first_id = reports[0]["delegation_id"]
+                        assert [
+                            record["status"]
+                            for record in reports
+                            if "model_request" not in record and record["delegation_id"] == first_id
+                        ] == [
                             "queued",
                             "working",
                             "working",
@@ -576,7 +581,11 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                         release.set()
                         await run.task
                     assert stopped.is_set() and run.outcome == "completed" and run.finished
-                    assert [record["status"] for record in reports if "model_request" not in record] == [
+                    assert [
+                        record["status"]
+                        for record in reports
+                        if "model_request" not in record and record["delegation_id"] == first_id
+                    ] == [
                         "queued",
                         "working",
                         "working",
@@ -864,26 +873,32 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
                 assert spoken == ["Reply 1 from the selected assistant", "Reply 2 from the selected assistant"]
                 assert seen[0][:2] == seen[1][:2] == ("anthropic", "chat-model")
                 assert seen[1][2] > seen[0][2]  # One persistent chat conversation.
+                record = app.state.live._records[created.json()["session_id"]]
+                async with asyncio.timeout(HANG_GUARD):
+                    while state.active is not None or any(
+                        item["status"] != "completed" for item in record.delegations.values()
+                    ):
+                        await asyncio.sleep(0.001)
                 snapshot = (
                     await client.get(f"/api/live/sessions/{created.json()['session_id']}", headers=headers)
                 ).json()
-                assert [
-                    event["status"]
-                    for event in snapshot["events"]
-                    if event["type"] == "delegation" and not event.get("detail_type")
-                ] == [
-                    "queued",
-                    "working",
-                    "working",
-                    "completed",
-                    "queued",
-                    "working",
-                    "working",
-                    "completed",
-                ]
+                for identifier in ("d1", "d2"):
+                    phases = [
+                        event["status"]
+                        for event in snapshot["events"]
+                        if event["type"] == "delegation"
+                        and event["delegation_id"] == identifier
+                        and not event.get("detail_type")
+                    ]
+                    assert phases[0] == "queued" and phases[-1] == "completed"
+                    assert phases.count("queued") == phases.count("completed") == 1
+                    assert phases[1:-1] and all(phase == "working" for phase in phases[1:-1])
                 assert len(snapshot["delegations"]) == 2
                 assert len({item["delegation_id"] for item in snapshot["delegations"]}) == 2
-                assert len({item["run_id"] for item in snapshot["delegations"]}) == 2
+                # A promptly received second request may share the first host
+                # run, or be admitted after it finishes; neither restarts Live.
+                assert 1 <= len({item["run_id"] for item in snapshot["delegations"]}) <= 2
+                assert {item["delegation_id"] for item in snapshot["delegations"]} == {"d1", "d2"}
                 assert all(
                     item["chat_session_id"] == root and item["status"] == "completed"
                     for item in snapshot["delegations"]

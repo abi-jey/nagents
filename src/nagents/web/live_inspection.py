@@ -158,8 +158,19 @@ def _generation_urls(provider: Provider) -> set[str]:
 
 
 @contextmanager
-def model_requests(session_id: str, provider: Provider, report: Callable[[Payload], None]) -> Iterator[None]:
-    """Observe only this root's model boundary and its matching generation HTTP attempts."""
+def model_requests(
+    session_id: str,
+    provider: Provider,
+    report: Callable[[Payload], None],
+    *,
+    enabled: Callable[[], bool] = lambda: True,
+) -> Iterator[None]:
+    """Observe this root while enabled, including consumers attached mid-run.
+
+    Disabled observations do not serialize payloads or consume capture budgets.
+    A newly attached consumer starts at the next observed model boundary; past
+    request bodies are not reconstructed or attributed to the new consumer.
+    """
     previous = observer.get()
     active = True
     call_id = ""
@@ -170,7 +181,7 @@ def model_requests(session_id: str, provider: Provider, report: Callable[[Payloa
 
     def capture(kind: str, data: Payload) -> None:
         nonlocal call_id, call_round, count, used, limited
-        if not active or data.get("session_id") != session_id:
+        if not active or not enabled() or data.get("session_id") != session_id:
             return
         identifier, round_number = data.get("model_call_id"), data.get("round")
         if not isinstance(identifier, str) or not _ID.fullmatch(identifier):

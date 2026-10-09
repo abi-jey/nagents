@@ -24,6 +24,15 @@
 .live-sphere:disabled { opacity: 1; cursor: default; }
 .live-sphere:focus-visible { outline: 2px solid var(--focus, #bcdccc); outline-offset: 2px; }
 .live-sphere-scene { position: absolute; inset: 0; display: block; pointer-events: none; }
+.live-sphere-connection { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; color: var(--accent-violet, #c4b1e6); transition: opacity 180ms ease; }
+.live-sphere-connection-track { stroke: currentColor; stroke-width: .5; opacity: .2; }
+.live-sphere-connection-arcs { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; transform-origin: 40px 40px; }
+.live-sphere:is([data-phase="permission"], [data-phase="connecting"]) .live-sphere-connection { opacity: 1; }
+.live-sphere:is([data-phase="permission"], [data-phase="connecting"]) .live-sphere-connection-arcs { animation: live-connection-orbit 1.8s linear infinite; }
+.live-sphere[data-phase="error"] .live-sphere-connection { opacity: 1; color: var(--state-error, #f2a0a7); }
+.live-sphere[data-phase="error"] .live-sphere-connection-track { stroke-dasharray: 3 5; opacity: .4; }
+.live-sphere[data-phase="error"] .live-sphere-connection-arcs { opacity: 0; }
+@keyframes live-connection-orbit { to { transform: rotate(360deg); } }
 .live-sphere-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 180ms ease; }
 .live-sphere[data-renderer="network"] .live-sphere-canvas { opacity: 1; }
 .live-sphere-fallback { position: absolute; inset: 6%; width: 88%; height: 88%; color: var(--accent-teal, #94c7bc); opacity: .9; transition: opacity 180ms ease; }
@@ -34,7 +43,7 @@
 .live-sphere[data-phase="error"] .live-sphere-fallback { color: var(--state-error, #f2a0a7); }
 .live-sphere:disabled:is([data-phase="idle"], [data-phase="ended"], [data-phase="error"]) .live-sphere-scene { opacity: .6; }
 @media (max-width: 760px) { .live-sphere { width: var(--sphere-size, 64px); height: var(--sphere-size, 64px); } }
-@media (prefers-reduced-motion: reduce) { .live-sphere, .live-sphere * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .live-sphere, .live-sphere * { transition: none !important; animation: none !important; } }
 @media (forced-colors: active) {
   .live-sphere { outline: 1px solid ButtonText; outline-offset: 1px; }
   .live-sphere:focus-visible { outline: 3px solid Highlight; outline-offset: 2px; }

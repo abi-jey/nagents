@@ -206,29 +206,38 @@ def create_app(
 
         def voice_agent(voice: str) -> Agent:
             connection = live_settings.admitted()
-            handler = (
+            bridge = (
                 MainAgentBridge(
                     state,
                     live_settings.admitted_session(),
                     voice_session_id=live.active_session_id,
                     report=live.delegation_reporter(live.active_session_id),
-                ).handle
+                )
                 if connection.values.backend_mode == "assistant"
                 else None
             )
-            return create_live_agent(connection, voice, demo=live_settings.demo, client_handler=handler)
+            if bridge is not None:
+                live.bind_bridge(live.active_session_id, bridge)
+            return create_live_agent(
+                connection,
+                voice,
+                demo=live_settings.demo,
+                client_request_handler=bridge.handle_request if bridge is not None else None,
+                client_request_observer=bridge.observe if bridge is not None else None,
+            )
 
         def login_voice(voice: str) -> "LoginVoiceConfig | None":
             connection = live_settings.admitted()
             if connection.voice_auth != "chatgpt":
                 return None
-            handler = MainAgentBridge(
+            bridge = MainAgentBridge(
                 state,
                 live_settings.admitted_session(),
                 voice_session_id=live.active_session_id,
                 report=live.delegation_reporter(live.active_session_id),
-            ).handle_native
-            return create_login_config(connection, voice, handler)
+            )
+            live.bind_bridge(live.active_session_id, bridge)
+            return create_login_config(connection, voice, bridge.handle_request, observer=bridge.observe_native)
 
         async def voice_context(identifier: str) -> LiveSeed:
             connection = live_settings.admitted()
@@ -429,29 +438,16 @@ def create_app(
 
         async def accept() -> dict[str, str]:
             if body.command:
-                session_id, admitted = await state.channels.store.web(
+                session_id, _ = await state.queued_inputs.submit(
                     body.session_id, body.message_id, body.prompt, command=body.command
                 )
             elif body.attachments:
                 media = await state.uploads.capabilities(body.session_id)
-                session_id, admitted = await state.channels.store.web(
+                session_id, _ = await state.queued_inputs.submit(
                     body.session_id, body.message_id, body.prompt, tuple(body.attachments), media
                 )
             else:
-                session_id, admitted = await state.channels.store.web(body.session_id, body.message_id, body.prompt)
-            active = state.active
-            if (
-                admitted
-                and state.harness.config.submit_mode == "interrupt"
-                and active is not None
-                and not active.voice
-                and active.session_id == session_id
-                and active.message_id != body.message_id
-                and not active.finished
-                and not active.task.done()
-            ):
-                await state.stop(active)
-            state.channels.changed.set()
+                session_id, _ = await state.queued_inputs.submit(body.session_id, body.message_id, body.prompt)
             return {"session_id": session_id, "message_id": body.message_id, "status": "queued"}
 
         # Admission and the selected policy complete even if the HTTP caller

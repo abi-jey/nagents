@@ -74,9 +74,10 @@ async def automatic_reply(state: WebState, run: Run, request: ApprovalRequest) -
                 and ingress.consumed
                 and ingress.run_id == run.id
                 and run.session_id == work.session_id
-                and run.message_id == work.message_id
-                and run.server_owned is True
-                and run.background is False
+                and (
+                    (run.message_id == work.message_id and run.server_owned is True and run.background is False)
+                    or state.queued_inputs.owns(run, work)
+                )
                 and not work.acknowledgement
                 and run.source == expected
             )

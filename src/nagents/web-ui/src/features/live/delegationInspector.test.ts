@@ -82,7 +82,7 @@ test("inspector fetches only the selected authenticated request and shows its ex
   try {
     await ui.render(delegation(), [delegation(), delegation({ id: "request-two" })]);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].path, "/api/live/sessions/voice-one/delegations/request-one");
+    assert.equal(calls[0].path, "/api/live/sessions/voice-one/delegation-details?delegation_id=request-one");
     assert.equal(calls[0].init.method, "GET");
     assert.deepEqual(calls[0].init.headers, { "X-Ngn-Token": "private-local-token" });
     assert.equal(calls[0].init.credentials, "same-origin");
@@ -230,7 +230,7 @@ test("a failed request can be retried without retaining the error or changing th
     assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /temporarily unavailable/);
     assert.equal(ui.payload("Speech transcript context"), undefined);
     await act(async () => ui.button("Refresh").click());
-    assert.deepEqual(paths, Array(2).fill("/api/live/sessions/voice-one/delegations/request-one"));
+    assert.deepEqual(paths, Array(2).fill("/api/live/sessions/voice-one/delegation-details?delegation_id=request-one"));
     assert.equal(ui.container.querySelector('[role="alert"]'), null);
     assert.equal(ui.payload("Assistant result")?.querySelector("pre")?.textContent, "Four.\n");
     assert.equal(ui.button("Refresh").disabled, false);
@@ -389,3 +389,112 @@ test("a changed authentication token hides retained request captures until the n
     assert.ok(ui.container.querySelector('[data-event-type="model_context"] pre'));
   } finally { await ui.close(); }
 });
+
+function appendDetail(): LiveDelegationDetails {
+  const data = detail(delegation({ id: "provider:delegation/one.v2", seq: 7 }));
+  const base = data.timeline.at(-1)!;
+  data.timeline = [...data.timeline.slice(0, 3),
+    { ...base, seq: 4, type: "delegation", detail_type: "live_append", text: "Sent thinking to voice." },
+    { ...base, seq: 5, type: "delegation", detail_type: "live_append", text: "Sent commentary to voice." },
+    { ...base, seq: 6, type: "delegation", detail_type: "live_delivery_failed", text: "A voice write failed." },
+    base];
+  const content = (text: string) => ({ text, characters: Array.from(text).length, truncated: false });
+  data.live_updates = [
+    { seq: 4, kind: "thinking", outcome: "sent", wire_type: "delegation.context.append", content: content("Working on <private>the request</private>.") },
+    { seq: 5, kind: "commentary", outcome: "sent", wire_type: "session.commentary.append", content: content("The result is four.") },
+    { seq: 6, kind: "instructions", outcome: "failed", wire_type: "", content: content("An update is ready.") },
+  ];
+  data.live_updates_truncated = false;
+  return data;
+}
+
+test("Live append rows show their channel, exact expandable payload and honest transport outcomes", async t => {
+  const ui = view(), data = appendDetail(), item = delegation({ id: data.delegation_id, seq: 7 });
+  t.mock.method(globalThis, "fetch", async () => Response.json(data));
+  try {
+    await ui.render(item);
+    assert.equal(ui.container.querySelector('[role="alert"]'), null);
+    const sent = ui.container.querySelector('[data-event-type="live_append"]')!;
+    assert.match(sent.querySelector("summary")!.textContent!, /live_append · thinking.*Sent.*#4/);
+    assert.equal(sent.querySelector("pre")!.textContent, data.live_updates![0].content.text);
+    assert.equal(sent.querySelector("private"), null, "retained update content is inert text");
+    assert.match(sent.textContent!, /does not confirm provider acknowledgment or spoken audio/);
+    assert.equal(sent.querySelector("details")!.open, false);
+    await act(async () => sent.querySelector("summary")!.click());
+    assert.equal(sent.querySelector("details")!.open, true);
+    assert.deepEqual(JSON.parse(sent.querySelector(".inspection-event-metadata pre")!.textContent!), data.timeline[3]);
+    const failed = ui.container.querySelector('[data-event-type="live_delivery_failed"]')!;
+    assert.match(failed.querySelector("summary")!.textContent!, /instructions.*Failed/);
+    assert.match(failed.textContent!, /not confirmed as sent.*remains available in chat/);
+    assert.equal(failed.querySelector("pre")!.textContent, "An update is ready.");
+    assert.equal(failed.getAttribute("data-write-outcome"), "failed");
+  } finally { await ui.close(); }
+});
+
+test("retired Live payloads and earlier retained updates remain explicit and separately expandable", async t => {
+  const ui = view(), data = appendDetail();
+  data.timeline = [data.timeline[4], data.timeline.at(-1)!]; data.timeline_truncated = true;
+  data.live_updates = [data.live_updates![0], data.live_updates![2]]; data.live_updates_truncated = true;
+  t.mock.method(globalThis, "fetch", async () => Response.json(data));
+  try {
+    await ui.render(delegation({ id: data.delegation_id, seq: 7 }));
+    assert.equal(ui.container.querySelector('[role="alert"]'), null);
+    assert.match(ui.container.querySelector('[data-event-type="live_append"]')!.textContent!, /payload is no longer retained/);
+    assert.match(ui.container.textContent!, /Earlier Live updates/);
+    assert.match(ui.container.textContent!, /Some Live update payloads are no longer retained/);
+    assert.equal(ui.payload("live_append · thinking · Sent · #4")?.querySelector("pre")?.textContent, data.live_updates[0].content.text);
+    assert.equal(ui.payload("live_append · instructions · Failed · #6")?.querySelector("pre")?.textContent, data.live_updates[1].content.text);
+  } finally { await ui.close(); }
+});
+
+for (const id of ["provider:request/part.one", ".", "..", "provider/#?% request", "界".repeat(256), "😀".repeat(256)]) {
+  test(`provider delegation ID ${id.length > 30 ? "Unicode bound" : JSON.stringify(id)} uses an exact same-origin query lookup`, async t => {
+    const ui = view(), item = delegation({ id }); let target = "";
+    t.mock.method(globalThis, "fetch", async (path: string) => { target = path; return Response.json(detail(item)); });
+    try {
+      await ui.render(item);
+      assert.equal(ui.container.querySelector('[role="alert"]'), null);
+      const url = new URL(target, "https://localhost/");
+      assert.equal(url.origin, "https://localhost");
+      assert.equal(url.pathname, "/api/live/sessions/voice-one/delegation-details");
+      assert.equal(url.searchParams.get("delegation_id"), id);
+      assert.equal([...url.searchParams.keys()].length, 1);
+    } finally { await ui.close(); }
+  });
+}
+
+for (const id of ["", " \n", "x".repeat(257), "界".repeat(257)]) {
+  test(`invalid provider ID of ${id.length} characters never requests details`, async t => {
+    const ui = view(); let reads = 0;
+    t.mock.method(globalThis, "fetch", async () => { reads++; return Response.json(detail()); });
+    try {
+      await ui.render(delegation({ id }));
+      assert.equal(reads, 0);
+      assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /identifier is invalid/);
+    } finally { await ui.close(); }
+  });
+}
+
+for (const [name, change] of [
+  ["future update", (data: LiveDelegationDetails) => { data.live_updates![0].seq = 8; }],
+  ["duplicate update", (data: LiveDelegationDetails) => { data.live_updates!.push(data.live_updates![0]); }],
+  ["mismatched timeline outcome", (data: LiveDelegationDetails) => { data.timeline[3].detail_type = "live_delivery_failed"; }],
+  ["wrong wire channel", (data: LiveDelegationDetails) => { data.live_updates![0].wire_type = "session.instructions.append"; }],
+  ["successful write without wire event", (data: LiveDelegationDetails) => { data.live_updates![0].wire_type = ""; }],
+  ["failed write claiming a sent event", (data: LiveDelegationDetails) => { data.live_updates![2].wire_type = "session.instructions.append"; }],
+  ["nonintegral update sequence", (data: LiveDelegationDetails) => { data.live_updates![0].seq = 4.5; }],
+  ["too many updates", (data: LiveDelegationDetails) => { data.live_updates = Array(97).fill(data.live_updates![0]); }],
+  ["too many payload bytes", (data: LiveDelegationDetails) => { data.live_updates![0].content = { text: "界".repeat(667), characters: 667, truncated: false }; }],
+  ["inconsistent payload count", (data: LiveDelegationDetails) => { data.live_updates![0].content.characters = 0; }],
+  ["model capture using an opaque provider ID", (data: LiveDelegationDetails) => { data.timeline[3].type = "model_context"; data.timeline[3].model_call_id = "provider:call/one"; data.timeline[3].round = 1; }],
+] as const) {
+  test(`inspector rejects ${name} before showing any Live payload`, async t => {
+    const ui = view(), data = appendDetail(); change(data);
+    t.mock.method(globalThis, "fetch", async () => Response.json(data));
+    try {
+      await ui.render(delegation({ id: data.delegation_id, seq: 7 }));
+      assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /incomplete or inconsistent|did not match/);
+      assert.equal(ui.container.querySelector("pre"), null);
+    } finally { await ui.close(); }
+  });
+}

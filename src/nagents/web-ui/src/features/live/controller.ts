@@ -1,6 +1,7 @@
 import type { AudioDeviceSelection, Caption, LiveCreated, LiveDelegation, LiveDelegationStatus, LiveEvent, LiveMedia, LiveSnapshot, LiveState, LiveTransport, MediaHandlers } from "./types.js";
 import { readAudioDevices } from "./devices.js";
 import { readVoiceContext } from "./context.js";
+import { providerDelegationId } from "./identifiers.js";
 import type { AudioSource } from "../../components/voiceSphere/useVoiceSphere.js";
 import { silentSignal, type AudioFrame, type SignalFrame } from "../../components/voiceSphere/types.js";
 
@@ -33,7 +34,7 @@ function delegationRecord(value: unknown, sessionId: string, chatSessionId: stri
   const record = value as Record<string, unknown>;
   if (!Number.isSafeInteger(cursor) || cursor < 0 ||
       typeof record.seq !== "number" || !Number.isSafeInteger(record.seq) || record.seq < 1 || record.seq > cursor ||
-      typeof record.delegation_id !== "string" || !record.delegation_id.trim() ||
+      !providerDelegationId(record.delegation_id) ||
       record.voice_session_id !== sessionId || !sessionId ||
       record.chat_session_id !== chatSessionId || !chatSessionId ||
       (record.type !== undefined && record.type !== "delegation") ||
@@ -55,7 +56,9 @@ function mergeDelegations(previous: LiveDelegation[], snapshot: LiveSnapshot, ev
     const next = delegationRecord(record, snapshot.session_id, chatSessionId, snapshot.cursor);
     if (!next) continue;
     const current = states.get(next.id);
-    if (current && (next.seq <= current.seq || !activeDelegation(current) ||
+    if (current && (next.seq <= current.seq ||
+        (!activeDelegation(current) && (next.status !== current.status || next.runId !== current.runId ||
+          next.agent !== current.agent || next.provider !== current.provider || next.model !== current.model)) ||
         next.chatSessionId !== current.chatSessionId || (!!current.runId && next.runId !== current.runId) ||
         (current.status === "working" && next.status === "queued"))) continue;
     states.set(next.id, next);

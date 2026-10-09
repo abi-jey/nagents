@@ -48,7 +48,7 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
   const levels: [number, number][] = [];
   const playbackCommands: { type: string; epoch: number; buffer?: ArrayBuffer }[] = [];
   let inputError: Error | undefined, outputError: Error | undefined, sinkResult = Promise.resolve();
-  let inputResult = Promise.resolve(stream), graphError = false;
+  let inputResult = Promise.resolve(stream), graphError = false, resumeAllowed = true;
   const captureSources: { node: Node; stream: object }[] = [];
   let connected = false, ended = false, socket!: Socket, node!: WorkletNode, speaker!: WorkletNode, context!: Context;
   class Node {
@@ -91,7 +91,7 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
       const source = Object.assign(new Node(), { buffer: null, onended: () => {}, starts, stops: 0, start: (at: number) => { starts.push(at); }, stop() { this.stops++; } });
       sources.push(source); return source;
     }
-    async resume() { this.state = "running"; }
+    async resume() { if (resumeAllowed) this.state = "running"; }
     async setSinkId(id: string) { sinks.push(id); if (outputError) throw outputError; await sinkResult; this.sinkId = id; }
     async close() { this.closes++; }
   }
@@ -128,6 +128,7 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
     sinkResult: (result: Promise<void>) => { sinkResult = result; },
     inputResult: (result: Promise<typeof stream>) => { inputResult = result; },
     graphError: (value: boolean) => { graphError = value; },
+    resumeAllowed: (value: boolean) => { resumeAllowed = value; },
     newMicrophone: () => { const track = makeTrack(); return { track, stream: { getTracks: () => [track], getAudioTracks: () => [track] } }; },
     withoutOutputRouting: () => { Object.defineProperty(Context.prototype, "setSinkId", { value: undefined }); },
     context: () => context, socket: () => socket, node: () => node, connected: () => connected, ended: () => ended,
@@ -482,7 +483,6 @@ test("a server session identifier cannot change the audio socket origin", async 
   assert.equal(f.connected(), true);
 });
 
-
 test("output worklet epochs fence delayed sphere messages through mute, suspension and close", async t => {
   const f = browserFixture(); t.after(f.restore); await f.open();
   assert(f.media.sampleAudio); const context = f.context(); context.currentTime = 1;
@@ -540,4 +540,70 @@ test("playback health accepts numeric counters only and never logs worklet paylo
   f.media.close();
   assert.equal(logs.length, 1); assert.equal(logs[0][0], "ngn voice playback health");
   assert.doesNotMatch(JSON.stringify(logs), /never-log-this|private|transcript|provider/);
+});
+
+test("an open audio socket stays connecting until the capture context is running", async t => {
+  const f = browserFixture(); t.after(f.restore);
+  f.resumeAllowed(false);
+  await f.media.prepare(new AbortController().signal);
+  assert.equal(f.context().state, "suspended");
+  const opening = f.media.connect("voice-id", "web-token");
+  f.socket().onopen(); await opening;
+  assert.equal(f.connected(), false, "WebSocket attachment alone does not mean the mic is live");
+  assert.equal(f.playback.at(-1), true, "the user can enable audio while still connecting");
+  f.resumeAllowed(true); await f.media.play();
+  assert.equal(f.connected(), true);
+  assert.equal(f.playback.at(-1), false);
+});
+
+test("a source-muted microphone cannot report ready until its live track resumes", async t => {
+  const f = browserFixture(); t.after(f.restore);
+  Object.defineProperty(f.microphone, "muted", { value: true, configurable: true });
+  await f.media.prepare(new AbortController().signal);
+  const opening = f.media.connect("voice-id", "web-token");
+  f.socket().onopen(); await opening;
+  assert.equal(f.connected(), false);
+  Object.defineProperty(f.microphone, "muted", { value: false });
+  f.microphone.dispatchEvent(new Event("unmute"));
+  assert.equal(f.connected(), true);
+});
+
+test("late audio resume cannot resurrect a cancelled connection", async t => {
+  const f = browserFixture(); t.after(f.restore);
+  f.resumeAllowed(false);
+  await f.media.prepare(new AbortController().signal);
+  const opening = f.media.connect("voice-id", "web-token"); f.socket().onopen(); await opening;
+  f.media.close();
+  f.resumeAllowed(true); await f.media.play(); f.microphone.dispatchEvent(new Event("unmute"));
+  assert.equal(f.connected(), false);
+});
+
+test("an intentional mute before socket attachment permits a speaker-only connection and can be undone", async t => {
+  const f = browserFixture(); t.after(f.restore);
+  await f.media.prepare(new AbortController().signal);
+  f.media.muteInput(true);
+  const opening = f.media.connect("voice-id", "web-token");
+  assert.equal(f.connected(), false);
+  f.socket().onopen(); await opening;
+  assert.equal(f.connected(), true, "an intentional input mute is not failed hardware or pending transport");
+  assert.equal(f.microphone.enabled, false);
+  f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  assert(new Uint8Array(f.sent.at(-1)!).every(value => value === 0));
+  assert.equal(f.media.sampleAudio!().input.active, false);
+  f.media.muteInput(false);
+  f.context().currentTime = 1;
+  f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  assert.equal(f.microphone.enabled, true);
+  assert.equal(f.connected(), true);
+  assert(f.media.sampleAudio!().input.rms > 0);
+});
+
+test("enabling a pending microphone rechecks readiness without relying on a track unmute event", async t => {
+  const f = browserFixture(); t.after(f.restore);
+  await f.media.prepare(new AbortController().signal);
+  f.microphone.enabled = false;
+  const opening = f.media.connect("voice-id", "web-token"); f.socket().onopen(); await opening;
+  assert.equal(f.connected(), false);
+  f.media.muteInput(false);
+  assert.equal(f.connected(), true);
 });

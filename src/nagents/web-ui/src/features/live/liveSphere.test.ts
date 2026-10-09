@@ -110,3 +110,50 @@ test("unsupported canvas and reduced motion retain accessible network controls",
     assert.equal(reduced.button().getAttribute("aria-label"), "Mute voice microphone");
   } finally { await reduced.close(); }
 });
+
+test("permission, provider setup and transport setup share a distinct connecting network; failure never listens", async () => {
+  const ui = view(); let sampled = 0;
+  ui.props.audio = { sample() { sampled++; return { input: { active: true, rms: .2, low: .1, mid: .1, high: .1 }, output: { active: false, rms: 0, low: 0, mid: 0, high: 0 } }; } };
+  try {
+    for (const phase of ["permission", "connecting"] as const) {
+      ui.props.phase = phase; ui.props.busy = true;
+      await ui.render(); await ui.step(30);
+      assert.equal(ui.canvas().dataset.mode, "connect");
+      assert.equal(ui.canvas().dataset.ambientPackets, "0", "setup never runs the thinking/listening packets");
+      assert.equal(ui.canvas().dataset.voicePackets, "0");
+      assert.equal(ui.button().getAttribute("aria-busy"), "true");
+      assert.equal(ui.canvas().dataset.nodes, "204", "connection does not replace the approved network");
+    }
+    assert.equal(sampled, 0, "setup cannot consume voice frames");
+    ui.props.phase = "error"; await ui.render(); await ui.step(30);
+    assert.equal(ui.canvas().dataset.mode, "error");
+    assert.equal(ui.canvas().dataset.ambientPackets, "0");
+    assert.equal(ui.button().getAttribute("aria-busy"), null);
+    assert.equal(ui.button().getAttribute("aria-label"), "Reconnect voice");
+    assert.equal(ui.button().disabled, false);
+    assert.equal(sampled, 0);
+    ui.props.phase = "connecting"; await ui.render(); await ui.step(12);
+    assert.equal(ui.canvas().dataset.mode, "connect", "retry visibly re-enters setup");
+    ui.props.phase = "connected"; ui.props.busy = false; await ui.render(); await ui.step(30);
+    assert.equal(ui.canvas().dataset.mode, "listen");
+    assert(Number(ui.canvas().dataset.outerScale) < 1);
+    assert(sampled > 0, "only the ready connection receives microphone frames");
+  } finally { await ui.close(); }
+});
+
+test("connection and failure indicators survive reduced motion and a missing canvas", async () => {
+  for (const options of [{ supported: false }, { reduced: true }]) {
+    const ui = view(options);
+    try {
+      ui.props.phase = "connecting"; await ui.render(); await ui.step(12);
+      assert(ui.container.querySelector("svg.live-sphere-connection .live-sphere-connection-arcs"));
+      assert.equal(ui.button().getAttribute("aria-label"), "Connecting voice");
+      ui.props.phase = "error"; await ui.render(); await ui.step(12);
+      assert.equal(ui.button().getAttribute("aria-label"), "Reconnect voice");
+      if (options.reduced) {
+        assert.equal(ui.canvas().dataset.mode, "error");
+        assert.equal(ui.canvas().dataset.shock, "0");
+      }
+    } finally { await ui.close(); }
+  }
+});

@@ -529,6 +529,7 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. Negotiated `ngn.live.v2` also accepts server-only `{"type":"interrupt"}` to clear queued playback; legacy `ngn.live.v1` remains PCM-only. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
 | `GET live/sessions/{session_id}/delegations/{delegation_id}` | On-demand request, dispatched input, result, and application event timeline for one delegation; authenticated and bounded. |
+| `GET live/sessions/{session_id}/delegation-details?delegation_id=…` | Exact opaque provider-ID lookup, including slash and dot-only IDs; the same authenticated details response. |
 | `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
 
 The run stream uses the CLI's normalized `schema_version: 1` event names and
@@ -1186,7 +1187,8 @@ include a safe `message`. Status is `connecting`, `connected`, `closing`, `close
 or `error`. Events have `seq` and a normalized `type` (`transcript`, `delegation`, `status`, or
 `error`); transcript records include `speaker`, `text`, and timing when available.
 Pass the last cursor as `after`, an integer in `0..9007199254740991`. This is the
-only allowed Live query parameter; duplicate cursors and tokens in URLs are
+cursor query parameter. The separate delegation-details route accepts exactly one
+`delegation_id` (nonblank, at most 256 characters). Duplicate selectors and tokens in URLs are
 rejected. Polling returns bounded retained observations, not a durable replay log.
 
 Delegation details use the same call/chat/run identities and explicitly identify
@@ -1205,6 +1207,13 @@ requests are not captured.
 Details may expire with the bounded ended-session cache; durable
 assistant results remain in normal chat history.
 
+Details also retain `live_updates`: at most 96 sent or failed append attempts,
+each with its sequence, thinking/commentary/instructions kind, actual wire event,
+and a text preview bounded to 2,000 UTF-8 bytes. `live_updates_truncated` reports
+older entries being dropped. A sent update records transport submission, not a
+provider acknowledgment or proof of speaker playback. Payloads are available only
+in expanded details; ordinary polling retains metadata and delivery warnings.
+
 `GET /api/live/sessions/{session_id}/context` returns startup instructions and
 the actual text-only seed messages captured when preparing provider dispatch.
 This is a record of prepared input, not confirmation of provider acceptance.
@@ -1214,8 +1223,8 @@ as delegation inspection; routine polling and creation responses remain metadata
 
 Main-assistant delegation records contain `delegation_id`, `voice_session_id`,
 `chat_session_id`, `run_id`, `status`, `agent`, `provider`, `model`, `text`, and
-`seq`. The bridge issues an application delegation ID for each admitted handler
-request. It binds that ID to the original call and chat; `run_id` becomes available
+`seq`. The bridge preserves the provider's original delegation ID and captures
+its request context when the notice arrives. It binds that ID to the original call and chat; `run_id` becomes available
 when the main assistant accepts the work. The lifecycle is `queued` → `working`
 → `completed`, `failed`, or `cancelled`; a queued request can also end before
 admission. Terminal state comes from the actual assistant task, never caption
@@ -1223,13 +1232,38 @@ timing or audio playback. Snapshots retain all active requests and the most rece
 32 terminal records independently of the bounded event stream.
 
 The voice layer owns media and spoken delivery; the normal web assistant owns
-reasoning, tools, approvals, and durable outcomes. The bridge waits up to 60 seconds
-for an available assistant and up to 300 seconds for a spoken result, within the
-outer voice timeout. If speech stops waiting while an admitted task continues,
-it directs the caller to chat rather than reporting task failure. After a call
-ends, the UI points to chat for further progress; live delegation observations
-are not durable task history. Hosted Responses does not emit this main-assistant
-handoff lifecycle.
+reasoning, tools, approvals, and durable outcomes. Typed and voice inputs share
+the durable web inbox and FIFO order within their conversation. In queue mode,
+the next input enters after the current model response and all of its returned
+tool calls finish, before the next model request. It can also wake an assistant
+waiting for background children. This keeps one model/tool owner and runs normal
+input hooks, upload validation, history receipts, and approvals for every input.
+Other conversations remain queued; `/compact` waits for the run to become idle.
+While voice is attached, both typed and voice inputs steer at this boundary even
+if the text-only submit preference is interrupt. Existing voice-owned work keeps
+that protection after voice ends. Text-only runs retain their interrupt preference;
+the explicit Stop control still cancels the active assistant run and its children.
+
+Completed assistant messages, including interim, background-task, and scheduled
+wakeup answers, are forwarded while voice is attached. Task lifecycle changes
+use quiet thinking updates; child reasoning and raw child outputs are not spoken.
+Known original delegation IDs remain attached to later updates; unrelated chat
+work uses session-wide updates. Long work no longer loses its answer at the old
+300-second voice waiter limit. Voice end detaches delivery; already queued work
+continues like queued typed input. Caller labels and inbox receipts survive a
+server restart, and an old call ID never attaches to a new call.
+
+Public Live uses `session.thinking.append` for progress and
+`session.commentary.append` for answers. When a background result arrives after
+at least two seconds without speech, a fixed `session.instructions.append` can
+request the caller's attention; quietness is checked again when sending. Native
+ChatGPT login maps progress to its quiet `commentary` context channel and answers
+to `speakable` context. Its protocol has no verified instruction-append equivalent,
+so that attention instruction is omitted rather than spoken as assistant content.
+All actual updates are chunked below the Live append limit. A blocked or failed
+voice update stream reports a delivery warning and retains results in chat.
+Live observations remain bounded, process-local inspection data; hosted Responses
+does not emit this main-assistant handoff lifecycle.
 
 These IDs correlate work; they do not provide business-action idempotency.
 Duplicate upstream delegation IDs are suppressed, but distinct IDs have no

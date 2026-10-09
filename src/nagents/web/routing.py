@@ -8,6 +8,7 @@ Unclaimed work survives connector configuration changes and process shutdown.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -41,6 +42,9 @@ class Work:
     acknowledgement: str
     command: str = ""
     attachments: tuple[str, ...] = ()
+    voice_session_id: str = ""
+    voice_delegation_id: str = ""
+    voice_display: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,10 @@ class RoutingStore(InboxStore):
                 db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN command TEXT NOT NULL DEFAULT ''")
             if "attachments" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
                 db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+            fields = {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}
+            for name in ("voice_session_id", "voice_delegation_id", "voice_display"):
+                if name not in fields:
+                    db.execute(f"ALTER TABLE ngn_web_inbox ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS ngn_web_deleted_messages ("
                 "channel TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY(channel, message_id))"
@@ -332,26 +340,57 @@ class RoutingStore(InboxStore):
         supported_media_types: tuple[str, ...] = (),
         *,
         command: Literal["", "compact"] = "",
+        voice_session_id: str = "",
+        voice_delegation_id: str = "",
+        voice_display: str = "",
     ) -> tuple[str, bool]:
         """Return the root and whether this is newly admitted (not an HTTP retry)."""
         if command not in {"", "compact"} or (command and (prompt != "/compact" or attachments)):
             raise HTTPException(422, "The compact command accepts no arguments or attachments.")
+        if any((voice_session_id, voice_delegation_id, voice_display)) and (
+            not isinstance(voice_session_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", voice_session_id)
+            or not isinstance(voice_delegation_id, str)
+            or not voice_delegation_id.strip()
+            or len(voice_delegation_id) > 256
+            or not isinstance(voice_display, str)
+            or not voice_display.strip()
+            or len(voice_display) > 12000
+            or command
+            or attachments
+        ):
+            raise HTTPException(422, "Voice input needs bounded call identity and caller text.")
 
         def admit(db: sqlite3.Connection) -> tuple[str, bool]:
             self.execution_root(db, session_id)
             row = db.execute(
-                "SELECT session_id, prompt, attachments, command FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
+                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display "
+                "FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
                 (message_id,),
             ).fetchone()
             if row:
-                if row[:2] != (session_id, prompt) or tuple(json.loads(row[2])) != attachments or row[3] != command:
+                if (
+                    row[:2] != (session_id, prompt)
+                    or tuple(json.loads(row[2])) != attachments
+                    or row[3] != command
+                    or row[4:] != (voice_session_id, voice_delegation_id, voice_display)
+                ):
                     raise HTTPException(409, "Message ID already belongs to a different submission.")
                 return session_id, False
             self.capacity(db)
             cursor = db.execute(
-                "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments, command) "
-                "VALUES (?, '', ?, ?, ?, ?)",
-                (session_id, message_id, prompt, json.dumps(attachments), command),
+                "INSERT INTO ngn_web_inbox(session_id, channel, message_id, prompt, attachments, command, "
+                "voice_session_id, voice_delegation_id, voice_display) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    message_id,
+                    prompt,
+                    json.dumps(attachments),
+                    command,
+                    voice_session_id,
+                    voice_delegation_id,
+                    voice_display,
+                ),
             )
             assert cursor.lastrowid is not None
             bind_uploads(db, session_id, cursor.lastrowid, attachments, supported_media_types)
@@ -498,19 +537,25 @@ class RoutingStore(InboxStore):
         return predicate, parameters
 
     async def claim_work(
-        self, *, web_only: bool = False, available_channels: tuple[str, ...] | None = None
+        self, *, web_only: bool = False, available_channels: tuple[str, ...] | None = None, session_id: str = ""
     ) -> Work | None:
         predicate, parameters = self.eligible(web_only, available_channels)
+        if session_id:
+            predicate += " AND session_id = ? AND channel = ''"
+            parameters += (session_id,)
 
         def claim(db: sqlite3.Connection) -> Work | None:
             self._quarantine_work(db)
             row = db.execute(
                 "SELECT id, session_id, channel, message_id, prompt, conversation_id, thread_id, reply_to, "
-                f"acknowledgement, command, attachments FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
+                f"acknowledgement, command, attachments, voice_session_id, voice_delegation_id, voice_display "
+                f"FROM ngn_web_inbox WHERE {predicate} ORDER BY id LIMIT 1",
                 parameters,
             ).fetchone()
             if row is None:
                 return None
+            if session_id and (row[8] or row[9]):
+                return None  # Commands are a FIFO barrier until the current run is idle.
             db.execute("UPDATE ngn_web_inbox SET status = 'running' WHERE id = ?", (row[0],))
             return Work(
                 id=row[0],
@@ -524,6 +569,9 @@ class RoutingStore(InboxStore):
                 acknowledgement=row[8],
                 command=row[9],
                 attachments=tuple(json.loads(row[10])),
+                voice_session_id=row[11],
+                voice_delegation_id=row[12],
+                voice_display=row[13],
             )
 
         return await self._transaction(claim)

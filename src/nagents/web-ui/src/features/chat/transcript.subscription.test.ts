@@ -304,3 +304,93 @@ test("explicit history reload stays quiet but a subsequent live source event sti
   assert.equal(activity(state), 1);
   assert.ok(state.entries.slice(0, 2).every((entry) => !entry.activity));
 });
+
+test("input admission joins the existing run without resetting child approvals, status or history baseline", () => {
+  const cache = new LiveSessions();
+  const approval: WireEvent = { event: "approval", run_id: "existing-run", task_id: "child", activation: 2,
+    call_id: "call", approval_id: "child-approval", tool: "shell" };
+  cache.receive({ type: "snapshot", cursor: 0, epoch: "one", session_id: "root", snapshot: {
+    ...history(["Original request"]), active_run: { id: "existing-run", status: "approval", pending_approvals: [approval], events: [approval] },
+  } });
+  const followup = { session_id: "root", message_id: "next-input", prompt: "Use the other file" };
+  cache.enqueue(followup); cache.admission(followup, "queued");
+  cache.enqueue({ ...followup, message_id: "later-input" });
+  const before = cache.get("root"), child = before.entries.find(entry => entry.approvalId === "child-approval");
+  const receipt: WireEvent = { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "" };
+  const admitted = event(cache, 1, receipt);
+  assert.equal(admitted.activeRun, before.activeRun);
+  assert.equal(admitted.activeRun?.status, "approval");
+  assert.equal(admitted.runHistory, before.runHistory);
+  assert.deepEqual(pendingApprovals(admitted.activeRun), [approval]);
+  assert.equal(admitted.entries.find(entry => entry.approvalId === "child-approval"), child);
+  assert.deepEqual(admitted.entries.find(entry => entry.messageId === "next-input"), {
+    ...before.entries.find(entry => entry.messageId === "next-input"), runId: "existing-run", queued: false, admission: undefined, state: "Preparing",
+  });
+  assert.equal(admitted.entries.find(entry => entry.messageId === "later-input")?.queued, true);
+  cache.admission(followup, "queued");
+  assert.equal(cache.get("root").entries.find(entry => entry.messageId === "next-input")?.queued, false);
+  const beforeReplay = cache.get("root").entries;
+  const replayed = event(cache, 2, receipt);
+  assert.equal(replayed.entries, beforeReplay, "a repeated receipt is inert");
+  const snapshot = { ...history(["Original request"]), active_run: { ...before.activeRun!, events: [approval, receipt] } };
+  const restored = applySnapshot(replayed, snapshot);
+  assert.equal(restored.entries.filter(entry => entry.messageId === "next-input").length, 1);
+  assert.equal(restored.entries.find(entry => entry.messageId === "next-input")?.state, "Preparing", "snapshot replay retains admitted input before its history row is saved");
+  assert.deepEqual(pendingApprovals(restored.activeRun), [approval]);
+});
+
+for (const [outcome, label] of [["cancelled", "Cancelled"], ["failed", "Interrupted"]] as const) {
+  test(`admitted input has a visible ${label} outcome if preparation ends before its canonical row arrives`, () => {
+    const cache = new LiveSessions();
+    event(cache, 1, { event: "run_started", run_id: "existing-run" });
+    cache.enqueue({ session_id: "root", message_id: "next-input", prompt: "Queued follow-up" });
+    event(cache, 2, { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "" });
+    const finished = event(cache, 3, { event: "run_finished", run_id: "existing-run", status: outcome });
+    const entry = finished.entries.find(entry => entry.messageId === "next-input")!;
+    assert.equal(entry.queued, false); assert.equal(entry.state, label);
+    const html = renderToStaticMarkup(createElement(Conversation, { entries: finished.entries, sessionId: "root", demo: false, canSubmit: false, submit() {} }));
+    assert.match(html, new RegExp(`>${label}<`));
+    assert.doesNotMatch(html, />Queued<|Sending…|Delivery unconfirmed/);
+    const saved = applySnapshot(finished, history(["Queued follow-up"], "root", ["next-input"]));
+    assert.equal(saved.entries[0].state, undefined, "an authoritative persisted row replaces the unsaved-input outcome");
+  });
+}
+
+test("canonical follow-up input clears preparation and cannot be retroactively cancelled with later work", () => {
+  const cache = new LiveSessions();
+  event(cache, 1, { event: "run_started", run_id: "existing-run" });
+  cache.enqueue({ session_id: "root", message_id: "next-input", prompt: "Follow-up" });
+  event(cache, 2, { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "" });
+  const saved = event(cache, 3, { event: "user_message", run_id: "existing-run", message_id: "next-input", history_id: "saved-input", text: "Follow-up" });
+  assert.equal(saved.entries[0].state, undefined);
+  const finished = event(cache, 4, { event: "run_finished", run_id: "existing-run", status: "cancelled" });
+  assert.equal(finished.entries[0].state, undefined);
+  assert.equal(finished.entries[0].historyId, "saved-input");
+});
+
+test("foreign, child, channel and unidentified admission receipts cannot claim queued browser input", () => {
+  const cache = new LiveSessions();
+  event(cache, 1, { event: "run_started", run_id: "existing-run" });
+  cache.enqueue({ session_id: "root", message_id: "next-input", prompt: "Follow-up" });
+  const original = cache.get("root");
+  let cursor = 1;
+  for (const extra of [{ session_id: "another-root" }, { run_id: "another-run" }, { task_id: "child" },
+    { channel: "telegram" }, { message_id: "" }, { message_id: "unrelated" }, { run_id: "" }]) {
+    const after = event(cache, ++cursor, { event: "input_admitted", run_id: "existing-run", session_id: "root", message_id: "next-input", channel: "", ...extra });
+    assert.equal(after.entries, original.entries); assert.equal(after.activeRun, original.activeRun);
+  }
+  assert.equal(cache.get("root").entries.length, 1);
+  assert.equal(cache.get("root").entries[0].queued, true);
+});
+
+test("an unadmitted follow-up remains queued when the previous run stops and can join a later run", () => {
+  const cache = new LiveSessions();
+  event(cache, 1, { event: "run_started", run_id: "previous-run" });
+  const message = { session_id: "root", message_id: "next-input", prompt: "Not claimed yet" };
+  cache.enqueue(message); cache.admission(message, "queued");
+  const stopped = event(cache, 2, { event: "run_finished", run_id: "previous-run", status: "cancelled" });
+  assert.equal(stopped.entries[0].queued, true); assert.equal(stopped.entries[0].runId, "");
+  assert.equal(stopped.entries[0].state, undefined);
+  const admitted = event(cache, 3, { event: "run_started", run_id: "next-run", message_id: "next-input" });
+  assert.equal(admitted.entries[0].queued, false); assert.equal(admitted.entries[0].runId, "next-run");
+});
