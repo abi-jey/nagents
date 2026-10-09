@@ -74,7 +74,8 @@ async def test_zero_servers_logs_every_reload_and_never_reads_foreign_or_untrust
         assert sum("Ignoring foreign MCP configuration" in record.getMessage() for record in caplog.records) == 2
         public = json.dumps(diagnostics.snapshot()) + harness.describe() + caplog.text
         assert "PRIVATE_SECRET" not in public and "PRIVATE_COMMAND" not in public
-        assert ".vscode/mcp.json" in public and "opencode.json" in public
+        assert all(str(path) in harness.describe() for path in foreign)
+        assert all(json.dumps(str(path)) in caplog.text for path in foreign)
         foreign[0].unlink()
         await harness.resources.reload()
         assert harness.resources.mcp_diagnostics().ignored_configs == (str(foreign[1]),)
