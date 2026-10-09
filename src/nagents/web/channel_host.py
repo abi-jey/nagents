@@ -685,13 +685,22 @@ class ChannelHost:
         except Exception:
             pass
         finally:
-            await self.store.finish_work(work, status)
-            run = self.state.run_for(work.session_id)
-            if run is not None and run.work is work and not run.finished:
-                run.outcome = "cancelled" if status in {"interrupted", "queued"} else status
-                self.state.finish(run)
-            self.work_tasks.pop(work.session_id, None)
-            self.changed.set()
+
+            async def finish() -> None:
+                try:
+                    await self.store.finish_work(work, status)
+                finally:
+                    run = self.state.run_for(work.session_id)
+                    if run is not None and run.work is work and not run.finished:
+                        run.outcome = "cancelled" if status in {"interrupted", "queued"} else status
+                        self.state.finish(run)
+                    self.work_tasks.pop(work.session_id, None)
+                    self.changed.set()
+
+            # SQL alone joins its commit before propagating cancellation. Own
+            # the entire finalizer so Stop/shutdown cannot skip lane cleanup
+            # when cancellation arrives during that commit (or arrives again).
+            await _join(asyncio.create_task(finish(), name=f"ngn-claim-finish-{work.session_id}"))
 
     async def poll(self) -> None:
         previous: dict[str, str] = {}
