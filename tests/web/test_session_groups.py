@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -15,7 +17,201 @@ from tests.support.web import client_app
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import httpx
+
     from nagents.web.service import WebState
+
+
+async def create_folder(client: httpx.AsyncClient, headers: dict[str, str], name: str, parent: str = "") -> str:
+    before = (await client.get("/api/session-groups", headers=headers)).json()
+    response = await client.post(
+        "/api/session-groups/create",
+        headers=headers,
+        json={"revision": before["revision"], "name": name, "parent_id": parent},
+    )
+    assert response.status_code == 200, response.text
+    return str(
+        next(
+            group["id"] for group in response.json()["groups"] if group["name"] == name and group["parent_id"] == parent
+        )
+    )
+
+
+def test_nested_folders_reparent_rename_and_sibling_uniqueness(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (_, client, headers, _):
+            first = await create_folder(client, headers, "First")
+            second = await create_folder(client, headers, "Second")
+            notes = await create_folder(client, headers, "Notes", first)
+            other_notes = await create_folder(client, headers, "Notes", second)
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            for endpoint, body in (
+                ("create", {"name": "NOTES", "parent_id": first}),
+                ("reparent", {"group_id": notes, "parent_id": second}),
+            ):
+                response = await client.post(
+                    f"/api/session-groups/{endpoint}", headers=headers, json={"revision": current["revision"], **body}
+                )
+                assert response.status_code == 409
+                assert (await client.get("/api/session-groups", headers=headers)).json() == current
+            renamed = await client.post(
+                "/api/session-groups/update",
+                headers=headers,
+                json={"revision": current["revision"], "group_id": notes, "name": "Research", "collapsed": True},
+            )
+            assert renamed.status_code == 200
+            changed = next(group for group in renamed.json()["groups"] if group["id"] == notes)
+            assert changed == {"id": notes, "name": "Research", "collapsed": True, "parent_id": first}
+            moved = await client.post(
+                "/api/session-groups/reparent",
+                headers=headers,
+                json={"revision": renamed.json()["revision"], "group_id": notes, "parent_id": second},
+            )
+            assert moved.status_code == 200
+            assert {group["id"] for group in moved.json()["groups"] if group["parent_id"] == second} == {
+                notes,
+                other_notes,
+            }
+            before_restart = moved.json()
+        async with client_app(tmp_path) as (_, client, headers, _):
+            assert (await client.get("/api/session-groups", headers=headers)).json() == before_restart
+
+    asyncio.run(scenario())
+
+
+def test_folder_tree_rejects_cycles_missing_parents_and_deep_subtrees_atomically(tmp_path: Path) -> None:
+    from nagents.web.session_groups import MAX_GROUP_DEPTH
+
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (_, client, headers, _):
+            chain: list[str] = []
+            for depth in range(MAX_GROUP_DEPTH):
+                chain.append(await create_folder(client, headers, f"Level {depth}", chain[-1] if chain else ""))
+            branch = await create_folder(client, headers, "Branch")
+            await create_folder(client, headers, "Leaf", branch)
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            cases = [
+                ("reparent", {"group_id": chain[0], "parent_id": chain[-1]}, 422),
+                ("reparent", {"group_id": branch, "parent_id": branch}, 422),
+                ("reparent", {"group_id": branch, "parent_id": chain[-2]}, 422),
+                ("reparent", {"group_id": branch, "parent_id": "group-" + "f" * 32}, 404),
+                ("create", {"name": "Too deep", "parent_id": chain[-1]}, 422),
+                ("create", {"name": "Missing", "parent_id": "group-" + "f" * 32}, 404),
+            ]
+            for endpoint, body, status in cases:
+                response = await client.post(
+                    f"/api/session-groups/{endpoint}", headers=headers, json={"revision": current["revision"], **body}
+                )
+                assert response.status_code == status, response.text
+                assert (await client.get("/api/session-groups", headers=headers)).json() == current
+
+    asyncio.run(scenario())
+
+
+def test_removing_nested_folder_promotes_children_and_trashed_chat_memberships(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            root = state.selected_session_id
+            await state.history.add_message(root, Message(role="user", content="Keep nested conversation"))
+            parent = await create_folder(client, headers, "Parent")
+            middle = await create_folder(client, headers, "Middle", parent)
+            child = await create_folder(client, headers, "Leaf", middle)
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            moved = await client.post(
+                "/api/session-groups/move",
+                headers=headers,
+                json={"revision": current["revision"], "group_id": middle, "session_id": root},
+            )
+            assert moved.status_code == 200
+            deleted = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
+            assert deleted.status_code == 200
+            removed = await client.post(
+                "/api/session-groups/remove",
+                headers=headers,
+                json={"revision": moved.json()["revision"], "group_id": middle},
+            )
+            assert removed.status_code == 200
+            assert next(group for group in removed.json()["groups"] if group["id"] == child)["parent_id"] == parent
+            restored = await client.post(
+                f"/api/trash/{root}/restore",
+                headers=headers,
+                json={"deletion_id": deleted.json()["trash"]["deletion_id"]},
+            )
+            assert restored.status_code == 200
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            assert current["memberships"] == {root: parent}
+            removed_root = await client.post(
+                "/api/session-groups/remove",
+                headers=headers,
+                json={"revision": current["revision"], "group_id": parent},
+            )
+            assert removed_root.status_code == 200
+            assert removed_root.json()["memberships"] == {}
+            assert removed_root.json()["groups"][0]["parent_id"] == ""
+            assert (await client.get(f"/api/sessions/{root}", headers=headers)).json()["history"][0][
+                "content"
+            ] == "Keep nested conversation"
+
+    asyncio.run(scenario())
+
+
+def test_removal_name_collision_rolls_back_tree_and_revision(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (_, client, headers, _):
+            parent = await create_folder(client, headers, "Parent")
+            await create_folder(client, headers, "Notes")
+            await create_folder(client, headers, "Notes", parent)
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            response = await client.post(
+                "/api/session-groups/remove",
+                headers=headers,
+                json={"revision": current["revision"], "group_id": parent},
+            )
+            assert response.status_code == 409
+            assert (await client.get("/api/session-groups", headers=headers)).json() == current
+
+    asyncio.run(scenario())
+
+
+def test_legacy_flat_folders_migrate_without_losing_membership_or_collapse(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            root = state.selected_session_id
+            await state.history.add_message(root, Message(role="user", content="Keep legacy conversation"))
+            folder = await create_folder(client, headers, "Legacy")
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            moved = await client.post(
+                "/api/session-groups/move",
+                headers=headers,
+                json={"revision": current["revision"], "group_id": folder, "session_id": root},
+            )
+            assert moved.status_code == 200
+            path = state.channels.store.db_path
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("ALTER TABLE ngn_web_session_groups RENAME TO migration_source")
+            db.execute(
+                "CREATE TABLE ngn_web_session_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, collapsed INTEGER NOT NULL DEFAULT 0)"
+            )
+            db.execute("INSERT INTO ngn_web_session_groups SELECT id, name, name_key, 1 FROM migration_source")
+            db.execute("DROP TABLE migration_source")
+        async with client_app(tmp_path) as (_, client, headers, _):
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            assert current["groups"] == [{"id": folder, "name": "Legacy", "collapsed": True, "parent_id": ""}]
+            assert current["memberships"] == {root: folder}
+            nested = await create_folder(client, headers, "Legacy", folder)
+            assert nested != folder
+            current = (await client.get("/api/session-groups", headers=headers)).json()
+            removed = await client.post(
+                "/api/session-groups/remove",
+                headers=headers,
+                json={"revision": current["revision"], "group_id": folder},
+            )
+            assert removed.status_code == 200
+            assert removed.json()["groups"] == [{"id": nested, "name": "Legacy", "collapsed": False, "parent_id": ""}]
+
+    asyncio.run(scenario())
 
 
 def test_folder_membership_survives_restart_and_trash_restore_but_not_permanent_deletion(tmp_path: Path) -> None:
