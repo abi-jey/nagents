@@ -1,3 +1,7 @@
+/* Keep the form outside the voice scroll region: slash suggestions open above it. */
+.composer-area:has(> .voice-composer) { display: flex; flex-direction: column; max-height: calc(100dvh - 52px); min-height: 0; }
+.composer-area > .voice-composer { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; grid-auto-rows: min-content; align-content: start; }
+.composer-area:has(> .voice-composer) > form { flex-shrink: 0; }
 .voice-composer { --voice-accent: #c1e8da; position: relative; display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 0 10px; min-width: 0; color: var(--text-reading); animation: voice-enter 300ms ease-out both; }
 .voice-composer [hidden] { display: none !important; }
 .voice-presence { --sphere-size: 92px; grid-column: 1; grid-row: 1; display: grid; place-items: center; height: 100px; transition: height 320ms cubic-bezier(.2,.8,.2,1); }
@@ -97,7 +101,12 @@
   .voice-composer-actions .voice-settings-trigger span, .voice-composer-actions .voice-stop span { display: none; }
   .voice-composer-actions .voice-settings-trigger, .voice-composer-actions .voice-stop { width: 40px; }
 }
-@media (max-height: 680px) { .voice-presence, .voice-composer.has-expansion .voice-presence { --sphere-size: 64px; height: 76px; }.voice-inline-expansion { max-height: 28dvh; } }
+@media (max-height: 680px) {
+  .voice-presence, .voice-composer.has-expansion .voice-presence { --sphere-size: 64px; height: 76px; }
+  .voice-inline-expansion { max-height: 28dvh; scroll-padding-block: 8px; }
+  /* Sticky chrome must not cover the entire inspection area with a keyboard open. */
+  .voice-inline-expansion .delegation-inspector > :is(header, footer) { position: static; }
+}
 @media (prefers-reduced-motion: reduce) { .voice-composer, .voice-presence, .voice-inline-expansion { animation: none; transition: none; } }
 .delegation-inspector { min-width: 0; font-size: 13px; line-height: 1.6; }
 .delegation-inspector > header { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; background: var(--surface-reading); border-bottom: 1px solid #c5dfc41c; }
