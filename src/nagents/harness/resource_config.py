@@ -126,8 +126,11 @@ def read_resource_configuration(config: HarnessConfig) -> ResourceConfiguration:
     for path in config.resource_paths:
         revision = ""
         try:
+            # An explicit --config symlink retains target-relative references,
+            # but resolve it anew for every generation (e.g. ConfigMap ..data).
+            source_path = path.resolve() if path in config.explicit_config_paths else path
             try:
-                with path.open(encoding="utf-8") as stream:
+                with source_path.open(encoding="utf-8") as stream:
                     source = stream.read(1048577)
             except FileNotFoundError:
                 sources.append(ResourceSource(path, path.resolve(), False))
@@ -139,13 +142,15 @@ def read_resource_configuration(config: HarnessConfig) -> ResourceConfiguration:
             if not isinstance(document, dict):
                 raise ValueError("Extension configuration must be a mapping")
             if "plugins" in document:
-                plugins = parse_plugins(document["plugins"], path.parent)
+                plugins = parse_plugins(document["plugins"], source_path.parent)
                 plugin_source = str(path)
             if "mcp_servers" in document:
-                servers = parse_mcp_servers(document["mcp_servers"], path.parent, config.workspace)
+                servers = parse_mcp_servers(document["mcp_servers"], source_path.parent, config.workspace)
                 mcp_source = str(path)
             sources.append(
-                ResourceSource(path, path.resolve(), True, revision, "plugins" in document, "mcp_servers" in document)
+                ResourceSource(
+                    path, source_path.resolve(), True, revision, "plugins" in document, "mcp_servers" in document
+                )
             )
         except (OSError, ValueError, TypeError, RuntimeError) as error:
             raise ResourceConfigError(path, type(error).__name__, revision) from None

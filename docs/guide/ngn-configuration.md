@@ -533,6 +533,11 @@ configuration is intended.
 Reload locations preserve their logical paths. For example, a process started with
 `--config /etc/ngn/config.json` follows a replacement Kubernetes ConfigMap `..data`
 symlink on its next reload instead of retaining an obsolete timestamped target.
+Relative provider files, data directories, Python plugin paths, and MCP working
+directories in an explicit symlink config retain their target-directory meaning.
+Each extension reload resolves that logical source again and reads the same target
+used as its relative-path base. Startup-only settings still require their normal
+restart or settings action.
 `ngn serve` logs source and resolved paths, the effective MCP source, server names,
 and registered/advertised tool counts when that state changes. A higher-priority
 `"mcp_servers": {}` still clears earlier declarations; the effective-source log

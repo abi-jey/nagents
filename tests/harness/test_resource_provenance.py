@@ -49,7 +49,7 @@ async def test_configmap_rotation_updates_next_request_and_retains_old_called_se
         directory.mkdir()
         (directory / "config.json").write_text(
             json.dumps(
-                {"mcp_servers": {name: {"command": configured.command, "args": configured.args, "cwd": configured.cwd}}}
+                {"mcp_servers": {name: {"command": configured.command, "args": ["-u", "server.py"], "cwd": "../.."}}}
             )
         )
     rotate(volume, "..generation-one")
@@ -73,6 +73,7 @@ async def test_configmap_rotation_updates_next_request_and_retains_old_called_se
 
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
     harness.config.resource_paths = config.resource_paths
+    harness.config.explicit_config_paths = config.explicit_config_paths
 
     async def approve(request: ApprovalRequest) -> bool:
         return True
@@ -86,6 +87,61 @@ async def test_configmap_rotation_updates_next_request_and_retains_old_called_se
         assert read_resource_configuration(config).sources[-1].resolved == volume / "..generation-two" / "config.json"
     finally:
         await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.parametrize("kind", ["explicit", "project"])
+def test_symlink_reference_bases_preserve_source_semantics_across_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "user"))
+    directory = workspace / ".ngn" if kind == "project" else tmp_path / "volume"
+    directory.mkdir(parents=True)
+    source = directory / "config.json"
+    source.symlink_to("..data/config.json")
+    content = {
+        "providers": "./providers.json",
+        "data_dir": "./state",
+        "plugins": ["./extension.py:setup"],
+        "mcp_servers": {"fixture": {"command": sys.executable, "args": ["server.py"], "cwd": "./tools"}},
+    }
+    provider = {
+        "version": 2,
+        "revision": "0" * 64,
+        "active": "fixture",
+        "providers": {"fixture": {"kind": "openai", "auth": "api-key"}},
+    }
+    for name in ("..one", "..two"):
+        target = directory / name
+        target.mkdir()
+        (target / "config.json").write_text(json.dumps(content))
+        (target / "providers.json").write_text(json.dumps(provider))
+    if kind != "explicit":
+        (directory / "providers.json").write_text(json.dumps(provider))
+    rotate(directory, "..one")
+    config = load_config(workspace, source if kind == "explicit" else None, trust_project=kind == "project")
+    base = directory / "..one" if kind == "explicit" else directory
+    assert config.provider == "fixture"
+    assert config.provider_paths["workspace"] == base / "providers.json"
+    assert config.data_dir == base / "state"
+    assert config.plugins == (str(base / "extension.py") + ":setup",)
+    assert config.mcp_servers[0].cwd == str(base / "tools")
+    assert config.resource_paths[-1] == source
+    first = read_resource_configuration(config)
+    assert first.plugins == config.plugins and first.servers == config.mcp_servers
+
+    rotate(directory, "..two")
+    shutil.rmtree(directory / "..one")
+    second = read_resource_configuration(config)
+    base = directory / "..two" if kind == "explicit" else directory
+    assert second.plugins == (str(base / "extension.py") + ":setup",)
+    assert second.servers[0].cwd == str(base / "tools")
+    assert second.sources[-1].path == source
+    assert second.sources[-1].resolved == directory / "..two/config.json"
+    reloaded = load_config(workspace, source if kind == "explicit" else None, trust_project=kind == "project")
+    assert reloaded.provider_paths["workspace"] == base / "providers.json"
 
 
 @pytest.mark.requires_posix
