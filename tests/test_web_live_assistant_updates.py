@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
+from nagents.harness.tools import CodingTools
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.live_bridge import MainAgentBridge
 from tests.support.hang_guard import HANG_GUARD
@@ -25,6 +27,7 @@ from tests.test_web_live_bridge import speech
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from collections.abc import Iterator
     from pathlib import Path
 
     from nagents.events import Event
@@ -32,6 +35,17 @@ if TYPE_CHECKING:
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition
+
+
+@pytest.fixture(autouse=True)
+def portable_lifecycle_bootstrap(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # ControlledHarness covers the root; delegated children are plain Harnesses.
+    # These delivery/wakeup contracts must not depend on guarded workspace IO.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+    guarded = Mock(side_effect=OSError("Guarded workspace file tools currently require POSIX"))
+    monkeypatch.setattr(CodingTools, "directory", guarded)
+    yield
+    guarded.assert_not_called()
 
 
 @pytest.mark.parametrize("detach_early", [False, True])
