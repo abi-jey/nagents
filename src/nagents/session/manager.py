@@ -25,6 +25,16 @@ from .deliveries import delivery_cleanup_statements
 logger = logging.getLogger(__name__)
 
 
+def _content_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Serialized dataclasses cannot contain duplicate content fields."""
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("Duplicate content field")
+        result[name] = value
+    return result
+
+
 class SessionManager:
     """
     SQLite-based session and message history management.
@@ -449,7 +459,7 @@ class SessionManager:
         content: str | list[ContentPart] | None = row["content"]
         if isinstance(content, str) and content.startswith("["):
             try:
-                parts_data = json.loads(content)
+                parts_data = json.loads(content, object_pairs_hook=_content_object)
                 if isinstance(parts_data, list) and parts_data:
                     content = [self._dict_to_content_part(p) for p in parts_data]
             except (ValueError, TypeError, RecursionError):
