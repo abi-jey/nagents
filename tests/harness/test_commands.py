@@ -50,6 +50,8 @@ def test_builtin_metadata_and_frozen_command(harness: Harness) -> None:
     assert {command.name for command in commands} == {
         "help",
         "new",
+        "fork",
+        "rename",
         "sessions",
         "compact",
         "agent",

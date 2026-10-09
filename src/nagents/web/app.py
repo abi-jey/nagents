@@ -65,6 +65,7 @@ from .security import LocalOnly
 from .service import Run as Run
 from .service import RunResponse
 from .service import WebState as WebState
+from .session_actions import register_session_actions
 from .session_groups import SessionGroups
 from .session_groups import register_session_groups
 from .settings import SettingsInput
@@ -393,6 +394,7 @@ def create_app(
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
     register_session_groups(app, lambda: session_groups)
+    register_session_actions(app, lambda: state, lambda: live)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 

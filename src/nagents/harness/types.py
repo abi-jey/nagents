@@ -63,6 +63,7 @@ class SessionInfo:
     id: str
     title: str
     updated_at: str
+    forked_from: str = ""
 
 
 @dataclass

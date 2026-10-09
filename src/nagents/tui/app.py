@@ -1225,7 +1225,7 @@ class NagentsApp(App[None]):
             self.push_screen(
                 ModelModal(self.harness.config.model), lambda value: self.command(f"/model {value}") if value else None
             )
-        elif name in ("/new", "/compact", "/agent", "/model"):
+        elif name in ("/new", "/fork", "/rename", "/compact", "/agent", "/model"):
             self._launch(lambda: self._change(name, argument), f"{name[1:].capitalize()}...")
         elif name.startswith("/skill:") or self.harness.commands.get(name[1:]) is not None:
             self._launch(lambda: self._custom_command(name[1:], argument), f"Running {name}...")
@@ -1589,6 +1589,16 @@ class NagentsApp(App[None]):
         if name == "/new":
             await self.harness.new_session()
             await self._clear_conversation()
+        elif name == "/fork":
+            if self._queued_prompts:
+                raise ValueError("Finish or clear queued prompts before forking this conversation.")
+            await self.harness.fork_session(argument)
+            await self._clear_conversation()
+            await self._load_history()
+            await self._notice("Forked conversation. New messages are independent of the original chat.")
+        elif name == "/rename":
+            await self.harness.rename_session(argument)
+            await self._notice(f"Conversation renamed to {argument.strip()}.")
         elif name == "/compact":
             await self._event(await self.harness.compact())
         elif name == "/agent":

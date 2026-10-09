@@ -290,10 +290,15 @@ class WebHistory(_HarnessSession):
             "'filename', u.filename, 'media_type', u.media_type, 'byte_length', u.byte_length)) "
             "FROM (SELECT upload_id, filename, media_type, byte_length, inbox_id, position "
             "FROM ngn_web_uploads ORDER BY position) u WHERE u.inbox_id = i.id) AS upload_metadata, "
-            "v.transcript AS voice_transcript, vo.voice_session_id AS voice_session_id "
+            "v.transcript AS voice_transcript, vo.voice_session_id AS voice_session_id, "
+            "f.content AS fork_content, (SELECT json_group_array(json_object('upload_id', u.upload_id, "
+            "'filename', u.filename, 'media_type', u.media_type, 'byte_length', u.byte_length)) "
+            "FROM (SELECT * FROM ngn_fork_message_uploads ORDER BY position) u "
+            "WHERE u.history_id = m.id) AS fork_upload_metadata "
             "FROM v2_messages m "
             "LEFT JOIN ngn_web_voice_messages v ON v.history_id = m.id "
             "LEFT JOIN ngn_web_voice_origins vo ON vo.history_id = m.id "
+            "LEFT JOIN ngn_fork_message_display f ON f.history_id = m.id "
             "LEFT JOIN ngn_web_message_origins o ON o.history_id = m.id "
             "LEFT JOIN ngn_web_inbox i ON i.id = o.inbox_id AND i.session_id = m.session_id"
         )
@@ -326,6 +331,11 @@ class WebHistory(_HarnessSession):
                 )
             return record
         if row["origin_id"] is None or message.role != "user":
+            if row["fork_content"] is not None and message.role == "user":
+                record["content"] = str(row["fork_content"])
+                uploads = json.loads(row["fork_upload_metadata"])
+                if uploads:
+                    record.update(uploads=uploads, parts=[])
             return record
         message_id = str(row["origin_message_id"])
         if not row["origin_channel"]:

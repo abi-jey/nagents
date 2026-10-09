@@ -24,6 +24,7 @@ from nagents.events import ErrorEvent
 from nagents.observation import scope as observation_scope
 from nagents.provider.openai import OpenAIProvider
 from nagents.session import SessionManager
+from nagents.session import forks
 from nagents.types import ContentPart
 from nagents.types import TextContent
 
@@ -64,6 +65,8 @@ from .types import TaskMessage
 from .types import ToolOutput
 
 if TYPE_CHECKING:
+    import sqlite3
+
     from nagents.context_stats import ContextStats
     from nagents.events import CompactionDoneEvent
     from nagents.provider import Provider
@@ -711,11 +714,45 @@ class Harness:
         await self.initialize(create_session=False)
         async with aiosqlite.connect(self.agent.session.db_path) as db:
             cursor = await db.execute(
-                "SELECT h.id, h.title, s.updated_at FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
+                "SELECT h.id, h.title, s.updated_at, COALESCE(f.forked_from, '') "
+                "FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
+                "LEFT JOIN ngn_session_forks f ON f.session_id = h.id "
                 "ORDER BY h.title = '', s.updated_at DESC, s.rowid DESC"
             )
             rows = await cursor.fetchall()
-        return [SessionInfo(str(row[0]), str(row[1]) or "New session", str(row[2])) for row in rows]
+        return [SessionInfo(str(row[0]), str(row[1]) or "New session", str(row[2]), str(row[3])) for row in rows]
+
+    async def fork_session(self, title: str = "") -> str:
+        """Select an independent context copy; runtime work and approvals stay with the source."""
+        with self.operation("fork session"):
+            await self.initialize()
+            if self.wakeup_handler is not None:
+                raise forks.SessionForkError("Use the host's fork action when scheduled work has a lifecycle owner.")
+            if any(not task.done() for task in self.tasks.root._workers.values()):
+                raise forks.SessionForkError("Finish descendant work before forking this conversation.")
+            source = self.session_id
+
+            async def change() -> str:
+                target = await forks.transaction(
+                    self.agent.session.db_path, lambda db: forks.fork_in(db, source, title)
+                )
+                self.session_id = target
+                self._session_created = True
+                self.tools.read_hashes.clear()
+                return target
+
+            return await _await_cleanup(asyncio.create_task(change()))
+
+    async def rename_session(self, title: str) -> None:
+        """Set a nonempty title, which later automatic title generation preserves."""
+        with self.operation("rename session"):
+            await self.initialize()
+
+            def change(db: "sqlite3.Connection") -> str:
+                forks.rename_in(db, self.session_id, title)
+                return self.session_id
+
+            await forks.transaction(self.agent.session.db_path, change)
 
     async def resume(self, id: str) -> None:
         with self.operation("resume"):
