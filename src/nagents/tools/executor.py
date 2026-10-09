@@ -95,7 +95,11 @@ class ToolExecutor:
 
         except Exception as e:
             duration = (time.monotonic() - start) * 1000
-            logger.exception(f"Tool {tool_call.name} failed")
+            if tool_call.name.startswith("mcp__"):
+                # MCP error text is untrusted response data and may contain credentials.
+                logger.error("MCP tool invocation failed: tool=%s error_type=%s", tool_call.name, type(e).__name__)
+            else:
+                logger.exception(f"Tool {tool_call.name} failed")
 
             return ToolResultEvent(
                 id=tool_call.id,

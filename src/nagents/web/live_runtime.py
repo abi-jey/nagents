@@ -43,6 +43,7 @@ from .live_inspection import seed_details
 from .live_inspection import text_preview
 from .live_login import ChatGPTLiveConnection
 from .live_login import LoginVoiceError
+from .live_output import BrowserOutput as _BrowserOutput
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -411,28 +412,6 @@ class _BrowserInput:
             deadline += len(frame) / bytes_per_second
 
 
-class _BrowserOutput:
-    """Do not accumulate unbounded audio when browser playback falls behind."""
-
-    audio_format = AudioFormat()
-
-    def __init__(self) -> None:
-        self.frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
-
-    async def write(self, chunk: bytes) -> None:
-        if len(chunk) % 2:
-            raise ValueError("Live PCM16 output ended with an incomplete sample")
-        for offset in range(0, len(chunk), MAX_AUDIO_FRAME):
-            self.frames.put_nowait(chunk[offset : offset + MAX_AUDIO_FRAME])
-
-    async def interrupt(self) -> None:
-        while not self.frames.empty():
-            self.frames.get_nowait()
-
-    async def close(self) -> None:
-        await self.interrupt()
-
-
 class LiveService:
     """Single-event-loop call ownership, independent of HTTP request lifetimes.
 
@@ -588,12 +567,19 @@ class LiveService:
         source, sink = call.audio_in, call.audio_out
         assert source is not None and sink is not None
         call.browser = True
-        await socket.accept(subprotocol="ngn.live.v1")
+        protocol = "ngn.live.v2" if "ngn.live.v2" in socket.scope.get("subprotocols", ()) else "ngn.live.v1"
+        await socket.accept(subprotocol=protocol)
         source.connected.set()
 
         async def playback() -> None:
-            while True:
-                await socket.send_bytes(await sink.frames.get())
+            async for packet in sink.packets():
+                if packet.interrupted:
+                    # Cached v1 clients accept PCM only. Explicit v2 negotiation
+                    # is required before sending any playback-control text.
+                    if protocol == "ngn.live.v2":
+                        await socket.send_json({"type": "interrupt"})
+                else:
+                    await socket.send_bytes(packet.data)
 
         sender = asyncio.create_task(playback(), name="web-live-playback")
         stopped = asyncio.create_task(call.stop.wait())
@@ -619,6 +605,7 @@ class LiveService:
             pass
         finally:
             call.request_stop("Live browser audio disconnected.")
+            await sink.close()
             sender.cancel()
             stopped.cancel()
             await asyncio.gather(sender, stopped, return_exceptions=True)
@@ -829,6 +816,8 @@ class LiveService:
             for pending in preparing:
                 pending.cancel()
             await asyncio.gather(*preparing, return_exceptions=True)
+            if call.audio_out is not None:
+                await call.audio_out.close()
             if media is not None:
                 with suppress(Exception):
                     await media.quiet()
@@ -983,6 +972,7 @@ class LiveService:
                 agent.audio = AudioDuplex(input=call.audio_in, output=call.audio_out)
                 observer = asyncio.create_task(self._observe(call, agent, ""), name="web-live-upstream")
                 await self._connected(call, observer)
+                await call.audio_out.close()
                 if call.record.status != "closing":
                     call.record.transition("closing", "Closing Live session.")
                 if call.attached.is_set() and not observer.done():
@@ -1002,6 +992,8 @@ class LiveService:
                 if not call.failure:
                     call.fail("Live connection failed. Provider finalization is unconfirmed.")
         finally:
+            if call.audio_out is not None:
+                await call.audio_out.close()
             if agent is not None:
                 try:
                     async with asyncio.timeout(CLEANUP_SECONDS):

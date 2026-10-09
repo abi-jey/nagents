@@ -1,6 +1,7 @@
 import type { AudioDeviceSelection, LiveMedia, LiveTransport, MediaHandlers } from "./types.js";
 import { readAudioDevices } from "./devices.js";
 import { captureMicrophone, DeviceChangeQueue, replaceMicrophone, selectAudioOutput, type AudioSink } from "./device-routing.js";
+import { pcmPlayback, type PcmPlayback } from "./playback.js";
 import { audioLevels, type AudioLevels } from "./audio-levels.js";
 import { serverSocketUrl } from "../../api/origin.js";
 import { createPcmAudio, type PcmAudio } from "../../components/voiceSphere/audioStreams.js";
@@ -24,12 +25,13 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
   let stream: MediaStream | undefined, context: AudioContext | undefined, capture: AudioWorkletNode | undefined, socket: WebSocket | undefined;
   let captureSource: MediaStreamAudioSourceNode | undefined;
   let meter: AudioLevels | undefined;
+  let playback: PcmPlayback | undefined;
   let pcm: PcmAudio | undefined;
-  let closed = false, inputMuted = false, outputMuted = false, playbackTime = 0;
+  let closed = false, inputMuted = false, outputMuted = false;
+  let hasOutput = false;
   let switchingInput = false, outputId = devices.outputId;
   const inputs = new DeviceChangeQueue(), outputs = new DeviceChangeQueue();
   let abortSignal: AbortSignal | undefined, rejectConnection: ((cause: Error) => void) | undefined;
-  const playing = new Map<AudioBufferSourceNode, (() => void) | undefined>();
 
   // Visualization is optional: a queue/analysis failure must never terminate
   // microphone capture, scheduled playback, or the server-owned connection.
@@ -49,15 +51,11 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     try {
       const frame = pcm.sample();
       return { input: inputMuted || switchingInput ? silentSignal() : frame.input,
-        output: outputMuted || playing.size === 0 ? silentSignal() : frame.output };
+        output: outputMuted || !playback ? silentSignal() : frame.output };
     } catch { releasePcm(); return silent(); }
   };
 
-  const stopPlayback = () => {
-    resetOutput();
-    for (const [source, releaseLevel] of playing) { releaseLevel?.(); source.stop(); source.disconnect(); }
-    playing.clear(); playbackTime = 0;
-  };
+  const stopPlayback = () => { hasOutput = false; resetOutput(); playback?.reset(); };
 
   const close = () => {
     if (closed) return;
@@ -71,7 +69,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     captureSource?.disconnect();
     capture?.disconnect(); capture?.port.close();
     socket?.close();
-    stopPlayback();
+    stopPlayback(); playback?.close(); playback = undefined;
     if (context) { context.onstatechange = null; void context.close().catch(() => {}); }
   };
 
@@ -90,25 +88,8 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
   const receive = (data: ArrayBuffer) => {
     if (closed || !context || outputMuted) return;
     if (data.byteLength === 0 || data.byteLength > 48_000 || data.byteLength % 2) { handlers.failed("The audio relay sent an invalid frame."); return; }
-    const samples = new DataView(data), buffer = context.createBuffer(1, data.byteLength / 2, 24_000);
-    const channel = buffer.getChannelData(0);
-    for (let i = 0; i < channel.length; i++) channel[i] = samples.getInt16(i * 2, true) / 32768;
-    // Avoid building a long delayed playback queue if the browser falls behind.
-    if (playbackTime > context.currentTime + 0.6) {
-      stopPlayback();
-    }
-    const source = context.createBufferSource();
-    source.buffer = buffer; source.connect(context.destination);
-    const releaseLevel = meter?.output(source);
-    source.onended = () => { playing.delete(source); releaseLevel?.(); source.disconnect(); };
-    playing.set(source, releaseLevel);
-    const start = Math.max(context.currentTime + 0.02, playbackTime);
-    source.start(start);
-    // These bytes become audible on AudioContext time, not when the socket
-    // receives them. The queue copies the PCM before this ArrayBuffer is reused.
-    withPcm((audio) => audio.output.write(new Uint8Array(data), { at: start }));
-    playbackTime = start + buffer.duration;
-    if (context.state !== "running") handlers.playbackBlocked(true);
+    if (context.state !== "running") { handlers.playbackBlocked(true); return; }
+    hasOutput = true; playback?.write(data);
   };
 
   return {
@@ -125,7 +106,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
       } catch { releasePcm(); }
       meter = audioLevels(audio, handlers.levels, () => [
         !closed && !inputMuted && socket?.readyState === WebSocket.OPEN,
-        !closed && !outputMuted && playing.size > 0,
+        !closed && !outputMuted && hasOutput,
       ]);
       audio.onstatechange = () => {
         if (closed) return;
@@ -142,8 +123,12 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         observeMicrophone(stream);
         await selectAudioOutput(audio as AudioContext & AudioSink, devices.outputId, signal);
         if (closed || signal.aborted) throw new DOMException("Cancelled", "AbortError");
-        await audio.audioWorklet.addModule("/assets/live-capture.js");
+        await Promise.all([audio.audioWorklet.addModule("/assets/live-capture.js"), audio.audioWorklet.addModule("/assets/live-playback.js")]);
         if (closed || signal.aborted) throw new DOMException("Cancelled", "AbortError");
+        playback = pcmPlayback(audio, (bytes, at) => {
+          if (!closed && !outputMuted) withPcm(queue => queue.output.write(bytes, { at }));
+        }, () => { if (!closed) handlers.failed("Speaker audio processing stopped. Reconnect to try again."); });
+        meter?.output(playback.node);
         const source = audio.createMediaStreamSource(stream); captureSource = source;
         const processor = new AudioWorkletNode(audio, "ngn-live-capture"); capture = processor;
         processor.onprocessorerror = () => { if (!closed) handlers.failed("Microphone audio processing stopped. Reconnect to try again."); };
@@ -166,10 +151,11 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     async connect(sessionId, token) {
       if (closed || !context) throw new DOMException("Cancelled", "AbortError");
       resetInput(); stopPlayback();
-      const channel = new WebSocket(serverSocketUrl(`/api/live/sessions/${encodeURIComponent(sessionId)}/audio`), ["ngn.live.v1", `ngn.token.${token}`]);
+      const channel = new WebSocket(serverSocketUrl(`/api/live/sessions/${encodeURIComponent(sessionId)}/audio`), ["ngn.live.v2", `ngn.token.${token}`]);
       socket = channel; channel.binaryType = "arraybuffer";
-      channel.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      channel.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
         if (closed) return;
+        if (typeof event.data === "string" && event.data === '{"type":"interrupt"}') { stopPlayback(); return; }
         if (!(event.data instanceof ArrayBuffer)) { handlers.failed("The audio relay sent an invalid frame."); return; }
         receive(event.data);
       };
@@ -203,6 +189,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     muteInput(muted) { inputMuted = muted; resetInput(); stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); meter?.sync(); },
     muteOutput(muted) {
       outputMuted = muted;
+      playback?.mute(muted);
       if (muted) stopPlayback();
       else resetOutput();
       meter?.sync();
@@ -239,9 +226,11 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         if (closed || !context) throw new DOMException("Voice is not active", "AbortError");
         if (deviceId === outputId) return;
         await selectAudioOutput(context as AudioContext & AudioSink, deviceId, signal, true);
-        signal.throwIfAborted(); outputId = deviceId; resetOutput();
+        signal.throwIfAborted(); outputId = deviceId; playback?.fenceReports(); resetOutput();
       });
     },
     play, close, sampleAudio,
+    audioHealth: () => playback?.health() || { receivedSamples: 0, playedSamples: 0, underruns: 0, droppedSamples: 0,
+      bufferedMs: 0, peakBufferedMs: 0, targetMs: 40, sampleRate: context?.sampleRate || 0, correctionPpm: 0 },
   };
 }

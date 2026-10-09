@@ -900,7 +900,10 @@ def test_real_agent_and_live_api_attach_without_second_start_or_server_audio(mon
     asyncio.run(scenario())
 
 
-def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("protocol", ["ngn.live.v1", "ngn.live.v2"])
+def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(
+    monkeypatch: pytest.MonkeyPatch, protocol: str
+) -> None:
     """Real native provider WebSocket, with the browser end simulated at the ASGI boundary."""
 
     class Browser:
@@ -909,6 +912,8 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(monkeypat
             self.outgoing: asyncio.Queue[bytes] = asyncio.Queue()
             self.accepted = ""
             self.closed = False
+            self.scope = {"subprotocols": [protocol]}
+            self.controls: list[dict[str, object]] = []
 
         async def accept(self, *, subprotocol: str) -> None:
             self.accepted = subprotocol
@@ -918,6 +923,10 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(monkeypat
 
         async def send_bytes(self, data: bytes) -> None:
             await self.outgoing.put(data)
+
+        async def send_json(self, data: dict[str, object]) -> None:
+            assert data == {"type": "interrupt"}
+            self.controls.append(data)
 
         async def close(self, *, code: int = 1000) -> None:
             self.closed = True
@@ -980,12 +989,24 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(monkeypat
             identifier = str(created["session_id"])
             browser = Browser()
             relay = asyncio.create_task(service.serve_audio(identifier, cast("WebSocket", browser)))
-            await until(lambda: browser.accepted == "ngn.live.v1")
+            await until(lambda: browser.accepted == protocol)
             browser.incoming.put_nowait({"type": "websocket.receive", "bytes": input_audio})
             async with asyncio.timeout(WAIT):
                 await upstream_audio.wait()
-                assert b"".join([await browser.outgoing.get(), await browser.outgoing.get()]) == output_audio
+                received = bytearray()
+                while len(received) < len(output_audio):
+                    frame = await browser.outgoing.get()
+                    assert 0 < len(frame) <= 960
+                    received.extend(frame)
+                assert bytes(received) == output_audio
             assert (await service.snapshot(identifier))["status"] == "connected"
+            sink = service._active[identifier].audio_out
+            assert sink is not None
+            await sink.interrupt()
+            await sink.write(input_audio)
+            async with asyncio.timeout(WAIT):
+                assert await browser.outgoing.get() == input_audio
+            assert browser.controls == ([{"type": "interrupt"}] if protocol == "ngn.live.v2" else [])
             browser.incoming.put_nowait({"type": "websocket.disconnect"})
             await asyncio.wait_for(relay, WAIT)
             result = await service.snapshot(identifier)

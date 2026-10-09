@@ -63,6 +63,9 @@ class HarnessConfig:
     profiles: dict[str, AgentProfile] = field(default_factory=dict)
     diagnostics: tuple[str, ...] = ()
     config_paths: tuple[Path, ...] = ()
+    # Explicit symlink configs historically resolve relative references beside
+    # their target. Keep the logical location so extension reloads can rotate it.
+    explicit_config_paths: tuple[Path, ...] = ()
     provider_paths: dict[str, Path] = field(default_factory=dict)
     theme: str = "terminal"
     animations: bool = True
@@ -162,11 +165,14 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     """Load trusted config only; never import plugins or read credential values."""
     defaults = HarnessConfig(workspace=workspace, trust_project=trust_project)
     directory = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn"
-    user = directory / "config.json"
+    user = Path(os.path.abspath((directory / "config.json").expanduser()))
     project = defaults.workspace / ".ngn/config.json"
-    explicit = config_path.expanduser().resolve() if config_path is not None else None
+    # Retain the operator-selected location, not a transient symlink target.
+    # Kubernetes rotates ConfigMap ..data links without restarting the process.
+    explicit = Path(os.path.abspath(config_path.expanduser())) if config_path is not None else None
+    explicit_project = explicit is not None and explicit.resolve() == project.resolve()
     paths = [user]
-    if project.exists() and not trust_project and explicit != project.resolve():
+    if project.exists() and not trust_project and not explicit_project:
         message = (
             f"Ignoring untrusted project config {project}; use trust_project=True to allow endpoints and Python code."
         )
@@ -176,6 +182,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     if explicit is not None:
         paths.append(explicit)
     documents: list[tuple[Path, dict[str, object]]] = []
+    directories: dict[Path, Path] = {}
     provider_paths: dict[str, Path] = {}
     for path in reversed(dict.fromkeys(reversed(paths))):
         if not path.exists():
@@ -184,8 +191,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             continue
         if path.suffix != ".json":
             raise ValueError(f"{path}: ngn configuration files must be .json")
+        source = path.resolve() if path == explicit else path
+        directories[path] = source.parent
         try:
-            values = json.loads(path.read_text(encoding="utf-8"))
+            values = json.loads(source.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid configuration in {path}: {exc}") from exc
         if not isinstance(values, dict):
@@ -200,7 +209,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 if not isinstance(reference, str) or not reference.strip():
                     raise ValueError(f"{path}: providers.{scope} must be a nonempty file path")
                 target = Path(reference).expanduser()
-                target = (target if target.is_absolute() else path.parent / target).resolve()
+                target = (target if target.is_absolute() else directories[path] / target).resolve()
                 if target.suffix != ".json" or target == path.resolve():
                     raise ValueError(f"{path}: providers.{scope} must refer to a separate .json file")
                 provider_paths[scope] = target
@@ -259,13 +268,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 global_model = env_value
 
     diagnostics: list[str] = [login_note] if login_note else []
-    if project.exists() and not trust_project and explicit != project.resolve():
+    if project.exists() and not trust_project and not explicit_project:
         diagnostics.append(
             f"Ignoring untrusted project config {project}; use trust_project=True to allow endpoints and Python code."
         )
     loaded: list[Path] = []
     for path, values in documents:
-        loaded.append(path.resolve())
+        loaded.append(path)
         unknown = values.keys() - allowed
         if unknown:
             raise ValueError(
@@ -285,7 +294,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                     raise ValueError(f"{path}: {key} must be a string")
                 if key == "data_dir":
                     value = Path(value).expanduser()
-                    value = value if value.is_absolute() else path.parent / value
+                    value = value if value.is_absolute() else directories[path] / value
             elif key in integers:
                 if type(value) is not int:
                     raise ValueError(f"{path}: {key} must be an integer")
@@ -296,7 +305,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 if type(value) is not bool:
                     raise ValueError(f"{path}: {key} must be a boolean")
             elif key == "mcp_servers":
-                value = parse_mcp_servers(value, path.parent, config.workspace)
+                value = parse_mcp_servers(value, directories[path], config.workspace)
             elif key == "plugins":
                 if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                     raise ValueError(f"{path}: plugins must be an array of 'path.py:setup' or 'module:setup' strings")
@@ -307,7 +316,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                         raise ValueError(f"{path}: invalid plugin reference {item!r}")
                     if module.endswith(".py"):
                         plugin_path = Path(module).expanduser()
-                        module = str((path.parent / plugin_path).resolve())
+                        module = str((directories[path] / plugin_path).resolve())
                     elif not all(part.isidentifier() for part in module.split(".")):
                         raise ValueError(f"{path}: invalid installed plugin module {module!r}")
                     plugins.append(f"{module}:{setup}")
@@ -340,7 +349,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
-    config.resource_paths = tuple(reversed(dict.fromkeys(path.resolve() for path in reversed(paths))))
+    config.explicit_config_paths = (explicit,) if explicit is not None else ()
+    config.resource_paths = tuple(reversed(dict.fromkeys(paths[::-1])))
     config.global_model_default = global_model
     if selected_name:
         registry = store.load()

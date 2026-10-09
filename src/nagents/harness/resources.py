@@ -12,6 +12,7 @@ import copy
 import hashlib
 import inspect
 import json
+import logging
 import marshal
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from nagents._async import join_owned
 from nagents.extensions import AgentPlugin
 from nagents.extensions import ModelRequest
 from nagents.extensions import RunContext
+from nagents.mcp import MCPError
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
 from nagents.tools.registry import ToolRegistry
@@ -34,7 +36,10 @@ from nagents.types import ToolDefinition
 from .commands import CommandRegistry
 from .plugin_loader import PluginModule
 from .plugin_loader import load_plugin
-from .resource_config import resource_settings
+from .resource_config import ResourceConfigError
+from .resource_config import ResourceConfiguration
+from .resource_config import ignored_project
+from .resource_config import read_resource_configuration
 from .types import Notice
 
 if TYPE_CHECKING:
@@ -230,6 +235,10 @@ class HarnessResources(AgentPlugin):
         self._close_task: asyncio.Task[None] | None = None
         self._closed = False
         self.last_error = ""
+        self.logger = logging.getLogger(__name__)
+        self._failure_fingerprint = ""
+        self._summary_fingerprint = ""
+        self._ignored_source = ""
 
     def definition(self, name: str) -> ToolDefinition | None:
         if self._running and self._snapshot_ready:
@@ -288,6 +297,9 @@ class HarnessResources(AgentPlugin):
         if harness.config.demo or (harness._is_subagent and not harness.supports_child_custom_tools):
             return
         fresh = _Generation()
+        configured = ResourceConfiguration()
+        stage, source, server_name = "configuration", "programmatic configuration", ""
+        await self._report_project_trust()
         registry = harness.agent.tool_registry
         # Baseline includes current host registrations, restoring definitions
         # shadowed by the retiring extension only when it still owns that slot.
@@ -325,8 +337,11 @@ class HarnessResources(AgentPlugin):
         try:
             # Rebuild the host baseline before setup reads it. Replaying an
             # append-style setup against its old override would accumulate text.
+            stage, source = "tool_policy", str(harness.tool_settings.path)
             harness.tool_settings.load()
+            stage = "skills"
             await harness.agent.refresh_skills()
+            stage, source = "instructions", str(harness.workspace / "AGENTS.md")
             authored = prompt_before != generated_before
             harness.load_project_instructions()
             for name in tuple(harness.instructions):
@@ -337,8 +352,11 @@ class HarnessResources(AgentPlugin):
                 baselines["system_prompt"] = harness._generated_system_prompt
             if authored:
                 harness.agent.system_prompt = prompt_before
-            references, servers = resource_settings(harness.config)
+            stage, source = "configuration", "programmatic configuration"
+            configured = read_resource_configuration(harness.config)
+            references, servers = configured.plugins, configured.servers
             fresh.references = references
+            stage, source = "plugin_setup", configured.plugin_source
             scope._config.plugins = references
             scope._config.mcp_servers = servers
             config_identity = _fingerprint(asdict(scope._config))
@@ -379,11 +397,13 @@ class HarnessResources(AgentPlugin):
             # candidate and closes every already-started client.
             server_origins: dict[str, str] = {}
             for server in servers:
+                stage, source, server_name = "mcp_start", configured.mcp_source, server.name
                 origin = _mcp_origin(server)
                 await fresh.manager.add_server(server, strict=True)
                 if _mcp_origin(server) != origin:
                     raise ValueError("MCP source changed during startup; retry discovery")
                 server_origins[server.name] = origin
+            stage, source = "mcp_discover", configured.mcp_source
             for tool in await fresh.manager.get_tool_definitions():
                 if tool.func is not None:
                     fresh.registry.register(tool.func, tool.name, tool.description, tool.parameters)
@@ -401,6 +421,7 @@ class HarnessResources(AgentPlugin):
                             "schema": tool.parameters,
                         }
                     )
+            stage, source, server_name = "validation", configured.plugin_source, ""
             if any(not isinstance(hook, AgentPlugin) for hook in fresh.hooks):
                 raise TypeError("Plugin hooks must be AgentPlugin instances")
             fresh.settings = dict(agent_scope._settings)
@@ -413,6 +434,8 @@ class HarnessResources(AgentPlugin):
             ):
                 raise ValueError("Plugin max_tool_rounds must be an integer between 1 and 1000")
         except BaseException as error:
+            if stage == "mcp_start" and server_name in fresh.manager._clients:
+                stage = "mcp_discover"
             cleanup_failed = False
             try:
                 await finish_on_cancel(fresh.close())
@@ -424,22 +447,49 @@ class HarnessResources(AgentPlugin):
                 harness._generated_system_prompt = generated_before
             if not isinstance(error, Exception):
                 raise
-            if initial:
-                raise RuntimeError(f"Extension initialization failed: {type(error).__name__}: {error}") from error
-            # Do not echo plugin/config exception text: it can contain credentials.
-            self.last_error = f"Resource reload failed ({type(error).__name__}); previous tools and MCP connections retained. Check trusted extension configuration."
+            if isinstance(error, ResourceConfigError):
+                stage, source = "configuration", str(error.path)
+            elif isinstance(error, MCPError) and error.stage:
+                stage = error.stage
+            error_type = error.error_type if isinstance(error, ResourceConfigError) else type(error).__name__
+            diagnostic = (
+                f"Resource reload failed: stage={stage}, source={json.dumps(source)}, "
+                f"server={server_name or '(none)'}, error={error_type}; "
+                "previous tools and MCP connections retained. Check the trusted configuration and server installation."
+            )
             if isinstance(error, ReloadContractError):
-                self.last_error += f" {error}"
+                diagnostic += f" {error}"
             if cleanup_failed:
-                self.last_error += " A rejected plugin's cleanup also failed."
-            if self.last_error not in harness.diagnostics:
-                harness.diagnostics.append(self.last_error)
-            await harness.emit(Notice(self.last_error, "warning"))
+                diagnostic += " A rejected plugin's cleanup also failed."
+            fingerprint = _fingerprint(
+                {
+                    "diagnostic": diagnostic,
+                    "sources": [item.revision for item in configured.sources],
+                    "servers": [asdict(item) for item in configured.servers],
+                    "plugins": configured.plugins,
+                    "invalid_source": error.revision if isinstance(error, ResourceConfigError) else "",
+                }
+            )
+            if fingerprint != self._failure_fingerprint:
+                self.logger.warning("%s", diagnostic)
+                self._failure_fingerprint = fingerprint
+                if self.last_error in harness.diagnostics:
+                    harness.diagnostics.remove(self.last_error)
+                self.last_error = diagnostic
+                if diagnostic not in harness.diagnostics:
+                    harness.diagnostics.append(diagnostic)
+                if not initial:
+                    await harness.emit(Notice(diagnostic, "warning"))
+            if initial:
+                if stage in {"configuration", "mcp_start", "mcp_discover"}:
+                    raise RuntimeError(diagnostic) from None
+                raise RuntimeError(f"Extension initialization failed: {type(error).__name__}: {error}") from error
             return
         previous_error = self.last_error
         if previous_error in harness.diagnostics:
             harness.diagnostics.remove(previous_error)
         self.last_error = ""
+        self._failure_fingerprint = ""
         if harness.instructions != instructions_before:
             # Refreshing the cache must not make an old edit snapshot appear
             # to have observed newly changed project instructions.
@@ -480,6 +530,58 @@ class HarnessResources(AgentPlugin):
             await finish_on_cancel(old.close())
         if not authored and "system_prompt" not in fresh.settings:
             harness.refresh_instructions()
+        self._report_loaded(configured, fresh)
+
+    async def _report_project_trust(self) -> None:
+        path = ignored_project(self.harness.config)
+        if path == self._ignored_source:
+            return
+        self._ignored_source = path
+        if path:
+            locations = [str(item) for item in self.harness.config.resource_paths]
+            text = (
+                f"Ignoring untrusted project configuration {json.dumps(path)}: its MCP servers and Python plugins "
+                f"are not loaded. Trusted reload locations: {json.dumps(locations)}. "
+                "An operator can add the approved declaration to a trusted configuration, or restart with "
+                "--trust-project to explicitly trust this workspace. Project trust is unchanged."
+            )
+            self.logger.warning("%s", text)
+            await self.harness.emit(Notice(text, "warning"))
+
+    def _report_loaded(self, configured: ResourceConfiguration, generation: _Generation) -> None:
+        counts = {server.name: 0 for server in configured.servers}
+        for name in generation.mcp_names:
+            counts[generation.manager._tool_map[name].server_name] += 1
+        try:
+            advertised = sum(tool.name in generation.mcp_names for tool in self.harness.agent.tool_registry.get_all())
+        except Exception:
+            advertised = -1  # Diagnostics never break a successfully installed generation.
+        sources = [
+            {"path": str(item.path), "resolved": str(item.resolved), "present": item.present}
+            for item in configured.sources
+        ]
+        fingerprint = _fingerprint(
+            {
+                "sources": [(item.path, item.resolved, item.revision) for item in configured.sources],
+                "identities": generation.approval_identities,
+                "advertised": advertised,
+                "profile": self.harness.config.agent,
+            }
+        )
+        if fingerprint == self._summary_fingerprint:
+            return
+        self._summary_fingerprint = fingerprint
+        self.logger.info(
+            "ngn resources loaded: sources=%s mcp_source=%s servers=%s registered_mcp_tools=%d "
+            "advertised_mcp_tools=%d plugins=%d agent=%s",
+            json.dumps(sources),
+            json.dumps(configured.mcp_source),
+            json.dumps(counts),
+            len(generation.mcp_names),
+            advertised,
+            len(configured.plugins),
+            self.harness.config.agent,
+        )
 
     async def before_run(self, context: RunContext, message: Message) -> Message:
         # Also refresh between user messages; the post-response path below is

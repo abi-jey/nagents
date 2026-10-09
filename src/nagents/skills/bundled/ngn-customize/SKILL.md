@@ -151,15 +151,44 @@ either a local `message` or a `prompt` for `Harness.run`. Built-in names and
 the `skill:` namespace are reserved. Command metadata does not execute handlers.
 Handlers are trusted Python, not automatically tool-mediated actions.
 
-For MCP, `nagents.mcp.MCPServerConfig` describes a stdio server's name, command,
-args, optional environment, and working directory. `MCPManager(configs)` owns
-connections: await `connect_all()`, then register the callable wrappers from
-`await manager.get_tools()` through `harness.agent.register_tool`. To add a
-server dynamically, `await manager.add_server(config)` returns its new wrappers.
-The embedding application owns `disconnect_all()` during shutdown; keep it alive
-for the intended tool lifetime rather than closing it after setup. These remain
-custom tools subject to the Harness executor. There is no YAML MCP-server table
-or automatic child inheritance; trusted Python composition supplies the wiring.
+For `ngn serve` and the TUI, configure stdio MCP servers through `mcp_servers`
+in a trusted JSON configuration. Example declaration (merge, do not overwrite
+other existing settings):
+
+```json
+{
+  "mcp_servers": {
+    "docs": {
+      "command": "/opt/docs-mcp-server",
+      "args": ["stdio"],
+      "cwd": "/state/workspace"
+    }
+  }
+}
+```
+
+`--workspace` does not grant configuration trust. Creating `.ngn/config.json`
+after the server starts does not activate it when `--trust-project` was absent.
+Check the running process's trusted config locations and resource diagnostics.
+Within authorized host configuration changes, merge only the intended declaration
+into an already trusted source (for the Kubernetes template,
+`/state/config/ngn/config.json`), retaining the model and other keys. Otherwise
+explain the required operator activation. Do not silently grant whole-project
+trust. Preserve executable/cwd path semantics when changing configuration location.
+Do not put credential values into source, tool arguments, logs, or chat output.
+
+The harness reloads trusted declarations, processes, and tools at model-response
+and completed-tool-batch boundaries and before user turns. Logical ConfigMap paths
+follow symlink rotation. Current response calls retain their original handles;
+normal approvals and profile/tool-selection rules still apply. Verify the running
+Tools catalog and subsequent model visibility before claiming installation is
+active. Separate `MCPManager` discovery does not register anything in an existing
+`ngn serve` process. Discovery is also not proof of external-service authorization.
+
+For direct library embedding, `MCPServerConfig`, `MCPClient`, and `MCPManager`
+remain available. The embedding application owns connection cleanup and tool
+registration. These remain custom tools subject to the Harness executor, and
+native child agents do not automatically inherit parent MCP servers.
 
 ### Hooks and executor boundary
 

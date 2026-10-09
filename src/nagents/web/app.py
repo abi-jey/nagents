@@ -34,6 +34,7 @@ from nagents.harness import Harness
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import validate_request_timeout
 from nagents.provider import OpenAIProvider
+from nagents.provider._codex_catalog import catalog_logging
 
 from . import built_assets
 from . import empty_sessions
@@ -186,6 +187,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nonlocal state, designer, live, live_settings, provider_login
         harness = harness_factory(copy.deepcopy(config))
+        harness.resources.logger = logger
         logger.info(
             "ngn serve starting: workspace=%s state_dir=%s demo=%s",
             harness.workspace,
@@ -518,7 +520,8 @@ def create_app(
         if state.harness.config.demo:
             raise HTTPException(501, "Model discovery is unavailable in offline demo mode. Enter a model ID manually.")
         try:
-            model_ids = await provider.get_model_list()
+            with catalog_logging(logger):
+                model_ids = await provider.get_model_list()
             source = (
                 "codex"
                 if isinstance(provider, OpenAIProvider) and provider.uses_chatgpt_auth
@@ -640,7 +643,8 @@ def create_app(
         if state.harness.config.demo:
             raise HTTPException(501, "Model discovery is unavailable in offline demo mode.")
         try:
-            models = await state.harness.provider_models(name)
+            with catalog_logging(logger):
+                models = await state.harness.provider_models(name)
         except NotImplementedError:
             logger.info("Model catalog unsupported: connection=%s", name)
             raise HTTPException(

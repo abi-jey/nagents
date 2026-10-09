@@ -126,9 +126,9 @@ class MCPManager:
         for config, result in zip(self.configs, results, strict=True):
             if isinstance(result, Exception):
                 logger.error(
-                    "Failed to connect to MCP server '%s': %s",
+                    "MCP startup failed: server=%s error_type=%s",
                     config.name,
-                    result,
+                    type(result).__name__,
                 )
                 # Continue with other servers
             else:
@@ -181,8 +181,9 @@ class MCPManager:
             if not isinstance(e, Exception):
                 raise
             raise MCPError(
-                message=f"Failed to connect to MCP server '{config.name}': {e}",
+                message=f"Failed to connect to MCP server '{config.name}' ({type(e).__name__})",
                 code=-1,
+                stage="mcp_start",
             ) from e
 
         self._clients[config.name] = client
@@ -196,9 +197,9 @@ class MCPManager:
         try:
             tools = await client.list_tools()
         except Exception as e:
-            logger.error("Failed to list tools from MCP server '%s': %s", config.name, e)
+            logger.error("MCP discovery failed: server=%s error_type=%s", config.name, type(e).__name__)
             if strict:
-                raise MCPError("MCP tool discovery failed", code=-1) from e
+                raise MCPError("MCP tool discovery failed", code=-1, stage="mcp_discover") from None
             return wrappers
 
         for tool in tools:
@@ -233,7 +234,7 @@ class MCPManager:
             try:
                 await client.disconnect()
             except Exception as e:
-                logger.error("Error disconnecting from MCP server '%s': %s", name, e)
+                logger.error("MCP disconnect failed: server=%s error_type=%s", name, type(e).__name__)
 
         self.configs = [c for c in self.configs if c.name != name]
 
@@ -255,7 +256,7 @@ class MCPManager:
             try:
                 tools = await client.list_tools()
             except Exception as e:
-                logger.error("Failed to list tools from MCP server '%s': %s", name, e)
+                logger.error("MCP discovery failed: server=%s error_type=%s", name, type(e).__name__)
                 continue
 
             for tool in tools:
@@ -458,7 +459,7 @@ class MCPManager:
                 await client.disconnect()
                 logger.info("Disconnected from MCP server '%s'", name)
             except Exception as e:
-                logger.error("Error disconnecting from MCP server '%s': %s", name, e)
+                logger.error("MCP disconnect failed: server=%s error_type=%s", name, type(e).__name__)
 
         await asyncio.gather(*(_disconnect_one(name, client) for name, client in self._clients.items()))
 

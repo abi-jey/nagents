@@ -526,7 +526,7 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
 | `POST live/sessions` | `{voice?: string, revision, session_id}` starts a GPT-Live call through the server. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, context?}` with an opaque application session ID. No provider SDP or credentials reach the browser. |
-| `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. |
+| `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. Negotiated `ngn.live.v2` also accepts server-only `{"type":"interrupt"}` to clear queued playback; legacy `ngn.live.v1` remains PCM-only. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
 | `GET live/sessions/{session_id}/delegations/{delegation_id}` | On-demand request, dispatched input, result, and application event timeline for one delegation; authenticated and bounded. |
 | `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
@@ -1054,6 +1054,37 @@ provider credentials. Browser-supplied captions or delegation events never trigg
 assistant work. Install the `web` extra for the server media relay. No host
 microphone, PortAudio, `voice` extra, or container audio-device mount is needed.
 
+Assistant playback uses a continuous AudioWorklet sample queue, independent of
+React rendering and per-packet main-thread scheduling. PCM remains mono 24 kHz
+on the wire; the worklet resamples continuously to the AudioContext's actual
+sample rate, including an anti-alias filter for lower-rate outputs. Its startup
+queue target follows measured short delivery variation between 40 and 160 ms.
+A one-second sample capacity bounds memory and latency; exceptional overflow
+trims stale samples with a short fade instead of stopping every queued source.
+The server paces unpaced provider bursts into 20 ms frames and backpressures the
+producer at two seconds of buffered PCM, preserving long utterances without
+flooding that browser queue. Already-paced RTP is sent as it arrives unless it
+gets ahead of the cumulative sample clock; no second silence stream is inserted.
+Interrupt and shutdown invalidate blocked writers and unsent frames, and a fixed
+server interruption message clears already-delivered browser samples. New clients
+explicitly negotiate `ngn.live.v2` with the existing token; cached v1 clients keep
+their PCM-only wire contract and are never sent text control frames.
+A slow correction capped at 0.1% prevents small remote/device clock differences
+from accumulating over long calls. Microphone capture is unchanged.
+
+The sphere consumes PCM tagged with the worklet's actual playout time. Mute,
+suspension, reconnect and close reset the queue generation so delayed messages
+cannot revive old speech or animation. Speaker changes retain the same audible sample queue,
+audio clock and output worklet while advancing a separate report barrier. `LiveMedia.audioHealth()` exposes numeric playback
+counters, and closing a call writes a numeric-only `ngn voice playback health`
+summary to the browser console: received/played samples, queue depth and peak,
+starvation count, dropped samples, target depth, device rate and clock correction.
+Starvation also includes intentional gaps between replies; counters alone do not
+prove network loss. Played-PCM and health reports each allow only one message in
+flight; a busy UI skips old visualization frames without dropping audible PCM.
+The server also logs numeric output queue/backpressure counters on close. No audio,
+transcript, session identifier, provider URL or credentials are logged.
+
 In **Main assistant** mode, GPT-Live delegates requests through the normal
 Harness run for the chat selected when voice connects. The assistant retains
 that chat's history, current provider/model, profile, tools, permissions and
@@ -1425,8 +1456,14 @@ a fake or cached catalog, expose upstream exceptions, or change the provider.
 
 Codex returns only picker-visible model IDs, including those marked
 `supported_in_api: false`; that field does not indicate OAuth unavailability.
-Its fixed catalog request uses compatibility version `0.153.4` while retaining
-ngn's own client identity. This follows the [official Codex client contract](../api/provider.md#local-configuration-and-chatgpt-authentication),
+The server revalidates OpenAI's public stable Codex release metadata for every
+catalog lookup and uses that version in its fixed catalog request while retaining
+ngn's own client identity. Overlapping version checks are coalesced; a metadata
+outage retains the last known version (bundled `0.162.0` before the first successful
+check) with a five-minute retry backoff. The model list itself is always fetched
+fresh. This adds at most two seconds for metadata discovery, sends no provider
+credentials to the metadata host, and requires no Codex installation in the
+container. See the [official Codex client contract and fallback behavior](../api/provider.md#local-configuration-and-chatgpt-authentication),
 not a stable public OpenAI REST guarantee. The existing backend login/refresh
 flow and private deployment's selected authentication mode are unchanged.
 

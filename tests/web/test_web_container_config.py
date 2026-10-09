@@ -80,6 +80,9 @@ def test_kubernetes_projected_file_is_explicit_trusted_config(tmp_path: Path, mo
 
     config = load_config(tmp_path, config_file)
     assert len(config.config_paths) == 1
+    assert config.config_paths[0] == config_file
+    assert config.resource_paths[-1] == config_file
+    assert config.provider_paths["workspace"] == projection / "providers.json"
     assert config.config_paths[0].samefile(projected_file)
     assert config.diagnostics[0] == "Applied provider connection: openai"
     prefix = "Loaded trusted configuration: "

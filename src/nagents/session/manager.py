@@ -25,6 +25,16 @@ from .deliveries import delivery_cleanup_statements
 logger = logging.getLogger(__name__)
 
 
+def _content_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Serialized dataclasses cannot contain duplicate content fields."""
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("Duplicate content field")
+        result[name] = value
+    return result
+
+
 class SessionManager:
     """
     SQLite-based session and message history management.
@@ -444,15 +454,16 @@ class SessionManager:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # Deserialize content: may be plain str, None, or JSON-encoded list[ContentPart]
+        # Legacy rich content is a JSON array, but ordinary model replies can
+        # also be JSON. Decode only complete, recognized content-part records.
         content: str | list[ContentPart] | None = row["content"]
         if isinstance(content, str) and content.startswith("["):
             try:
-                parts_data = json.loads(content)
+                parts_data = json.loads(content, object_pairs_hook=_content_object)
                 if isinstance(parts_data, list) and parts_data:
                     content = [self._dict_to_content_part(p) for p in parts_data]
-            except (json.JSONDecodeError, TypeError, KeyError):
-                pass  # Not valid JSON array, keep as plain string
+            except (ValueError, TypeError, RecursionError):
+                pass  # Ordinary or malformed JSON remains the original text.
 
         return Message(
             role=row["role"],
@@ -463,31 +474,50 @@ class SessionManager:
         )
 
     @staticmethod
-    def _dict_to_content_part(data: dict[str, Any]) -> ContentPart:
-        """Reconstruct a ContentPart dataclass from a serialized dict."""
-        part_type = data.get("type", "text")
+    def _dict_to_content_part(data: object) -> ContentPart:
+        """Decode a recognized legacy content part without reinterpreting JSON text."""
+        if not isinstance(data, dict):
+            raise ValueError("Not a content-part record")
+        part_type = data.get("type")
+        fields = {
+            "text": {"type", "text"},
+            "image": {"type", "base64_data", "media_type", "detail"},
+            "audio": {"type", "base64_data", "format"},
+            "document": {"type", "base64_data", "media_type", "title"},
+        }
+        if not isinstance(part_type, str) or part_type not in fields or data.keys() - fields[part_type]:
+            raise ValueError("Not a recognized content-part record")
+
+        def text(name: str, default: object = None) -> str:
+            value: object = data.get(name, default)
+            if not isinstance(value, str):
+                raise ValueError("Invalid content-part text")
+            return value
+
+        def optional_text(name: str) -> str | None:
+            value: object = data.get(name)
+            if value is not None and not isinstance(value, str):
+                raise ValueError("Invalid optional content-part text")
+            return value
+
         if part_type == "text":
-            return TextContent(text=data.get("text", ""))
+            return TextContent(text=text("text"))
         elif part_type == "image":
             return ImageContent(
-                base64_data=data.get("base64_data", ""),
-                media_type=data.get("media_type", "image/jpeg"),
-                detail=data.get("detail"),
+                base64_data=text("base64_data"),
+                media_type=text("media_type", "image/jpeg"),
+                detail=optional_text("detail"),
             )
         elif part_type == "audio":
             return AudioContent(
-                base64_data=data.get("base64_data", ""),
-                format=data.get("format", "wav"),
+                base64_data=text("base64_data"),
+                format=text("format", "wav"),
             )
-        elif part_type == "document":
-            return DocumentContent(
-                base64_data=data.get("base64_data", ""),
-                media_type=data.get("media_type", "application/pdf"),
-                title=data.get("title"),
-            )
-        else:
-            # Fallback: treat unknown types as text
-            return TextContent(text=str(data))
+        return DocumentContent(
+            base64_data=text("base64_data"),
+            media_type=text("media_type", "application/pdf"),
+            title=optional_text("title"),
+        )
 
 
 class PlaceholderSessionManager(SessionManager):
