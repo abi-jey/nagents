@@ -44,7 +44,7 @@ export function useChatFolders(token: string, sessionIds: string[]) {
     window.addEventListener("focus", focus);
     return () => window.removeEventListener("focus", focus);
   }, [token]);
-  async function mutate(action: "create" | "update" | "move" | "remove", fields: object): Promise<boolean> {
+  async function mutate(action: "create" | "update" | "move" | "remove" | "reparent", fields: object): Promise<boolean> {
     if (!token || !current.current || occupied.current) return false;
     occupied.current = true; setPending(true); setError(""); read.current?.abort();
     try {
@@ -66,12 +66,13 @@ export function useChatFolders(token: string, sessionIds: string[]) {
   return {
     value, error, pending, ready: !!token && !!value,
     clearError: () => setError(""), refresh,
-    create: (name: string) => mutate("create", { name }),
+    create: (name: string, parentId = "") => mutate("create", { name, parent_id: parentId }),
     update: (folder: ChatFolder, name?: string, collapsed?: boolean) => {
       const latest = current.current?.groups.find(item => item.id === folder.id) || folder;
       return mutate("update", { group_id: folder.id, name: name ?? latest.name, collapsed: collapsed ?? latest.collapsed });
     },
     remove: (folder: ChatFolder) => mutate("remove", { group_id: folder.id }),
+    reparent: (folder: ChatFolder, parentId: string) => mutate("reparent", { group_id: folder.id, parent_id: parentId }),
     move: (sessionId: string, folderId: string) => mutate("move", { session_id: sessionId, group_id: folderId }),
   };
 }

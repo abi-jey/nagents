@@ -18,6 +18,7 @@ export type Bootstrap = {
 export type Session = {
   id: string; title: string; updated_at: string;
   parent_session_id?: string;
+  forked_from?: string;
   active_run_id?: string;
   status?: string;
 };

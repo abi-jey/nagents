@@ -1,6 +1,7 @@
-type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit";
+type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch";
 
 const paths: Record<IconName, string> = {
+  branch: "M5 3v10a3 3 0 0 0 3 3h7M5 8h5a5 5 0 0 0 5-5M3 3h4M13 3h4M15 14l2 2-2 2",
   plus: "M10 4v12M4 10h12",
   chat: "M4 3h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-5 3V5a2 2 0 0 1 1-2Z",
   trash: "M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6M12 8v6",

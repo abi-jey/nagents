@@ -1,6 +1,6 @@
 import { request } from "./client.js";
 
-export type ChatFolder = { id: string; name: string; collapsed: boolean };
+export type ChatFolder = { id: string; name: string; collapsed: boolean; parent_id: string };
 export type ChatFolders = { revision: string; groups: ChatFolder[]; memberships: Record<string, string> };
 const groupId = /^group-[a-f0-9]{32}$/;
 const rootId = /^[A-Za-z0-9_-]{1,128}$/;
@@ -16,9 +16,18 @@ export function parseFolders(value: unknown): ChatFolders {
   for (const item of value.groups) {
     if (!record(item) || typeof item.id !== "string" || !groupId.test(item.id) || ids.has(item.id)
         || typeof item.name !== "string" || !item.name.trim() || [...item.name].length > 80
-        || typeof item.collapsed !== "boolean") throw invalid();
+        || typeof item.collapsed !== "boolean" || (item.parent_id !== undefined && typeof item.parent_id !== "string")) throw invalid();
     ids.add(item.id);
-    groups.push({ id: item.id, name: item.name, collapsed: item.collapsed });
+    groups.push({ id: item.id, name: item.name, collapsed: item.collapsed, parent_id: typeof item.parent_id === "string" ? item.parent_id : "" });
+  }
+  const byId = new Map(groups.map(group => [group.id, group]));
+  for (const group of groups) {
+    const visited = new Set([group.id]);
+    let parent = group.parent_id;
+    while (parent) {
+      if (!ids.has(parent) || visited.has(parent) || visited.size >= 12) throw invalid();
+      visited.add(parent); parent = byId.get(parent)!.parent_id;
+    }
   }
   const memberships: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [id, folder] of Object.entries(value.memberships)) {
@@ -31,6 +40,6 @@ export function parseFolders(value: unknown): ChatFolders {
 export async function readFolders(token: string, signal?: AbortSignal) {
   return parseFolders(await (await request("session-groups", token, undefined, signal)).json());
 }
-export async function changeFolder(token: string, action: "create" | "update" | "move" | "remove", body: object) {
+export async function changeFolder(token: string, action: "create" | "update" | "move" | "remove" | "reparent", body: object) {
   return parseFolders(await (await request(`session-groups/${action}`, token, body)).json());
 }

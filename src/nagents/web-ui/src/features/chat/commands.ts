@@ -3,6 +3,8 @@ export const webCommands = [
   { name: "help", description: "Show browser commands", argument: "" },
   { name: "login", description: "Sign in to ChatGPT / Codex on this server", argument: "" },
   { name: "new", description: "Start a new conversation", argument: "" },
+  { name: "fork", description: "Branch from this conversation's saved context", argument: "[title]" },
+  { name: "rename", description: "Rename this conversation", argument: "<title>" },
   { name: "sessions", description: "Browse or resume conversations", argument: "[session ID]" },
   { name: "compact", description: "Summarize the current conversation", argument: "" },
   { name: "model", description: "Choose the workspace model", argument: "[model ID]" },
@@ -28,6 +30,7 @@ export function commandIntent(value: string): CommandIntent | undefined {
   if (!command) throw new Error(`Unknown browser command: ${token}. Use /help to see available commands.`);
   const argument = parts.join(" ");
   if (argument && !command.argument) throw new Error(`Usage: /${command.name}. Your draft is kept.`);
+  if (name === "rename" && !argument) throw new Error("Usage: /rename <title>. Your draft is kept.");
   return { name: command.name, argument };
 }
 

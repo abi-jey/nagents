@@ -8,6 +8,7 @@ import { rootSessions } from "../channels/draft.js";
 import { idle, activitiesFromRuns, sessionActivities, type SessionActivities } from "./activity.js";
 import { deleteSession, type DeletedSnapshot, type DeletionSelection } from "../../api/deletion.js";
 import type { RestoreReply } from "../../api/trash.js";
+import { changeSession } from "../../api/sessionActions.js";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
@@ -71,6 +72,16 @@ export function useSessions() {
     if (!config) throw new Error("Reconnect to ngn before deleting a session.");
     return deleteSession(config.token, id, permanent);
   }
+  async function rename(id: string, title: string): Promise<void> {
+    if (!config) throw new Error("Reconnect to ngn before renaming a chat.");
+    const snapshot = await changeSession(config.token, id, "rename", title);
+    // Metadata updates must not replace another chat's transcript or selection.
+    setSessions(rootSessions(snapshot.sessions));
+  }
+  async function fork(id: string, title = ""): Promise<Snapshot> {
+    if (!config) throw new Error("Reconnect to ngn before forking a chat.");
+    return accept(await changeSession(config.token, id, "fork", title));
+  }
   function restored(reply: RestoreReply) {
     const item = reply.sessions.find((session) => session.id === reply.restored_session_id);
     if (item) setSessions((current) => [item, ...current.filter((session) => session.id !== item.id)]);
@@ -98,6 +109,6 @@ export function useSessions() {
       status: activities[session.id]?.status || "",
     })), sessionId, activeSessionId: active.sessionId,
     globalRunId: active.id, globalBusy: Object.keys(activities).length > 0, externalRun: active.sessionId !== sessionId ? active.id : "",
-    activityOnly: false, connect, select, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
+    activityOnly: false, connect, select, rename, fork, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
   };
 }

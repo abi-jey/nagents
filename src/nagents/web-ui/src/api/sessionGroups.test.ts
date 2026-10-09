@@ -34,14 +34,14 @@ test("folder view keeps collapsed chats and ungrouped chats separate and escapes
   const value = parseFolders({ revision, groups: [{ id, name, collapsed: true }], memberships: { "ngn-one": id } });
   const actions: ChatFolderActions = {
     value, error: "", pending: false, ready: true, clearError() {}, async refresh() {},
-    async create() { return true; }, async update() { return true; }, async move() { return true; }, async remove() { return true; },
+    async create() { return true; }, async update() { return true; }, async move() { return true; }, async remove() { return true; }, async reparent() { return true; },
   };
   const html = renderToStaticMarkup(createElement(SessionFolders, {
     folders: actions, selected: "ngn-one", sessions: [
       { id: "ngn-one", title: "Grouped chat", updated_at: "today" },
       { id: "ngn-two", title: "Unsorted chat", updated_at: "today" },
     ],
-    renderSession: (session) => createElement("li", { key: session.id }, session.title),
+    renderSession: (session) => createElement("div", { key: session.id }, session.title),
   }));
   const dom = new JSDOM(html);
   const document = dom.window.document;

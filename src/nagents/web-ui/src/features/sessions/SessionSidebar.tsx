@@ -44,6 +44,9 @@ export function SessionSidebar({
   remove,
   canDelete,
   permanent,
+  rename,
+  fork,
+  canFork = () => false,
   trash,
   trashDisabled,
   notice,
@@ -69,6 +72,9 @@ export function SessionSidebar({
   remove: (session: Session) => void;
   canDelete: (id: string) => boolean;
   permanent: (session: Session) => void;
+  rename?: (session: Session) => void;
+  fork?: (session: Session) => void;
+  canFork?: (id: string) => boolean;
   trash: () => void;
   trashDisabled: boolean;
   notice?: ReactNode;
@@ -153,8 +159,8 @@ export function SessionSidebar({
         <Icon name="plus" /> <span>New session</span>
       </button>
       </div>
-      <SessionFolders sessions={sessions} selected={selected} folders={folders} renderSession={(session, move) => (
-          <li key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
+      <SessionFolders sessions={sessions} selected={selected} folders={folders} workspace={workspace} renderSession={(session, move) => (
+          <div key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
           <button
             className={`session ${selected === session.id ? "selected" : ""}`}
             aria-label={`${session.title || "New session"}${session.active_run_id ? " — Working" : ""}`}
@@ -163,7 +169,7 @@ export function SessionSidebar({
             onClick={() => select(session.id)}
             title={`${session.title} · Updated ${session.updated_at.slice(0, 10)}`}
           >
-            <Icon name="chat" size={15} />
+            <Icon name={session.forked_from ? "branch" : "chat"} size={15} />
             <span className="session-title">{session.title || "New session"}</span>
             {session.active_run_id && <span className="session-working" title="Working"><span className="sr-only">Working</span></span>}
             <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
@@ -171,8 +177,10 @@ export function SessionSidebar({
           <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
             title="Move to Trash" disabled={!canDelete(session.id) || !!session.active_run_id}
             onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
-          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} move={move} />
-          </li>
+          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} move={move}
+            rename={!disabled && rename ? () => rename(session) : undefined}
+            fork={fork ? () => fork(session) : undefined} forkDisabled={disabled || !canFork(session.id)} />
+          </div>
         )} />
       <div className="sidebar-footer">
         {notice}

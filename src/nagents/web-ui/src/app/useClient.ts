@@ -107,6 +107,23 @@ export function useClient() {
     });
   }
 
+  function canForkSession(id: string) {
+    const source = sessions.sessions.find(session => session.id === id);
+    return access().navigate && !!source && !source.active_run_id && !(id === sessions.sessionId && chat.runId);
+  }
+  async function renameSession(id: string, title: string) {
+    if (!access().navigate) return false;
+    return operate(async () => { await sessions.rename(id, title); });
+  }
+  async function forkSession(id: string, title = "") {
+    if (!canForkSession(id)) { setError("Finish this chat's active work before forking it. Other chats can keep running."); return false; }
+    return operate(async () => {
+      voice.close(); chat.pause();
+      try { chat.loadHistory(await sessions.fork(id, title)); }
+      finally { chat.reconnect(); }
+    });
+  }
+
   async function command({ name, argument }: CommandIntent): Promise<boolean> {
     if (uploadState.items.length) throw new Error("Remove draft attachments before running a command. Your draft is kept.");
     if (["login", "settings", "model", "agent", "provider"].includes(name) && !access().settings)
@@ -121,6 +138,8 @@ export function useClient() {
       if (argument) return select(argument);
       setNavigationRequest(value => value + 1); return true;
     }
+    if (name === "fork") return forkSession(sessions.sessionId, argument);
+    if (name === "rename") return renameSession(sessions.sessionId, argument);
     if (name === "compact") return operate(async () => { await chat.submit("/compact", [], "compact"); });
     if (name === "stop") {
       if (!chat.runId) throw new Error("There is no active run in this chat to stop.");
@@ -247,6 +266,9 @@ export function useClient() {
     recoverDraft,
     connect,
     select,
+    renameSession,
+    forkSession,
+    canForkSession,
     submit,
     cancel,
   };
