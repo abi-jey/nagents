@@ -4,6 +4,22 @@ import type { Session } from "../../types.js";
 export type ChatBranch = { session: Session; children: ChatBranch[]; origin: string };
 export type FolderBranch = { folder: ChatFolder; folders: FolderBranch[]; chats: ChatBranch[]; count: number; containsCurrent: boolean };
 
+export function selectedPath(sessions: Session[], folders: ChatFolder[], membership: Record<string, string>, selected: string) {
+  const byId = new Map(sessions.map(session => [session.id, session]));
+  const forkIds: string[] = [], folderIds: string[] = [];
+  const folder = membership[selected] || "";
+  const seen = new Set([selected]);
+  let parent = byId.get(selected)?.forked_from || "";
+  while (parent && byId.has(parent) && !seen.has(parent) && seen.size < 64 && (membership[parent] || "") === folder) {
+    forkIds.push(parent); seen.add(parent); parent = byId.get(parent)?.forked_from || "";
+  }
+  parent = folder;
+  while (parent && folderIds.length < 12 && !folderIds.includes(parent)) {
+    folderIds.push(parent); parent = folders.find(item => item.id === parent)?.parent_id || "";
+  }
+  return { forkIds, folderIds };
+}
+
 /** Build a forest without confusing copied conversations with agent child sessions. */
 export function chatBranches(sessions: Session[], membership: Record<string, string>, folderId: string): ChatBranch[] {
   const all = new Map(sessions.map(session => [session.id, session]));

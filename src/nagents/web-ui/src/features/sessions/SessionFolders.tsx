@@ -3,7 +3,7 @@ import { Icon } from "../../components/Icon.js";
 import type { Session } from "../../types.js";
 import type { ChatFolderActions } from "./useChatFolders.js";
 import { ChatFolderDialog, type FolderAction } from "./ChatFolderDialog.js";
-import { sessionTree, type ChatBranch, type FolderBranch } from "./sessionTree.js";
+import { selectedPath, sessionTree, type ChatBranch, type FolderBranch } from "./sessionTree.js";
 import { TreeActions } from "./TreeActions.js";
 
 export function SessionFolders({ sessions, selected, folders, renderSession, workspace = "" }: {
@@ -13,6 +13,7 @@ export function SessionFolders({ sessions, selected, folders, renderSession, wor
   const [query, setQuery] = useState("");
   const [action, setAction] = useState<FolderAction>();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [revealedFolders, setRevealedFolders] = useState<Set<string>>(new Set());
   const storageKey = `ngn.fork-branches:${workspace}`;
   useEffect(() => {
     try {
@@ -31,6 +32,20 @@ export function SessionFolders({ sessions, selected, folders, renderSession, wor
   const needle = query.trim().toLocaleLowerCase();
   const groups = folders?.value?.groups || [];
   const membership = folders?.value?.memberships || {};
+  const path = selectedPath(sessions, groups, membership, selected);
+  const pathKey = JSON.stringify(path);
+  const searching = !!needle;
+  useEffect(() => {
+    if (searching) return;
+    setRevealedFolders(new Set(path.folderIds));
+    setCollapsed(previous => {
+      if (!path.forkIds.some(id => previous.has(id))) return previous;
+      const next = new Set(previous);
+      for (const id of path.forkIds) next.delete(id);
+      try { localStorage.setItem(storageKey, JSON.stringify([...next].slice(-2048))); } catch { /* Optional preference. */ }
+      return next;
+    });
+  }, [selected, pathKey, storageKey, searching]);
   const available = !!folders?.ready && !folders.pending;
   const tree = sessionTree(sessions, groups, membership, needle, selected);
   function edit(next: FolderAction) { folders?.clearError(); setAction(next); }
@@ -53,12 +68,15 @@ export function SessionFolders({ sessions, selected, folders, renderSession, wor
   }
   function folder(branch: FolderBranch, depth: number): ReactNode {
     const group = branch.folder;
-    const expanded = !group.collapsed || !!needle;
+    const expanded = !group.collapsed || !!needle || revealedFolders.has(group.id);
     return <section key={group.id} className={`session-folder${branch.containsCurrent ? " contains-current" : ""}`}>
       <div className="folder-heading">
         <button type="button" className="folder-toggle" aria-expanded={expanded} aria-controls={`folder-${group.id}`}
           disabled={!available || !!needle} title={needle ? "Search shows matching chats in each folder" : group.name}
-          onClick={() => { if (folders) { folders.clearError(); void folders.update(group, undefined, !group.collapsed); } }}>
+          onClick={() => { if (folders) {
+            setRevealedFolders(current => { const next = new Set(current); next.delete(group.id); return next; });
+            folders.clearError(); void folders.update(group, undefined, expanded);
+          } }}>
           <Icon name="chevron" size={12} /><Icon name="folder" size={14} /><span>{group.name}</span><small>{branch.count}</small>
         </button>
         <TreeActions label={`folder ${group.name}`} className="folder-action" items={[

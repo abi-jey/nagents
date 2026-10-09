@@ -4,7 +4,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { parseFolders } from "./sessionGroups.js";
-import { chatBranches, folderOptions, sessionTree } from "../features/sessions/sessionTree.js";
+import { chatBranches, folderOptions, selectedPath, sessionTree } from "../features/sessions/sessionTree.js";
 import { SessionFolders } from "../features/sessions/SessionFolders.js";
 import type { Session } from "../types.js";
 
@@ -55,6 +55,12 @@ test("move-folder choices distinguish paths and exclude the entire moving subtre
   assert.deepEqual(folderOptions([a,b,c], b.id).map(option => option.id), [a.id]);
 });
 
+test("selection reveals only its visible branch and folder ancestry after a move", () => {
+  const sessions = [session("source"), session("fork", "source"), session("leaf", "fork")];
+  const membership = { source: a.id, fork: c.id, leaf: c.id };
+  assert.deepEqual(selectedPath(sessions, [a,b,c], membership, "leaf"), { forkIds: ["fork"], folderIds: [c.id,b.id,a.id] });
+});
+
 test("very long fork lineages remain visible with bounded rendering depth", () => {
   const sessions = Array.from({ length: 100 }, (_, index) => session(`chat-${index}`, index ? `chat-${index-1}` : ""));
   const tree = chatBranches(sessions, {}, "");
@@ -70,8 +76,8 @@ test("fork collapse is local to a workspace and nested rows remain mounted", asy
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true });
   const container = dom.window.document.getElementById("root")!, root = createRoot(container);
-  const render = (workspace: string) => act(async () => root.render(createElement(SessionFolders, {
-    sessions: [session("source"), session("fork", "source")], selected: "source", workspace,
+  const render = (workspace: string, selected = "source") => act(async () => root.render(createElement(SessionFolders, {
+    sessions: [session("source"), session("fork", "source")], selected, workspace,
     renderSession: item => createElement("button", { "data-session": item.id }, item.title),
   })));
   try {
@@ -82,6 +88,10 @@ test("fork collapse is local to a workspace and nested rows remain mounted", asy
     assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("ngn.fork-branches:first")!), ["source"]);
     await render("second"); assert.equal(container.querySelector("#forks-source")!.hasAttribute("hidden"), false);
     await render("first"); assert.equal(container.querySelector("#forks-source")!.hasAttribute("hidden"), true);
+    await render("first", "fork"); assert.equal(container.querySelector("#forks-source")!.hasAttribute("hidden"), false);
+    await act(async () => container.querySelector<HTMLButtonElement>(".branch-toggle")!.click());
+    await render("first", "fork"); assert.equal(container.querySelector("#forks-source")!.hasAttribute("hidden"), true,
+      "An explicit later collapse is respected until selection changes");
   } finally {
     await act(async () => root.unmount()); dom.window.close();
     for (const name of ["window", "document", "localStorage", "IS_REACT_ACT_ENVIRONMENT"])

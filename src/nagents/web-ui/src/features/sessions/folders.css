@@ -39,6 +39,13 @@
 .chat-folder-dialog footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 22px; }
 .folder-chat-title { color: var(--text-secondary); }
 @media (max-width: 760px) { .session-search input, .chat-folder-dialog input, .chat-folder-dialog select { font-size: 16px; } }
+@media (max-height: 600px) {
+  .sidebar .sidebar-header { min-height: 52px; padding-block: 4px; }
+  .sidebar .sidebar-create { padding-top: 0; padding-bottom: 4px; }
+  .sidebar .session-label { padding-block: 0; }
+  .sidebar .session-search { padding-block: 0; margin-bottom: 6px; }
+  .sidebar .sidebar-footer { max-height: 20dvh; min-height: 0; flex-shrink: 1; }
+}
 @media (min-width: 761px) {
   .sidebar-collapsed :is(.session-search, .folder-create, .folder-heading, .folder-empty, .ungrouped-heading, .folder-error, .branch-toggle, .fork-origin) { display: none; }
   .sidebar-collapsed :is(.session-folder, .session-branch) > div[hidden] { display: block; }
