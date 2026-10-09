@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from typing import cast
 
 import pytest
+from aiohttp import ClientWebSocketResponse
 from aiohttp import web
 
 from nagents import Agent
@@ -34,6 +35,7 @@ from nagents import TextDoneEvent
 from nagents import ToolCallEvent
 from nagents import ToolResultEvent
 from nagents import Usage
+from nagents.live import LiveCommandError
 from nagents.live import LiveEvent
 from nagents.live import _LiveUpdates
 from nagents.live import runtime as live
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.events import Event as AgentEvent
+    from nagents.live.delegation import ClientDelegationRequest
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition
@@ -189,7 +192,7 @@ def test_client_delegations_context_dedup_and_limit() -> None:
     asyncio.run(scenario())
 
 
-def test_client_delegations_serialize_and_only_explicit_invalidation_drops() -> None:
+def test_client_delegations_overlap_with_frozen_context_and_no_implicit_invalidation() -> None:
     async def scenario() -> None:
         started = asyncio.Event()
         release = asyncio.Event()
@@ -214,6 +217,7 @@ def test_client_delegations_serialize_and_only_explicit_invalidation_drops() -> 
         client = live.ClientDelegations(backend, collect_into(output))
         client.observe(transcript("session.input_transcript.delta", "Question", 0))
         client.observe(delegation("first"))
+        client.observe(transcript("session.input_transcript.delta", "Second question", 20))
         client.observe(delegation("second"))
         worker = asyncio.create_task(client.run())
         try:
@@ -221,14 +225,18 @@ def test_client_delegations_serialize_and_only_explicit_invalidation_drops() -> 
             # Input transcript deltas alone must NOT invalidate a running task.
             for index in range(3):
                 client.observe(transcript("session.input_transcript.delta", f"more {index}", 50 + index))
+            await wait_until(lambda: bool(output))
+            assert [event["delegation_id"] for event in output] == ["second"]
             release.set()
             await wait_until(lambda: len(output) >= 2)
 
-            assert peak == 1  # One backend lane: tasks never overlap.
+            assert peak == 2
             assert [identifier for _, identifier in calls] == ["first", "second"]
             assert all(event["type"] == "session.commentary.append" for event in output)
-            assert [event["delegation_id"] for event in output][:2] == ["first", "second"]
-            assert "more 2" in calls[1][0]
+            assert [event["delegation_id"] for event in output][:2] == ["second", "first"]
+            assert "Second question" not in calls[0][0]
+            assert "Second question" in calls[1][0]
+            assert all("more 2" not in context for context, _ in calls)
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
@@ -250,7 +258,7 @@ def test_client_delegation_explicit_invalidation_drops_superseded_result() -> No
                 await release.wait()
             return f"answer for {identifier}"
 
-        client = live.ClientDelegations(backend, collect_into(output))
+        client = live.ClientDelegations(backend, collect_into(output), concurrency=1)
         client.observe(transcript("session.input_transcript.delta", "Question", 0))
         client.observe(delegation("first"))
         client.observe(delegation("second"))
@@ -473,6 +481,163 @@ def test_application_submission_routes_to_backend_with_null_delegation() -> None
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_typed_handler_keeps_the_original_id_for_multiple_late_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        observed: list[ClientDelegationRequest] = []
+        handled: list[ClientDelegationRequest] = []
+        received: list[dict[str, object]] = []
+        admitted = asyncio.Event()
+        updates = _LiveUpdates()
+
+        async def typed(request: ClientDelegationRequest) -> str:
+            handled.append(request)
+            admitted.set()
+            return ""  # Background results use the still-attached update sink.
+
+        async def unused(context: str, identifier: str) -> str:
+            raise AssertionError("Legacy backend must not replace the typed request handler")
+
+        async def upstream(request: web.Request) -> web.WebSocketResponse:
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            await socket.receive_json()
+            await socket.send_json({"type": "session.started"})
+            await socket.send_json(transcript("session.input_transcript.delta", "First request", 0))
+            await socket.send_json(delegation("original"))
+            await socket.send_json(transcript("session.input_transcript.delta", "Later speech", 20))
+            async for message in socket:
+                received.append(message.json())
+                if len(received) == 4:
+                    await socket.send_json({"type": "session.closed"})
+                    break
+            return socket
+
+        options = LiveConfig(delegation="client", client_request_handler=typed, client_request_observer=observed.append)
+        async with live_server(monkeypatch, upstream), asyncio.timeout(HANG_GUARD):
+            connection = asyncio.create_task(
+                live.converse(
+                    options.session(),
+                    "fixture-key",
+                    unused,
+                    AudioDuplex(input=BlockingMic([])),
+                    CollectingSpeaker(),
+                    collect_into([]),
+                    updates,
+                    options,
+                )
+            )
+            try:
+                await admitted.wait()
+                assert handled == observed and len(handled) == 1
+                assert handled[0].identifier == "original" and handled[0].offset_ms == 10
+                assert "First request" in handled[0].transcript and "Later speech" not in handled[0].transcript
+                await updates.append("thinking", "Work started", "original")
+                await updates.append("commentary", "First partial result", "original")
+                await updates.append("commentary", "Late final result", "original")
+                await updates.append("instructions", "A background result is ready")
+                await connection
+            finally:
+                connection.cancel()
+                await asyncio.gather(connection, return_exceptions=True)
+        assert [event["delegation_id"] for event in received] == ["original", "original", "original", None]
+        assert [event["type"] for event in received] == [
+            "session.thinking.append",
+            "session.commentary.append",
+            "session.commentary.append",
+            "session.instructions.append",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_close_racing_queued_command_and_audio_has_no_false_receipt_or_failed_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        started, writing, release, audio_yielded, checked = (asyncio.Event() for _ in range(5))
+        received: list[dict[str, object]] = []
+        chunks: asyncio.Queue[bytes] = asyncio.Queue()
+        updates = _LiveUpdates()
+        original_send = ClientWebSocketResponse.send_json
+
+        class Mic:
+            audio_format = AudioFormat()
+
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                while True:
+                    chunk = await chunks.get()
+                    audio_yielded.set()
+                    yield chunk
+
+        async def gated_send(socket: ClientWebSocketResponse, data: dict[str, object]) -> None:
+            if data.get("content") == "Hold the writer":
+                writing.set()
+                await release.wait()
+            await original_send(socket, data)
+
+        monkeypatch.setattr(ClientWebSocketResponse, "send_json", gated_send)
+
+        async def observe(event: dict[str, object]) -> None:
+            if event["type"] == "session.started":
+                started.set()
+
+        async def backend(context: str, identifier: str) -> str:
+            raise AssertionError("No delegation was issued")
+
+        async def upstream(request: web.Request) -> web.WebSocketResponse:
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            await socket.receive_json()
+            await socket.send_json({"type": "session.started"})
+            async for message in socket:
+                event = message.json()
+                received.append(event)
+                if event["type"] == "session.close":
+                    await checked.wait()
+                    await socket.send_json({"type": "session.closed"})
+                    break
+            return socket
+
+        async with live_server(monkeypatch, upstream), asyncio.timeout(HANG_GUARD):
+            connection = asyncio.create_task(
+                live.converse(
+                    {}, "fixture-key", backend, AudioDuplex(input=Mic()), CollectingSpeaker(), observe, updates
+                )
+            )
+            commands: list[asyncio.Task[str]] = []
+            try:
+                await started.wait()
+                held = asyncio.create_task(updates.append("thinking", "Hold the writer"))
+                commands.append(held)
+                await writing.wait()
+                closing = asyncio.create_task(updates.close())
+                commands.append(closing)
+                await asyncio.sleep(0)  # Queue close behind the held write.
+                stale = asyncio.create_task(updates.append("commentary", "Stale command"))
+                commands.append(stale)
+                await asyncio.sleep(0)
+                await chunks.put(b"\x01\x02")
+                await audio_yielded.wait()
+                release.set()
+                await held
+                await closing
+                with pytest.raises(LiveCommandError, match="connection is closed"):
+                    await stale
+                assert len(updates._pending) == 2  # Failed command did not leave an acknowledgment waiter.
+                checked.set()
+                await connection  # Suppressed raw audio must not fail graceful close.
+                assert [event["type"] for event in received] == ["session.thinking.append", "session.close"]
+            finally:
+                release.set()
+                checked.set()
+                for command in commands:
+                    command.cancel()
+                connection.cancel()
+                await asyncio.gather(connection, *commands, return_exceptions=True)
 
     asyncio.run(scenario())
 

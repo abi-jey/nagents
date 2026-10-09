@@ -70,8 +70,10 @@ def test_native_handoffs_freeze_their_own_text_and_history_before_queued_work_ru
                 speech(lane, "Third task spoken later", 3000)
                 observe(lane, notice("third", "Third task", 4000))
                 observe(lane, notice("third-extra", "Third task", 4100))
+                received = [await results.get() for _ in range(3)]
+                assert [result["delegation_id"] for result in received] == ["second", "third", "third-extra"]
                 release.set()
-                received = [await results.get() for _ in range(4)]
+                received.append(await results.get())
                 # Late captions are observations, never a request to replay tools.
                 speech(lane, "Second task transcript arrived last", 1500)
                 observe(lane, notice("second", "Replay attempt"))
@@ -85,9 +87,9 @@ def test_native_handoffs_freeze_their_own_text_and_history_before_queued_work_ru
                 "Third task spoken later",
             ]
             assert calls[1].offset_ms == 2000
-            assert received == [
-                {"delegation_id": call.identifier, "content": "Result for " + call.identifier} for call in calls
-            ]
+            assert {str(result["delegation_id"]): result["content"] for result in received} == {
+                call.identifier: "Result for " + call.identifier for call in calls
+            }
             assert lane.pending.empty() and results.empty()
         finally:
             worker.cancel()

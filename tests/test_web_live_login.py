@@ -18,6 +18,7 @@ from nagents.web.live_login import LoginVoiceConfig
 from nagents.web.live_login import LoginVoiceError
 from nagents.web.live_login import normalize_event
 from nagents.web.live_runtime import LiveService
+from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -162,6 +163,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
             assert commands == [
                 {
                     "type": "delegation.context.append",
+                    "channel": "speakable",
                     "delegation_item_id": "delegation-1",
                     "content": [{"type": "input_text", "text": "Four."}],
                 },
@@ -219,7 +221,7 @@ def test_login_results_keep_each_requesting_delegation_item_id_across_chunks_and
                     await socket.send_json({"type": "session.closed"})
                     break
                 assert event["type"] == "delegation.context.append"
-                assert "channel" not in event and "delegation_id" not in event
+                assert event["channel"] == "speakable" and "delegation_id" not in event
                 identifier = event["delegation_item_id"]
                 assert identifier in expected and identifier != "different-handoff-id"
                 assert len(event["content"]) == 1 and event["content"][0]["type"] == "input_text"
@@ -248,7 +250,7 @@ def test_login_results_keep_each_requesting_delegation_item_id_across_chunks_and
                 await asyncio.gather(reader, return_exceptions=True)
                 await connection.aclose()
             assert len(calls) == 2 and all(request.text == "Current caller request" for request in calls)
-            assert order.count("item-first") > 1 and order[-1] == "item-second"
+            assert order.count("item-first") > 1 and order.count("item-second") == 1
             assert results == expected and connection.finalized
 
     asyncio.run(scenario())
@@ -262,6 +264,92 @@ def test_login_result_without_a_valid_provider_delegation_id_never_uses_unbound_
             normalize_event({"type": "delegation.created", "item": {"id": identifier, "target": "client"}})
         with pytest.raises(LoginVoiceError, match="invalid delegation result"):
             await connection._result({"delegation_id": identifier, "content": "An answer"})
+
+    asyncio.run(scenario())
+
+
+def test_native_late_and_session_updates_use_verified_channels_and_stop_at_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        handled = asyncio.Event()
+        commands: asyncio.Queue[Payload] = asyncio.Queue()
+
+        async def backend(request: LoginHandoff) -> str:
+            handled.set()
+            return ""  # Application owns progress and later results separately.
+
+        async def handle(request: web.Request) -> web.StreamResponse:
+            if request.method == "POST":
+                return web.Response(status=201, text=ANSWER, headers={"Location": "/calls/rtc_fixture"})
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            await socket.send_json(
+                {
+                    "type": "delegation.created",
+                    "item": {
+                        "id": "original",
+                        "type": "delegation",
+                        "target": "client",
+                        "content": [{"type": "input_text", "text": "Start research"}],
+                    },
+                }
+            )
+            async for message in socket:
+                event = message.json()
+                await commands.put(event)
+                if event["type"] == "session.close":
+                    await socket.send_json({"type": "session.closed"})
+                    break
+            return socket
+
+        async with upstream(monkeypatch, handle), asyncio.timeout(HANG_GUARD):
+            connection = ChatGPTLiveConnection(config(backend))
+            await connection.provision(OFFER)
+
+            async def read() -> None:
+                async for _ in connection.events():
+                    pass
+
+            reader = asyncio.create_task(read())
+            try:
+                await handled.wait()
+                with pytest.raises(ValueError, match="Unknown client delegation"):
+                    await connection.append("commentary", "Do not speak", "wrong-call-id")
+                progress = "界" * 200
+                assert await connection.append("thinking", progress, "original") == "delegation.context.append"
+                fragments = [await commands.get(), await commands.get()]
+                assert "".join(str(event["content"][0]["text"]) for event in fragments) == progress  # type: ignore[index]
+                assert all(event["channel"] == "commentary" for event in fragments)
+                assert all(event["delegation_item_id"] == "original" for event in fragments)
+                assert all(len(str(event["content"][0]["text"]).encode()) <= 480 for event in fragments)  # type: ignore[index]
+                assert (
+                    await connection.append("commentary", "The late result", "original") == "delegation.context.append"
+                )
+                assert (await commands.get())["channel"] == "speakable"
+                assert await connection.append("commentary", "Wakeup result") == "session.context.append"
+                wakeup = await commands.get()
+                assert wakeup["channel"] == "speakable" and "delegation_item_id" not in wakeup
+                assert await connection.append("thinking", "Background work started") == "session.context.append"
+                assert (await commands.get())["channel"] == "commentary"
+                assert await connection.append("instructions", "Unsupported instruction") == ""
+                # Closing while an update waits for the shared writer lock must
+                # suppress it before close, not emit a stale update afterwards.
+                await connection._send_lock.acquire()
+                pending = asyncio.create_task(connection.append("commentary", "stale", "original"))
+                closing = asyncio.create_task(connection.close())
+                await asyncio.sleep(0)
+                connection._send_lock.release()
+                assert await pending == ""
+                await closing
+                assert (await commands.get())["type"] == "session.close"
+                await reader
+                assert await connection.append("commentary", "After close", "original") == ""
+                assert commands.empty()
+            finally:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+                await connection.aclose()
 
     asyncio.run(scenario())
 

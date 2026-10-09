@@ -13,6 +13,7 @@ from contextlib import aclosing
 from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Literal
@@ -33,7 +34,10 @@ from ..events import Event as AgentEvent
 from ..events import InputTranscriptDeltaEvent
 from ..provider.auth import validate_endpoint
 from .audio import SilenceInput
+from .controls import LiveCommandError
 from .controls import LiveControls as _LiveUpdates
+from .delegation import ClientDelegationRequest
+from .delegation import delegation_workers
 from .events import LiveEvent
 from .hosted import HostedTools
 
@@ -76,6 +80,7 @@ class _DelegationScope:
 
 
 _delegation_scope: ContextVar[_DelegationScope | None] = ContextVar("live_delegation", default=None)
+_input_content: ContextVar[tuple[ContentPart, ...]] = ContextVar("live_client_input", default=())
 
 
 async def append_update(agent: Agent, kind: Literal["commentary", "thinking", "instructions"], content: str) -> str:
@@ -128,7 +133,7 @@ class LiveConfig:
             raise ValueError("Choose attachment or a stored fork, not both")
         if self.client_handler is not None and self.client_request_handler is not None:
             raise ValueError("Choose a legacy or typed client handler, not both")
-        if isinstance(self.client_concurrency, bool) or not 1 <= self.client_concurrency <= 32:
+        if type(self.client_concurrency) is not int or not 1 <= self.client_concurrency <= 32:
             raise ValueError("Live client concurrency must be between 1 and 32")
         if len(self.history) > 128 or self.backend_timeout <= 0 or self.close_timeout <= 0 or self.event_queue_size < 1:
             raise ValueError("Invalid Live history length or timeout")
@@ -207,13 +212,26 @@ class ResponsesDelegation:
 
 
 class ClientDelegations:
-    """One backend lane, independent of audio. Speech never retries tools."""
+    """Bounded independent backend lanes; capture requests before dispatch."""
 
-    def __init__(self, backend: Backend, send: Send) -> None:
-        self.backend = backend
-        self.send = send
+    def __init__(
+        self,
+        backend: Backend,
+        send: Send,
+        *,
+        handler: ClientDelegationHandler | None = None,
+        observer: ClientDelegationObserver | None = None,
+        concurrency: int = 4,
+    ) -> None:
+        self.backend, self.send = backend, send
+        self.handler, self.observer = handler, observer
+        if type(concurrency) is not int or not 1 <= concurrency <= 32:
+            raise ValueError("Live client concurrency must be between 1 and 32")
+        self.concurrency = concurrency
         self.fragments: deque[Event] = deque(maxlen=512)
         self.pending: asyncio.Queue[str] = asyncio.Queue(maxsize=32)
+        self.requests: dict[str, ClientDelegationRequest] = {}
+        self._awaiting_context: set[str] = set()
         self.seen: set[str] = set()
         self.revision = 0
         self.ready = asyncio.Event()
@@ -221,19 +239,38 @@ class ClientDelegations:
         self.timeout = 120.0
         self.inputs: dict[str, list[ContentPart]] = {}
         self.enabled = True
+        self.closed = False
 
     async def submit(self, content: list[ContentPart]) -> str:
+        if self.closed or self.updates.closing:
+            raise RuntimeError("The Live connection is closed")
+        if self.handler is not None:
+            raise ValueError(
+                "Typed Live request handlers accept voice notices; route application input to your backend"
+            )
         identifier = "application:" + uuid4().hex
         self.inputs[identifier] = content
         try:
-            self.pending.put_nowait(identifier)
-        except asyncio.QueueFull:
-            self.inputs.pop(identifier)
-            raise RuntimeError("Live backend queue is full") from None
+            self._queue(ClientDelegationRequest(identifier, transcript=self.context()))
+        except BaseException:
+            self.inputs.pop(identifier, None)
+            raise
         return identifier
+
+    def _queue(self, request: ClientDelegationRequest) -> None:
+        if self.pending.full():
+            raise RuntimeError("Live client delegation queue is full")
+        if self.observer is not None:
+            self.observer(request)
+        self.requests[request.identifier] = request
+        self.pending.put_nowait(request.identifier)
 
     def observe(self, event: Event) -> None:
         kind = event.get("type")
+        if kind == "session.closed":
+            self.closed = True
+        if self.closed:
+            return
         if kind in {"session.input_transcript.delta", "session.output_transcript.delta"}:
             user = kind == "session.input_transcript.delta"
             text = event.get("delta")
@@ -251,19 +288,36 @@ class ClientDelegations:
                 self.revision += 1
                 if text.strip():
                     self.ready.set()
+                    # Legacy transcript-only handlers can wait for the first
+                    # caller caption. Freeze it once, before subsequent speech.
+                    # Typed handlers always receive the notice-time snapshot.
+                    for waiting_id in self._awaiting_context:
+                        waiting = self.requests[waiting_id]
+                        self.requests[waiting_id] = replace(waiting, transcript=self.context())
+                    self._awaiting_context.clear()
         elif kind == "session.delegation.created":
             if not self.enabled:
                 return
             delegation = object_value(event["delegation"])
             if delegation.get("target") != "client":
                 return
-            identifier = str(delegation["id"])
+            identifier = delegation.get("id")
+            if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 256:
+                raise ValueError("Invalid Live client delegation ID")
             if identifier in self.seen:
                 return
+            offset = event.get("offset_ms")
+            request = ClientDelegationRequest(
+                identifier,
+                transcript=self.context(),
+                offset_ms=float(offset)
+                if isinstance(offset, int | float) and not isinstance(offset, bool) and 0 <= offset <= 1e12
+                else None,
+            )
+            self._queue(request)
             self.seen.add(identifier)
-            if self.pending.full():
-                raise RuntimeError("Live client delegation queue is full")
-            self.pending.put_nowait(identifier)
+            if self.handler is None and not self.ready.is_set():
+                self._awaiting_context.add(identifier)
 
     def context(self) -> str:
         # Preserve exact text, including spaces/repeated words; order by session
@@ -272,20 +326,45 @@ class ClientDelegations:
         return json.dumps(fragments, ensure_ascii=False)
 
     async def run(self) -> None:
+        try:
+            await delegation_workers(self._work, self.concurrency, self._stop)
+        finally:
+            self.closed = True
+            self.requests.clear()
+            self.inputs.clear()
+            self._awaiting_context.clear()
+
+    def _stop(self) -> None:
+        self.closed = True
+
+    async def _work(self) -> None:
         while True:
             identifier = await self.pending.get()
+            if self.closed:
+                return
             application = identifier.startswith("application:")
-            if not application:
+            if not application and self.handler is None:
                 await self.ready.wait()  # A delegation can precede its transcript.
+            if self.closed:
+                return
+            request = self.requests.pop(identifier)
             revision = self.updates.revision
             try:
                 async with asyncio.timeout(self.timeout):
-                    result = await self.backend(self.context(), identifier)
+                    result = (
+                        await self.handler(request)
+                        if self.handler is not None
+                        else await self.backend(request.transcript, identifier)
+                    )
             except Exception:
                 result = "The backend could not complete this request."
+            finally:
+                self.inputs.pop(identifier, None)
             if revision != self.updates.revision:
                 continue  # Application explicitly superseded this task.
             for part in result_chunks(result):
+                if self.closed or self.updates.closing or self.updates.status.finalized:
+                    return
                 await self.send(
                     {
                         "type": "session.commentary.append",
@@ -415,9 +494,19 @@ async def converse(
     ):
         send_lock = asyncio.Lock()
 
-        async def send(event: Event) -> None:
+        async def write(event: Event, *, command: bool) -> None:
             async with send_lock:
+                if updates.status.finalized or (updates.closing and event.get("type") != "session.close"):
+                    if command:
+                        raise LiveCommandError("The Live connection is closed")
+                    return
                 await socket.send_json(event)
+
+        async def send(event: Event) -> None:
+            await write(event, command=False)
+
+        async def send_command(event: Event) -> None:
+            await write(event, command=True)
 
         # Live uses session.start, not Realtime's session.update or a model
         # URL query. Nothing else may be sent until session.started arrives.
@@ -435,7 +524,13 @@ async def converse(
         if started.get("type") not in {"session.started", "connection.attached"}:
             await on_event(started)
             raise RuntimeError("Live did not start; inspect the startup event")
-        delegations = ClientDelegations(backend, send)
+        delegations = ClientDelegations(
+            backend,
+            send,
+            handler=options.client_request_handler,
+            observer=options.client_request_observer,
+            concurrency=options.client_concurrency,
+        )
         for index, message in enumerate(options.history if options.history_in_client_context else ()):
             parts = message.get("content")
             assert isinstance(parts, list)
@@ -452,7 +547,7 @@ async def converse(
         delegations.updates = updates
         delegations.enabled = options.handle_delegations
         delegations.timeout = options.backend_timeout
-        updates.sender = send
+        updates.sender = send_command
         updates.delegations = delegations.seen
         updates.responses = options.delegation == "responses"
         updates.observe(started)
@@ -465,12 +560,11 @@ async def converse(
 
         async def dispatch(context: str, identifier: str) -> str:
             content = delegations.inputs.pop(identifier, None)
-            if content is not None:
-                updates.input_content = content
+            token = _input_content.set(tuple(content or ()))
             try:
                 return await original_backend(context, identifier)
             finally:
-                updates.input_content = []
+                _input_content.reset(token)
 
         delegations.backend = dispatch
         reader = asyncio.create_task(receive(socket, speaker, delegations, on_event, hosted))
@@ -485,6 +579,7 @@ async def converse(
                 for task in done:
                     task.result()  # Surface audio/backend/transport failures.
         finally:
+            delegations.closed = True
             updates.sender = None  # Stop commands, but let pending acknowledgments drain.
             sender.cancel()
             worker.cancel()
@@ -561,6 +656,8 @@ class _LiveConnection:
 
     async def run(self, audio: AudioDuplex) -> None:
         """Run until cancellation or server close; finalize before disconnecting."""
+        if isinstance(self.backend, Agent) and self.options.client_request_handler is not None:
+            raise ValueError("Choose a delegation agent or a client request handler, not both")
         formats = [adapter.audio_format for adapter in (audio.input, audio.output) if adapter is not None]
         if formats and any(fmt != formats[0] for fmt in formats):
             raise ValueError("Live input and output audio formats must match")
@@ -587,7 +684,7 @@ class _LiveConnection:
             try:
                 return await infer(
                     self.backend,
-                    self.updates.input_content or transcript,
+                    list(_input_content.get()) or transcript,
                     identifier,
                     self.on_backend_event,
                     session_id=self.backend_session_id,
@@ -605,7 +702,7 @@ class _LiveConnection:
                 speaker,
                 self.on_event,
                 self.updates,
-                self.options,
+                replace(self.options, client_concurrency=1) if isinstance(self.backend, Agent) else self.options,
                 self.hosted,
                 self.provider,
             )

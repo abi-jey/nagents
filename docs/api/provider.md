@@ -99,6 +99,40 @@ complete hosted function batches and uses its tool executor, submitting every
 result before continuing. A plain async service can instead be configured with
 `LiveConfig(delegation="client", client_handler=...)`.
 
+For correlated application work, use `client_request_handler` instead. Its
+`ClientDelegationRequest` (from `nagents.live`) contains the original `identifier`,
+notice-time `transcript`, optional native `text`, and `offset_ms`. The immutable
+snapshot never absorbs later speech while waiting for a backend. A synchronous
+`client_request_observer` can report receipt immediately, including when all
+workers are busy; keep this callback short and nonblocking.
+
+Independent callbacks run with `client_concurrency=4` (configurable from 1 to 32),
+with at most 32 queued requests. A supplied `Agent.delegation_agent` keeps one
+lane because it owns one conversation. Cancellation joins all workers before
+disconnecting. The legacy `client_handler(transcript)` interface remains valid;
+only this transcript-only interface waits for a first caller caption when a
+notice arrives before any caller speech.
+
+The typed handler accepts voice notices only. Route application text or images
+directly to your backend; `submit_text` and `submit_image` reject this handler
+configuration instead of discarding the supplied content. A delegation agent
+continues to accept these multimodal input commands.
+
+A handler may return `""` when the application owns ongoing results. The ID
+remains valid until the connection closes: send quiet progress with
+`voice.live.append("thinking", text, identifier)` and speakable results with
+`voice.live.append("commentary", text, identifier)`. Use an empty identifier for
+session-wide work. Keep each public append below 500 tokens; the transport's
+automatic results use conservative 480-byte UTF-8 chunks. An append receipt
+does not confirm audio playback. See the
+[OpenAI delegation guide](https://developers.openai.com/api/docs/guides/live-delegation).
+
+The web ChatGPT login adapter uses its distinct native protocol: quiet progress
+maps to `channel: commentary`, spoken results to `channel: speakable`, and an
+empty ID uses `session.context.append`. Native instruction appends are explicitly
+unsupported; they are not converted into spoken instructions. Native content is
+also split below its 500-byte limit.
+
 `LiveAPI` implements WebRTC setup, SIP controls, recording download and stored
 forks. `agent.live_configuration(media=True)` supplies the session configuration
 and registered hosted tool schemas without a WebSocket audio format. Attach an

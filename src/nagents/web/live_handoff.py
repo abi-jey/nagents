@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING
 from typing import cast
 
 from nagents.live.delegation import ClientDelegationRequest
+from nagents.live.delegation import delegation_workers
 from nagents.live.runtime import result_chunks
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
+
+    from nagents.live.delegation import ClientDelegationObserver
 
 MAX_HANDOFF_TEXT = 12000
 MAX_HANDOFF_PARTS = 512
@@ -56,13 +59,23 @@ def _request_text(item: object) -> str:
 
 
 class LoginDelegations:
-    """One bounded native lane, with immutable context captured at each notice."""
+    """Bounded independent execution of immutable native request items."""
 
     def __init__(
-        self, backend: Callable[[LoginHandoff], Awaitable[str]], send: Callable[[Payload], Awaitable[None]]
+        self,
+        backend: Callable[[LoginHandoff], Awaitable[str]],
+        send: Callable[[Payload], Awaitable[None]],
+        *,
+        observer: ClientDelegationObserver | None = None,
+        concurrency: int = 4,
     ) -> None:
         self.backend = backend
         self.send = send
+        self.observer = observer
+        if type(concurrency) is not int or not 1 <= concurrency <= 32:
+            raise ValueError("Live client concurrency must be between 1 and 32")
+        self.concurrency = concurrency
+        self.closed = False
         self.pending: asyncio.Queue[LoginHandoff] = asyncio.Queue(maxsize=32)
         self.seen: set[str] = set()
         self.fragments: deque[Payload] = deque()
@@ -70,6 +83,10 @@ class LoginDelegations:
 
     def observe(self, event: Payload, raw: Payload) -> None:
         kind = event.get("type")
+        if kind == "session.closed":
+            self.closed = True
+        if self.closed:
+            return
         if kind in {"session.input_transcript.delta", "session.output_transcript.delta"}:
             text = event.get("delta")
             if not isinstance(text, str):
@@ -92,20 +109,31 @@ class LoginDelegations:
             identifier = delegation.get("id")
             if not isinstance(identifier, str) or identifier in self.seen:
                 return
-            self.seen.add(identifier)
             text = _request_text(raw.get("item"))
             fragments = sorted(self.fragments, key=lambda part: cast("float", part["start_ms"]))
             transcript = json.dumps(fragments, ensure_ascii=False) if text else "[]"
-            try:
-                self.pending.put_nowait(
-                    LoginHandoff(identifier, text, transcript, handoff_offset(raw.get("offset_ms")))
-                )
-            except asyncio.QueueFull:
-                raise RuntimeError("Live client delegation queue is full") from None
+            request = LoginHandoff(identifier, text, transcript, handoff_offset(raw.get("offset_ms")))
+            if self.pending.full():
+                raise RuntimeError("Live client delegation queue is full")
+            if self.observer is not None:
+                self.observer(request)
+            self.pending.put_nowait(request)
+            self.seen.add(identifier)
 
     async def run(self) -> None:
+        try:
+            await delegation_workers(self._work, self.concurrency, self._stop)
+        finally:
+            self.closed = True
+
+    def _stop(self) -> None:
+        self.closed = True
+
+    async def _work(self) -> None:
         while True:
             request = await self.pending.get()
+            if self.closed:
+                return
             result = _CLARIFY
             if request.text:
                 try:
@@ -114,4 +142,6 @@ class LoginDelegations:
                 except Exception:
                     result = "The backend could not complete this request."
             for part in result_chunks(result):
+                if self.closed:
+                    return
                 await self.send({"delegation_id": request.identifier, "content": part})
