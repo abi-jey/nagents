@@ -46,12 +46,14 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
   const failures: string[] = [], sources: { stops: number; starts: number[]; onended(): void }[] = [];
   const constraints: MediaStreamConstraints[] = [], sinks: string[] = [];
   const levels: [number, number][] = [];
+  const playbackCommands: { type: string; epoch: number; buffer?: ArrayBuffer }[] = [];
   let inputError: Error | undefined, outputError: Error | undefined, sinkResult = Promise.resolve();
   let inputResult = Promise.resolve(stream), graphError = false;
   const captureSources: { node: Node; stream: object }[] = [];
-  let connected = false, ended = false, socket!: Socket, node!: WorkletNode, context!: Context;
+  let connected = false, ended = false, socket!: Socket, node!: WorkletNode, speaker!: WorkletNode, context!: Context;
   class Node {
-    port = { onmessage: (_event: MessageEvent<ArrayBuffer>) => {}, close: () => {} };
+    port = { onmessage: (_event: MessageEvent<ArrayBuffer>) => {}, close: () => {},
+      postMessage: (message: { type: string; epoch: number; buffer?: ArrayBuffer }) => { playbackCommands.push(message); } };
     connections: object[] = [];
     disconnects = 0;
     connect(other: object) { this.connections.push(other); return other as this; }
@@ -64,18 +66,19 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
   }
   class WorkletNode extends Node {
     onprocessorerror = () => {};
-    constructor() { super(); node = this; }
+    constructor(_context: object, name: string) { super(); if (name === "ngn-live-playback") speaker = this; else node = this; }
   }
   class Context {
     state = "suspended";
     currentTime = 0;
+    sampleRate = 48000;
     destination = {};
     closes = 0;
     sinkId = "";
     onstatechange: (() => void) | null = null;
     analysers: Analyser[] = [];
     constructor() { context = this; }
-    audioWorklet = { addModule: async (path: string) => { assert.equal(path, "/assets/live-capture.js"); } };
+    audioWorklet = { addModule: async (path: string) => { assert.ok(["/assets/live-capture.js", "/assets/live-playback.js"].includes(path)); } };
     createMediaStreamSource(value: object) { if (graphError) throw new Error("Graph unavailable"); const source = new Node(); captureSources.push({ node: source, stream: value }); return source; }
     createGain() { return Object.assign(new Node(), { gain: { value: 1 } }); }
     createAnalyser() { const analyser = new Analyser(); this.analysers.push(analyser); return analyser; }
@@ -114,7 +117,13 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
   const media = browserMedia({ connected: () => { connected = true; }, ended: () => { ended = true; }, failed: (message) => failures.push(message), playbackBlocked: (blocked) => playback.push(blocked),
     ...(metering ? { levels: (input: number, output: number) => { levels.push([input, output]); } } : {}),
   }, "websocket", devices);
-  return { media, microphone, sent, playback, failures, sources, constraints, sinks, captureSources, levels,
+  const epoch = () => playbackCommands.filter(command => ["reset", "barrier"].includes(command.type)).at(-1)?.epoch || 0;
+  const heard = (buffer: ArrayBuffer, at = context.currentTime - .02, version = epoch()) => {
+    speaker.port.onmessage?.({ data: { type: "played", epoch: version, buffer, at } } as unknown as MessageEvent<ArrayBuffer>);
+  };
+  return { media, microphone, sent, playback, failures, sources, constraints, sinks, captureSources, levels, playbackCommands, heard,
+    speaker: () => speaker, epoch,
+    packets: () => playbackCommands.filter(command => command.type === "pcm"),
     inputError: (cause: Error | undefined) => { inputError = cause; }, outputError: (cause: Error | undefined) => { outputError = cause; },
     sinkResult: (result: Promise<void>) => { sinkResult = result; },
     inputResult: (result: Promise<typeof stream>) => { inputResult = result; },
@@ -138,7 +147,7 @@ function pcmFrame(value: number, samples = 480): ArrayBuffer {
   return bytes;
 }
 
-test("sphere PCM samples only sent capture and scheduled playback, copying each source buffer", async (t) => {
+test("sphere PCM samples only sent capture and actual worklet playback, copying each source buffer", async (t) => {
   const f = browserFixture(); t.after(f.restore);
   assert(f.media.sampleAudio);
   await f.media.prepare(new AbortController().signal);
@@ -157,17 +166,22 @@ test("sphere PCM samples only sent capture and scheduled playback, copying each 
   new Uint8Array(input).fill(0);
   assert.equal(f.media.sampleAudio().input.rms, captured.rms, "queued capture must not alias the worklet buffer");
 
-  const first = pcmFrame(8192, 4800), second = pcmFrame(-16384, 4800);
+  const first = pcmFrame(8192), second = pcmFrame(-16384);
   f.socket().onmessage({ data: first } as MessageEvent<ArrayBuffer>);
   f.socket().onmessage({ data: second } as MessageEvent<ArrayBuffer>);
-  assert.deepEqual(f.sources.map(source => source.starts[0]), [1.02, 1.22]);
-  new Uint8Array(first).fill(0); new Uint8Array(second).fill(0);
-  assert.equal(f.media.sampleAudio().output.active, false, "received speech must not animate before scheduled playback");
-  context.currentTime = 1.019; assert.equal(f.media.sampleAudio().output.rms, 0);
-  context.currentTime = 1.055; assert(Math.abs(f.media.sampleAudio().output.rms - .25) < .002);
-  context.currentTime = 1.255; assert(Math.abs(f.media.sampleAudio().output.rms - .5) < .002);
-  f.sources.forEach(source => source.onended());
-  assert.equal(f.media.sampleAudio().output.active, false, "ended playback clears its visualization immediately");
+  assert.equal(f.packets().length, 2);
+  assert.equal(f.sources.length, 0, "network frames must not create UI-thread AudioBufferSource schedules");
+  assert.equal(f.media.sampleAudio().output.active, false, "received speech must not animate before actual worklet playback");
+  context.currentTime = 1.04;
+  f.heard(first, 1.02);
+  const audible = f.media.sampleAudio().output.rms;
+  assert(audible > .15);
+  new Uint8Array(first).fill(0);
+  assert.equal(f.media.sampleAudio().output.rms, audible, "played PCM must be copied before buffers can be reused");
+  context.currentTime = 1.06; f.heard(second, 1.04);
+  assert(f.media.sampleAudio().output.rms > audible);
+  context.currentTime = 1.5;
+  assert.equal(f.media.sampleAudio().output.active, false, "silence following the last played PCM clears the sphere");
   assert.equal(f.constraints.length, 1, "PCM analysis does not acquire another microphone");
   assert.deepEqual(f.failures, []);
 });
@@ -178,8 +192,9 @@ test("sphere PCM ownership resets on mute, context suspension, device changes, r
   const feed = () => {
     f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
     f.socket().onmessage({ data: pcmFrame(16384, 4800) } as MessageEvent<ArrayBuffer>);
+    f.heard(pcmFrame(16384));
   };
-  feed(); context.currentTime += .025; assert(f.media.sampleAudio().input.rms > 0); assert(f.media.sampleAudio().output.rms > 0);
+  feed(); assert(f.media.sampleAudio().input.rms > 0); assert(f.media.sampleAudio().output.rms > 0);
   f.media.muteInput(true); f.media.muteOutput(true);
   assert.equal(f.media.sampleAudio().input.rms, 0); assert.equal(f.media.sampleAudio().output.rms, 0);
   f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
@@ -193,7 +208,7 @@ test("sphere PCM ownership resets on mute, context suspension, device changes, r
   feed(); assert(f.media.sampleAudio().input.active);
   const replacement = f.newMicrophone(); f.inputResult(Promise.resolve(replacement.stream));
   await f.media.setInputDevice("new-input"); assert.equal(f.media.sampleAudio().input.rms, 0);
-  context.currentTime += .025; assert(f.media.sampleAudio().output.rms > 0);
+  assert(f.media.sampleAudio().output.rms > 0);
   await f.media.setOutputDevice("new-output"); assert.equal(f.media.sampleAudio().output.rms, 0);
   feed(); const next = f.media.connect("second-session", "web-token"); f.socket().onopen(); await next;
   assert.equal(f.media.sampleAudio().input.active, false); assert.equal(f.media.sampleAudio().output.active, false);
@@ -209,7 +224,7 @@ test("unavailable optional PCM queues never interrupt the existing voice transpo
   assert(f.media.sampleAudio);
   f.node().port.onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
   f.socket().onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
-  assert.equal(f.sent.length, 1); assert.equal(f.sources.length, 1);
+  assert.equal(f.sent.length, 1); assert.equal(f.packets().length, 1);
   assert.equal(f.media.sampleAudio().input.active, false); assert.equal(f.media.sampleAudio().output.active, false);
   assert.deepEqual(f.failures, []); assert.equal(f.connected(), true);
 });
@@ -262,7 +277,7 @@ test("microphone and playback use only the ngn serve WebSocket, release devices 
   assert.deepEqual(f.sinks, [], "fresh playback follows the system default without pinning a sink");
   assert.equal(f.connected(), true);
   assert.equal(f.socket().url, "ws://127.0.0.1:8765/api/live/sessions/voice-id/audio");
-  assert.deepEqual(f.socket().protocols, ["ngn.live.v1", "ngn.token.web-token"]);
+  assert.deepEqual(f.socket().protocols, ["ngn.live.v2", "ngn.token.web-token"]);
   assert.equal(f.socket().binaryType, "arraybuffer");
   const frame = new Int16Array(480).fill(1234).buffer;
   f.node().port.onmessage({ data: frame } as MessageEvent<ArrayBuffer>);
@@ -272,9 +287,9 @@ test("microphone and playback use only the ngn serve WebSocket, release devices 
   f.node().port.onmessage({ data: frame } as MessageEvent<ArrayBuffer>);
   assert.equal(f.microphone.enabled, false);
   assert.ok(new Int16Array(f.sent[1]).every((sample) => sample === 0));
-  assert.equal(f.sources[0].stops, 1);
+  assert(f.epoch() > 1, "mute clears the playback queue with a fresh epoch");
   f.socket().onmessage({ data: frame } as MessageEvent<ArrayBuffer>);
-  assert.equal(f.sources.length, 1, "muted output is discarded");
+  assert.equal(f.packets().length, 1, "muted output is discarded");
   f.media.muteInput(false); f.node().port.onmessage({ data: frame } as MessageEvent<ArrayBuffer>);
   assert.equal(f.microphone.enabled, true); assert.equal(f.sent[2], frame);
   await f.media.play(); assert.equal(f.playback.at(-1), false);
@@ -305,7 +320,7 @@ test("audio context interruption stops queued speech and exposes playback recove
   const f = browserFixture(); t.after(f.restore); await f.open();
   f.socket().onmessage({ data: new ArrayBuffer(960) } as MessageEvent<ArrayBuffer>);
   f.context().state = "interrupted"; f.context().onstatechange?.();
-  assert.equal(f.playback.at(-1), true); assert.equal(f.sources[0].stops, 1);
+  assert.equal(f.playback.at(-1), true); assert(f.epoch() > 1);
   await f.media.play();
   assert.equal(f.playback.at(-1), false);
   f.node().onprocessorerror();
@@ -315,8 +330,8 @@ test("audio context interruption stops queued speech and exposes playback recove
 test("playback backlog and invalid or stalled relay frames stay bounded", async (t) => {
   const f = browserFixture(); t.after(f.restore); await f.open();
   for (let index = 0; index < 40; index++) f.socket().onmessage({ data: new ArrayBuffer(960) } as MessageEvent<ArrayBuffer>);
-  assert.ok(f.sources.some((source) => source.stops > 0));
-  assert.ok(f.sources.filter((source) => source.stops === 0).length < 31);
+  assert.equal(f.sources.length, 0, "only the audio-thread bounded queue owns playout");
+  assert.equal(f.packets().length, 40);
   f.socket().onmessage({ data: new ArrayBuffer(3) } as MessageEvent<ArrayBuffer>);
   assert.match(f.failures.at(-1) || "", /invalid frame/);
   f.socket().bufferedAmount = 192_001;
@@ -430,7 +445,7 @@ test("relay speaker changes preserve mute, reset to system default, and retain t
   const f = browserFixture(); t.after(f.restore); await f.open();
   const socket = f.socket(), context = f.context(); f.media.muteOutput(true);
   await f.media.setOutputDevice("headphones"); assert.equal(context.sinkId, "headphones");
-  f.socket().onmessage({ data: new ArrayBuffer(960) } as MessageEvent<ArrayBuffer>); assert.equal(f.sources.length, 0);
+  f.socket().onmessage({ data: new ArrayBuffer(960) } as MessageEvent<ArrayBuffer>); assert.equal(f.packets().length, 0);
   await f.media.setOutputDevice(""); assert.deepEqual(f.sinks, ["headphones", ""]); assert.equal(context.sinkId, "");
   f.outputError(new DOMException("Missing", "NotFoundError"));
   await assert.rejects(f.media.setOutputDevice("missing"), /selected speaker/);
@@ -465,4 +480,64 @@ test("a server session identifier cannot change the audio socket origin", async 
   assert.equal(f.socket().url, `ws://127.0.0.1:8765/api/live/sessions/${encodeURIComponent(id)}/audio`);
   f.socket().onopen(); await opening;
   assert.equal(f.connected(), true);
+});
+
+
+test("output worklet epochs fence delayed sphere messages through mute, suspension and close", async t => {
+  const f = browserFixture(); t.after(f.restore); await f.open();
+  assert(f.media.sampleAudio); const context = f.context(); context.currentTime = 1;
+  const old = f.epoch(); f.heard(pcmFrame(8192)); assert(f.media.sampleAudio().output.rms > 0);
+  f.media.muteOutput(true); f.media.muteOutput(false);
+  f.heard(pcmFrame(8192), .98, old); assert.equal(f.media.sampleAudio().output.rms, 0);
+  f.heard(pcmFrame(8192)); assert(f.media.sampleAudio().output.rms > 0);
+  context.state = "suspended"; context.onstatechange?.();
+  const suspended = f.epoch();
+  f.socket().onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  assert.equal(f.packets().length, 0, "suspended playback must not build a stale speech queue");
+  await f.media.play(); f.heard(pcmFrame(8192), .98, suspended - 1);
+  assert.equal(f.media.sampleAudio().output.rms, 0);
+  const node = f.speaker(); f.media.close();
+  assert.equal(node.port.onmessage, null); assert(node.disconnects > 0);
+  assert.equal(f.sources.length, 0);
+});
+
+test("speaker switching retains the continuous playout node and clock", async t => {
+  const f = browserFixture(); t.after(f.restore); await f.open();
+  const node = f.speaker(), epoch = f.epoch(), socket = f.socket();
+  await f.media.setOutputDevice("headphones");
+  assert.equal(f.speaker(), node); assert.equal(f.epoch(), epoch + 1); assert.equal(f.socket(), socket);
+  assert.equal(f.playbackCommands.at(-1)?.type, "barrier", "device change only fences telemetry, preserving queued audio");
+  f.context().currentTime = 2; f.heard(pcmFrame(8192), 1.98, epoch);
+  assert.equal(f.media.sampleAudio!().output.rms, 0, "pre-switch reports cannot repopulate the sphere");
+  f.context().currentTime = 2; f.heard(pcmFrame(8192), 1.98);
+  assert(f.media.sampleAudio!().output.rms > 0);
+  assert.equal(f.sources.length, 0);
+});
+
+test("a server interrupt clears queued speech and late sphere reports without reconnecting", async t => {
+  const f = browserFixture(); t.after(f.restore); await f.open();
+  f.context().currentTime = 1; f.heard(pcmFrame(8192));
+  const epoch = f.epoch(), socket = f.socket();
+  assert(f.media.sampleAudio!().output.rms > 0);
+  socket.onmessage({ data: '{"type":"interrupt"}' } as unknown as MessageEvent<ArrayBuffer>);
+  assert.equal(f.epoch(), epoch + 1); assert.equal(f.media.sampleAudio!().output.rms, 0);
+  f.heard(pcmFrame(8192), .98, epoch); assert.equal(f.media.sampleAudio!().output.rms, 0);
+  assert.equal(f.socket(), socket); assert.equal(f.socket().readyState, 1); assert.deepEqual(f.failures, []);
+  socket.onmessage({ data: '{"type":"execute","prompt":"untrusted"}' } as unknown as MessageEvent<ArrayBuffer>);
+  assert.match(f.failures.at(-1)!, /invalid frame/);
+});
+
+test("playback health accepts numeric counters only and never logs worklet payload extras", async t => {
+  const logs: unknown[][] = []; t.mock.method(console, "info", (...args: unknown[]) => { logs.push(args); });
+  const f = browserFixture(); t.after(f.restore); await f.open();
+  const health = { receivedSamples: 480, playedSamples: 300, underruns: 0, droppedSamples: 0, bufferedMs: 7.5,
+    peakBufferedMs: 40, targetMs: 40, sampleRate: 48000, correctionPpm: 10 };
+  f.speaker().port.onmessage({ data: { type: "health", epoch: f.epoch(), ...health, transcript: "never-log-this", provider: "private" } } as unknown as MessageEvent<ArrayBuffer>);
+  assert.deepEqual(f.media.audioHealth!(), health);
+  assert.equal(f.playbackCommands.at(-1)?.type, "health-ack");
+  const snapshot = f.media.audioHealth!(); snapshot.receivedSamples = 999;
+  assert.equal(f.media.audioHealth!().receivedSamples, 480);
+  f.media.close();
+  assert.equal(logs.length, 1); assert.equal(logs[0][0], "ngn voice playback health");
+  assert.doesNotMatch(JSON.stringify(logs), /never-log-this|private|transcript|provider/);
 });

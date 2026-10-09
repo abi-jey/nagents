@@ -54,7 +54,7 @@ class LocalOnly:
             expected = (
                 "ngn.events.v1"
                 if path == "/api/events"
-                else "ngn.live.v1"
+                else ("ngn.live.v2" if "ngn.live.v2" in protocols else "ngn.live.v1")
                 if re.fullmatch(r"/api/live/sessions/[A-Za-z0-9_-]{1,128}/audio", path)
                 else ""
             )

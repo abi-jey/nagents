@@ -1,3 +1,4 @@
+import type { PlaybackHealth } from "./playback.js";
 import type { AudioFrame } from "../../components/voiceSphere/types.js";
 
 export type LiveTransport = "websocket";
@@ -232,6 +233,7 @@ export interface MediaHandlers {
 
 export interface LiveMedia {
   /** Optional, read-only visualization of the media owned by this connection. */
+  audioHealth?(): PlaybackHealth;
   sampleAudio?(): AudioFrame;
   prepare(signal: AbortSignal): Promise<void>;
   connect(sessionId: string, token: string): Promise<void>;

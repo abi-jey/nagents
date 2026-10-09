@@ -65,15 +65,16 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     delegations: options.delegation ? [record] : [],
   });
   class AudioNode {
-    port = { onmessage: (_event: MessageEvent<ArrayBuffer>) => {}, close() {} };
+    port = { onmessage: (_event: MessageEvent<ArrayBuffer>) => {}, postMessage() {}, close() {} };
     connect(other: object) { return other as this; }
     disconnect() {}
   }
   class Context {
     state = "suspended";
     currentTime = 0;
+    sampleRate = 48000;
     destination = {};
-    audioWorklet = { addModule: async (path: string) => { assert.equal(path, "/assets/live-capture.js"); } };
+    audioWorklet = { addModule: async (path: string) => { assert.ok(["/assets/live-capture.js", "/assets/live-playback.js"].includes(path)); } };
     createMediaStreamSource() { return new AudioNode(); }
     createGain() { return Object.assign(new AudioNode(), { gain: { value: 1 } }); }
     async resume() { this.state = "running"; }
@@ -92,7 +93,7 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     constructor(url: string, protocols: string[]) {
       sockets++;
       assert.equal(url, "wss://localhost/api/live/sessions/voice-one/audio");
-      assert.deepEqual(protocols, ["ngn.live.v1", `ngn.token.${expectedToken}`]);
+      assert.deepEqual(protocols, ["ngn.live.v2", `ngn.token.${expectedToken}`]);
       queueMicrotask(() => this.onopen());
     }
     send() {}
