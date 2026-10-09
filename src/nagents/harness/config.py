@@ -16,9 +16,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
+from nagents.mcp import MCPServerConfig
+
 from .providers import ProviderProfile
 from .providers import ScopedProviderRegistryStore
 from .providers import validate_provider
+from .resource_config import parse_mcp_servers
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
 DEFAULT_HARNESS_MODEL = "gpt-6-astra"
@@ -47,6 +50,9 @@ class HarnessConfig:
     agent: str = "assistant"
     read_only: bool = False
     plugins: tuple[str, ...] = ()
+    mcp_servers: tuple[MCPServerConfig, ...] = ()
+    resource_paths: tuple[Path, ...] = ()
+    cli_plugins: tuple[str, ...] = ()
     trust_project: bool = False
     demo: bool = False
     data_dir: Path = field(default_factory=_data_dir)
@@ -230,7 +236,9 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_subagent_depth",
     }
     booleans = {"demo", "animations", "read_only"}
-    allowed = strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles", "providers"}
+    allowed = (
+        strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles", "providers", "mcp_servers"}
+    )
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
         if env_value is None:
@@ -287,6 +295,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             elif key in booleans:
                 if type(value) is not bool:
                     raise ValueError(f"{path}: {key} must be a boolean")
+            elif key == "mcp_servers":
+                value = parse_mcp_servers(value, path.parent, config.workspace)
             elif key == "plugins":
                 if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                     raise ValueError(f"{path}: plugins must be an array of 'path.py:setup' or 'module:setup' strings")
@@ -330,6 +340,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
+    config.resource_paths = tuple(reversed(dict.fromkeys(path.resolve() for path in reversed(paths))))
     config.global_model_default = global_model
     if selected_name:
         registry = store.load()

@@ -55,6 +55,14 @@ class AgentPlugin:
     async def before_model(self, context: RunContext, request: ModelRequest) -> ModelRequest:
         return request
 
+    async def after_model(self, context: RunContext) -> None:
+        """A completed text response, before its calls execute (including final replies)."""
+        pass
+
+    async def aclose(self) -> None:
+        """Release resources when a reloadable harness extension is retired."""
+        pass
+
     async def before_tool(self, context: RunContext, call: ToolCall) -> ToolCall:
         return call
 

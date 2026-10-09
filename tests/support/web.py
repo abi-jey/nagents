@@ -64,6 +64,9 @@ class ControlledHarness(Harness):
         self.decisions: list[bool] = []
         self.loop = asyncio.get_running_loop()
 
+    def load_project_instructions(self) -> None:
+        """This portable scripted client never invokes guarded workspace tools."""
+
     async def initialize(self, *, create_session: bool = True) -> None:
         assert asyncio.get_running_loop() is self.loop
         # Replace only workspace discovery on this injected test instance. Keep

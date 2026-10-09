@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import gc
-import importlib
 import inspect
 import json
 import re
 import secrets
 import uuid
-from types import ModuleType
 from typing import TYPE_CHECKING
 
 import aiosqlite
@@ -781,7 +779,7 @@ def test_plugin_commands_attributed_and_not_reimported_into_child(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
-        setups: list[Harness] = []
+        marker = tmp_path / "root-setups.txt"
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.index or len(provider.requests) > 1:
@@ -789,22 +787,21 @@ def test_plugin_commands_attributed_and_not_reimported_into_child(
             else:
                 yield ToolCallEvent(id="a", name="delegate", arguments={"prompt": "Review"})
 
-        module = ModuleType("subagent_test_plugin")
-
-        async def setup(harness: Harness) -> None:
-            setups.append(harness)
-            await asyncio.sleep(0)
-            harness.commands.register("review-note", "Review notes", prompt="Review $ARGUMENTS")
-
-        module.setup = setup  # type: ignore[attr-defined]
-        monkeypatch.setattr(importlib, "import_module", lambda name: module)
+        extension = tmp_path / "subagent_test_plugin.py"
+        extension.write_text(
+            "from pathlib import Path\n"
+            "def setup(harness):\n"
+            f"    with Path({str(marker)!r}).open('a') as stream: stream.write('root\\n')\n"
+            "    harness.commands.register('review-note', 'Review notes', prompt='Review $ARGUMENTS')\n"
+        )
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
-        harness.config.plugins = ("subagent_test_plugin:setup",)
+        harness.config.plugins = (str(extension) + ":setup",)
         try:
             await collect(harness)
-            assert setups == [harness]
+            # The parent reloads on each response; children never import it.
+            assert len(marker.read_text().splitlines()) == len(providers[0].requests) + 3
             command = harness.commands.get("review-note")
-            assert command is not None and command.source == "plugin:subagent_test_plugin"
+            assert command is not None and command.source == "plugin:subagent_test_plugin.py"
             assert providers[1].harness_config.plugins == ()
         finally:
             await harness.close()
@@ -1376,6 +1373,8 @@ def test_continuation_permission_ceiling_and_no_restored_job_handles(
                 yield TextDoneEvent(text="Completed")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
+        (tmp_path / "nested").mkdir()
+        (tmp_path / "nested" / "AGENTS.md").write_text("Retained nested project context")
         harness.instructions["nested/AGENTS.md"] = "Retained nested project context"
         harness.refresh_instructions()
         try:

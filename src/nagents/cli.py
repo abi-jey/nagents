@@ -515,6 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     location = str(Path(location).expanduser().resolve())
                 plugins.append(f"{location}:{function}")
             overrides["plugins"] = tuple(plugins)
+            overrides["cli_plugins"] = tuple(plugins[len(config.plugins) :])
         config = replace(config, **overrides)
         if "model" in overrides:
             config.model_explicit = True

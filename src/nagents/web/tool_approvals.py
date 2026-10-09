@@ -51,8 +51,11 @@ class ToolApprovals:
             )
 
     def binding(self, harness: Harness, name: str) -> ToolBinding | None:
-        definition = harness.agent.tool_registry.get(name)
-        if definition is None or definition.func is None:
+        # A model response may already have installed the next generation. The
+        # operator approves the exact definition advertised for this invocation,
+        # never a same-name replacement waiting for the next model request.
+        definition = harness.resources.definition(name)
+        if definition is None or definition.func is None or not harness.resources.unchanged(name, definition):
             return None
         function = definition.func
         schema = json.dumps(definition.parameters, sort_keys=True, separators=(",", ":"))
@@ -61,6 +64,12 @@ class ToolApprovals:
         # Builtin methods have framework-owned receivers. Arbitrary extension
         # receivers/closures can hide a server, destination or mutable authority:
         # never transfer their grant to a newly registered same-name wrapper.
+        captured = harness.resources.approval_identity(definition)
+        if captured:
+            # This identity describes the source/config loaded for this exact
+            # callable, even if disk and the ready generation have since changed.
+            key = hashlib.sha256(f"resource:{captured}\n{name}\n{schema}".encode()).hexdigest()
+            return ToolBinding(name, key, True)
         stable = builtin or (inspect.isfunction(function) and not function.__closure__)
         if stable:
             try:

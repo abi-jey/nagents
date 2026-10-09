@@ -11,6 +11,7 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.extensions import AgentPlugin
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
 from nagents.types import ToolCall
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
 
     import httpx
     from fastapi import FastAPI
+
+    from nagents.extensions import RunContext
 
 
 async def example(value: str = "") -> str:
@@ -388,5 +391,101 @@ def test_designer_setup_without_registered_tool_is_explicitly_once_only(tmp_path
                 assert (await decide(client, headers, pending.record, "allow")).status_code == 200
                 await asyncio.wait_for(active.task, HANG_GUARD)
                 assert (await client.get("/api/tools", headers=headers)).json()["tool_approvals"] == []
+
+    asyncio.run(scenario())
+
+
+def test_reloaded_plugin_approval_binds_advertised_generation_not_new_source(tmp_path: Path) -> None:
+    extension = tmp_path / "reloadable.py"
+
+    def write(version: str) -> None:
+        extension.write_text(
+            f"VERSION = {version!r}\n"
+            'async def versioned(value: str = "") -> str:\n'
+            '    return VERSION + ":" + value\n'
+            "def setup(harness):\n"
+            "    harness.agent.register_tool(versioned)\n"
+        )
+
+    class ReplaceAfterModel(AgentPlugin):
+        async def after_model(self, context: RunContext) -> None:
+            write("two")
+
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=config_for(tmp_path)) as (app, client, headers, harnesses):
+            harness = harnesses[0]
+            write("one")
+            await harness.load_plugin(str(extension) + ":setup")
+            # Run before the stable resources dispatcher, as though the source
+            # changed while the provider response was being streamed.
+            harness.agent.plugins.insert(0, ReplaceAfterModel())
+            stream = real_stream(app, headers, harness, ["versioned", "versioned"])
+            pending = await stream.event("approval")
+            advertised = harness.resources.definition("versioned")
+            replacement = harness.agent.tool_registry.get("versioned")
+            assert advertised is not None and advertised.func is not None
+            assert replacement is not None and replacement.func is not None
+            assert advertised is not replacement
+            assert await advertised.func(value="probe") == "one:probe"
+            assert await replacement.func(value="probe") == "two:probe"
+            store = app.state.web.tool_approvals
+            binding = store.binding(harness, "versioned")
+            assert binding is not None and binding.persistent
+            assert pending["allow_tool"] is True and pending["allow_tool_persistent"] is True
+            assert (await decide(client, headers, pending, "allow_tool")).status_code == 200
+            results: list[object] = []
+            automatic = False
+            async with asyncio.timeout(HANG_GUARD):
+                while len(results) < 2 or not automatic:
+                    event = await stream.output.get()
+                    if event["event"] == "tool_result":
+                        results.append(event.get("result"))
+                    if event["event"] == "notice" and event.get("policy") == "workspace_tool_allow":
+                        automatic = True
+            assert results == ["one:0", "one:1"]
+            await finish(stream)
+            current = store.binding(harness, "versioned")
+            assert current is not None and current != binding
+            assert not store.allowed(current), "Approval of the old function must not approve replacement code"
+            assert store.allowed(binding), "Both calls advertised together share their exact approved generation"
+            # Explicitly grant the changed source, then verify unconditional
+            # reloads of those same bytes keep the workspace permission.
+            stream = real_stream(app, headers, harness, ["versioned"])
+            pending = await stream.event("approval")
+            assert (await decide(client, headers, pending, "allow_tool")).status_code == 200
+            assert (await stream.event("tool_result"))["result"] == "two:0"
+            await finish(stream)
+            changed_binding = store.binding(harness, "versioned")
+            assert changed_binding is not None and store.allowed(changed_binding)
+            stream = real_stream(app, headers, harness, ["versioned"])
+            automatic = False
+            results.clear()
+            async with asyncio.timeout(HANG_GUARD):
+                while not automatic or not results:
+                    event = await stream.output.get()
+                    assert event["event"] != "approval", "An unchanged reload must retain Always allow"
+                    if event["event"] == "notice" and event.get("policy") == "workspace_tool_allow":
+                        automatic = True
+                    if event["event"] == "tool_result":
+                        results.append(event.get("result"))
+            assert results == ["two:0"]
+            await finish(stream)
+            assert store.binding(harness, "versioned") == changed_binding
+            # Actual advertised schemas participate even when callable/source
+            # identity is unchanged; source/config capture cannot mask a change.
+            definition = harness.agent.tool_registry.get("versioned")
+            assert definition is not None
+            schema = copy.deepcopy(definition.parameters)
+            definition.parameters = {**schema, "required": ["value"]}
+            changed_schema = store.binding(harness, "versioned")
+            assert changed_schema is not None and changed_schema != changed_binding
+            assert not store.allowed(changed_schema)
+            definition.parameters = schema
+            assert store.binding(harness, "versioned") == changed_binding
+            harness.config.shell_timeout += 1
+            await harness.resources.reload()
+            changed_config = store.binding(harness, "versioned")
+            assert changed_config is not None and changed_config != changed_binding
+            assert not store.allowed(changed_config), "Changed setup configuration needs a fresh grant"
 
     asyncio.run(scenario())

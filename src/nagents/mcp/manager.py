@@ -6,11 +6,13 @@ with a nagents Agent.
 
 import asyncio
 import inspect
+import keyword
 import logging
 from collections.abc import Callable
 from typing import Any
 from typing import cast
 
+from .._async import finish_on_cancel
 from ..types import JsonSchema
 from ..types import ToolCall
 from ..types import ToolDefinition
@@ -32,7 +34,8 @@ def _mcp_type_to_python(prop: dict[str, Any], name: str) -> type:
         "object": dict,
         "string": str,
     }
-    return _TYPE_MAP.get(prop.get("type", "string"), str)
+    kind = prop.get("type", "string")
+    return _TYPE_MAP.get(kind, str) if isinstance(kind, str) else object
 
 
 def _param_to_mcp_name(safe_name: str, properties: dict[str, Any]) -> str:
@@ -147,7 +150,7 @@ class MCPManager:
             len(self._tool_map),
         )
 
-    async def add_server(self, config: MCPServerConfig) -> list[Callable[..., Any]]:
+    async def add_server(self, config: MCPServerConfig, *, strict: bool = False) -> list[Callable[..., Any]]:
         """Connect a single MCP server at runtime and return its tools.
 
         Unlike connect_all(), this adds one server without disturbing any
@@ -173,7 +176,10 @@ class MCPManager:
         client = MCPClient(config, request_timeout=self.request_timeout)
         try:
             await client.connect()
-        except Exception as e:
+        except BaseException as e:
+            await finish_on_cancel(client.disconnect())
+            if not isinstance(e, Exception):
+                raise
             raise MCPError(
                 message=f"Failed to connect to MCP server '{config.name}': {e}",
                 code=-1,
@@ -191,6 +197,8 @@ class MCPManager:
             tools = await client.list_tools()
         except Exception as e:
             logger.error("Failed to list tools from MCP server '%s': %s", config.name, e)
+            if strict:
+                raise MCPError("MCP tool discovery failed", code=-1) from e
             return wrappers
 
         for tool in tools:
@@ -374,7 +382,11 @@ class MCPManager:
         properties: dict[str, Any] = schema.get("properties", {})
         required: list[str] = schema.get("required", [])
 
-        if properties:
+        if (
+            properties
+            and len({name.replace("-", "_") for name in properties}) == len(properties)
+            and all(name.replace("-", "_").isidentifier() and not keyword.iskeyword(name) for name in properties)
+        ):
             for prop_name in sorted(properties.keys()):
                 safe_name = prop_name.replace("-", "_")
                 # Required params have no default → ToolRegistry marks them required in schema
@@ -399,15 +411,10 @@ class MCPManager:
             """
             # Restore original parameter names (underscores back to hyphens)
             restored_args: dict[str, Any] = {}
-            for k, v in kwargs.items():
-                if v is not None:
-                    # Map underscore names back to hyphenated if needed
-                    mcp_key = k
-                    for orig_name in properties:
-                        if orig_name.replace("-", "_") == k:
-                            mcp_key = orig_name
-                            break
-                    restored_args[mcp_key] = v
+            for key, value in kwargs.items():
+                # Keep explicit null and original JSON property names intact.
+                original = key if key in properties else _param_to_mcp_name(key, properties)
+                restored_args[original] = value
 
             tool_call = ToolCall(
                 id="",

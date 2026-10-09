@@ -707,6 +707,34 @@ and batch/realtime limitations.
 
 ## Python behavior extensions
 
+### Reloadable setup contract
+
+The coding harness stages configured extension setup on initialization, at user
+message boundaries, and unconditionally after each model response. Register tools
+with `harness.agent.register_tool` or `harness.agent.tool_registry`, commands and
+aliases with `harness.commands`, and return an `AgentPlugin` (or append one to
+`harness.agent.plugins`). Setup may replace `max_tool_rounds`, `streaming`,
+`system_prompt`, or `compaction_strategy`; these model behavior settings revert
+when their extension is removed. `workspace` and a configuration snapshot are
+available while staging. Setup must not replace host-owned providers, executors,
+sessions, tasks, or approval handlers. An unsupported mutation rejects the entire
+candidate and retains the last working tools, commands and MCP connections.
+
+Retained tool closures forward to the live harness after setup, so they see the
+current session and approval policy. Source files are compiled fresh, including
+same-size edits made within one filesystem timestamp tick. Imported dependencies
+follow normal Python import semantics. Put owned resource cleanup in the async
+`AgentPlugin.aclose` method; import/setup failures must clean up resources acquired
+before a hook is registered. Trusted Python still has full process privileges;
+this registration contract is not a sandbox.
+
+A generation’s hooks remain attached to the response and calls that used it.
+`after_run` cleans up that generation’s participation before retirement, and
+`aclose` releases it. A replacement hook initializes with `before_run` before its
+first model request in the continuing conversation; that return value does not
+rewrite the existing user message. Use `before_model` for new request context.
+Host-installed library hooks retain the normal once-per-run lifecycle below.
+
 ### Register slash commands
 
 Trusted setup functions can register a prompt template or an async handler:
@@ -749,6 +777,8 @@ from `nagents`. They do not depend on the coding harness or TUI.
 | --- | --- |
 | `AgentPlugin.before_run` | Transform an incoming message |
 | `AgentPlugin.before_model` | Transform request-local messages, tools, and generation configuration |
+| `AgentPlugin.after_model` | Observe each completed response, including final text, before calls execute |
+| `AgentPlugin.aclose` | Release a retired harness extension generation’s resources |
 | `AgentPlugin.before_tool` | Transform tool arguments before the execution permission boundary |
 | `AgentPlugin.after_tool` | Transform the tool result |
 | `AgentPlugin.on_event` | Observe core events |

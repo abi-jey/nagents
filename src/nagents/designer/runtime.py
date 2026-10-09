@@ -159,6 +159,9 @@ class DesignedHarness(Harness):
             agent=self.agent_id,
             profiles=profiles,
             plugins=(),
+            mcp_servers=(),
+            resource_paths=(),
+            cli_plugins=(),
             provider="",
             providers={
                 "": ProviderProfile(
