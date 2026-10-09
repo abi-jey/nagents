@@ -151,6 +151,7 @@ class MainAgentBridge:
         self.updates = AssistantUpdates(state, session_id, self._append_report, self._answer, self._finish_run)
         self.updates.admitted = self._admitted
         self.updates.model = self._model
+        self.updates.invalidated = self._invalidate
         self.updates.retain = lambda: bool(self._pending_requests)
         self.updates.known = self._observed
 
@@ -237,6 +238,19 @@ class MainAgentBridge:
                     run.id,
                     **({"result_text": self._answers.pop(identifier)} if identifier in self._answers else {}),
                 )
+
+    def _invalidate(self) -> None:
+        """A committed root removal also terminates its unexecuted inbox work."""
+        pending, self._pending_requests = self._pending_requests, set()
+        for identifier in pending:
+            self._report(
+                identifier,
+                "cancelled",
+                "The chat was deleted before this request completed.",
+                self._request_runs.pop(identifier, ""),
+            )
+            self._answers.pop(identifier, None)
+        self.state.queued_inputs.detach_voice(self.session_id, self)
 
     async def handle_request(self, request: ClientDelegationRequest) -> str:
         """Admit once; the call-bound event consumer owns all spoken results."""

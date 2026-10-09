@@ -219,6 +219,7 @@ async def delete_session(state: WebState, session_id: str, *, permanent: bool = 
                     harness.session_id = selected
                     harness.tools.read_hashes.clear()
                 state.bus.delete_session(session_id)
+                state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
                 state.wakeups.forget_session(session_id)
                 result = await state.snapshot(selected)
                 state.bus.publish({"type": "sessions", "sessions": result["sessions"]})

@@ -62,6 +62,7 @@ class AssistantUpdates:
         self.admitted: Callable[[str, str, str], None] = lambda identifier, run_id, prompt: None
         self.model: Callable[[str, str, dict[str, object]], None] = lambda identifier, run_id, request: None
         self.retain: Callable[[], bool] = lambda: False
+        self.invalidated: Callable[[], None] = lambda: None
         self.known: set[str] = set()
         self.voice_session_id = ""
 
@@ -145,6 +146,13 @@ class AssistantUpdates:
 
     def observe(self, run: Run | None, record: dict[str, object]) -> None:
         if record.get("session_id") != self.session_id:
+            return
+        if record.get("event") == "session_deleted":
+            self.closed = self.detached = True
+            self.state.run_observers.discard(self.observe)
+            if self._worker is not None:
+                self._worker.cancel()
+            self.invalidated()
             return
         if self.closed and not self.retain():
             self.state.run_observers.discard(self.observe)

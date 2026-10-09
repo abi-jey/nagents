@@ -16,6 +16,7 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.live.delegation import ClientDelegationRequest
+from nagents.web.deletion import delete_session
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.service import Run
 from tests.support.hang_guard import HANG_GUARD
@@ -190,6 +191,67 @@ def test_queued_voice_survives_restart_with_display_and_inbox_receipt(tmp_path: 
                 assert user["voice_verified"] and user["voice_session_id"] == bridge.voice_session_id
                 assert user["message_id"].startswith("voice-")
                 assert spoken == before_restart
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("permanent", [False, True])
+def test_deleted_chat_terminates_detached_queued_voice_and_releases_observer(tmp_path: Path, permanent: bool) -> None:
+    async def scenario() -> None:
+        sent: list[str] = []
+        reports: list[dict[str, object]] = []
+
+        async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
+            sent.append(content)
+            return f"session.{kind}.append"
+
+        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
+            state = app.state.web
+            state.mutating = True
+            root = state.selected_session_id
+            other = await state.harness.new_session()
+            await state.harness.resume(root)
+            bridge = MainAgentBridge(state, root, report=reports.append)
+            other_bridge = MainAgentBridge(state, other)
+            bridge.attach(append)
+            other_bridge.attach(append)
+            try:
+                await bridge.handle_request(ClientDelegationRequest("never-executed", "Queued request"))
+                await other_bridge.handle_request(ClientDelegationRequest("other-request", "Other queued request"))
+                await bridge.close()
+                await other_bridge.close()
+                assert bridge.updates.observe in state.run_observers
+                assert other_bridge.updates.observe in state.run_observers
+                before_delete = list(sent)
+                state.mutating = False
+                # delete_session owns the idle reservation before its first await;
+                # the channel worker cannot claim either queued request meanwhile.
+                await delete_session(state, root, permanent=permanent)
+                state.mutating = True
+                assert state.active is None
+                assert bridge.updates.observe not in state.run_observers
+                assert other_bridge.updates.observe in state.run_observers
+                assert not bridge._pending_requests
+                assert other_bridge._pending_requests == {"other-request"}
+                assert [record["status"] for record in reports if "status" in record] == ["queued", "cancelled"]
+                assert sent == before_delete
+                rows = await state.channels.store._transaction(
+                    lambda db: db.execute("SELECT status FROM ngn_web_inbox WHERE session_id = ?", (root,)).fetchall()
+                )
+                assert rows == ([] if permanent else [("interrupted",)])
+                assert await bridge.handle_request(ClientDelegationRequest("late", "Must not run")) == ""
+                if not permanent:
+                    trash = (await state.trash.snapshot())["items"]
+                    assert isinstance(trash, list) and len(trash) == 1
+                    state.mutating = False
+                    await state.trash.restore(root, str(trash[0]["deletion_id"]))
+                    state.mutating = True
+                    assert bridge.updates.observe not in state.run_observers
+                    assert not bridge._pending_requests
+                    assert sent == before_delete
+            finally:
+                await bridge.close()
+                await other_bridge.close()
 
     asyncio.run(scenario())
 
