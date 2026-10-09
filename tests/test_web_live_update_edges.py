@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 from typing import cast
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
+from nagents.harness.tools import CodingTools
 from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.live_login import ChatGPTLiveConnection
@@ -114,8 +116,14 @@ def test_failed_update_consumer_requires_reconnect_without_blackholing_new_reque
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("quiet_at_send", [False, True])
 def test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_text(
-    tmp_path: Path, native: bool, quiet_at_send: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native: bool, quiet_at_send: bool
 ) -> None:
+    # The child is a plain Harness, unlike the portable ControlledHarness root.
+    # This delivery lifecycle needs neither child project instructions nor file IO.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+    guarded = Mock(side_effect=OSError("Guarded workspace file tools currently require POSIX"))
+    monkeypatch.setattr(CodingTools, "directory", guarded)
+
     async def scenario() -> None:
         child_started, release_child, interim, writing_result, release_sink, drained = (
             asyncio.Event() for _ in range(6)
@@ -198,6 +206,7 @@ def test_attention_cue_rechecks_quiet_state_and_never_speaks_native_instruction_
                 connection._sockets.clear()
 
     asyncio.run(scenario())
+    guarded.assert_not_called()
 
 
 def test_new_call_cannot_reuse_old_delegation_identity_for_recovered_work(tmp_path: Path) -> None:
