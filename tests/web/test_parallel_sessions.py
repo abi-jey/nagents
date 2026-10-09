@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from nagents.types import Message
     from tests.support.providers import FakeProvider
 
+pytestmark = pytest.mark.requires_posix
+
 
 def test_switching_voice_chat_keeps_original_work_and_other_root_progresses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

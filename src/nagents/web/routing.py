@@ -83,6 +83,9 @@ class RoutingStore(InboxStore):
                 "UNIQUE(channel, message_id))"
             )
             db.execute("CREATE INDEX IF NOT EXISTS ngn_web_inbox_pending ON ngn_web_inbox(status, id)")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS ngn_web_inbox_source_order ON ngn_web_inbox(channel, conversation_id, status, id)"
+            )
             if "command" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
                 db.execute("ALTER TABLE ngn_web_inbox ADD COLUMN command TEXT NOT NULL DEFAULT ''")
             if "attachments" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_inbox)")}:
@@ -534,6 +537,24 @@ class RoutingStore(InboxStore):
                 parameters += available_channels
             else:
                 predicate += " AND acknowledgement = ''"
+        # Routing commands change the target at admission, but their replies
+        # and later ingress still follow earlier work from that same external
+        # conversation. Other chats and ordinary web roots remain independent.
+        prior = "earlier.status IN ('queued', 'running')"
+        if available_channels is not None:
+            prior += " AND (earlier.acknowledgement = '' OR earlier.status = 'running'"
+            if available_channels:
+                prior += f" OR earlier.channel IN ({','.join('?' for _ in available_channels)})"
+                parameters += available_channels
+            prior += ")"
+        predicate += (
+            " AND (channel = '' OR NOT EXISTS (SELECT 1 FROM ngn_web_inbox earlier "
+            "WHERE earlier.id < ngn_web_inbox.id AND earlier.channel = ngn_web_inbox.channel "
+            "AND earlier.conversation_id = ngn_web_inbox.conversation_id AND "
+            + prior
+            + " AND EXISTS (SELECT 1 FROM harness_sessions h JOIN v2_sessions s ON s.id = h.id "
+            "WHERE h.id = earlier.session_id)))"
+        )
         return predicate, parameters
 
     async def claim_work(

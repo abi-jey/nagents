@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from nagents.web.routing import Work
     from tests.support.providers import FakeProvider
 
+pytestmark = pytest.mark.requires_posix
+
 
 @pytest.mark.parametrize("shutdown", [False, True])
 @pytest.mark.parametrize("command", ["", "compact"])

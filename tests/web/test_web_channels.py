@@ -102,6 +102,7 @@ def test_frozen_pending_binding_command_dedup_and_restart(tmp_path: Path, monkey
         app.client.portal.call(started)
         initial_history = cast("list[dict[str, object]]", app.history(app.main)["history"])
         assert [row["content"] for row in initial_history if row["role"] == "user"] == ["hold"]
+        app.pause_worker()
         app.emit("pending", id="pending-id")
         before = app.bindings()["chat-a"]
         app.emit("/session ngn-not-in-this-workspace", id="attach-id")
@@ -339,7 +340,7 @@ def test_outbound_send_needs_no_approval_subscriber(tmp_path: Path, monkeypatch:
         )
 
 
-def test_disconnect_denies_pending_approval_without_cancelling_run(
+def test_disconnect_keeps_pending_approval_until_reconnected_user_decides_without_cancelling_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
@@ -352,6 +353,20 @@ def test_disconnect_denies_pending_approval_without_cancelling_run(
                 frame = socket.receive_json()
                 if frame.get("record", {}).get("event") == "approval":
                     break
+            run = app.state.run_for(app.main)
+            assert run is not None and run.pending is not None
+            pending = run.pending
+        assert app.state.run_for(app.main) is run and not pending.answer.done()
+        with app.socket() as socket:
+            socket.send_json({"type": "subscribe", "session_id": app.main, "after": 0})
+            snapshot = socket.receive_json()["snapshot"]
+            assert snapshot["active_run"]["approval"]["approval_id"] == pending.id
+            response = app.client.post(
+                "/api/approval",
+                headers=app.headers,
+                json={"run_id": run.id, "approval_id": pending.id, "call_id": pending.call_id, "decision": "deny"},
+            )
+            assert response.status_code == 200
         app.idle()
         assert not app.channels[0].deliveries
         assert len(app.providers[0].requests) == 2
@@ -556,7 +571,11 @@ def test_other_chat_publishes_global_busy_without_switching_ui_root(
             assert frame["active_session_id"] == app.bindings()["chat-a"] != app.main
             snapshot = app.history(app.main)
             assert snapshot["session_id"] == app.state.selected_session_id == app.main
-            assert snapshot["active_run"] is None and snapshot["active_run_id"] == frame["active_run_id"]
+            assert snapshot["active_run"] is None and snapshot["active_run_id"] == ""
+            assert snapshot["active_runs"] == frame["active_runs"]
+            assert snapshot["active_runs"] == [
+                {"id": frame["active_run_id"], "session_id": frame["active_session_id"], "status": "running"}
+            ]
             assert (
                 app.client.post("/api/cancel", headers=app.headers, json={"run_id": frame["active_run_id"]}).status_code
                 == 200

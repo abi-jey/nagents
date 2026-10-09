@@ -63,14 +63,15 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
         started = asyncio.create_task(provider_started.wait())
         try:
             await asyncio.wait_for(validated.wait(), HANG_GUARD)
-            assert state.active is None and not providers[0].requests
+            reserved = state.run_for(root)
+            assert reserved is not None and not reserved.executing and not providers[0].requests
             assert await statuses(state) == {"validation-race": "running"}
             closing = asyncio.create_task(host.close() if shutdown == "host" else context.__aexit__(None, None, None))
             try:
-                # _close cancels the poller only AFTER checking state.active.
-                # Release validation after that check, not on a timing-based sleep.
-                await until(lambda: host.tasks[1].cancelling() > 0)
-                assert host.closed and not closing.done() and state.active is None
+                # Admission now reserves a visible owner before validation. A
+                # shutdown must still return this never-executed claim to queued.
+                await until(lambda: host.closed)
+                assert not provider_started.is_set()
                 release_validation.set()
                 done, _ = await asyncio.wait(
                     (closing, started), return_when=asyncio.FIRST_COMPLETED, timeout=HANG_GUARD
@@ -86,11 +87,18 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
                 await closing
                 assert not providers[0].requests and channel.closed
                 assert state.active is None and all(task.done() for task in host.tasks)
+                assert not host.work_tasks and not host.work_cleanup
                 assert state.harness._worker is None
                 assert await statuses(state) == {"validation-race": "queued"}
                 for frame, _ in state.bus.ring:
                     record = frame.get("record")
-                    assert not isinstance(record, dict) or record.get("event") != "run_started"
+                    assert not isinstance(record, dict) or record.get("event") not in {
+                        "text_chunk",
+                        "text_done",
+                        "tool_call",
+                        "tool_result",
+                    }
+                assert await state.history.snapshot(root) == []
             finally:
                 # Let the old implementation finish its late producer rather than
                 # leave a shielded shutdown hanging after the regression fails.

@@ -92,7 +92,14 @@ async def idle(state: WebState) -> None:
     async with asyncio.timeout(HANG_GUARD):
         while True:
             pending = await state.channels.store.has_pending(available_channels=tuple(state.channels.channels))
-            if not pending and state.active is None and not state.mutating:
+            if (
+                not pending
+                and state.active is None
+                and not state.mutating
+                and not state.channels.work_tasks
+                and not state.channels.work_cleanup
+                and not state.channels.management.ready
+            ):
                 return
             await asyncio.sleep(0.001)
 
@@ -426,7 +433,9 @@ def test_unavailable_ack_survives_restart_while_other_work_runs_then_reenable_de
         app.client.portal.call(idle, app.state)
         before = app.client.portal.call(statuses, app.state)
         assert before["pending-ack"] == "queued" and before["pending-model"] == "completed"
-        assert len(app.providers[0].requests) == 2  # Both web and channel model work bypassed the ack.
+        assert (
+            sum(len(provider.requests) for provider in app.providers) == 2
+        )  # Both roots bypassed the unavailable ack.
         assert not app.state.channels.channels
         assert app.client.portal.call(app.state.channels.store.has_pending)  # Still durably queued.
 
@@ -446,6 +455,6 @@ def test_unavailable_ack_survives_restart_while_other_work_runs_then_reenable_de
         app.emit("/new Kept once", id="pending-ack", thread="command-thread")
         app.emit("accepted channel input", id="pending-model", thread="input-thread")
         app.idle()
-        assert len(channel.deliveries) == 1 and len(app.providers[0].requests) == 2
+        assert len(channel.deliveries) == 1 and sum(len(provider.requests) for provider in app.providers) == 2
         assert list(app.roots().values()).count("Kept once") == 1
         assert app.client.portal.call(statuses, app.state)["pending-ack"] == "completed"

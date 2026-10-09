@@ -107,6 +107,7 @@ class Run:
     outcome: str = "completed"
     final_text: str = ""
     finished: bool = False
+    executing: bool = False
     background: bool = False
     server_owned: bool = False
     voice: bool = False
@@ -847,6 +848,7 @@ class WebState:
                 )
 
         async def execute_owned() -> None:
+            run.executing = True
             async with self.designed_channels.execution(run) as harness:
                 self.running_harness = harness
                 await harness.resume(run.session_id)
@@ -880,6 +882,7 @@ class WebState:
         async def execute() -> None:
             note = "Compaction failed. Context was not changed."
             try:
+                run.executing = True
                 with self.executions.scope(run):
                     async with self.designed_channels.execution(run) as harness:
                         self.running_harness = harness

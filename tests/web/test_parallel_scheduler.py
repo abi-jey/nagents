@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from nagents.web.routing import Work
     from tests.support.providers import FakeProvider
 
+pytestmark = pytest.mark.requires_posix
+
 
 def test_held_sql_claim_blocks_timer_and_http_reservations_then_unstarted_timers_cleanly_cancel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

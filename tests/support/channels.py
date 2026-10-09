@@ -153,6 +153,17 @@ class Site:
         assert self.client.portal is not None
         self.client.portal.call(wait)
 
+    def pause_worker(self) -> None:
+        """Hold future durable work while existing independent runs continue."""
+
+        async def pause() -> None:
+            worker = self.state.channels.tasks[0]
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+        assert self.client.portal is not None
+        self.client.portal.call(pause)
+
     def bindings(self) -> dict[str, str]:
         response = self.client.get("/api/channels", headers=self.headers).json()
         return {item["conversation_id"]: item["session_id"] for item in response["bindings"]}

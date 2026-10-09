@@ -384,6 +384,9 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   Scheduled wakeups wait for their own chat and an available execution slot.
   Idle runtimes with retained children or pending wakeups keep those handles;
   unused additional runtimes release their clients and MCP resources.
+  Messages and routing-command acknowledgements from one external channel
+  conversation also keep their source order across session switches. Unavailable
+  connector acknowledgements remain queued without blocking accepted model work.
 - The browser subscribes to session updates over WebSocket. Navigating away or
   losing that subscription does not cancel server-owned queued work. Use **Stop
   run** to cancel an active run; server shutdown joins its owned work. Pending

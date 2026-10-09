@@ -28,6 +28,8 @@ if TYPE_CHECKING:
     from nagents.types import Message
     from tests.support.providers import FakeProvider
 
+pytestmark = pytest.mark.requires_posix
+
 
 class RecordingApprovalChannel(ApprovalChannel):
     async def send(self, message: ChannelSend) -> ChannelDelivery:

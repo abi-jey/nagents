@@ -669,6 +669,7 @@ class ChannelHost:
 
     async def execute_claim(self, work: Work, started: asyncio.Event) -> None:
         started.set()
+        owner = self.state.run_for(work.session_id)
         status = "failed"
         try:
             if work.command == "compact":
@@ -679,7 +680,7 @@ class ChannelHost:
             else:
                 status = await self.state.execute_work(work)
         except asyncio.CancelledError:
-            status = "interrupted"
+            status = "queued" if self.closed and owner is not None and not owner.executing else "interrupted"
             raise
         except Exception:
             pass
