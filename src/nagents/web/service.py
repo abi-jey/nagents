@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from starlette.types import Send
 
     from nagents.harness import Harness
+    from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import SessionInfo
     from nagents.types import ContentPart
@@ -604,6 +605,13 @@ class WebState:
                 if definition is not None and any(definition is tool for tool in self.channels.tools)
                 else nullcontext()
             )
+
+            def turn_started(turn: RunTurn) -> None:
+                notices.turn(turn)
+                self.observe_run(
+                    run, {"event": "root_turn", "session_id": run.session_id, "run_id": run.id, "_turn": turn}
+                )
+
             with (
                 binding,
                 host_run(self.running_harness, run.id),
@@ -611,11 +619,7 @@ class WebState:
                     lambda: self.queued_inputs.pull(run),
                     (run.work.voice_session_id, run.work.voice_delegation_id) if run.work is not None else ("", ""),
                 ),
-                self.running_harness.followups.observe(
-                    lambda turn: self.observe_run(
-                        run, {"event": "root_turn", "session_id": run.session_id, "run_id": run.id, "_turn": turn}
-                    )
-                ),
+                self.running_harness.followups.observe(turn_started),
                 model_requests(
                     run.session_id,
                     self.running_harness.agent.provider,

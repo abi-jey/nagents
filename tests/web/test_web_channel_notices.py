@@ -26,6 +26,7 @@ from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness.config import HarnessConfig
+from nagents.harness.followups import RunTurn
 from nagents.harness.types import ApprovalRequest
 from nagents.web import channel_notices
 from nagents.web.catalog import Connection
@@ -152,6 +153,25 @@ def call(id: str = "call-1", **fields: object) -> dict[str, object]:
         "arguments": {"path": "README.md", "limit": 3},
         **fields,
     }
+
+
+def test_unattributed_background_turn_does_not_reuse_previous_message_receipt(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with fixture(tmp_path) as f:
+            f.run.message_id = "initial"
+            observer = f.notices()
+            await observer.start(live=True)
+            await observer.observe(call("first"), live=True)
+            observer.turn(RunTurn("second", "", "followup", (), message_id="queued-receipt"))
+            await observer.observe(call("second"), live=True)
+            await observer.observe(call("child", task_id="child-a"), live=True)
+            observer.turn(RunTurn("background", "", "notification", ("child",)))
+            await observer.observe(call("background"), live=True)
+            assert {
+                event.call_id: event.message_id for event in f.channel.events if event.phase == "tool_requested"
+            } == {"first": "initial", "second": "queued-receipt", "child": "", "background": ""}
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("conversation,thread", [("room-a", "thread-4"), ("room-b", "")])

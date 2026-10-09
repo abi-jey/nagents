@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     from nagents.channels import ChannelExecutionPhase
     from nagents.channels import ChannelValue
+    from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
 
     from .service import Run
@@ -51,6 +52,7 @@ class _Tool:
     name: str
     arguments: object
     failed: bool = False
+    task_id: str = ""
 
 
 _EMPTY_TOOL = _Tool("", "", "", {})
@@ -97,7 +99,7 @@ def _tool(record: Mapping[str, object], *, allow_transport: bool = False) -> _To
         return None
     # Length-prefix child identity: separators inside IDs cannot collide.
     scope = f"{len(task)}:{task}:{activation}"
-    return _Tool(scope, id, name, record.get("arguments", {}), bool(error))
+    return _Tool(scope, id, name, record.get("arguments", {}), bool(error), task)
 
 
 class ChannelNotices:
@@ -120,6 +122,11 @@ class ChannelNotices:
         self._lock = asyncio.Lock()
         self._seen: set[tuple[str, str, str]] = set()
         self._approvals: set[tuple[str, str]] = set()
+        self._message_id = run.message_id
+
+    def turn(self, turn: RunTurn) -> None:
+        """Follow the consumer's ordered host turn, never provider metadata."""
+        self._message_id = turn.message_id or (self.run.message_id if turn.kind == "human" else "")
 
     def _active(self, *, terminal: bool = False) -> bool:
         run, state = self.run, self.state
@@ -176,7 +183,9 @@ class ChannelNotices:
             if key in self._seen or len(self._seen) >= MAX_TOOL_EVENTS:
                 return
             self._seen.add(key)  # Failed/uncertain attempts cannot replay.
-            await self._emit(phase, self._active, tool)
+            # Child events carry a task identity, but no verified inbox receipt.
+            # Do not mislabel them with whichever root input is now active.
+            await self._emit(phase, self._active, tool, message_id="" if tool.task_id else None)
 
     async def waiting_for_approval(self, request: ApprovalRequest, *, live: bool = False) -> None:
         """Call after installing real Pending, before awaiting its answer; not for auto-approval."""
@@ -235,10 +244,33 @@ class ChannelNotices:
             if key in self._approvals or len(self._approvals) >= MAX_APPROVAL_EVENTS:
                 return
             self._approvals.add(key)
-            await self._emit("waiting_for_approval", waiting, tool)
+            work = self.state.queued_inputs.current.get()
+            turn = harness.followups.current
+            if request.task_id:
+                # Children retain their spawning input context while the root
+                # may already have moved on to a different queued request.
+                message_id = (
+                    work.message_id
+                    if work is not None
+                    and work.session_id == self.session_id
+                    and (work is self.run.work or self.state.queued_inputs.owns(self.run, work))
+                    else ""
+                )
+            elif turn.kind in {"notification", "wakeup"}:
+                message_id = ""
+            elif work is not None and self.state.queued_inputs.owns(self.run, work):
+                message_id = work.message_id
+            else:
+                message_id = None
+            await self._emit("waiting_for_approval", waiting, tool, message_id=message_id)
 
     async def _emit(
-        self, phase: ChannelExecutionPhase, eligible_run: Callable[[], bool], tool: _Tool = _EMPTY_TOOL
+        self,
+        phase: ChannelExecutionPhase,
+        eligible_run: Callable[[], bool],
+        tool: _Tool = _EMPTY_TOOL,
+        *,
+        message_id: str | None = None,
     ) -> None:
         host = self.state.channels
         try:
@@ -302,7 +334,7 @@ class ChannelNotices:
                     tool_name=tool.name,
                     tool_arguments=arguments,
                     tool_failed=tool.failed,
-                    message_id=self.run.message_id,
+                    message_id=self._message_id if message_id is None else message_id,
                 )
                 await dispatch_channel_execution_event(channel, event, timeout=NOTICE_TIMEOUT)
         except asyncio.CancelledError:

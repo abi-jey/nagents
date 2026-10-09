@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from contextlib import nullcontext
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 from typing import Literal
 
@@ -26,6 +27,18 @@ class QueuedInputs:
         self.state = state
         self.claimed: dict[str, list[Work]] = {}
         self.voice_attachments: dict[str, set[object]] = {}
+        self.current: ContextVar[Work | None] = ContextVar("ngn_queued_input", default=None)
+
+    def owns(self, run: Run, work: Work) -> bool:
+        """Recognize only the exact follow-up claimed and entered by this host."""
+        return (
+            self.state.active is run
+            and not run.finished
+            and work.session_id == run.session_id
+            and not work.channel
+            and self.current.get() is work
+            and any(claimed is work for claimed in self.claimed.get(run.id, ()))
+        )
 
     def attach_voice(self, session_id: str, owner: object) -> None:
         self.voice_attachments.setdefault(session_id, set()).add(owner)
@@ -101,15 +114,19 @@ class QueuedInputs:
 
     @asynccontextmanager
     async def context(self, run: Run, work: Work) -> AsyncIterator[None]:
-        with self.state.history.admitted(work, run.id):
-            async with (
-                self.state.history.voice_request(
-                    work.session_id, run.id, work.voice_display, voice_session_id=work.voice_session_id
-                )
-                if work.voice_session_id
-                else nullcontext()
-            ):
-                yield
+        token = self.current.set(work)
+        try:
+            with self.state.history.admitted(work, run.id):
+                async with (
+                    self.state.history.voice_request(
+                        work.session_id, run.id, work.voice_display, voice_session_id=work.voice_session_id
+                    )
+                    if work.voice_session_id
+                    else nullcontext()
+                ):
+                    yield
+        finally:
+            self.current.reset(token)
 
     async def pull(self, run: Run) -> RunInput | None:
         state = self.state
@@ -144,6 +161,7 @@ class QueuedInputs:
             "followup",
             context=lambda: self.context(run, work),
             voice_session_id=work.voice_session_id,
+            message_id=work.message_id,
         )
 
     async def finish(self, run: Run) -> None:

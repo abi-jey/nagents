@@ -34,6 +34,7 @@ class RunInput:
     task_ids: tuple[str, ...] = ()
     context: Callable[[], AbstractAsyncContextManager[None]] = field(default=nullcontext, repr=False)
     voice_session_id: str = ""
+    message_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class RunTurn:
     kind: str
     task_ids: tuple[str, ...]
     voice_session_id: str = ""
+    message_id: str = ""
 
 
 class FollowupReady(Exception):
@@ -89,7 +91,12 @@ class RunInputs(AgentPlugin):
 
     def start_turn(self, message: RunInput) -> RunTurn:
         self.current = RunTurn(
-            uuid4().hex, message.identifier, message.kind, message.task_ids, message.voice_session_id
+            uuid4().hex,
+            message.identifier,
+            message.kind,
+            message.task_ids,
+            message.voice_session_id,
+            message.message_id,
         )
         return self.current
 
