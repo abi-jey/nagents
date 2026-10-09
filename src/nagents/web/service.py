@@ -43,8 +43,10 @@ from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
 from .history import WebHistory
+from .live_inspection import model_requests
 from .provider_setup import provider_error
 from .provider_setup import provider_setup
+from .queued_inputs import QueuedInputs
 from .replay import RunReplay
 from .subscriptions import EventBus
 from .tool_approvals import ToolApprovals
@@ -104,6 +106,7 @@ class Run:
     background: bool = False
     server_owned: bool = False
     voice: bool = False
+    work: Work | None = field(default=None, repr=False)
     message_id: str = ""
     source: dict[str, str] = field(default_factory=dict)
     chain: Chain = field(default_factory=Chain)
@@ -250,7 +253,9 @@ class WebState:
         self.active: Run | None = None
         self.mutating = False
         self.bus = EventBus()
+        self.run_observers: set[Callable[[Run | None, dict[str, object]], None]] = set()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
+        self.queued_inputs = QueuedInputs(self)
         self.tool_approvals = ToolApprovals(
             harness.agent.session.db_path.with_name("tool-approvals.db"), harness.workspace
         )
@@ -538,6 +543,15 @@ class WebState:
         else:
             run.remember(record)
             self.bus.event(record)
+            self.observe_run(run, record)
+
+    def observe_run(self, run: Run | None, record: dict[str, object]) -> None:
+        """Notify attached application consumers without giving them run ownership."""
+        for observer in tuple(self.run_observers):
+            try:
+                observer(run, record)
+            except Exception:
+                logger.warning("An attached run observer could not process an update.")
 
     def activity_event(self, record: dict[str, object]) -> None:
         # This also captures lifecycle records emitted directly by the scheduler,
@@ -546,6 +560,10 @@ class WebState:
         if run is not None and record.get("run_id") == run.id:
             run.remember(record)
         self.bus.event(record)
+        observed = record
+        if record.get("event") == "wakeup" and record.get("status") == "scheduled":
+            observed = {**record, "_turn": self.running_harness.followups.current}
+        self.observe_run(run if run is not None and record.get("run_id") == run.id else None, observed)
 
     def status(self) -> None:
         active = self.active
@@ -586,7 +604,35 @@ class WebState:
                 if definition is not None and any(definition is tool for tool in self.channels.tools)
                 else nullcontext()
             )
-            with binding, host_run(self.running_harness, run.id):
+            with (
+                binding,
+                host_run(self.running_harness, run.id),
+                self.running_harness.followups.source(
+                    lambda: self.queued_inputs.pull(run),
+                    (run.work.voice_session_id, run.work.voice_delegation_id) if run.work is not None else ("", ""),
+                ),
+                self.running_harness.followups.observe(
+                    lambda turn: self.observe_run(
+                        run, {"event": "root_turn", "session_id": run.session_id, "run_id": run.id, "_turn": turn}
+                    )
+                ),
+                model_requests(
+                    run.session_id,
+                    self.running_harness.agent.provider,
+                    lambda request: self.observe_run(
+                        run,
+                        {
+                            "event": "model_request",
+                            "session_id": run.session_id,
+                            "run_id": run.id,
+                            "request": request,
+                            "_turn": self.running_harness.followups.current,
+                        },
+                    ),
+                )
+                if self.run_observers
+                else nullcontext(),
+            ):
                 async with aclosing(source) as events:
                     async for event in events:
                         if isinstance(event, DoneEvent) and not event.extra.get("task_id"):
@@ -683,6 +729,7 @@ class WebState:
                 else:
                     await notices.finish("completed")
             finally:
+                await _join(asyncio.create_task(self.queued_inputs.finish(run)))
                 await _join(asyncio.create_task(self.channels.activity(run.session_id, False)))
 
     async def execute_work(self, work: Work) -> str:
@@ -692,10 +739,13 @@ class WebState:
         # await. The inbox worker returns this unstarted claim to queued.
         if self.channels.closed:
             return "queued"
-        run = Run(work.session_id, server_owned=True, message_id=work.message_id)
+        run = Run(
+            work.session_id, server_owned=True, message_id=work.message_id, voice=bool(work.voice_session_id), work=work
+        )
         if work.channel:
             run.source = {"channel": work.channel, "conversation_id": work.conversation_id, "thread_id": work.thread_id}
         self.active = run
+        self.queued_inputs.admitted(run, work, initial=True)
         logger.info(
             "Queued run started: session=%s run=%s message=%s channel=%s",
             work.session_id,
@@ -711,7 +761,7 @@ class WebState:
                 async with self.designed_channels.execution(run) as harness:
                     self.running_harness = harness
                     await harness.resume(run.session_id)
-                    with self.history.admitted(work, run.id):
+                    async with self.queued_inputs.context(run, work):
                         prompt: str | list[ContentPart] = (
                             await self.channels.inbound_content(work.channel, work.prompt)
                             if work.channel

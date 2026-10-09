@@ -176,7 +176,20 @@ class WebHistory(_HarnessSession):
         ):
             voice.consumed = True
             if message.role == "user" and values == voice.expected:
-                return await self._add_voice(voice, values)
+                origin = (
+                    ingress
+                    if (
+                        ingress is not None
+                        and not ingress.consumed
+                        and ingress.owner is asyncio.current_task()
+                        and ingress.work.session_id == session_id
+                        and ingress.expected == values
+                    )
+                    else None
+                )
+                if origin is not None:
+                    origin.consumed = True
+                return await self._add_voice(voice, values, origin)
         if (
             ingress is None
             or ingress.consumed
@@ -227,9 +240,22 @@ class WebHistory(_HarnessSession):
         # notification before propagating; restart snapshots never guess IDs.
         return await finish_on_cancel(persist())
 
-    async def _add_voice(self, voice: VoiceInput, values: tuple[str | None, ...]) -> int:
+    async def _add_voice(
+        self, voice: VoiceInput, values: tuple[str | None, ...], ingress: Ingress | None = None
+    ) -> int:
         async def persist() -> int:
             def insert(db: sqlite3.Connection) -> tuple[int, dict[str, object]]:
+                if ingress is not None:
+                    work = ingress.work
+                    if (
+                        db.execute(
+                            "SELECT 1 FROM ngn_web_inbox WHERE id = ? AND session_id = ? AND channel = ? "
+                            "AND message_id = ? AND status = 'running'",
+                            (work.id, voice.session_id, work.channel, work.message_id),
+                        ).fetchone()
+                        is None
+                    ):
+                        raise RuntimeError("Voice ingress is no longer owned by this run")
                 cursor = db.execute(
                     "INSERT INTO v2_messages(session_id, role, content, tool_calls, tool_call_id, name) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
@@ -241,6 +267,8 @@ class WebHistory(_HarnessSession):
                 db.execute("INSERT INTO ngn_web_voice_messages VALUES (?, ?)", (history_id, voice.text))
                 if voice.voice_session_id:
                     db.execute("INSERT INTO ngn_web_voice_origins VALUES (?, ?)", (history_id, voice.voice_session_id))
+                if ingress is not None:
+                    db.execute("INSERT INTO ngn_web_message_origins VALUES (?, ?)", (history_id, ingress.work.id))
                 db.row_factory = sqlite3.Row
                 row = db.execute(self._select() + " WHERE m.id = ?", (history_id,)).fetchone()
                 assert row is not None
@@ -290,6 +318,12 @@ class WebHistory(_HarnessSession):
             record.update(content=str(row["voice_transcript"]), parts=[], voice_verified=True)
             if row["voice_session_id"]:
                 record["voice_session_id"] = row["voice_session_id"]
+            if row["origin_id"] is not None and not row["origin_channel"]:
+                record.update(
+                    message_id=str(row["origin_message_id"]),
+                    ingress_id=f"inbox-{row['origin_id']}",
+                    source_verified=True,
+                )
             return record
         if row["origin_id"] is None or message.role != "user":
             return record

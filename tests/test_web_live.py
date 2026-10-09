@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents.agent import Agent
+    from nagents.web.live_bridge import MainAgentBridge
     from nagents.web.live_handoff import LoginHandoff
     from nagents.web.live_login import LoginVoiceConfig
 
@@ -89,6 +90,7 @@ class FakeLiveService:
         self.closes: list[str] = []
         self.configs: list[LoginVoiceConfig] = []
         self.delegations: list[dict[str, object]] = []
+        self.bridges: list[MainAgentBridge] = []
         self.shutdown_calls = 0
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
@@ -126,14 +128,22 @@ class FakeLiveService:
     def delegation_reporter(self, session_id: str) -> Callable[[dict[str, object]], None]:
         return self.delegations.append
 
+    def bind_bridge(self, session_id: str, bridge: MainAgentBridge) -> None:
+        assert session_id == self.active_session_id == bridge.voice_session_id
+        self.bridges.append(bridge)
+
     async def close(self, session_id: str) -> dict[str, object]:
         self.closes.append(session_id)
+        for bridge in self.bridges:
+            await bridge.close()
         self.active_session_id = ""
         return {"session_id": session_id, "status": "closed"}
 
     async def shutdown(self) -> None:
         assert asyncio.get_running_loop() is self.loop
         self.shutdown_calls += 1
+        for bridge in self.bridges:
+            await bridge.close()
         self.active_session_id = ""
 
 

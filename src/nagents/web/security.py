@@ -3,6 +3,7 @@
 import re
 import secrets
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl
 
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
@@ -102,7 +103,7 @@ class LocalOnly:
         if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
             await reject(404, "Not found.")
             return
-        # Only bounded, non-secret Live cursor and Voice scope selectors are accepted.
+        # Only bounded, non-secret Live cursor, delegation and Voice scope selectors are accepted.
         # Other queries (including duplicate parameters and tokens) remain rejected.
         live_cursor = (
             scope["method"] == "GET"
@@ -114,7 +115,26 @@ class LocalOnly:
             and path == "/api/live/settings"
             and scope["query_string"] in {b"scope=global", b"scope=workspace"}
         )
-        if scope["query_string"] and not (live_cursor or voice_scope):
+        delegation_query = False
+        if (
+            scope["method"] == "GET"
+            and len(scope["query_string"]) <= 4096
+            and re.fullmatch(r"/api/live/sessions/[A-Za-z0-9_-]{1,128}/delegation-details", path)
+        ):
+            try:
+                query = scope["query_string"].decode("ascii")
+                if re.search(r"%(?![0-9a-fA-F]{2})", query):
+                    raise ValueError("Invalid query encoding")
+                pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1, errors="strict")
+                delegation_query = (
+                    len(pairs) == 1
+                    and pairs[0][0] == "delegation_id"
+                    and 0 < len(pairs[0][1]) <= 256
+                    and bool(pairs[0][1].strip())
+                )
+            except (ValueError, UnicodeError):
+                pass
+        if scope["query_string"] and not (live_cursor or voice_scope or delegation_query):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return
         method = scope["method"]
