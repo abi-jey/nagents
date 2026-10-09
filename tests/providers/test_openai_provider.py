@@ -58,6 +58,12 @@ async def credentials() -> CodexCredentials:
     return CodexCredentials(ACCESS, "account-123", "eu")
 
 
+@pytest.fixture(autouse=True)
+def catalog_metadata_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Metadata transport/freshness is exercised separately with local servers.
+    monkeypatch.setattr(openai, "catalog_version", AsyncMock(return_value="0.163.0"))
+
+
 def test_catalog_cannot_inherit_api_key_route() -> None:
     async def scenario() -> None:
         callback = AsyncMock(side_effect=credentials)
@@ -73,11 +79,11 @@ def test_catalog_cannot_inherit_api_key_route() -> None:
                 callback.assert_not_called()
                 assert await provider.get_model_list() == []
                 get.assert_awaited_once_with(
-                    "https://chatgpt.com/backend-api/codex/models?client_version=0.153.4",
+                    "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0",
                     {
                         "Authorization": f"Bearer {ACCESS}",
                         "Accept": "application/json",
-                        "version": "0.153.4",
+                        "version": "0.163.0",
                         "ChatGPT-Account-Id": "account-123",
                         "x-openai-internal-codex-residency": "eu",
                         "originator": "ngn",
@@ -184,8 +190,8 @@ def test_catalog_projects_visible_ids_and_captures_rotating_credentials(monkeypa
 
         async def handle(request: web.Request) -> web.Response:
             assert request.method == "GET" and request.path == "/backend-api/codex/models"
-            assert dict(request.query) == {"client_version": "0.153.4"}
-            assert request.headers["version"] == "0.153.4"
+            assert dict(request.query) == {"client_version": "0.163.0"}
+            assert request.headers["version"] == "0.163.0"
             assert request.headers["Accept"] == "application/json"
             assert request.headers["originator"] == "ngn" and request.headers["User-Agent"] == openai.USER_AGENT
             assert (

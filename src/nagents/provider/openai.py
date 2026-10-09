@@ -45,6 +45,7 @@ from ..observation import trace_config
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
+from ._codex_catalog import catalog_version
 from ._diagnostics import FailurePhase
 from ._diagnostics import failure_extra
 from .base import Provider
@@ -70,9 +71,6 @@ if TYPE_CHECKING:
 DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models"
-# Catalog protocol compatibility, not ngn's version or client identity.
-# Verified against openai/codex rust-v0.153.4 (3d2ee51ca2d5).
-CODEX_MODELS_CLIENT_VERSION = "0.153.4"
 try:
     USER_AGENT = f"ngn/{version('nagents')}"
 except PackageNotFoundError:
@@ -562,10 +560,11 @@ class OpenAIProvider(Provider):
             raise ModelListError(str(error)) from None
         except Exception:
             raise ModelListError("ChatGPT credentials are unavailable; sign in again with /login.") from None
+        client_version = await catalog_version(self._model_list_timeout)
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/json",
-            "version": CODEX_MODELS_CLIENT_VERSION,
+            "version": client_version,
             "originator": "ngn",
             "User-Agent": USER_AGENT,
         }
@@ -576,9 +575,7 @@ class OpenAIProvider(Provider):
         try:
             client = GatewayHTTPClient(timeout=self._model_list_timeout)
             async with client:
-                response = await client.get_json(
-                    f"{CODEX_MODELS_ENDPOINT}?client_version={CODEX_MODELS_CLIENT_VERSION}", headers
-                )
+                response = await client.get_json(f"{CODEX_MODELS_ENDPOINT}?client_version={client_version}", headers)
         except Exception:
             raise ModelListError(
                 "Codex model discovery failed; check service availability and your ChatGPT login."

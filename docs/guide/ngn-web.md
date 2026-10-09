@@ -1425,8 +1425,14 @@ a fake or cached catalog, expose upstream exceptions, or change the provider.
 
 Codex returns only picker-visible model IDs, including those marked
 `supported_in_api: false`; that field does not indicate OAuth unavailability.
-Its fixed catalog request uses compatibility version `0.153.4` while retaining
-ngn's own client identity. This follows the [official Codex client contract](../api/provider.md#local-configuration-and-chatgpt-authentication),
+The server revalidates OpenAI's public stable Codex release metadata for every
+catalog lookup and uses that version in its fixed catalog request while retaining
+ngn's own client identity. Overlapping version checks are coalesced; a metadata
+outage retains the last known version (bundled `0.162.0` before the first successful
+check) with a five-minute retry backoff. The model list itself is always fetched
+fresh. This adds at most two seconds for metadata discovery, sends no provider
+credentials to the metadata host, and requires no Codex installation in the
+container. See the [official Codex client contract and fallback behavior](../api/provider.md#local-configuration-and-chatgpt-authentication),
 not a stable public OpenAI REST guarantee. The existing backend login/refresh
 flow and private deployment's selected authentication mode are unchanged.
 

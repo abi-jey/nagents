@@ -245,11 +245,30 @@ asyncio.run(codex_models())
 ```
 
 For ChatGPT/OAuth authentication, Codex discovery uses the fixed
-`https://chatgpt.com/backend-api/codex/models?client_version=0.153.4` route.
-The query and `version` header both use `0.153.4` as a **catalog protocol
-compatibility version**, pinned to the official Codex `rust-v0.153.4` client, not
-the ngn package version. Requests still identify
+`https://chatgpt.com/backend-api/codex/models` route. Its `client_version` query
+and `version` header use the latest stable Codex release version discovered from
+OpenAI's public [`@openai/codex` package metadata](https://registry.npmjs.org/@openai/codex/latest),
+not the ngn package version. This matters because upstream catalog visibility
+can depend on client version. Requests still identify
 the application honestly as `originator: ngn` and `User-Agent: ngn/<package-version>`.
+
+Every explicit catalog lookup revalidates that public release metadata, using
+`If-None-Match` when the registry supplies an ETag; overlapping lookups share one
+check. There is no positive freshness delay that hides a newly published stable
+version. Metadata requests have a separate maximum two-second deadline (or the
+connection's shorter catalog deadline), a 64 KiB response limit, no redirects,
+cookies, proxy/netrc settings, provider credentials, account headers, or request
+tracing. Only the exact package name and a plain stable `major.minor.patch`
+version are accepted. ngn does not install or execute Codex to discover models.
+
+If metadata is unavailable, invalid, or older than the known version, ngn uses
+the last valid version in this process and waits five minutes before checking
+metadata again. A process with no successful metadata lookup uses the verified
+`0.162.0` fallback. This is an offline compatibility fallback, not a cached model
+list: the authenticated catalog itself is fetched on every request. The cache
+contains only public version/ETag data, stays in memory, and writes no settings
+or credential files. Logs report the selected version, metadata source, and
+fallback status without upstream response data.
 
 Each fetch obtains one current `OpenAIAuth.credentials` snapshot and uses its
 access token, optional account ID, and optional residency together. It never
@@ -262,21 +281,21 @@ features are inferred from geolocation or other metadata.
 The response must contain a `models` array of objects with valid `slug` and
 `visibility` fields. Only `visibility: "list"` contributes an ID; `"hide"` and
 `"none"` are excluded. Missing, null, or unknown visibility is an error, matching
-the pinned struct's required enum rather than guessing a default. Models with
+Codex's required enum rather than guessing a default. Models with
 `supported_in_api: false` **remain eligible for OAuth discovery**. IDs retain
 upstream order (no priority sorting), with duplicates removed; descriptions,
 instructions, account metadata, and other extra fields are not returned.
 
-The catalog uses the same bounded, redirect-free, cookie-free, non-logging
-transport limits described above. There is no catalog cache or pagination.
+The authenticated catalog uses the same bounded, redirect-free, cookie-free,
+non-logging transport limits described above. There is no model-list cache or pagination.
 For ChatGPT authentication, `OpenAIProvider.verify_model()` remains local and does not prove account
 entitlement or request a catalog. This is an **official Codex client contract,
 not a stable public OpenAI REST API guarantee**. `ModelListError` and manual model
 entry remain important if that contract or account access changes.
 
-Pinned upstream sources: [catalog route and query](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/codex-api/src/endpoint/models.rs#L31-L78),
-[required model fields](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/openai_models.rs#L390-L402),
-and [picker visibility](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/openai_models.rs#L880-L883).
+Verified upstream sources: [catalog route and client-version query](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/codex-api/src/endpoint/models.rs),
+[model fields and picker visibility](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/protocol/src/openai_models.rs),
+and [Codex's public release metadata checks](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/tui/src/updates.rs).
 
 ::: nagents.CodexCredentials
 
