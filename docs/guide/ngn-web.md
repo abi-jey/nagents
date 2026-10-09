@@ -1373,7 +1373,7 @@ configuration. Write-only keys live in a separate `ngn_web_provider_keys` table
 in the same private database; both are deleted on reset. The override applies
 across sessions and web-server restarts for that resolved workspace. One process
 must own the workspace; this is not multi-process settings synchronization.
-ConfigMap/YAML, CLI, profile and initial authentication/model resolution
+ConfigMap/JSON, CLI, profile and initial authentication/model resolution
 establish startup defaults, followed by global defaults, **before** the saved
 workspace override is applied. Reset deletes the workspace rows and inherits
 current global defaults. The
@@ -1381,8 +1381,8 @@ CLI/TUI do not load this web-only override.
 
 Version-1 through version-4 rows without removed fields retain supported
 preferences and receive newer fields from trusted defaults. Version-5 rows
-store workspace differences. Unknown or removed fields fail loading; see the
-[manual upgrade steps](ngn-configuration.md#updating-existing-installations-to-provider-yaml-v2)
+store workspace differences. Unknown or removed fields fail loading. Check the
+[current configuration schema](ngn-configuration.md#complete-top-level-schema)
 before restarting an existing installation. Existing chat preferences and
 revision checks are retained when their rows are valid.
 
