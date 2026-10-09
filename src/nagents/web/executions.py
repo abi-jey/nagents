@@ -59,6 +59,12 @@ class Executions:
         if self.runs.get(run.session_id) is run:
             self.runs.pop(run.session_id)
 
+    def in_use(self, harness: Harness) -> bool:
+        """Include admitted owners before startup and after the Agent finishes."""
+        return any(
+            run.harness is harness or self.owners.get(session_id) is harness for session_id, run in self.runs.items()
+        )
+
     @contextmanager
     def scope(self, run: Run) -> Iterator[None]:
         if self.runs.get(run.session_id) is not run:

@@ -170,7 +170,7 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
         if type(harness.agent.session) is not WebHistory:
             state.selected_session_id = await harness.new_session()
             return state.selected_session_id
-        with nullcontext() if harness._busy else harness.operation("new session"):
+        with nullcontext() if harness._busy or state.executions.in_use(harness) else harness.operation("new session"):
             protected = _protected(state)
             in_use = _in_use(state)
             workers = bool(state.executions.runs) or any(not task.done() for task in harness.tasks._workers.values())
@@ -185,7 +185,7 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
 
             selected, removed = await state.channels.store._transaction(select)
             state.selected_session_id = selected
-            if not harness._busy:
+            if not harness._busy and not state.executions.in_use(harness):
                 harness.session_id = selected
                 harness._session_created = True
                 harness.tools.read_hashes.clear()

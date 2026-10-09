@@ -771,7 +771,7 @@ def create_app(
                 raise HTTPException(404, "Session not found in this workspace.")
             if body.session_id != state.selected_session_id and live.active_session_id:
                 await live.close(live.active_session_id)
-            if not state.harness._busy:
+            if not state.harness._busy and not state.executions.in_use(state.harness):
                 await state.harness.resume(body.session_id)
             state.selected_session_id = body.session_id
             await empty_sessions.prune(state, live.active_session_id)

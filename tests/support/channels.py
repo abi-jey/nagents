@@ -139,7 +139,14 @@ class Site:
             async with asyncio.timeout(HANG_GUARD):
                 while True:
                     pending = await self.state.channels.store.has_pending()
-                    if not pending and self.state.active is None and not self.state.mutating:
+                    if (
+                        not pending
+                        and self.state.active is None
+                        and not self.state.mutating
+                        and not self.state.channels.work_tasks
+                        and not self.state.channels.work_cleanup
+                        and not self.state.channels.management.ready
+                    ):
                         return
                     await asyncio.sleep(0.01)
 

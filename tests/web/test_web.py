@@ -491,15 +491,20 @@ def test_stream_exact_approvals_and_conflicts(tmp_path: Path) -> None:
         async with client_app(tmp_path, controlled=True) as (app, client, headers, harnesses):
             harness = harnesses[0]
             assert isinstance(harness, ControlledHarness)
+            original_session = harness.session_id
             stream = LiveStream(app, headers, harness.session_id, "approval")
             first = await stream.event("approval")
-            for path, mutation in [
-                ("/api/run", {"session_id": harness.session_id, "prompt": "no"}),
-                ("/api/sessions/new", {}),
-                ("/api/sessions/resume", {"session_id": harness.session_id}),
-            ]:
-                assert (await client.post(path, json=mutation, headers=headers)).status_code == 409
-            assert (await client.get("/api/sessions", headers=headers)).status_code == 409
+            assert (
+                await client.post("/api/run", json={"session_id": original_session, "prompt": "no"}, headers=headers)
+            ).status_code == 409
+            created = await client.post("/api/sessions/new", json={}, headers=headers)
+            assert created.status_code == 200 and created.json()["session_id"] != original_session
+            assert harness.session_id == original_session
+            assert (
+                await client.post("/api/sessions/resume", json={"session_id": original_session}, headers=headers)
+            ).status_code == 200
+            assert harness.session_id == original_session
+            assert (await client.get("/api/sessions", headers=headers)).status_code == 200
             assert (await client.get("/api/bootstrap")).json()["active_run_id"] == first["run_id"]
             body = {
                 "run_id": first["run_id"],

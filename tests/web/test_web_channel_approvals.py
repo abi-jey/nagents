@@ -270,16 +270,18 @@ def test_ordinary_message_without_decision_still_reaches_the_inbox(tmp_path: Pat
 
 
 @pytest.mark.parametrize("in_chat", [True, False])
-def test_disconnected_only_denies_when_a_browser_approval_is_required(tmp_path: Path, in_chat: bool) -> None:
+def test_disconnected_keeps_pending_browser_and_owning_chat_decisions_bounded_by_their_owner(
+    tmp_path: Path, in_chat: bool
+) -> None:
     async def scenario() -> None:
         async with fixture(tmp_path) as f:
             f.run.server_owned = True
             pending = install_pending(f)
             pending.in_chat = in_chat
             f.state.disconnected()
-            assert pending.answer.done() is not in_chat
-            if in_chat:
-                pending.answer.set_result(False)
+            assert not pending.answer.done()
+            assert f.run.pending is pending
+            pending.answer.set_result(False)
 
     asyncio.run(scenario())
 
