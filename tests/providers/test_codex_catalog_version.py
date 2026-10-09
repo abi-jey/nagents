@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import logging
 from contextlib import asynccontextmanager
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -209,6 +210,63 @@ async def test_metadata_decoding_and_body_are_bounded(monkeypatch: pytest.Monkey
         monkeypatch.setattr(catalog, "METADATA_URL", base)
         monkeypatch.setattr(catalog, "MAX_METADATA_BYTES", 128)
         assert await catalog.CatalogVersion().resolve() == catalog.FALLBACK_VERSION
+
+
+@pytest.mark.asyncio
+async def test_deep_metadata_within_byte_limit_is_a_sanitized_fallback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Size validation alone cannot protect the JSON parser's recursion depth.
+    body = b'{"name":"@openai/codex","version":"0.163.0","extra":' + b"[" * 10000 + b'"private"' + b"]" * 10000 + b"}"
+    assert len(body) < catalog.MAX_METADATA_BYTES
+    calls = 0
+
+    async def handle(request: web.Request) -> web.Response:
+        nonlocal calls
+        calls += 1
+        return web.Response(body=body)
+
+    async with endpoint(handle) as base:
+        monkeypatch.setattr(catalog, "METADATA_URL", base)
+        versions = catalog.CatalogVersion()
+        assert await versions.resolve() == catalog.FALLBACK_VERSION
+        assert await versions.resolve() == catalog.FALLBACK_VERSION
+        assert calls == 1
+        assert versions.retry_at > monotonic()
+    assert "private" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_catalog_log_scope_is_task_local_and_restored_on_cancellation(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def fetch() -> tuple[str, str]:
+        entered.set()
+        await release.wait()
+        return "0.163.0", ""
+
+    versions = catalog.CatalogVersion()
+    monkeypatch.setattr(versions, "_fetch", fetch)
+
+    async def lookup(name: str) -> None:
+        with catalog.catalog_logging(logging.getLogger(name)):
+            await versions.resolve()
+
+    first = asyncio.create_task(lookup("catalog.host.first"))
+    await asyncio.wait_for(entered.wait(), HANG_GUARD)
+    second = asyncio.create_task(lookup("catalog.host.second"))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    release.set()
+    await second
+    await versions.resolve()
+    records = [record for record in caplog.records if record.getMessage().startswith("Codex catalog compatibility:")]
+    assert [record.name for record in records] == ["catalog.host.second", catalog.__name__]
 
 
 @pytest.mark.asyncio

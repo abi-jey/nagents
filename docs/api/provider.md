@@ -268,7 +268,10 @@ metadata again. A process with no successful metadata lookup uses the verified
 list: the authenticated catalog itself is fetched on every request. The cache
 contains only public version/ETag data, stays in memory, and writes no settings
 or credential files. Logs report the selected version, metadata source, and
-fallback status without upstream response data.
+fallback status without upstream response data. `ngn serve` routes these bounded
+diagnostics through its application logger, so they remain visible in normal
+server/container logs without enabling verbose logging for other library or
+MCP operations.
 
 Each fetch obtains one current `OpenAIAuth.credentials` snapshot and uses its
 access token, optional account ID, and optional residency together. It never

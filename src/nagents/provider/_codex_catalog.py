@@ -10,7 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from time import monotonic
+from typing import TYPE_CHECKING
 from weakref import ReferenceType
 from weakref import WeakKeyDictionary
 from weakref import ref
@@ -19,7 +22,11 @@ import aiohttp
 
 from ..adapters._validation import load_object
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 logger = logging.getLogger(__name__)
+_catalog_logger: ContextVar[logging.Logger] = ContextVar("codex_catalog_logger", default=logger)
 
 METADATA_URL = "https://registry.npmjs.org/@openai/codex/latest"
 FALLBACK_VERSION = "0.162.0"
@@ -28,6 +35,16 @@ FAILURE_BACKOFF = 300.0
 MAX_METADATA_BYTES = 64 * 1024
 _VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\Z")
 _ETAG = re.compile(r"[\x21-\x7e]{1,1024}\Z")
+
+
+@contextmanager
+def catalog_logging(target: logging.Logger) -> Iterator[None]:
+    """Route only safe catalog diagnostics through the current host request."""
+    token = _catalog_logger.set(target)
+    try:
+        yield
+    finally:
+        _catalog_logger.reset(token)
 
 
 def _version(value: object) -> str:
@@ -52,7 +69,9 @@ class CatalogVersion:
         self._locks: WeakKeyDictionary[asyncio.AbstractEventLoop, ReferenceType[asyncio.Lock]] = WeakKeyDictionary()
 
     def _result(self, status: str) -> str:
-        logger.info("Codex catalog compatibility: version=%s source=%s status=%s", self.version, self.source, status)
+        _catalog_logger.get().info(
+            "Codex catalog compatibility: version=%s source=%s status=%s", self.version, self.source, status
+        )
         return self.version
 
     async def resolve(self, timeout: float = METADATA_TIMEOUT) -> str:
@@ -87,7 +106,9 @@ class CatalogVersion:
                 self.retry_at = monotonic() + FAILURE_BACKOFF
                 self.revision += 1
             # No upstream exception/body/header can enter application logs.
-            logger.warning("Codex version metadata unavailable; retaining compatibility version %s", self.version)
+            _catalog_logger.get().warning(
+                "Codex version metadata unavailable; retaining compatibility version %s", self.version
+            )
             return self._result("fallback")
 
     async def _fetch(self) -> tuple[str, str]:

@@ -149,6 +149,9 @@ async def endpoint(
     *,
     omit_content_type: bool = False,
 ) -> AsyncIterator[str]:
+    # Web integration tests also import this local transport fixture; none
+    # should depend on public release metadata or contact its external host.
+    monkeypatch.setattr(openai, "catalog_version", AsyncMock(return_value="0.163.0"))
     app = web.Application()
     app.router.add_route("*", "/{path:.*}", handler)
     if omit_content_type:
