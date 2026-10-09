@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from textual.containers import VerticalScroll
+from textual.messages import InvokeLater
 from textual.messages import Layout
 from textual.widgets import Button
 from textual.widgets import Static
@@ -457,8 +458,9 @@ def test_expanding_tool_before_layout_delivery_keeps_header_visible(
 
 
 @pytest.mark.parametrize("size", [(80, 24), (140, 40)])
+@pytest.mark.parametrize("defer_scroll", [False, True])
 def test_focused_visible_header_survives_growth_without_chasing_scrollback(
-    tmp_path: Path, size: tuple[int, int]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int], defer_scroll: bool
 ) -> None:
     async def scenario() -> None:
         backend = FakeHarness(tmp_path)
@@ -488,7 +490,29 @@ def test_focused_visible_header_survives_growth_without_chasing_scrollback(
 
             # Manually scroll into the output, keeping its header focused but
             # deliberately offscreen. More output must not pull it back.
-            conversation.scroll_relative(y=30, animate=False)
+            scroll_complete = asyncio.Event()
+            deferred: list[InvokeLater] = []
+            post_message = conversation.post_message
+
+            def defer_scroll_delivery(message: TextualMessage) -> bool:
+                if defer_scroll and isinstance(message, InvokeLater):
+                    deferred.append(message)
+                    return True
+                return post_message(message)
+
+            with monkeypatch.context() as delivery:
+                delivery.setattr(conversation, "post_message", defer_scroll_delivery)
+                conversation.scroll_relative(y=30, animate=False, on_complete=scroll_complete.set)
+                if defer_scroll:
+                    await pilot.pause()
+                    # Reproduce a slow refresh queue: an idle message pump does
+                    # not imply that the requested nonanimated scroll ran.
+                    assert deferred and not scroll_complete.is_set()
+                    assert title.region.bottom >= conversation.content_region.y
+            for message in deferred:
+                post_message(message)
+            async with asyncio.timeout(HANG_GUARD):
+                await scroll_complete.wait()
             await pilot.pause()
             assert title.region.bottom < conversation.content_region.y
             before = conversation.scroll_y
@@ -517,7 +541,10 @@ def test_focused_visible_header_survives_growth_without_chasing_scrollback(
 
             # Returning to the bottom resumes following without needing a new
             # card or assistant turn to reset the anchor.
-            conversation.scroll_end(animate=False)
+            scroll_complete.clear()
+            conversation.scroll_end(animate=False, on_complete=scroll_complete.set)
+            async with asyncio.timeout(HANG_GUARD):
+                await scroll_complete.wait()
             await pilot.pause()
             assert title.region.bottom < conversation.content_region.y
             await app._event(ToolOutput("growing", "shell", "late progress\n" * 100))
