@@ -166,6 +166,8 @@ export function TranscriptItems({
                        : "Status"}
               {entry.origin && !entry.channel && <span className="origin-badge">{entry.origin}</span>}
               {entry.voice && <span className="origin-badge">Voice</span>}
+              {entry.kind === "user" && !entry.queued && ["Cancelled", "Interrupted", "Disconnected", "No result recorded"].includes(entry.state || "") &&
+                <span className="origin-badge">{entry.state === "No result recorded" ? "Input not recorded" : entry.state}</span>}
               {entry.queued && <span className="origin-badge">{entry.admission === "queued" ? "Queued" : entry.admission === "sending" ? "Sending…" : "Delivery unconfirmed"}</span>}
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}

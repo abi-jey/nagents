@@ -128,7 +128,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     const old = previous[index];
     next.push(entry.delivery ? { ...entry, id: old.id } : entry.kind === "live_caption"
       ? { ...entry, id: old.id, activity: old.activity } : entry.kind === "user"
-      ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, activity: old.activity,
+      ? { ...old, ...entry, id: old.id, runId: old.runId, queued: false, admission: undefined, state: undefined, activity: old.activity,
           voice: entry.voice, voiceSessionId: entry.voiceSessionId,
           origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext,
            channel: entry.channel, parts: entry.parts, uploads: entry.uploads }
@@ -158,6 +158,11 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     ? supplied : undefined;
   const runHistory = run && current.runHistory?.runId !== run.id ? { runId: run.id, history: snapshot.history } : current.runHistory;
   if (run?.events) {
+    // A receipt has no message text: it can admit an existing optimistic row,
+    // but cannot recreate that row while replaying an otherwise empty log.
+    for (const record of run.events) if (record.event === "input_admitted" &&
+        (!record.run_id || record.run_id === run.id) && (!record.session_id || record.session_id === snapshot.session_id))
+      entries = appendEvent(entries, { ...record, run_id: record.run_id || run.id });
     let replay: Entry[] = [];
     for (const record of run.events) replay = appendEvent(replay, {
       ...record, run_id: record.run_id || run.id, ...(record.event === "user_message" ? { saved: true } : {}),
@@ -191,8 +196,9 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     });
     const first = entries.findIndex((entry) => entry.runId === run.id || claimed.has(entry.id));
     const before = first < 0 ? entries : entries.slice(0, first);
-    entries = [...before.filter((entry) => entry.runId !== run.id && !claimed.has(entry.id)), ...replay,
-      ...(first < 0 ? [] : entries.slice(first).filter((entry) => entry.runId !== run.id && !claimed.has(entry.id)))];
+    const keep = (entry: Entry) => !claimed.has(entry.id) && (entry.runId !== run.id ||
+      entry.kind === "user" && entry.state === "Preparing" && !entry.historyId && !entry.ingressId);
+    entries = [...before.filter(keep), ...replay, ...(first < 0 ? [] : entries.slice(first).filter(keep))];
   }
   // A first/explicit history load establishes a baseline, even if React renders
   // it after the selected session mounts. Only later snapshot additions announce
@@ -248,7 +254,9 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
     if (event.event === "run_finished" && event.run_id === activeRun?.id) activeRun = undefined;
     if (event.event === "approval" && activeRun) activeRun = { ...activeRun, pending_approvals: [...pendingApprovals(activeRun), event] };
     if (event.event === "approval_closed" && activeRun) activeRun = { ...activeRun, pending_approvals: pendingApprovals(activeRun).filter((item) => item.approval_id !== event.approval_id), events: undefined, approval: undefined };
-    next = { ...current, activeRun, runHistory, entries: appendEvent(current.entries, event) };
+    const scopedInput = event.event !== "input_admitted" ||
+      ((!event.session_id || event.session_id === frame.session_id) && (!activeRun || event.run_id === activeRun.id));
+    next = { ...current, activeRun, runHistory, entries: scopedInput ? appendEvent(current.entries, event) : current.entries };
   }
   return { ...next, position: { cursor: frame.cursor, epoch: frame.epoch } };
 }

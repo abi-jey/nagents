@@ -447,7 +447,7 @@ test("retired Live payloads and earlier retained updates remain explicit and sep
   } finally { await ui.close(); }
 });
 
-for (const id of ["provider:request/part.one", ".", "..", "provider/#?% request", "界".repeat(256)]) {
+for (const id of ["provider:request/part.one", ".", "..", "provider/#?% request", "界".repeat(256), "😀".repeat(256)]) {
   test(`provider delegation ID ${id.length > 30 ? "Unicode bound" : JSON.stringify(id)} uses an exact same-origin query lookup`, async t => {
     const ui = view(), item = delegation({ id }); let target = "";
     t.mock.method(globalThis, "fetch", async (path: string) => { target = path; return Response.json(detail(item)); });
