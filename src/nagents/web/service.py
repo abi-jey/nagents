@@ -629,9 +629,8 @@ class WebState:
                             "_turn": self.running_harness.followups.current,
                         },
                     ),
-                )
-                if self.run_observers
-                else nullcontext(),
+                    enabled=lambda: bool(self.run_observers),
+                ),
             ):
                 async with aclosing(source) as events:
                     async for event in events:
