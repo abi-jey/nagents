@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import cast
 
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.live.runtime import result_chunks
 
 if TYPE_CHECKING:
@@ -19,14 +19,7 @@ MAX_HANDOFF_TEXT = 12000
 MAX_HANDOFF_PARTS = 512
 _CLARIFY = "I could not read that request. Please repeat it clearly or type it in the chat."
 Payload = dict[str, object]
-
-
-@dataclass(frozen=True)
-class LoginHandoff:
-    identifier: str
-    text: str
-    transcript: str = "[]"
-    offset_ms: float | None = None
+LoginHandoff = ClientDelegationRequest
 
 
 def handoff_offset(value: object) -> float | None:

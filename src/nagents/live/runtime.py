@@ -44,6 +44,8 @@ if TYPE_CHECKING:
     from ..audio import AudioOutput
     from ..provider import Provider
     from ..types import ContentPart
+    from .delegation import ClientDelegationHandler
+    from .delegation import ClientDelegationObserver
 
 Event = dict[str, object]
 Send = Callable[[Event], Awaitable[None]]
@@ -113,6 +115,9 @@ class LiveConfig:
     close_session_on_exit: bool = True
     backend_options: dict[str, object] = field(default_factory=dict)
     client_handler: Callable[[str], Awaitable[str]] | None = None
+    client_request_handler: ClientDelegationHandler | None = None
+    client_request_observer: ClientDelegationObserver | None = None
+    client_concurrency: int = 4
     event_queue_size: int = 1024
     handle_delegations: bool = True
 
@@ -121,6 +126,10 @@ class LiveConfig:
             raise ValueError("Live delegation must be responses or client")
         if self.attach_to and self.fork_from:
             raise ValueError("Choose attachment or a stored fork, not both")
+        if self.client_handler is not None and self.client_request_handler is not None:
+            raise ValueError("Choose a legacy or typed client handler, not both")
+        if isinstance(self.client_concurrency, bool) or not 1 <= self.client_concurrency <= 32:
+            raise ValueError("Live client concurrency must be between 1 and 32")
         if len(self.history) > 128 or self.backend_timeout <= 0 or self.close_timeout <= 0 or self.event_queue_size < 1:
             raise ValueError("Invalid Live history length or timeout")
         for message in self.history:

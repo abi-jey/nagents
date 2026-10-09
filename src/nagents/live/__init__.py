@@ -5,12 +5,14 @@ from .api import verify_webhook
 from .controls import LiveCommandError
 from .controls import LiveControls as _LiveUpdates
 from .controls import LiveStatus
+from .delegation import ClientDelegationRequest
 from .events import LiveEvent
 from .runtime import LiveConfig
 from .runtime import append_update
 from .runtime import run_live
 
 __all__ = [
+    "ClientDelegationRequest",
     "LiveAPI",
     "LiveCommandError",
     "LiveConfig",

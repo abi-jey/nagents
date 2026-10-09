@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from collections.abc import Callable
 
+    from nagents.live.delegation import ClientDelegationObserver
     from nagents.provider.openai import CodexCredentials
 
 Payload = dict[str, object]
@@ -46,6 +47,7 @@ class LoginVoiceConfig:
     instructions: str
     handler: Callable[[LoginHandoff], Awaitable[str]]
     history: tuple[Payload, ...] = ()
+    observer: ClientDelegationObserver | None = None
 
 
 class LoginVoiceError(RuntimeError):
