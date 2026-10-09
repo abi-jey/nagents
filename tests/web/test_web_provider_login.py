@@ -12,6 +12,7 @@ import pytest
 from nagents._async import join_owned
 from nagents.harness.auth import DeviceAuthorization
 from nagents.harness.config import HarnessConfig
+from nagents.harness.connection import build_provider
 from nagents.harness.providers import ProviderProfile
 from nagents.provider import OpenAIProvider
 from nagents.web import provider_login
@@ -71,6 +72,9 @@ def test_login_completes_selected_provider_and_hides_secrets(
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
         release = pending_login(app, monkeypatch)
+        # The shared site fixture substitutes a FakeProvider during startup.
+        # Exercise the real replacement factory for the user-initiated login.
+        monkeypatch.setattr("nagents.harness.runtime.build_provider", build_provider)
         previous_provider = app.state.harness.agent.provider
         assert app.client.get("/api/login/chatgpt", headers=app.headers).json()["status"] == "idle"
         response = app.client.post("/api/login/chatgpt", headers=app.headers, json={})
