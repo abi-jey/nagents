@@ -162,11 +162,14 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     """Load trusted config only; never import plugins or read credential values."""
     defaults = HarnessConfig(workspace=workspace, trust_project=trust_project)
     directory = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ngn"
-    user = directory / "config.json"
+    user = Path(os.path.abspath((directory / "config.json").expanduser()))
     project = defaults.workspace / ".ngn/config.json"
-    explicit = config_path.expanduser().resolve() if config_path is not None else None
+    # Retain the operator-selected location, not a transient symlink target.
+    # Kubernetes rotates ConfigMap ..data links without restarting the process.
+    explicit = Path(os.path.abspath(config_path.expanduser())) if config_path is not None else None
+    explicit_project = explicit is not None and explicit.resolve() == project.resolve()
     paths = [user]
-    if project.exists() and not trust_project and explicit != project.resolve():
+    if project.exists() and not trust_project and not explicit_project:
         message = (
             f"Ignoring untrusted project config {project}; use trust_project=True to allow endpoints and Python code."
         )
@@ -259,13 +262,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 global_model = env_value
 
     diagnostics: list[str] = [login_note] if login_note else []
-    if project.exists() and not trust_project and explicit != project.resolve():
+    if project.exists() and not trust_project and not explicit_project:
         diagnostics.append(
             f"Ignoring untrusted project config {project}; use trust_project=True to allow endpoints and Python code."
         )
     loaded: list[Path] = []
     for path, values in documents:
-        loaded.append(path.resolve())
+        loaded.append(path)
         unknown = values.keys() - allowed
         if unknown:
             raise ValueError(
@@ -340,7 +343,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
-    config.resource_paths = tuple(reversed(dict.fromkeys(path.resolve() for path in reversed(paths))))
+    config.resource_paths = tuple(reversed(dict.fromkeys(paths[::-1])))
     config.global_model_default = global_model
     if selected_name:
         registry = store.load()

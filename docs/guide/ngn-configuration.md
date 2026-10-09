@@ -521,6 +521,31 @@ last working generation and produce a warning. Cancellation/shutdown closes owne
 processes. Offline demo starts no MCP servers, and read-only profiles cannot launch
 custom server subprocesses. Native child agents do not inherit parent MCP servers.
 
+A newly created `<workspace>/.ngn/config.json` does not become trusted just because
+it was written from the web chat. Without `--trust-project` or an explicit selection
+of that file, the running harness ignores it and reports the trusted reload
+locations. An operator can merge the specifically approved MCP declaration into an
+already trusted user/host configuration, preserving its other settings. Preserve
+relative path semantics when moving a declaration: an explicit absolute `cwd` is
+useful. Restart with `--trust-project` only when trusting the entire project
+configuration is intended.
+
+Reload locations preserve their logical paths. For example, a process started with
+`--config /etc/ngn/config.json` follows a replacement Kubernetes ConfigMap `..data`
+symlink on its next reload instead of retaining an obsolete timestamped target.
+`ngn serve` logs source and resolved paths, the effective MCP source, server names,
+and registered/advertised tool counts when that state changes. A higher-priority
+`"mcp_servers": {}` still clears earlier declarations; the effective-source log
+makes that precedence visible. Warnings distinguish configuration parsing, MCP
+startup and tool discovery failures. Tool-call authorization failures are separate
+from registration. Diagnostics do not echo server arguments, environment values,
+request/response bodies or credentials.
+
+Verify activation in the running web **Tools** catalog and a subsequent model
+request. A successful connection from a separate `MCPManager` or CLI process only
+proves that separate process can discover the server. Tool discovery also does not
+prove that the server is authorized to call GitHub or another external service.
+
 Reloading never expands trusted paths or replaces provider/login, session storage,
 permission ceilings, task ownership, or host approval handlers. Newly created files
 are discovered only at the trusted paths selected at startup. Changes to those

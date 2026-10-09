@@ -70,6 +70,32 @@ untouched, and a bare `envsubst` would corrupt them. The unrendered template is
 **not** an apply-ready manifest. For local tests use only dummy values and a private
 temporary directory outside the repository, never a generated file inside it.
 
+## Activating installed MCP servers
+
+The deployment's `--workspace /state/workspace` selects workspace files; it does
+not grant project-configuration trust. Installing a binary and writing
+`/state/workspace/.ngn/config.json` therefore does not activate it unless the
+process was explicitly started with project trust or that config file selected.
+
+For one approved server, merge its `mcp_servers` declaration into the existing
+trusted `/state/config/ngn/config.json`, preserving the model and other fields.
+Use absolute executable and working-directory paths when moving a declaration
+from project to host configuration. Keep credentials in the server's authorized
+environment/secret source, not in transcripts or committed configuration. This
+activates the specific declaration without granting blanket project trust and is
+picked up at the next model boundary or user turn without a rollout.
+
+Mounted `/etc/ngn/config.json` remains a higher-priority source. Its MCP declarations
+replace the lower-priority mapping when present, including an empty map. ConfigMap
+symlink rotations are followed through the configured logical path. Other startup
+settings still follow their documented restart/settings behavior.
+
+Use `ngn serve` resource logs to check logical/resolved source paths, the effective
+MCP source, server names, and registered/advertised tool counts. Repeated successful
+reloads do not flood logs. Check the **running** Tools catalog after a response;
+a temporary standalone discovery process does not modify the web server's tools.
+External GitHub/service authorization is separate from successful registration.
+
 ## Topology And Boundary
 
 ```text

@@ -121,12 +121,7 @@ class MCPClient:
             env = os.environ.copy()
             env.update(self.config.env)
 
-        logger.info(
-            "Starting MCP server '%s': %s %s",
-            self.config.name,
-            self.config.command,
-            " ".join(self.config.args),
-        )
+        logger.info("Starting MCP server '%s'", self.config.name)
 
         async def start() -> None:
             self._process = await asyncio.create_subprocess_exec(
@@ -175,10 +170,8 @@ class MCPClient:
         server_version = init_response.get("protocolVersion")
         if server_version != MCP_PROTOCOL_VERSION:
             logger.warning(
-                "Server '%s' protocol version %s differs from client %s",
+                "MCP protocol version differs from client: server=%s",
                 self.config.name,
-                server_version,
-                MCP_PROTOCOL_VERSION,
             )
 
         self._server_capabilities = init_response.get("capabilities", {})
@@ -187,12 +180,7 @@ class MCPClient:
         # Send initialized notification
         await self._send_notification("notifications/initialized")
 
-        logger.info(
-            "MCP handshake complete with '%s': %s %s",
-            self.config.name,
-            self._server_info.get("name", "unknown"),
-            self._server_info.get("version", ""),
-        )
+        logger.info("MCP handshake complete: server=%s", self.config.name)
 
     async def _send_request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Send a JSON-RPC request and wait for the response.
@@ -289,7 +277,7 @@ class MCPClient:
                 try:
                     message: dict[str, Any] = json.loads(line.decode())
                 except json.JSONDecodeError:
-                    logger.warning("MCP ← %s: invalid JSON: %s", self.config.name, line[:200])
+                    logger.warning("MCP response was invalid JSON: server=%s", self.config.name)
                     continue
 
                 msg_id = message.get("id")
@@ -303,11 +291,11 @@ class MCPClient:
                             error_msg = error.get("message", "Unknown JSON-RPC error")
                             error_code = error.get("code", -1)
                             logger.error(
-                                "MCP ← %s [id=%d]: ERROR %s (code=%d)",
+                                "MCP request failed: server=%s stage=%s category=%s code=%s",
                                 self.config.name,
-                                msg_id,
-                                error_msg,
-                                error_code,
+                                pending.method,
+                                _error_category(error_msg),
+                                error_code if type(error_code) is int else "invalid",
                             )
                             pending.future.set_exception(
                                 MCPError(
@@ -320,22 +308,20 @@ class MCPClient:
                             result = message.get("result", {})
                             pending.future.set_result(result)
                     else:
-                        logger.debug("MCP ← %s [id=%d]: no pending request for this id", self.config.name, msg_id)
+                        logger.debug("MCP response has no pending request: server=%s", self.config.name)
 
                 elif msg_id is not None and "method" in message:
                     # This is a request from the server (has both id and method)
                     # We don't currently handle server-initiated requests
                     logger.debug(
-                        "MCP ← %s [id=%d]: server request '%s' (ignored)",
+                        "MCP unsupported server request ignored: server=%s",
                         self.config.name,
-                        msg_id,
-                        message.get("method"),
                     )
 
                 elif "method" in message:
                     # This is a notification (no id, has method)
                     method = message.get("method", "")
-                    logger.debug("MCP ← %s: notification '%s'", self.config.name, method)
+                    logger.debug("MCP notification received: server=%s", self.config.name)
                     if method == "notifications/tools/list_changed":
                         logger.info("MCP server '%s' reported tools changed", self.config.name)
 
@@ -344,8 +330,8 @@ class MCPClient:
 
         except asyncio.CancelledError:
             pass
-        except Exception:
-            logger.exception("Error reading MCP responses from '%s'", self.config.name)
+        except Exception as error:
+            logger.error("MCP response reader failed: server=%s error_type=%s", self.config.name, type(error).__name__)
         finally:
             self._connected = False
             for pending in self._pending.values():
@@ -389,10 +375,10 @@ class MCPClient:
             content = result.get("content", [])
             error_text = _extract_text_content(content)
             logger.warning(
-                "MCP tool '%s' on '%s' returned error: %s",
+                "MCP request failed: stage=tools/call tool=%s server=%s category=%s",
                 name,
                 self.config.name,
-                error_text,
+                _error_category(error_text),
             )
 
         return cast("list[dict[str, Any]]", result.get("content", []))
@@ -513,10 +499,27 @@ def _extract_text_content(content: list[dict[str, Any]]) -> str:
     return "\n".join(texts)
 
 
+def _error_category(message: object) -> str:
+    """Bounded classification only; upstream text may contain credential values."""
+    text = message[:4096].casefold() if isinstance(message, str) else ""
+    authorization = (
+        "unauthorized",
+        "unauthenticated",
+        "authentication required",
+        "bad credentials",
+        "forbidden",
+        "permission denied",
+        "missing token",
+        "not logged in",
+    )
+    return "authorization" if any(term in text for term in authorization) else "server_error"
+
+
 class MCPError(Exception):
     """Raised when an MCP server returns a JSON-RPC error response."""
 
-    def __init__(self, message: str, code: int = -1, data: Any = None) -> None:
+    def __init__(self, message: str, code: int = -1, data: Any = None, *, stage: str = "") -> None:
+        self.stage = stage
         self.code = code
         self.data = data
         super().__init__(f"MCP error (code={code}): {message}")

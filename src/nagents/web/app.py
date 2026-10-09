@@ -187,6 +187,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nonlocal state, designer, live, live_settings, provider_login
         harness = harness_factory(copy.deepcopy(config))
+        harness.resources.logger = logger
         logger.info(
             "ngn serve starting: workspace=%s state_dir=%s demo=%s",
             harness.workspace,
