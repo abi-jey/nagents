@@ -205,3 +205,38 @@ test("a pulse requested while paused does not resume simulation", () => {
     assert.equal(engine.snapshot().ambientPackets, 3); assert(engine.snapshot().shock > 0);
     engine.dispose();
 });
+
+test("connecting and failed networks suppress stale audio without rebuilding or losing delegation ownership", () => {
+    const engine = createSphereEngine({ ...config, mode: "connect" }), drawing = surface();
+    const size = engine.snapshot().nodes;
+    assert(engine.startDelegation("preserved-task"));
+    advance(engine, .6, voiced());
+    assert.equal(engine.snapshot().mode, "connect");
+    assert.equal(engine.snapshot().nodes, size);
+    assert.equal(engine.snapshot().inputLevel, 0);
+    assert.equal(engine.snapshot().outputLevel, 0);
+    assert.equal(engine.snapshot().outerScale, 1);
+    assert.equal(engine.snapshot().ambientPackets, 0);
+    assert.equal(engine.snapshot().voicePackets, 0);
+    engine.render(drawing.context, 80, 80, true);
+    const before = [...drawing.coordinates()]; drawing.reset();
+    advance(engine, .4);
+    engine.render(drawing.context, 80, 80, true);
+    assert.notDeepEqual(drawing.coordinates(), before, "the network continues rotating during connection");
+    engine.configure({ ...config, mode: "error" }); advance(engine, .4, voiced());
+    assert.equal(engine.snapshot().mode, "error");
+    assert.equal(engine.snapshot().ambientPackets, 0);
+    assert.equal(engine.snapshot().inputLevel, 0);
+    assert.equal(engine.snapshot().tasks[0].id, "preserved-task");
+    engine.configure({ ...config, mode: "listen" }); advance(engine, .6, voiced());
+    assert(engine.snapshot().inputLevel > 0);
+    assert(engine.snapshot().outputLevel > 0);
+    assert.equal(engine.snapshot().nodes, size);
+    engine.configure({ ...config, mode: "error" });
+    assert.equal(engine.snapshot().ambientPackets, 0, "failure immediately removes listening routes");
+    assert.equal(engine.snapshot().voicePackets, 0, "failure cannot replay prior voice motions");
+    assert.equal(engine.snapshot().inputLevel, 0);
+    assert.equal(engine.snapshot().outputLevel, 0);
+    assert.equal(engine.snapshot().outerScale, 1);
+    engine.dispose();
+});

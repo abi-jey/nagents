@@ -60,8 +60,10 @@ function NetworkPresence({ phase, micMuted, outputMuted, busy, outputLevel, audi
     setSpeaking(value => value === actualOutput.current ? value : actualOutput.current);
     if (dispatch.current) bridge.flush(dispatch.current);
   }, [bridge]);
-  const mode: ActivityMode = phase === "connected" && !outputMuted && (speaking || !audio && level(outputLevel) > .015)
-    ? "speaking" : busy ? "delegating" : phase === "permission" || phase === "connecting" ? "thinking" : "idle";
+  const mode: ActivityMode = phase === "permission" || phase === "connecting" ? "connecting"
+    : phase === "error" ? "error"
+      : phase === "connected" && !outputMuted && (speaking || !audio && level(outputLevel) > .015) ? "speaking"
+        : phase === "connected" && busy ? "delegating" : "idle";
   const controller = useVoiceSphere({ mode, audio: source, density: 3, dark: true, reducedMotion, onSnapshot });
   dispatch.current = controller.dispatch;
   useEffect(() => {
@@ -71,7 +73,7 @@ function NetworkPresence({ phase, micMuted, outputMuted, busy, outputLevel, audi
   }, [bridge, controller.dispatch]);
   const version = delegations.map(record => `${record.id}:${record.seq}:${record.status}`).join("|");
   useEffect(() => { bridge.reconcile(sessionId, delegations, controller.dispatch); }, [bridge, controller.dispatch, sessionId, delegations, version]);
-  return <VoiceSphereCanvas controller={controller} compact className="live-sphere-canvas" onReady={onReady} label="Connected voice network" />;
+  return <VoiceSphereCanvas controller={controller} compact className="live-sphere-canvas" onReady={onReady} label={mode === "connecting" ? "Voice network connecting" : mode === "error" ? "Voice connection failed" : "Voice network"} />;
 }
 
 /** The network is decorative; the existing native button owns voice activation. */
@@ -98,6 +100,10 @@ export function LiveSphere(props: LiveSphereProps) {
     aria-label={label} aria-pressed={connected ? micMuted : undefined} aria-busy={pending || undefined}
     title={label} disabled={blocked} onClick={onActivate}>
     <span className="live-sphere-scene" aria-hidden="true">
+      <svg className="live-sphere-connection" viewBox="0 0 80 80" fill="none" aria-hidden="true">
+        <circle className="live-sphere-connection-track" cx="40" cy="40" r="36" />
+        <path className="live-sphere-connection-arcs" d="M40 4a36 36 0 0 1 31.2 18M40 76A36 36 0 0 1 8.8 58" />
+      </svg>
       <svg className="live-sphere-fallback" viewBox="0 0 80 80" fill="none" aria-hidden="true">
         <g className="live-sphere-links" stroke="currentColor" strokeWidth=".7">
           <path d="m40 9 21 8 10 23-10 23-21 8-21-8L9 40l10-23 21-8Zm0 0L26 25 9 40l17 15 14 16 14-16 17-15-17-15L40 9Zm-21 8 7 38 35 8-7-38-35-8Zm42 0L26 25l-7 38 35-8 7-38ZM26 25l28 30M54 25 26 55M9 40h62M40 9v62" />

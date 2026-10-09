@@ -132,7 +132,16 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
     // Current task IDs live in tasks; only recently retired IDs need extra storage.
     const seenIds = new Set<string>(), delegationNames = ['Agent A', 'Agent B', 'Agent C'];
     let delegationStatus = 'Send a task through the inner network, then return its result.';
-    const rgb = (): RGB => palettes[state.color][dark ? 0 : 1];
+    const rgb = (): RGB => state.mode === 'error' ? (dark ? [242, 160, 167] : [157, 51, 66]) : palettes[state.color][dark ? 0 : 1];
+    const connecting = () => state.mode === 'connect';
+    function connectionLight(point: Vec3): number {
+        // A moving meridian assembles the existing network; no fake audio,
+        // thinking packets, density rebuild or delegation state is involved.
+        if (!connecting()) return 0;
+        if (reduced.matches) return .5;
+        const angle = Math.atan2(point.z, point.x) - state.time * 2.4;
+        return Math.pow((Math.cos(angle) + 1) * .5, 9);
+    }
     function build(): void {
         const profile = densityProfiles[state.density - 1], surface = ico(profile.surface), interior = ico(profile.core, .56);
         nodes = surface.nodes;
@@ -399,11 +408,13 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
                 alpha *= inner ? 1.45 : bridge ? .58 : .64;
             if (small)
                 alpha *= .80;
-            const active = miniWave ? Math.max(miniWave![edge.a], miniWave![edge.b], miniGlow![edge.a] * .38, miniGlow![edge.b] * .38) : Math.max(waveStrength(edge.a), waveStrength(edge.b), signalNodeGlow(edge.a) * .38, signalNodeGlow(edge.b) * .38);
+            if (connecting()) alpha *= .48;
+            if (state.mode === 'error') alpha *= .7;
+            const active = connecting() ? Math.max(connectionLight(nodes[edge.a]), connectionLight(nodes[edge.b])) * .65 : miniWave ? Math.max(miniWave![edge.a], miniWave![edge.b], miniGlow![edge.a] * .38, miniGlow![edge.b] * .38) : Math.max(waveStrength(edge.a), waveStrength(edge.b), signalNodeGlow(edge.a) * .38, signalNodeGlow(edge.b) * .38);
             const related = state.hover === edge.a || state.hover === edge.b;
             const hover = hoverStrength({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: edge.depth }, small);
             const speechLight = (inner ? speech.inner : bridge ? (speech.inner + speech.outer) * .32 : speech.outer) + listening.energy * (inner ? .35 : .6);
-            let c: RGB = inner && state.mode !== 'delegate' ? (dark ? [190, 168, 243] : [119, 77, 173]) : accent;
+            let c: RGB = inner && state.mode !== 'delegate' && state.mode !== 'error' ? (dark ? [190, 168, 243] : [119, 77, 173]) : accent;
             if (state.mode === 'delegate') {
                 const group = community(nodes[edge.a]);
                 if (group === 1)
@@ -419,11 +430,11 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
         const sorted = (miniStride > 1 ? points.filter(p => miniInner![p.id] || miniKeep![p.id] || p.id % miniStride === 0 || p.id % 23 === 0 || p.id === state.origin || Math.max(miniWave![p.id], miniGlow![p.id] * .55) >= .012) : points.slice()).sort((a, b) => a.z - b.z);
         for (const p of sorted) {
             const front = Math.max(0, Math.min(1, (p.z + 1) / 2));
-            const active = miniWave ? Math.max(miniWave![p.id], miniGlow![p.id] * .55) : Math.max(waveStrength(p.id), signalNodeGlow(p.id) * .55);
+            const active = connecting() ? connectionLight(nodes[p.id]) : miniWave ? Math.max(miniWave![p.id], miniGlow![p.id] * .55) : Math.max(waveStrength(p.id), signalNodeGlow(p.id) * .55);
             const hub = p.id % 23 === 0;
             const selected = p.id === state.origin;
             const inner = miniInner ? Boolean(miniInner![p.id]) : length(nodes[p.id]) < .7;
-            let c: RGB = inner && state.mode !== 'delegate' ? (dark ? [190, 168, 243] : [119, 77, 173]) : accent;
+            let c: RGB = inner && state.mode !== 'delegate' && state.mode !== 'error' ? (dark ? [190, 168, 243] : [119, 77, 173]) : accent;
             const hover = hoverStrength(p, small), speechLight = (inner ? speech.inner : speech.outer) + listening.energy * (inner ? .3 : .65);
             if (state.mode === 'delegate') {
                 const group = community(nodes[p.id]);
@@ -1188,15 +1199,24 @@ export function createSphereEngine(config: SphereConfig): SphereEngine {
     } }); return score < 40 ? best : -1; }
     function snapshot(): SphereSnapshot {
         refreshPhysical();
-        return { nodes: nodes.length, edges: edges.length, origin: state.origin, zoom: state.zoom, tasks: delegationDemo.tasks.map(({ id, label, slot, phase, resultQueued }) => ({ id, label, slot, phase, resultQueued })), delegationStatus, inputLevel: listening.energy, outputLevel: speech.inner, outerScale: 1 + breath.outer, innerScale: 1 + breath.inner, ambientPackets: voiceSignals.packets.filter(p => p.ambient).length, voicePackets: voiceSignals.packets.filter(p => !p.ambient).length, shock: sharedShock };
+        return { mode: state.mode, nodes: nodes.length, edges: edges.length, origin: state.origin, zoom: state.zoom, tasks: delegationDemo.tasks.map(({ id, label, slot, phase, resultQueued }) => ({ id, label, slot, phase, resultQueued })), delegationStatus, inputLevel: listening.energy, outputLevel: speech.inner, outerScale: 1 + breath.outer, innerScale: 1 + breath.inner, ambientPackets: voiceSignals.packets.filter(p => p.ambient).length, voicePackets: voiceSignals.packets.filter(p => !p.ambient).length, shock: sharedShock };
     }
     build();
     return {
         configure(next) { if (disposed)
-            return; const before = state.density; Object.assign(state, cleanConfig(next)); dark = state.dark; physicalDirty = true; if (before !== state.density)
-            build(); },
+            return; const before = state.density, previousMode = state.mode; Object.assign(state, cleanConfig(next)); dark = state.dark; physicalDirty = true;
+            if (previousMode !== state.mode && (connecting() || state.mode === 'error')) {
+                // Lifecycle changes stop old voice/listening routes immediately,
+                // while explicit delegation tasks retain their identities.
+                voiceSignals.packets.length = 0;
+                inputSignal = silentSignal(); outputSignal = silentSignal();
+                Object.assign(speech, { blend: 0, envelope: 0, inner: 0, outer: 0, shape: 0, shellShape: 0, low: 0, mid: 0, high: 0 });
+                Object.assign(listening, { blend: 0, energy: 0, shape: 0, low: 0, mid: 0, high: 0 });
+                Object.assign(breath, { outer: 0, inner: 0, outerVelocity: 0, innerVelocity: 0 });
+            }
+            if (before !== state.density) build(); },
         tick(seconds, audio) { if (disposed || !Number.isFinite(seconds) || seconds <= 0)
-            return; const dt = Math.min(.05, seconds); inputSignal = cleanSignal(audio.input); outputSignal = cleanSignal(audio.output); updatePointerLight(dt); updateSpeaking(dt); advanceSignalBlooms(dt); updatePulseImpacts(); updateDelegationEffects(dt); updateVoiceSignals(dt); physicalDirty = true; if (state.playing) {
+            return; const dt = Math.min(.05, seconds); inputSignal = connecting() || state.mode === 'error' ? silentSignal() : cleanSignal(audio.input); outputSignal = connecting() || state.mode === 'error' ? silentSignal() : cleanSignal(audio.output); updatePointerLight(dt); updateSpeaking(dt); advanceSignalBlooms(dt); updatePulseImpacts(); updateDelegationEffects(dt); updateVoiceSignals(dt); physicalDirty = true; if (state.playing) {
             state.time += dt;
             if (!drag && !reduced.matches)
                 state.yaw += dt * .075;

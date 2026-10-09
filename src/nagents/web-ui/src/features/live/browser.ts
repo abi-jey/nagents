@@ -28,6 +28,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
   let playback: PcmPlayback | undefined;
   let pcm: PcmAudio | undefined;
   let closed = false, inputMuted = false, outputMuted = false;
+  let socketOpened = false, readyReported = false;
   let hasOutput = false;
   let switchingInput = false, outputId = devices.outputId;
   const inputs = new DeviceChangeQueue(), outputs = new DeviceChangeQueue();
@@ -73,7 +74,16 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     if (context) { context.onstatechange = null; void context.close().catch(() => {}); }
   };
 
+  const reportReady = () => {
+    if (closed || readyReported || !socketOpened || socket?.readyState !== WebSocket.OPEN ||
+        context?.state !== "running" || !capture || !captureSource ||
+        !stream?.getAudioTracks().some(track => track.readyState === "live" && (inputMuted || track.enabled && !track.muted))) return;
+    readyReported = true;
+    handlers.connected();
+  };
+
   const observeMicrophone = (source: MediaStream) => {
+    for (const track of source.getAudioTracks()) track.addEventListener("unmute", reportReady);
     for (const track of source.getAudioTracks()) track.addEventListener("ended", () => {
       if (!closed && !switchingInput && stream === source) handlers.failed("Your microphone was disconnected. Check it, then reconnect.");
     });
@@ -81,7 +91,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
 
   const play = async () => {
     if (!context || closed) return;
-    try { await context.resume(); if (!closed) handlers.playbackBlocked(context.state !== "running"); }
+    try { await context.resume(); if (!closed) { handlers.playbackBlocked(context.state !== "running"); reportReady(); } }
     catch { if (!closed) handlers.playbackBlocked(true); }
   };
 
@@ -115,6 +125,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         if (audio.state !== "running") { stopPlayback(); resetInput(); }
         meter?.sync();
         handlers.playbackBlocked(audio.state !== "running");
+        reportReady();
       };
       void play();
       try {
@@ -165,7 +176,8 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         channel.onopen = () => {
           if (!closed) {
             opened = true; rejectConnection = undefined;
-            handlers.connected();
+            socketOpened = true;
+            reportReady();
             if (context?.state !== "running") handlers.playbackBlocked(true);
             void play(); resolve();
           }
@@ -186,7 +198,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         };
       });
     },
-    muteInput(muted) { inputMuted = muted; resetInput(); stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); meter?.sync(); },
+    muteInput(muted) { inputMuted = muted; resetInput(); stream?.getAudioTracks().forEach((track) => { track.enabled = !muted; }); meter?.sync(); reportReady(); },
     muteOutput(muted) {
       outputMuted = muted;
       playback?.mute(muted);

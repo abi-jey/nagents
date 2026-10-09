@@ -224,6 +224,7 @@ export interface LiveState {
 }
 
 export interface MediaHandlers {
+  /** Provider/audio transport attached, with running audio and a live microphone or an intentional input mute. */
   connected(): void;
   ended(): void;
   failed(message: string): void;

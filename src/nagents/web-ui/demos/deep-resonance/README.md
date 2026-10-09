@@ -77,7 +77,11 @@ export function ConversationSphere({ audio, mode }: {
 }
 ```
 
-Activities are `idle`, `thinking`, `speaking`, and `delegating`. Microphone audio is an independent layer and can accompany every activity. `running`, `density`, `speed`, `thinkingSpeed`, `luminance`, `color`, `dark`, and `reducedMotion` are controlled props.
+Activities are `idle`, `thinking`, `speaking`, and `delegating`. Microphone audio is an independent layer and can accompany these activities. `running`, `density`, `speed`, `thinkingSpeed`, `luminance`, `color`, `dark`, and `reducedMotion` are controlled props.
+
+The lifecycle modes `connecting` and `error` suppress audio reactions and ambient activity packets. `connecting` sweeps light through the existing network; `error` keeps a quiet, rose-colored network. Neither mode rebuilds the graph or discards delegation identities.
+
+In the Live composer, a rotating connection outline appears immediately during permission/provider/audio setup, and an interrupted outline marks failure; reduced motion uses static outlines. Listening begins only after the server audio socket is attached and the microphone capture graph is running with a live, enabled, unmuted track. An intentional microphone mute permits a connected speaker-only session; the host must retain its muted indicator and suppress input reactions.
 
 The handle accepts these commands:
 
