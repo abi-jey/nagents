@@ -14,6 +14,10 @@ test("command parsing handles aliases, arguments, and ordinary text explicitly",
   assert.deepEqual(commandIntent("/"), { name: "help", argument: "" });
   assert.deepEqual(commandIntent("/resume ngn-123"), { name: "sessions", argument: "ngn-123" });
   assert.deepEqual(commandIntent("/model vendor/model-id"), { name: "model", argument: "vendor/model-id" });
+  assert.deepEqual(commandIntent("/fork"), { name: "fork", argument: "" });
+  assert.deepEqual(commandIntent("/fork Alternative implementation"), { name: "fork", argument: "Alternative implementation" });
+  assert.deepEqual(commandIntent("/rename Current project"), { name: "rename", argument: "Current project" });
+  assert.throws(() => commandIntent("/rename "), /Usage: \/rename <title>/);
   assert.throws(() => commandIntent("/unknown"), /Unknown browser command/);
   assert.throws(() => commandIntent("/login\nplease send this too"), /Usage: \/login/);
   assert.throws(() => commandIntent("/compact now"), /Usage: \/compact/);

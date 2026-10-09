@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { revealAncestors } from "../../components/disclosures.js";
+import { scrollWithin } from "../../components/scrollWithin.js";
 import { capability, liveApi } from "./api.js";
 import { browserMedia, liveSupport } from "./browser.js";
 import { currentLiveDelegation, LiveController } from "./controller.js";
@@ -114,7 +115,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     if (!feed) return;
     const target = [...feed.querySelectorAll<HTMLElement>("[data-run-id]")].filter(element => element.dataset.runId === runId).at(-1);
     const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
-    if (target) { revealAncestors(target, feed); target.scrollIntoView({ block: "nearest", behavior }); target.focus({ preventScroll: true }); }
+    if (target) { revealAncestors(target, feed); scrollWithin(feed, target, "nearest", behavior); target.focus({ preventScroll: true }); }
     else { feed.scrollTo({ top: feed.scrollHeight, behavior }); feed.focus({ preventScroll: true }); }
   }
 

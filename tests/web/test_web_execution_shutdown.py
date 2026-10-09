@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from threading import Event as ThreadEvent
 from typing import TYPE_CHECKING
+from typing import TypeVar
 
 import pytest
 
@@ -17,7 +19,9 @@ from tests.web.test_web_host_lifecycle import statuses
 from tests.web.test_web_subscription_lifecycle import until
 
 if TYPE_CHECKING:
+    import sqlite3
     from collections.abc import AsyncIterator
+    from collections.abc import Callable
     from pathlib import Path
 
     from nagents.events import Event
@@ -26,6 +30,7 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix
+T = TypeVar("T")
 
 
 @pytest.mark.parametrize("shutdown", ["host", "lifespan"])
@@ -63,14 +68,15 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
         started = asyncio.create_task(provider_started.wait())
         try:
             await asyncio.wait_for(validated.wait(), HANG_GUARD)
-            assert state.active is None and not providers[0].requests
+            reserved = state.run_for(root)
+            assert reserved is not None and not reserved.executing and not providers[0].requests
             assert await statuses(state) == {"validation-race": "running"}
             closing = asyncio.create_task(host.close() if shutdown == "host" else context.__aexit__(None, None, None))
             try:
-                # _close cancels the poller only AFTER checking state.active.
-                # Release validation after that check, not on a timing-based sleep.
-                await until(lambda: host.tasks[1].cancelling() > 0)
-                assert host.closed and not closing.done() and state.active is None
+                # Admission now reserves a visible owner before validation. A
+                # shutdown must still return this never-executed claim to queued.
+                await until(lambda: host.closed)
+                assert not provider_started.is_set()
                 release_validation.set()
                 done, _ = await asyncio.wait(
                     (closing, started), return_when=asyncio.FIRST_COMPLETED, timeout=HANG_GUARD
@@ -86,11 +92,18 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
                 await closing
                 assert not providers[0].requests and channel.closed
                 assert state.active is None and all(task.done() for task in host.tasks)
+                assert not host.work_tasks and not host.work_cleanup
                 assert state.harness._worker is None
                 assert await statuses(state) == {"validation-race": "queued"}
                 for frame, _ in state.bus.ring:
                     record = frame.get("record")
-                    assert not isinstance(record, dict) or record.get("event") != "run_started"
+                    assert not isinstance(record, dict) or record.get("event") not in {
+                        "text_chunk",
+                        "text_done",
+                        "tool_call",
+                        "tool_result",
+                    }
+                assert await state.history.snapshot(root) == []
             finally:
                 # Let the old implementation finish its late producer rather than
                 # leave a shielded shutdown hanging after the regression fails.
@@ -112,5 +125,84 @@ def test_shutdown_during_owner_validation_requeues_without_starting_an_unowned_p
             assert len(providers[0].requests) == 1
             history = await reopened.harness.agent.session.get_history(root)
             assert [message.content for message in history if message.role == "user"] == ["hold"]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("ending", ["host", "lifespan", "stop"])
+def test_repeated_claim_cancellation_joins_final_sql_and_releases_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    async def scenario() -> None:
+        validated, release_validation = asyncio.Event(), asyncio.Event()
+        committing, release_commit = ThreadEvent(), ThreadEvent()
+        context = application(tmp_path, monkeypatch)
+        state, providers = await context.__aenter__()
+        host, root = state.channels, state.selected_session_id
+        validate, transaction = host.store.validate_work, host.store._transaction
+        expected = "interrupted" if ending == "stop" else "queued"
+
+        async def gated(work: Work) -> None:
+            await validate(work)
+            validated.set()
+            await release_validation.wait()
+
+        async def delayed(operation: Callable[[sqlite3.Connection], T]) -> T:
+            def blocked(db: sqlite3.Connection) -> T:
+                result = operation(db)
+                row = db.execute("SELECT status FROM ngn_web_inbox WHERE message_id = 'final-commit'").fetchone()
+                if row == (expected,) and not committing.is_set():
+                    committing.set()
+                    assert release_commit.wait(HANG_GUARD)
+                return result
+
+            return await transaction(blocked)
+
+        monkeypatch.setattr(host.store, "validate_work", gated)
+        await host.store.web(root, "final-commit", "Execute only if recovered")
+        host.changed.set()
+        try:
+            await asyncio.wait_for(validated.wait(), HANG_GUARD)
+            run = state.run_for(root)
+            assert run is not None and not run.executing
+            claim = host.work_tasks[root]
+            monkeypatch.setattr(host.store, "_transaction", delayed)
+            closing = asyncio.create_task(
+                state.stop(run)
+                if ending == "stop"
+                else host.close()
+                if ending == "host"
+                else context.__aexit__(None, None, None)
+            )
+            try:
+                await until(committing.is_set)
+                # A real final SQL transaction is held before commit. Further
+                # cancellation must join both it and its in-memory bookkeeping.
+                assert claim.cancelling() and not claim.done() and not closing.done()
+                claim.cancel()
+                await asyncio.sleep(0)
+                claim.cancel()
+                assert not providers[0].requests
+            finally:
+                release_commit.set()
+                release_validation.set()
+                await asyncio.wait_for(asyncio.shield(closing), HANG_GUARD)
+            assert claim.done() and run.finished and state.run_for(root) is None
+            assert not host.work_tasks and not host.work_cleanup and not state.queued_inputs.claimed
+            assert await statuses(state) == {"final-commit": expected}
+            assert not providers[0].requests and await state.history.snapshot(root) == []
+        finally:
+            release_commit.set()
+            release_validation.set()
+            await context.__aexit__(None, None, None)
+
+        async with application(tmp_path, monkeypatch) as (reopened, providers):
+            await idle(reopened)
+            assert await statuses(reopened) == {"final-commit": "interrupted" if ending == "stop" else "completed"}
+            assert len(providers[0].requests) == (0 if ending == "stop" else 1)
+            history = await reopened.history.snapshot(root)
+            assert [row["content"] for row in history if row["role"] == "user"] == (
+                [] if ending == "stop" else ["Execute only if recovered"]
+            )
 
     asyncio.run(scenario())

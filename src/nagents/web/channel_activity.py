@@ -24,19 +24,16 @@ class ChannelActivities:
     def __init__(self, store: RoutingStore, channels: Mapping[str, Channel]) -> None:
         self.store = store
         self.channels = channels
-        self.session_id = ""
-        self.source: dict[str, str] = {}
-        self.current: dict[tuple[str, str], tuple[Channel, ChannelActivity]] = {}
+        self.sources: dict[str, dict[str, str]] = {}
+        self.current: dict[tuple[str, str, str], tuple[Channel, ChannelActivity]] = {}
         self.lock = asyncio.Lock()
         self.revision = 0
 
     async def set(self, session_id: str, active: bool, source: dict[str, str]) -> None:
         if active:
-            self.session_id = session_id
-            self.source = dict(source)
-        elif self.session_id == session_id:
-            self.session_id = ""
-            self.source = {}
+            self.sources[session_id] = dict(source)
+        else:
+            self.sources.pop(session_id, None)
         await self.refresh()
 
     async def refresh(self) -> None:
@@ -51,24 +48,28 @@ class ChannelActivities:
     async def _refresh(self) -> None:
         async with self.lock:
             revision = self.revision
-            bindings = await self.store.activity_bindings(self.session_id) if self.session_id else []
-            desired: dict[tuple[str, str], tuple[Channel, ChannelActivity]] = {}
-            for binding in bindings:
-                channel = self.channels.get(binding["channel"])
-                if binding["session_id"] != self.session_id or channel is None:
-                    continue
-                key = (binding["channel"], binding["conversation_id"])
-                origin = key == (self.source.get("channel"), self.source.get("conversation_id"))
-                desired[key] = (
-                    channel,
-                    ChannelActivity(
-                        binding["conversation_id"],
-                        True,
-                        self.source.get("thread_id", "") if origin else "",
-                        self.session_id,
-                    ),
-                )
-            stopping = {key: value for key, value in self.current.items() if desired.get(key) != value}
+            desired: dict[tuple[str, str, str], tuple[Channel, ChannelActivity]] = {}
+            for session_id, source in tuple(self.sources.items()):
+                for binding in await self.store.activity_bindings(session_id):
+                    channel = self.channels.get(binding["channel"])
+                    if binding["session_id"] != session_id or channel is None:
+                        continue
+                    origin = (binding["channel"], binding["conversation_id"]) == (
+                        source.get("channel"),
+                        source.get("conversation_id"),
+                    )
+                    thread = source.get("thread_id", "") if origin else ""
+                    key = (binding["channel"], binding["conversation_id"], thread)
+                    desired.setdefault(
+                        key, (channel, ChannelActivity(binding["conversation_id"], True, thread, session_id))
+                    )
+            # Another root still using this destination/thread keeps its
+            # indicator active; a representative change must not send a stop.
+            stopping = {
+                key: value
+                for key, value in self.current.items()
+                if key not in desired or desired[key][0] is not value[0]
+            }
             await asyncio.gather(
                 *(_activity(channel, replace(event, active=False)) for channel, event in stopping.values())
             )
@@ -83,6 +84,5 @@ class ChannelActivities:
             await asyncio.gather(*(_activity(channel, event) for channel, event in starting.values()))
 
     async def close(self) -> None:
-        self.session_id = ""
-        self.source = {}
+        self.sources.clear()
         await self.refresh()

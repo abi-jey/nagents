@@ -145,11 +145,54 @@ MIGRATION_004_UPLOADS = Migration(
 )
 
 
+MIGRATION_005_FORKS = Migration(
+    version=5,
+    description="Independent conversation ancestry and copied historical attachment ownership",
+    up_sql="""
+        CREATE TABLE ngn_session_forks (
+            session_id TEXT PRIMARY KEY,
+            forked_from TEXT NOT NULL
+        );
+        CREATE INDEX ngn_session_forks_parent ON ngn_session_forks(forked_from);
+        CREATE TABLE ngn_fork_message_display (
+            history_id INTEGER PRIMARY KEY,
+            content TEXT NOT NULL
+        );
+        CREATE TABLE ngn_fork_message_uploads (
+            upload_id TEXT PRIMARY KEY,
+            history_id INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            byte_length INTEGER NOT NULL,
+            data BLOB NOT NULL CHECK(typeof(data) = 'blob' AND length(data) = byte_length)
+        );
+        CREATE INDEX ngn_fork_uploads_history ON ngn_fork_message_uploads(history_id, position);
+        CREATE TRIGGER ngn_fork_message_delete BEFORE DELETE ON v2_messages BEGIN
+            DELETE FROM ngn_fork_message_display WHERE history_id = OLD.id;
+            DELETE FROM ngn_fork_message_uploads WHERE history_id = OLD.id;
+        END;
+        CREATE TRIGGER ngn_session_fork_delete BEFORE DELETE ON v2_sessions BEGIN
+            DELETE FROM ngn_session_forks WHERE session_id = OLD.id;
+            UPDATE ngn_session_forks SET forked_from = '' WHERE forked_from = OLD.id;
+        END;
+    """,
+    down_sql="""
+        DROP TRIGGER ngn_session_fork_delete;
+        DROP TRIGGER ngn_fork_message_delete;
+        DROP TABLE ngn_fork_message_uploads;
+        DROP TABLE ngn_fork_message_display;
+        DROP TABLE ngn_session_forks;
+    """,
+)
+
+
 migrations = [
     MIGRATION_001_INITIAL,
     MIGRATION_002_COMPACTION,
     MIGRATION_003_DELIVERIES,
     MIGRATION_004_UPLOADS,
+    MIGRATION_005_FORKS,
 ]
 
 __all__ = [
@@ -157,5 +200,6 @@ __all__ = [
     "MIGRATION_002_COMPACTION",
     "MIGRATION_003_DELIVERIES",
     "MIGRATION_004_UPLOADS",
+    "MIGRATION_005_FORKS",
     "migrations",
 ]

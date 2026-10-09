@@ -74,7 +74,8 @@ function newRow(entry: Entry, history?: Snapshot["history"]): boolean {
 
 // History IDs identify saved rows; ingress/message IDs identify user turns.
 // A live response can join only its own turn, in order. Text/prefix equality is
-// never an identity, and an unfinished stream cannot consume an existing row.
+// never an identity; complete replay or a history baseline must establish a
+// still-streaming response's place before it can claim a committed row.
 export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announceNewUsers = false,
   knownHistory?: Snapshot["history"], settledRun?: LiveTranscript["runHistory"]): Entry[] {
   const saved = fromHistory(snapshot);
@@ -95,7 +96,10 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     if (index < 0 && entry.kind !== "user" && owner) {
       index = previous.findIndex((item, i) => !matched.has(i) && i > (turnPositions.get(owner) ?? -1) &&
         compatible(entry, item) && !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item)) &&
-        (!item.streaming || newRow(entry, knownHistory)));
+        // A complete active replay identifies response slots within this user
+        // turn even on a cold reconnect. Its still-streaming slot may already
+        // have committed a row before the final event reaches the web consumer.
+        (!item.streaming || !!snapshot.active_run?.events || newRow(entry, knownHistory)));
     }
     if (index >= 0) {
       matched.add(index);
@@ -136,7 +140,12 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
           callPosition: entry.callPosition,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
           text: entry.kind === "assistant" ? entry.text : old.text,
-          streaming: entry.kind === "assistant" ? false : old.streaming,
+          // A committed row can reach a checkpoint before the consumer has
+          // published its final text event. Keep that same live slot open until
+          // the event arrives, or aggregated active chunks create a second row.
+          streaming: entry.kind === "assistant"
+            ? !!old.streaming && !!snapshot.active_run && snapshot.active_run.id === old.runId && !finished(snapshot.active_run.status)
+            : old.streaming,
           result: entry.result ?? old.result, queued: false });
     if (entry.kind === "tool" && entry.result !== undefined &&
         ["Requested", "Starting", "Running", "Receiving output", "Waiting for approval", "Awaiting execution result", "No result recorded", "Disconnected", "Interrupted", "Cancelled"].includes(old.state || ""))
@@ -182,11 +191,12 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
         (!entry.streaming || !!item.streaming) &&
         (entry.kind !== "user" || sameTranscriptUser(entry, item)) &&
         (!owner || !oldOwners.has(item) || sameTurn(owner, oldOwners.get(item))));
-      // A replay can claim saved completed slots only within its identified user
-      // turn. In particular, a partial chunk never borrows an old answer's ID.
+      // A complete replay identifies every response slot within its own user
+      // turn, including a row committed before that slot's final event arrived.
+      // Truncated snapshots never enter this replay path.
       const old = scoped || entries.find((item, i) => !claimed.has(item.id) && !item.runId && compatible(entry, item) &&
         (entry.kind === "user" ? sameTranscriptUser(entry, item)
-          : !entry.streaming && !!owner && i > (positions.get(owner) ?? -1) &&
+          : !!owner && i > (positions.get(owner) ?? -1) &&
             !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item))));
       if (old) { claimed.add(old.id); if (owner) positions.set(owner, entries.indexOf(old)); }
       return { ...entry, id: old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`),

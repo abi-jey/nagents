@@ -15,9 +15,11 @@ from nagents.channels.types import ChannelSend
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness import runtime
 from tests.support.channels import FakeChannel
 from tests.support.channels import site
 from tests.support.hang_guard import HANG_GUARD
+from tests.support.providers import FakeProvider
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -26,9 +28,9 @@ if TYPE_CHECKING:
     from starlette.testclient import WebSocketTestSession
 
     from nagents.events import Event
+    from nagents.harness.config import HarnessConfig
     from nagents.types import Message
     from tests.support.channels import Site
-    from tests.support.providers import FakeProvider
 
 
 def channel_fields(content: str) -> dict[str, str]:
@@ -126,6 +128,7 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
         target = target_root(app)
         assert app.client.portal is not None
         started = app.client.portal.call(asyncio.Event)
+        a_started = app.client.portal.call(asyncio.Event)
         release = app.client.portal.call(asyncio.Event)
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
@@ -140,8 +143,10 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
             if messages[-1].role == "tool":
                 yield TextDoneEvent(text="answer " + source["message_id"])
                 return
-            if blocker == "A" and source["message_id"] == "A":
-                started.set()
+            if source["message_id"] == "A":
+                a_started.set()
+                if blocker == "A":
+                    started.set()
                 yield TextChunkEvent(chunk="A still working")
                 await release.wait()
             yield ToolCallEvent(
@@ -157,6 +162,13 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
             )
 
         app.providers[0].script = script
+
+        def provider(config: HarnessConfig) -> FakeProvider:
+            instance = FakeProvider(config, len(app.providers), script)
+            app.providers.append(instance)
+            return instance
+
+        monkeypatch.setattr(runtime, "build_provider", lambda profile, config, auth: provider(config))
         if blocker == "other-web-run":
             app.submit("block-current")
             app.client.portal.call(asyncio.wait_for, started.wait(), 5)
@@ -164,6 +176,7 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
         old = app.bindings()["chat"]
         assert len({old, target, app.main}) == 3
         app.client.portal.call(asyncio.wait_for, started.wait(), 5)
+        app.client.portal.call(asyncio.wait_for, a_started.wait(), HANG_GUARD)
         active = app.state.active
         assert active is not None
         selected = app.state.harness.session_id
@@ -181,7 +194,7 @@ def test_a_command_b_c_switches_at_admission_before_ack_and_preserves_reply_rout
         assert journal(app) == {
             "A": {
                 "session_id": old,
-                "status": "running" if blocker == "A" else "queued",
+                "status": "running",
                 "thread_id": "thread-S",
                 "reply_to": "reply-A",
             },
@@ -222,6 +235,7 @@ def test_admission_switch_and_frozen_A_C_targets_survive_restart_before_command_
 
         assert app.client.portal is not None
         app.client.portal.call(blocked)
+        app.pause_worker()
         batch = (
             ChannelMessage("A", "chat", "sender", "A", "thread-S", "reply-A"),
             ChannelMessage("B", "chat", "sender", f"/session {target}", "command-thread", "reply-B"),
@@ -250,7 +264,7 @@ def test_admission_switch_and_frozen_A_C_targets_survive_restart_before_command_
         for message in batch:
             deliver(app, message)
         app.idle()
-        assert len(app.providers[0].requests) == 2 and len(app.channels[0].deliveries) == 1
+        assert sum(len(provider.requests) for provider in app.providers) == 2 and len(app.channels[0].deliveries) == 1
         deliver(app, ChannelMessage("D", "chat", "sender", "after restart", "thread-D", "reply-D"))
         app.idle()
         assert [row["message_id"] for row in users(app, target)] == ["C", "D"]

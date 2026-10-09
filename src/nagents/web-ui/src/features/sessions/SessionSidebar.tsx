@@ -3,6 +3,8 @@ import { Icon } from "../../components/Icon.js";
 import type { Session } from "../../types";
 import type { ReactNode } from "react";
 import { SessionMenu } from "./SessionMenu.js";
+import { SessionFolders } from "./SessionFolders.js";
+import type { ChatFolderActions } from "./useChatFolders.js";
 
 function WorkspaceDialog({ workspace, name, demo, count, close }: {
   workspace: string; name: string; demo: boolean; count: number; close: () => void;
@@ -33,6 +35,7 @@ function WorkspaceDialog({ workspace, name, demo, count, close }: {
 export function SessionSidebar({
   workspace,
   sessions,
+  folders,
   selected,
   disabled,
   newDisabled = disabled,
@@ -41,6 +44,9 @@ export function SessionSidebar({
   remove,
   canDelete,
   permanent,
+  rename,
+  fork,
+  canFork = () => false,
   trash,
   trashDisabled,
   notice,
@@ -57,6 +63,7 @@ export function SessionSidebar({
 }: {
   workspace: string;
   sessions: Session[];
+  folders?: ChatFolderActions;
   selected: string;
   disabled: boolean;
   newDisabled?: boolean;
@@ -65,6 +72,9 @@ export function SessionSidebar({
   remove: (session: Session) => void;
   canDelete: (id: string) => boolean;
   permanent: (session: Session) => void;
+  rename?: (session: Session) => void;
+  fork?: (session: Session) => void;
+  canFork?: (id: string) => boolean;
   trash: () => void;
   trashDisabled: boolean;
   notice?: ReactNode;
@@ -101,7 +111,7 @@ export function SessionSidebar({
       if (document.querySelector("dialog[open], [popover]:popover-open")) return;
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
       if (event.key !== "Tab") return;
-      const targets = [...element.querySelectorAll<HTMLElement>("button:not(:disabled), summary, [tabindex='0']")]
+      const targets = [...element.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex='0']")]
         .filter((item) => {
           if (!item.getClientRects().length || item.checkVisibility?.() === false) return false;
           // Closed details can retain layout rectangles while their contents
@@ -149,11 +159,8 @@ export function SessionSidebar({
         <Icon name="plus" /> <span>New session</span>
       </button>
       </div>
-      <div className="workspace-label session-label"><span>Sessions</span><span className="session-count">{sessions.length}</span></div>
-      <nav className="session-list" aria-label="Sessions">
-        <ul>
-        {sessions.map((session) => (
-          <li key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
+      <SessionFolders sessions={sessions} selected={selected} folders={folders} workspace={workspace} renderSession={(session, move) => (
+          <div key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
           <button
             className={`session ${selected === session.id ? "selected" : ""}`}
             aria-label={`${session.title || "New session"}${session.active_run_id ? " — Working" : ""}`}
@@ -162,7 +169,7 @@ export function SessionSidebar({
             onClick={() => select(session.id)}
             title={`${session.title} · Updated ${session.updated_at.slice(0, 10)}`}
           >
-            <Icon name="chat" size={15} />
+            <Icon name={session.forked_from ? "branch" : "chat"} size={15} />
             <span className="session-title">{session.title || "New session"}</span>
             {session.active_run_id && <span className="session-working" title="Working"><span className="sr-only">Working</span></span>}
             <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
@@ -170,12 +177,11 @@ export function SessionSidebar({
           <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
             title="Move to Trash" disabled={!canDelete(session.id) || !!session.active_run_id}
             onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
-          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} />
-          </li>
-        ))}
-        </ul>
-        {!sessions.length && <p className="empty-sessions">Your conversations will appear here.</p>}
-      </nav>
+          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} move={move}
+            rename={!disabled && rename ? () => rename(session) : undefined}
+            fork={fork ? () => fork(session) : undefined} forkDisabled={disabled || !canFork(session.id)} />
+          </div>
+        )} />
       <div className="sidebar-footer">
         {notice}
         <nav className="sidebar-utilities" aria-label="Workspace controls">

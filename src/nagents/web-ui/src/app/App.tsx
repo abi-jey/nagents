@@ -19,17 +19,17 @@ export function App() {
   async function select(id?: string) {
     if (await client.select(id)) {
       setNavOpen(false);
-      requestAnimationFrame(() => composer.current?.focus());
+      requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
     }
   }
   async function submit(value?: string) {
-    composer.current?.focus();
+    composer.current?.focus({ preventScroll: true });
     await client.submit(value);
   }
   function closePanel() {
     const fromDesigner = client.panel === "designer";
     client.closePanel();
-    if (fromDesigner) requestAnimationFrame(() => composer.current?.focus());
+    if (fromDesigner) requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
   }
 
   return (

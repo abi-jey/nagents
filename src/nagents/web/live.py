@@ -47,6 +47,12 @@ SessionId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r
 Cursor = Annotated[int, Query(ge=0, le=2**53 - 1)]
 ASSISTANT_VOICE_INSTRUCTIONS = (
     "You are the voice of the assistant in the selected chat. Keep spoken replies concise. "
+    "Delegate the caller's first utterance to the assistant backend exactly once, even if it is only Hello, Hey, "
+    "or another greeting. This initial delegation lets the assistant load its project instructions, user profile, "
+    "and recent context before continuing the conversation. For a greeting, ask it to prepare that context and "
+    "return a brief greeting; do not resume or repeat actions from saved chat history. "
+    "If the first utterance contains a substantive request, include that request in the same delegation and "
+    "handle it once normally. Do not send a second context-only delegation for that first utterance. "
     "Delegate reasoning, workspace requests, and actions to the existing assistant backend. "
     "That assistant retains the chat history, configured provider, tools, and approval rules. "
     "Speak its verified results and ask for clarification when needed. "

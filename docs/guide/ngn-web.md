@@ -215,6 +215,32 @@ acknowledgement clears only the unchanged submitted draft, preserving newer typi
 Message badges distinguish **Sending…**, confirmed **Queued**, and **Delivery
 unconfirmed** states. Working sessions have an indicator in the sidebar; when
 another session is running, **View active session** takes you to it.
+Switching chats ends the current Live voice connection without cancelling the
+assistant's work. Its answers stay in the original chat. Other chats can run
+at the same time, and **Stop run** targets only the chat being viewed.
+
+### Chat Folders
+
+Use **New folder** beside Sessions to group chats by project or topic. Folders
+form a tree: create subfolders or move a folder beneath another folder, up to 12
+levels deep. Names must be unique among siblings, so different projects can each
+have a Notes folder. Open a
+chat's actions menu and choose **Move to folder…** to move it, or choose
+**Ungrouped** to remove its folder assignment. Moving a chat changes only its
+sidebar organization; its selected conversation, active work, approvals, and
+history are unaffected.
+
+Folders can be renamed, collapsed, or removed. Search matches chat titles and
+folder names, temporarily revealing matching chats inside collapsed folders.
+Folder membership and collapse state are stored with the workspace, survive a
+server restart, and remain attached through Trash and restore. Removing a folder
+moves its chats and direct subfolders to its parent (or Ungrouped and the top level
+when removing a top-level folder); it never deletes conversations. Conflicting
+subfolder names must be renamed or moved before removing their parent. Permanently deleting
+a chat also removes its folder membership. Updates are revision-checked so two
+browser windows cannot silently overwrite each other's folder edits.
+An otherwise empty draft explicitly moved to a folder is kept as an organized
+chat; untouched, ungrouped drafts continue to use normal empty-session cleanup.
 
 ### Browser Slash Commands
 
@@ -227,6 +253,8 @@ draft and display an error.
 | --- | --- |
 | `/login` | Open server-side ChatGPT device sign-in. |
 | `/new` | Start or reuse a blank conversation. |
+| `/fork [title]` | Copy the current idle conversation into an independent branch and select it. Other chats may continue running. |
+| `/rename <title>` | Persist a name of 1–80 printable characters for the current conversation. |
 | `/sessions [session ID]`, `/resume [session ID]` | Browse conversations or select one. |
 | `/compact` | Queue compaction of the submitted conversation. |
 | `/model [model ID]`, `/agent [name]`, `/provider [name]` | Open settings or select a model, agent, or connection. |
@@ -348,11 +376,19 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
 
 ### Execution And Access
 
-- One local app instance owns one Harness on one async lifespan/event loop. Web
-  messages and channel notifications queue for serialized execution. Each message
+- One local app instance owns up to four concurrent chat executions on one async
+  lifespan/event loop. Each active chat has its own Harness, tool-call state,
+  approvals and background-task handles. Web messages and channel notifications
+  keep FIFO order within their chat; additional chats wait in the durable inbox
+  when all four slots are occupied. Each message
   carries an explicit target session; changing the sidebar selection does not
-  reroute already accepted input. Settings and other session mutations still
-  require an idle boundary. Scheduled wakeups also wait for idle execution.
+  reroute already accepted input. Shared settings require all runs to be idle.
+  Scheduled wakeups wait for their own chat and an available execution slot.
+  Idle runtimes with retained children or pending wakeups keep those handles;
+  unused additional runtimes release their clients and MCP resources.
+  Messages and routing-command acknowledgements from one external channel
+  conversation also keep their source order across session switches. Unavailable
+  connector acknowledgements remain queued without blocking accepted model work.
 - The browser subscribes to session updates over WebSocket. Navigating away or
   losing that subscription does not cancel server-owned queued work. Use **Stop
   run** to cancel an active run; server shutdown joins its owned work. Pending
@@ -365,6 +401,11 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   An unanswered approval expires after five minutes and is denied. Saved grants
   do not override read-only profiles, disabled tools, input validation, or file
   checks. Revoke them under **Tools → Saved tool approvals → Ask again**.
+  **Review later** dismisses only the approval dialog. Switching chats or losing
+  the browser subscription keeps the pending decision until its deadline; return
+  to that chat to review it. Browser decisions still require a live subscription
+  to the exact chat, its run, call and approval nonce. Explicit **Deny** and
+  **Stop run** retain their usual behavior.
 - Partial streamed output remains visible after failure/cancellation. Subscription
   reconnects use a cursor and server-instance epoch. A gap or restart requests a
   fresh snapshot instead of replaying model/tool work. Web input has a stable
@@ -506,7 +547,15 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET sessions/{session_id}/context` | Read-only estimated token breakdown of the request that session would send; safe while idle and during a run |
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
 | `POST sessions/new` | `{}` creates/selects a session and returns the updated snapshot |
+| `POST sessions/{session_id}/fork` | `{title?: string}` atomically copies the quiescent root, selects its independent fork, and returns the new snapshot. `forked_from` records ancestry separately from subagent relationships. The source's pending work, approvals, wakeups, and channel authority are never copied. |
+| `POST sessions/{session_id}/rename` | `{title: string}` saves a nonblank name of at most 80 printable characters and returns the current selection's snapshot. Renaming another row does not navigate or cancel work. |
 | `POST sessions/resume` | `{session_id}` checks workspace membership and returns its snapshot |
+| `GET session-groups` | Folder tree `{revision, groups: [{id, name, collapsed, parent_id}], memberships: {session_id: group_id}}`; empty `parent_id` means top level |
+| `POST session-groups/create` | `{revision, name, parent_id?}` creates a folder; sibling names are unique ignoring case, 1-80 characters; up to 128 folders and 12 levels |
+| `POST session-groups/update` | `{revision, group_id, name, collapsed}` renames or collapses a folder |
+| `POST session-groups/reparent` | `{revision, group_id, parent_id}` moves a folder and its subtree; cycles, excessive depth, missing parents, and sibling name collisions are rejected |
+| `POST session-groups/move` | `{revision, session_id, group_id}` moves an existing root; an empty `group_id` means Ungrouped; allowed while chats run |
+| `POST session-groups/remove` | `{revision, group_id}` removes a folder, promoting direct subfolders and chat assignments (including Trash) to its parent or the top level; chats are preserved; name collisions return 409 |
 | `DELETE sessions/{session_id}` | `{}` or `{permanent: false}` moves an idle, unbound root to Trash; returns `Snapshot & {deleted_session_id: string, trash: TrashItem}` |
 | `DELETE sessions/{session_id}` | `{permanent: true}` permanently deletes an active-list root; returns `Snapshot & {deleted_session_id: string}` |
 | `GET trash` | Returns `{revision: string, retention_days: number, items: TrashItem[]}` |

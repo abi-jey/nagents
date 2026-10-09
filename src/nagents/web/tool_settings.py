@@ -71,6 +71,7 @@ def snapshot(state: WebState) -> dict[str, object]:
         "profiles": [{"id": name, "mode": harness.mode_for_profile(name)} for name in profiles],
         "tools": sorted(tools, key=lambda item: str(item["name"])),
         "tool_approvals": state.tool_approvals.snapshot(),
+        "mcp_diagnostics": harness.resources.mcp_diagnostics().snapshot(),
     }
 
 

@@ -376,6 +376,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       (entry) => entry.kind === "assistant" && entry.streaming && execution(entry),
     );
     const previous = index >= 0 ? entries[index] : undefined;
+    if (event.event === "text_done" && !text(event, "text") && !previous) return entries;
     return save(
       {
         ...previous,

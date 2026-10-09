@@ -139,12 +139,30 @@ class Site:
             async with asyncio.timeout(HANG_GUARD):
                 while True:
                     pending = await self.state.channels.store.has_pending()
-                    if not pending and self.state.active is None and not self.state.mutating:
+                    if (
+                        not pending
+                        and self.state.active is None
+                        and not self.state.mutating
+                        and not self.state.channels.work_tasks
+                        and not self.state.channels.work_cleanup
+                        and not self.state.channels.management.ready
+                    ):
                         return
                     await asyncio.sleep(0.01)
 
         assert self.client.portal is not None
         self.client.portal.call(wait)
+
+    def pause_worker(self) -> None:
+        """Hold future durable work while existing independent runs continue."""
+
+        async def pause() -> None:
+            worker = self.state.channels.tasks[0]
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+        assert self.client.portal is not None
+        self.client.portal.call(pause)
 
     def bindings(self) -> dict[str, str]:
         response = self.client.get("/api/channels", headers=self.headers).json()

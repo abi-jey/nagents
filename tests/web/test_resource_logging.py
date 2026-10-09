@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 @pytest.mark.requires_posix
 @pytest.mark.asyncio
-async def test_default_serve_logger_reports_mcp_counts_once_without_arguments_or_env(
+async def test_default_serve_logger_reports_each_mcp_discovery_without_arguments_or_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
@@ -45,10 +46,14 @@ async def test_default_serve_logger_reports_mcp_counts_once_without_arguments_or
             assert harness.resources.logger.name == "uvicorn.error"
             await harness.resources.reload()
             await harness.resources.reload()
-    summaries = [record for record in caplog.records if "ngn resources loaded:" in record.getMessage()]
-    assert len(summaries) == 1 and summaries[0].name == "uvicorn.error"
-    text = summaries[0].getMessage()
-    assert 'servers={"fixture": 1}' in text
-    assert "registered_mcp_tools=1" in text and "advertised_mcp_tools=1" in text
+    summaries = [record for record in caplog.records if "ngn MCP discovery:" in record.getMessage()]
+    assert len(summaries) == 3 and all(record.name == "uvicorn.error" for record in summaries)
+    assert "phase=startup" in summaries[0].getMessage()
+    assert all("phase=reload" in record.getMessage() for record in summaries[1:])
+    for record in summaries:
+        data = json.loads(record.getMessage().split("diagnostics=", 1)[1])
+        assert data["configured_servers"] == data["connected_servers"] == 1
+        assert data["registered_tools"] == data["advertised_tools"] == 1
+        assert data["status"] == "loaded" and data["effective_source"] == "programmatic configuration"
     assert "PRIVATE_COMMAND_ARGUMENT" not in caplog.text
     assert "PRIVATE_ENV_VALUE" not in caplog.text and "PRIVATE_KEY" not in caplog.text

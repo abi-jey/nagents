@@ -65,6 +65,9 @@ from .security import LocalOnly
 from .service import Run as Run
 from .service import RunResponse
 from .service import WebState as WebState
+from .session_actions import register_session_actions
+from .session_groups import SessionGroups
+from .session_groups import register_session_groups
 from .settings import SettingsInput
 from .settings import SettingsRevision
 from .settings import WebSettings
@@ -182,10 +185,11 @@ def create_app(
     live: LiveService
     live_settings: LiveSettings
     provider_login: ProviderLogin
+    session_groups: SessionGroups
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, designer, live, live_settings, provider_login
+        nonlocal state, designer, live, live_settings, provider_login, session_groups
         harness = harness_factory(copy.deepcopy(config))
         harness.resources.logger = logger
         logger.info(
@@ -195,6 +199,8 @@ def create_app(
             config.demo,
         )
         state = WebState(harness)
+        session_groups = SessionGroups(state.channels.store)
+        state.executions.factory = harness_factory
         voice_summaries = VoiceContextSummarizer()
         live_settings = LiveSettings(
             harness.agent.session.db_path,
@@ -247,7 +253,7 @@ def create_app(
                     notice="Hosted voice has no access to saved chat context.",
                 )
             root = live_settings.admitted_session()
-            active = state.active
+            active = state.run_for(root)
             task_state = (
                 "The main assistant already has an active run. Its final result is not yet confirmed."
                 if active is not None and active.session_id == root
@@ -293,6 +299,7 @@ def create_app(
             designer = Designer(state)
             await designer.traces.initialize()
             await state.history.initialize()
+            await session_groups.initialize()
             state.tool_approvals.initialize()
             harness.agent.plugins.append(state.history.identity)
             state.settings = WebSettings(harness)
@@ -347,8 +354,7 @@ def create_app(
 
             async def close_host() -> None:
                 try:
-                    if state.active is not None:
-                        await state.stop(state.active)
+                    await state.executions.close()
                 finally:
                     try:
                         await state.channels.close()
@@ -387,6 +393,8 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
+    register_session_groups(app, lambda: session_groups)
+    register_session_actions(app, lambda: state, lambda: live)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 
@@ -421,6 +429,7 @@ def create_app(
             "active_run_id": state.active.id if state.active is not None else "",
             "active_session_id": state.active.session_id if state.active is not None else "",
             "active_run_background": state.active.background if state.active is not None else False,
+            "active_runs": state.active_runs(),
         }
 
     @app.websocket("/api/events")
@@ -496,7 +505,7 @@ def create_app(
     ) -> dict[str, object]:
         if session_id not in {session.id for session in await state.harness.list_sessions()}:
             raise HTTPException(404, "Session not found in this workspace.")
-        active = state.active
+        active = state.run_for(session_id)
         return state.wakeups.activity(
             session_id, after, active.id if active and active.session_id == session_id else ""
         )
@@ -712,7 +721,7 @@ def create_app(
 
     @app.get("/api/sessions")
     async def sessions() -> dict[str, object]:
-        if state.active is not None and state.active.server_owned:
+        if state.executions.runs:
             return await state.snapshot()
         with state.idle():
             await empty_sessions.prune(state, live.active_session_id)
@@ -750,23 +759,22 @@ def create_app(
 
     @app.post("/api/sessions/new")
     async def new_session(body: Input) -> dict[str, object]:
-        with state.idle():
+        with state.idle(allow_running=True):
+            if live.active_session_id:
+                await live.close(live.active_session_id)
             await empty_sessions.new_session(state, live.active_session_id)
             logger.info("Session ready: id=%s", state.harness.session_id)
             return await state.snapshot()
 
     @app.post("/api/sessions/resume")
     async def resume(body: SessionInput) -> dict[str, object]:
-        # Selecting a UI root never switches the Harness underneath a producer.
-        if state.active is not None and state.active.server_owned:
-            result = await state.snapshot(body.session_id)
-            state.selected_session_id = body.session_id
-            logger.info("Session selected: id=%s", body.session_id)
-            return result
-        with state.idle():
+        with state.idle(allow_running=True):
             if body.session_id not in {session.id for session in await state.harness.list_sessions()}:
                 raise HTTPException(404, "Session not found in this workspace.")
-            await state.harness.resume(body.session_id)
+            if body.session_id != state.selected_session_id and live.active_session_id:
+                await live.close(live.active_session_id)
+            if not state.harness._busy and not state.executions.in_use(state.harness):
+                await state.harness.resume(body.session_id)
             state.selected_session_id = body.session_id
             await empty_sessions.prune(state, live.active_session_id)
             return await state.snapshot()
@@ -775,14 +783,12 @@ def create_app(
     async def run(body: PromptInput) -> StreamingResponse:
         if not config.demo and not state.harness.config.provider:
             raise HTTPException(409, "Select a named provider connection before starting a run.")
-        with state.idle():
+        with state.idle(allow_running=True):
             await state.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
             if body.session_id != state.selected_session_id:
                 raise HTTPException(409, "The selected session changed. Reconnect before submitting.")
             if not body.prompt.strip():
                 raise HTTPException(422, "Prompt must not be blank.")
-            if state.harness.session_id != body.session_id:
-                await state.harness.resume(body.session_id)
             active = Run(body.session_id)
             state.active = active
             state.publish(active, {"event": "run_started"})
@@ -793,7 +799,7 @@ def create_app(
 
     @app.post("/api/cancel")
     async def cancel(body: RunInput) -> dict[str, str]:
-        active = state.active
+        active = state.run_by_id(body.run_id)
         if active is None or active.id != body.run_id:
             raise HTTPException(409, "This run is no longer active.")
         await state.stop(active)
@@ -802,7 +808,7 @@ def create_app(
 
     @app.post("/api/approval")
     async def approve(body: DecisionInput) -> dict[str, str]:
-        active = state.active
+        active = state.run_by_id(body.run_id)
         pending = active.pending if active is not None else None
         if (
             active is None

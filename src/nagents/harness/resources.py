@@ -20,6 +20,7 @@ from dataclasses import field
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
+from typing import Literal
 
 from nagents._async import finish_on_cancel
 from nagents._async import join_owned
@@ -34,6 +35,9 @@ from nagents.types import Message
 from nagents.types import ToolDefinition
 
 from .commands import CommandRegistry
+from .mcp_diagnostics import MCPDiagnostics
+from .mcp_diagnostics import configuration_sources
+from .mcp_diagnostics import ignored_foreign_configs
 from .plugin_loader import PluginModule
 from .plugin_loader import load_plugin
 from .resource_config import ResourceConfigError
@@ -237,8 +241,16 @@ class HarnessResources(AgentPlugin):
         self.last_error = ""
         self.logger = logging.getLogger(__name__)
         self._failure_fingerprint = ""
-        self._summary_fingerprint = ""
         self._ignored_source = ""
+        self._ignored_foreign: tuple[str, ...] = ()
+        self._configuration = ResourceConfiguration(
+            harness.config.plugins,
+            harness.config.mcp_servers,
+            mcp_source="startup declarations (not discovered)"
+            if harness.config.resource_paths
+            else "programmatic configuration",
+        )
+        self._mcp_status: Literal["not_loaded", "loaded", "retained", "disabled"] = "not_loaded"
 
     def definition(self, name: str) -> ToolDefinition | None:
         if self._running and self._snapshot_ready:
@@ -294,7 +306,13 @@ class HarnessResources(AgentPlugin):
 
     async def _reload(self, *, initial: bool) -> None:
         harness = self.harness
-        if harness.config.demo or (harness._is_subagent and not harness.supports_child_custom_tools):
+        if harness._is_subagent and not harness.supports_child_custom_tools:
+            self._mcp_status = "disabled"
+            return
+        await self._report_foreign_configs()
+        if harness.config.demo:
+            self._mcp_status = "disabled"
+            self._report_mcp(initial=initial)
             return
         fresh = _Generation()
         configured = ResourceConfiguration()
@@ -480,6 +498,8 @@ class HarnessResources(AgentPlugin):
                     harness.diagnostics.append(diagnostic)
                 if not initial:
                     await harness.emit(Notice(diagnostic, "warning"))
+            self._mcp_status = "retained"
+            self._report_mcp(initial=initial)
             if initial:
                 if stage in {"configuration", "mcp_start", "mcp_discover"}:
                     raise RuntimeError(diagnostic) from None
@@ -530,7 +550,9 @@ class HarnessResources(AgentPlugin):
             await finish_on_cancel(old.close())
         if not authored and "system_prompt" not in fresh.settings:
             harness.refresh_instructions()
-        self._report_loaded(configured, fresh)
+        self._configuration = configured
+        self._mcp_status = "loaded"
+        self._report_mcp(initial=initial)
 
     async def _report_project_trust(self) -> None:
         path = ignored_project(self.harness.config)
@@ -548,39 +570,46 @@ class HarnessResources(AgentPlugin):
             self.logger.warning("%s", text)
             await self.harness.emit(Notice(text, "warning"))
 
-    def _report_loaded(self, configured: ResourceConfiguration, generation: _Generation) -> None:
-        counts = {server.name: 0 for server in configured.servers}
-        for name in generation.mcp_names:
-            counts[generation.manager._tool_map[name].server_name] += 1
+    async def _report_foreign_configs(self) -> None:
+        ignored = ignored_foreign_configs(self.harness.config)
+        for path in ignored:
+            if path not in self._ignored_foreign:
+                message = (
+                    f"Ignoring foreign MCP configuration {json.dumps(path)}. ngn does not import this file; "
+                    "configure mcp_servers in an ngn configuration you explicitly trust."
+                )
+                self.logger.warning("%s", message)
+                await self.harness.emit(Notice(message, "warning"))
+        self._ignored_foreign = ignored
+
+    def mcp_diagnostics(self) -> MCPDiagnostics:
+        generation = self.current
         try:
             advertised = sum(tool.name in generation.mcp_names for tool in self.harness.agent.tool_registry.get_all())
         except Exception:
-            advertised = -1  # Diagnostics never break a successfully installed generation.
-        sources = [
-            {"path": str(item.path), "resolved": str(item.resolved), "present": item.present}
-            for item in configured.sources
-        ]
-        fingerprint = _fingerprint(
-            {
-                "sources": [(item.path, item.resolved, item.revision) for item in configured.sources],
-                "identities": generation.approval_identities,
-                "advertised": advertised,
-                "profile": self.harness.config.agent,
-            }
+            advertised = -1  # Unknown: diagnostics must not break a usable generation.
+        return MCPDiagnostics(
+            status=self._mcp_status,
+            configured_servers=len(self._configuration.servers),
+            connected_servers=len(generation.manager._clients),
+            registered_tools=len(generation.mcp_names),
+            advertised_tools=advertised,
+            effective_source=self._configuration.mcp_source,
+            sources=configuration_sources(self.harness.config, self._configuration),
+            ignored_configs=self._ignored_foreign,
+            error=self.last_error,
         )
-        if fingerprint == self._summary_fingerprint:
-            return
-        self._summary_fingerprint = fingerprint
+
+    def _report_mcp(self, *, initial: bool) -> None:
+        # Counts and logical configuration paths matter even when there are no
+        # servers or an unchanged configuration is reloaded at a model boundary.
         self.logger.info(
-            "ngn resources loaded: sources=%s mcp_source=%s servers=%s registered_mcp_tools=%d "
-            "advertised_mcp_tools=%d plugins=%d agent=%s",
-            json.dumps(sources),
-            json.dumps(configured.mcp_source),
-            json.dumps(counts),
-            len(generation.mcp_names),
-            advertised,
-            len(configured.plugins),
-            self.harness.config.agent,
+            "ngn MCP discovery: phase=%s agent=%s scope=%s plugins=%d diagnostics=%s",
+            "startup" if initial else "reload",
+            json.dumps(self.harness.config.agent),
+            "child" if self.harness._is_subagent else "root",
+            len(self.harness.loaded_plugins),
+            json.dumps(self.mcp_diagnostics().snapshot()),
         )
 
     async def before_run(self, context: RunContext, message: Message) -> Message:

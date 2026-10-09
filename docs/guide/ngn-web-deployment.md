@@ -90,10 +90,13 @@ replace the lower-priority mapping when present, including an empty map. ConfigM
 symlink rotations are followed through the configured logical path. Other startup
 settings still follow their documented restart/settings behavior.
 
-Use `ngn serve` resource logs to check logical/resolved source paths, the effective
-MCP source, server names, and registered/advertised tool counts. Repeated successful
-reloads do not flood logs. Check the **running** Tools catalog after a response;
-a temporary standalone discovery process does not modify the web server's tools.
+Use `ngn serve` MCP discovery logs, `ngn doctor`, or **Tools → MCP discovery** to
+check logical config paths and trust/read status, the effective source, and
+configured/connected server and registered/available tool counts. Startup and each
+reload log these counts even when zero servers are configured. Workspace
+`.vscode/mcp.json` and `opencode.json` are detected but not imported. Check the
+**running** Tools catalog after a response; a temporary standalone discovery
+process does not modify the web server's tools.
 External GitHub/service authorization is separate from successful registration.
 
 ## Topology And Boundary

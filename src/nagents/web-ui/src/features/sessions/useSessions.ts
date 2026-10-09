@@ -5,9 +5,10 @@ import { validSnapshot, type EventFrame } from "../../api/subscription.js";
 import type { Bootstrap, Session, Snapshot } from "../../types.js";
 import type { SettingsReply } from "../settings/types.js";
 import { rootSessions } from "../channels/draft.js";
-import { idle, sessionActivity } from "./activity.js";
+import { idle, activitiesFromRuns, sessionActivities, type SessionActivities } from "./activity.js";
 import { deleteSession, type DeletedSnapshot, type DeletionSelection } from "../../api/deletion.js";
 import type { RestoreReply } from "../../api/trash.js";
+import { changeSession } from "../../api/sessionActions.js";
 
 export function useSessions() {
   const [config, setConfig] = useState<Bootstrap>();
@@ -15,7 +16,8 @@ export function useSessions() {
   const [sessionId, setSessionId] = useState("");
   const selection = useRef("");
   const selectionRevision = useRef(0);
-  const [active, setActive] = useState(idle);
+  const [activities, setActivities] = useState<SessionActivities>({});
+  const active = activities[sessionId] || Object.values(activities)[0] || idle;
   const connection = useRef<AbortController>(undefined);
   const mounted = useRef(false);
   useEffect(() => {
@@ -32,7 +34,7 @@ export function useSessions() {
   function currentSelection(): DeletionSelection { return { id: selection.current, revision: selectionRevision.current }; }
   function accept(snapshot: Snapshot): Snapshot {
     setSessions(rootSessions(snapshot.sessions)); selectRoot(snapshot.session_id);
-    setActive((current) => sessionActivity(current, { type: "snapshot", session_id: snapshot.session_id, snapshot, cursor: 0, epoch: "http" }));
+    setActivities((current) => sessionActivities(current, { type: "snapshot", session_id: snapshot.session_id, snapshot, cursor: 0, epoch: "http" }));
     return snapshot;
   }
   async function snapshotResponse(response: Response): Promise<Snapshot> {
@@ -46,7 +48,8 @@ export function useSessions() {
     connection.current = controller;
     const data = (await (await request("bootstrap", "", undefined, controller.signal)).json()) as Bootstrap;
     controller.signal.throwIfAborted();
-    setConfig(data); setActive({ id: data.active_run_id, sessionId: data.active_session_id || "", busy: !!data.active_run_id });
+    setConfig(data); setActivities(activitiesFromRuns(data.active_runs || (data.active_run_id ?
+      [{ id: data.active_run_id, session_id: data.active_session_id || "", status: "running" }] : [])));
     const snapshot = await readSessionHistory(data.token, controller.signal, selection.current || data.active_session_id || "");
     controller.signal.throwIfAborted();
     setSessions(rootSessions(snapshot.sessions));
@@ -69,13 +72,23 @@ export function useSessions() {
     if (!config) throw new Error("Reconnect to ngn before deleting a session.");
     return deleteSession(config.token, id, permanent);
   }
+  async function rename(id: string, title: string): Promise<void> {
+    if (!config) throw new Error("Reconnect to ngn before renaming a chat.");
+    const snapshot = await changeSession(config.token, id, "rename", title);
+    // Metadata updates must not replace another chat's transcript or selection.
+    setSessions(rootSessions(snapshot.sessions));
+  }
+  async function fork(id: string, title = ""): Promise<Snapshot> {
+    if (!config) throw new Error("Reconnect to ngn before forking a chat.");
+    return accept(await changeSession(config.token, id, "fork", title));
+  }
   function restored(reply: RestoreReply) {
     const item = reply.sessions.find((session) => session.id === reply.restored_session_id);
     if (item) setSessions((current) => [item, ...current.filter((session) => session.id !== item.id)]);
   }
   function drop(id: string) { setSessions((current) => current.filter((session) => session.id !== id)); }
   function receive(frame: EventFrame) {
-    setActive((current) => sessionActivity(current, frame));
+    setActivities((current) => sessionActivities(current, frame));
     if (frame.type === "snapshot" || frame.type === "sessions") {
       const list = frame.type === "snapshot" ? frame.snapshot.sessions : frame.sessions;
       setSessions(rootSessions(list));
@@ -92,9 +105,10 @@ export function useSessions() {
   }
   return {
     config, sessions: sessions.map<Session>((session) => ({ ...session,
-      active_run_id: active.busy && active.sessionId === session.id ? active.id : "",
+      active_run_id: activities[session.id]?.id || "",
+      status: activities[session.id]?.status || "",
     })), sessionId, activeSessionId: active.sessionId,
-    globalRunId: active.id, globalBusy: active.busy, externalRun: active.sessionId !== sessionId ? active.id : "",
-    activityOnly: false, connect, select, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
+    globalRunId: active.id, globalBusy: Object.keys(activities).length > 0, externalRun: active.sessionId !== sessionId ? active.id : "",
+    activityOnly: false, connect, select, rename, fork, remove, restored, drop, currentSelection, acceptDeletion: accept, receive, acceptSettings, acceptCredentials,
   };
 }

@@ -189,6 +189,14 @@ def register_uploads(app: FastAPI, get: Callable[[], WebState]) -> None:
                 "WHERE u.session_id = ? AND u.upload_id = ? AND u.inbox_id != 0",
                 (session_id, upload_id),
             ).fetchone()
+            if row is None:
+                # Forked history owns independent bytes, not another root's
+                # durable inbox receipt or attachment identifiers.
+                row = db.execute(
+                    "SELECT u.media_type, u.data FROM ngn_fork_message_uploads u "
+                    "JOIN v2_messages m ON m.id = u.history_id WHERE m.session_id = ? AND u.upload_id = ?",
+                    (session_id, upload_id),
+                ).fetchone()
             if row is None or row[0] not in TYPES or not row[0].startswith("image/") or not isinstance(row[1], bytes):
                 return None
             if not valid_media(row[0], row[1]):

@@ -9,12 +9,14 @@ export function ApprovalDialog({
   error,
   decide,
   cancel,
+  later,
 }: {
   approval: Approval;
   busy: boolean;
   error: string;
   decide: (decision: Decision) => void;
   cancel: () => void;
+  later?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -101,6 +103,7 @@ export function ApprovalDialog({
         )}
       </div>
       <div className="dialog-actions">
+        {later && <button disabled={busy} onClick={later}>Review later</button>}
         <button className="deny" disabled={busy} onClick={() => decide("deny")}>
           Deny
         </button>

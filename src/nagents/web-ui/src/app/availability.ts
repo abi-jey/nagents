@@ -9,17 +9,17 @@ type ClientActivity = {
 
 /** Keep button affordances and command admission on the same rules. */
 export function availability(state: ClientActivity) {
-  const free = state.ready && !state.operating && !state.modal && !state.approval;
-  const navigate = free;
+  const navigate = state.ready && !state.operating && !state.modal;
+  const free = navigate && !state.approval;
   return {
-    submit: navigate && state.uploadsReady,
+    submit: free && state.uploadsReady,
     navigate,
-    create: navigate && !state.running,
-    settings: navigate && !state.running,
-    channels: navigate,
-    tools: navigate,
-    designer: navigate && !state.running,
-    live: navigate,
+    create: navigate,
+    settings: free && !state.running,
+    channels: free,
+    tools: free,
+    designer: free && !state.running,
+    live: free,
     trash: free,
   };
 }

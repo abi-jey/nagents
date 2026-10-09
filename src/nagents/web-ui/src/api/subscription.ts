@@ -7,7 +7,7 @@ export type EventFrame = Position & (
   | { type: "snapshot"; session_id: string; snapshot: Snapshot }
   | { type: "event"; session_id: string; record: WireEvent }
   | { type: "sessions"; sessions: Session[]; active_run?: ActiveRun | null }
-  | { type: "status"; active_session_id: string; active_run_id: string }
+  | { type: "status"; active_session_id: string; active_run_id: string; active_runs?: ActiveRun[] }
 );
 export type SessionFrame = Extract<EventFrame, { type: "event" | "snapshot" }>;
 
@@ -27,7 +27,7 @@ export function validRecord(value: unknown): value is WireEvent {
 export function validSessionList(value: unknown): value is Session[] {
   return Array.isArray(value) && value.every((item: unknown) => object(item) &&
     ["id", "title", "updated_at"].every((key) => typeof item[key] === "string") &&
-    ["active_run_id", "parent_session_id", "status"].every((key) => item[key] === undefined || typeof item[key] === "string"));
+    ["active_run_id", "parent_session_id", "forked_from", "status"].every((key) => item[key] === undefined || typeof item[key] === "string"));
 }
 const sessions = validSessionList;
 function activeRun(value: unknown): boolean {
@@ -37,6 +37,11 @@ function activeRun(value: unknown): boolean {
     ["events", "records", "pending_approvals"].every((key) => value[key] === undefined ||
       (Array.isArray(value[key]) && value[key].every(validRecord))) &&
     (value.approval === undefined || (object(value.approval) && !Object.keys(value.approval).length) || validRecord(value.approval)));
+}
+function activeRuns(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.length <= 32 && value.every(item => object(item) &&
+    typeof item.id === "string" && !!item.id && typeof item.session_id === "string" && !!item.session_id &&
+    typeof item.status === "string" && Object.keys(item).every(key => ["id", "session_id", "status"].includes(key))));
 }
 function deliveries(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) && value.every((item: unknown) => object(item) &&
@@ -48,7 +53,7 @@ function deliveries(value: unknown): boolean {
 }
 export function validSnapshot(value: unknown): value is Snapshot {
   return object(value) && typeof value.session_id === "string" && sessions(value.sessions) &&
-    (value.activity_cursor === undefined || integer(value.activity_cursor)) && activeRun(value.active_run) &&
+    (value.activity_cursor === undefined || integer(value.activity_cursor)) && activeRun(value.active_run) && activeRuns(value.active_runs) &&
     Array.isArray(value.history) && value.history.every((item: unknown) => object(item) &&
       ["role", "content", "name", "tool_call_id"].every((key) => typeof item[key] === "string") &&
       (item.message_id === undefined || typeof item.message_id === "string") &&
@@ -66,7 +71,7 @@ export function parseFrame(data: unknown): EventFrame {
   if (!object(value) || !integer(value.cursor) || typeof value.epoch !== "string" || !value.epoch)
     throw new Error("Invalid event position.");
   if (value.type === "sessions" && sessions(value.sessions) && activeRun(value.active_run)) return value as EventFrame;
-  if (value.type === "status" && typeof value.active_session_id === "string" && typeof value.active_run_id === "string") return value as EventFrame;
+  if (value.type === "status" && typeof value.active_session_id === "string" && typeof value.active_run_id === "string" && activeRuns(value.active_runs)) return value as EventFrame;
   if (typeof value.session_id !== "string") throw new Error("Invalid event session.");
   if (value.type === "event" && validRecord(value.record) &&
       (value.record.session_id === undefined || value.record.session_id === value.session_id)) return value as EventFrame;

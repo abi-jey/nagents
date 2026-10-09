@@ -6,6 +6,7 @@ import asyncio
 import json
 from contextlib import suppress
 from copy import deepcopy
+from functools import partial
 from threading import Lock
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,7 @@ from .channel_activity import ChannelActivities
 from .channel_management import ChannelManagement
 from .channel_privacy import CredentialGuard
 from .channel_privacy import CredentialProtectionError
+from .executions import MAX_PARALLEL_RUNS
 from .local_delivery import WebChannel
 from .routing import RoutingStore
 from .upload_store import expire as expire_uploads
@@ -42,12 +44,14 @@ if TYPE_CHECKING:
     from nagents.channels.types import ChannelMessage
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
+    from nagents.harness.runtime import Harness
     from nagents.types import ContentPart
     from nagents.types import ToolDefinition
 
     from .catalog import ConnectionInput
     from .routing import ChatOwner
     from .routing import Work
+    from .service import Run
     from .service import WebState
 
 _HOSTS: set[Path] = set()
@@ -103,6 +107,8 @@ class ChannelHost:
         self.local = WebChannel(state)
         self.sources: dict[str, asyncio.Task[None]] = {}
         self.tasks: list[asyncio.Task[None]] = []
+        self.work_tasks: dict[str, asyncio.Task[None]] = {}
+        self.work_cleanup: dict[str, asyncio.Task[None]] = {}
         self.changed = asyncio.Event()
         self.closed = False
         self.initialized = False
@@ -111,6 +117,7 @@ class ChannelHost:
         self.dispatcher: ChannelDispatcher | None = None
         self.activities = ChannelActivities(self.store, self.channels)
         self.instructions = _ProtectedInstructions(self.catalog.protection, self.execution_owner)
+        self.runtime_instructions: dict[Harness, _ProtectedInstructions] = {}
         self.management = ChannelManagement(self, self.management_eligible)
 
     async def management_eligible(self, session_id: str) -> bool:
@@ -192,7 +199,33 @@ class ChannelHost:
         catalog = dispatcher.catalog()
         self.catalog.check_public(catalog)
         self.instructions.update(catalog)
+        for instructions in self.runtime_instructions.values():
+            instructions.update(catalog)
         self.dispatcher = dispatcher
+
+    def instructions_for(self, harness: Harness) -> _ProtectedInstructions:
+        instructions = _ProtectedInstructions(self.catalog.protection, self.execution_owner)
+        instructions.update(self.instructions.catalog)
+        self.runtime_instructions[harness] = instructions
+        return instructions
+
+    def register_runtime(self, harness: Harness) -> list[ToolDefinition]:
+        """Install host-owned definitions without sharing mutable agent state."""
+        installed = []
+        for tool in tuple(self.tools):
+            if tool.func is not None and harness.agent.tool_registry.get(tool.name) is None:
+                installed.append(
+                    harness.agent.tool_registry.register(
+                        tool.func, name=tool.name, description=tool.description, parameters=deepcopy(tool.parameters)
+                    )
+                )
+        harness.agent.plugins.extend((self.instructions_for(harness), self.management))
+        self.tools.extend(installed)
+        return installed
+
+    def unregister_runtime(self, harness: Harness, installed: list[ToolDefinition]) -> None:
+        self.runtime_instructions.pop(harness, None)
+        self.tools[:] = [tool for tool in self.tools if not any(tool is candidate for candidate in installed)]
 
     async def inbound_content(self, channel_id: str, prompt: str) -> str | list[ContentPart]:
         """Format a stored channel prompt for model input.
@@ -282,6 +315,8 @@ class ChannelHost:
         # belongs to its active root, including browser-origin follow-ups and
         # descendants. Direct trusted Python calls use the Harness execution root.
         active = self.state.active
+        if active is None and self.state.executions.current.get() is not None:
+            raise ChannelError("Execution owner is no longer active")
         session_id = active.session_id if active is not None else self.state.harness.session_id
         owner = await self.store.owner(session_id)
         current = self.state.active
@@ -379,7 +414,7 @@ class ChannelHost:
         dropped without side effects.
         """
         state = self.state
-        run = state.active
+        run = state.run_by_id(decision.run_id)
         if (
             run is None
             or run.finished
@@ -417,7 +452,7 @@ class ChannelHost:
         ):
             return False
         if (
-            state.active is not run
+            state.run_by_id(decision.run_id) is not run
             or run.pending is not pending
             or pending is None
             or pending.answer.done()
@@ -536,8 +571,15 @@ class ChannelHost:
         # Cancellation of RoutingStore.claim_work itself joins its transaction,
         # but discards the returned Work before raising. Own a shielded claim so
         # even cancellation racing commit can release the exact unstarted row.
+        excluded = tuple(set(self.state.executions.runs) | set(self.work_tasks))
         task = asyncio.create_task(
-            self.store.claim_work(web_only=not self.catalog.allow_plugins, available_channels=tuple(self.channels))
+            self.store.claim_work(
+                web_only=not self.catalog.allow_plugins,
+                available_channels=tuple(self.channels),
+                excluded_sessions=excluded,
+            )
+            if excluded
+            else self.store.claim_work(web_only=not self.catalog.allow_plugins, available_channels=tuple(self.channels))
         )
         try:
             return await asyncio.shield(task)
@@ -561,8 +603,9 @@ class ChannelHost:
             pending = await self.store.has_pending(
                 web_only=not self.catalog.allow_plugins, available_channels=tuple(self.channels)
             )
-            if pending and not self.closed and self.state.active is None and not self.state.mutating:
-                with self.state.idle():
+            occupied = set(self.state.executions.runs) | set(self.work_tasks)
+            if pending and not self.closed and len(occupied) < MAX_PARALLEL_RUNS and not self.state.mutating:
+                with self.state.idle(allow_running=True):
                     work = await self.claim()
                     if work is not None:
                         # Shutdown may have started while SQLite was claiming.
@@ -571,22 +614,25 @@ class ChannelHost:
                         if self.closed:
                             await self.store.release_work(work)
                             return
-                        status = "failed"
-                        try:
-                            if work.command == "compact":
-                                status = await self.state.compact_work(work)
-                            elif work.acknowledgement:
+                        if work.acknowledgement:
+                            status = "failed"
+                            try:
                                 await self.acknowledgement(work)
                                 status = "completed"
-                            else:
-                                status = await self.state.execute_work(work)
-                        except asyncio.CancelledError:
-                            status = "interrupted"
-                            raise
-                        except Exception:
-                            pass
-                        finally:
-                            await self.store.finish_work(work, status)
+                            finally:
+                                await self.store.finish_work(work, status)
+                            continue
+                        try:
+                            run = self.state.reserve_work(work)
+                        except HTTPException:
+                            await self.store.release_work(work)
+                            continue
+                        started = asyncio.Event()
+                        task = asyncio.create_task(
+                            self.execute_claim(work, started), name=f"ngn-inbox-{work.session_id}"
+                        )
+                        self.work_tasks[work.session_id] = run.task = task
+                        task.add_done_callback(partial(self.claim_done, work, run, started))
                         continue
             with suppress(TimeoutError):
                 # Python 3.11 wait_for can swallow owner cancellation when its
@@ -594,6 +640,67 @@ class ChannelHost:
                 # cancellation always escapes, retaining the same idle deadline.
                 async with asyncio.timeout(0.25):
                     await self.changed.wait()
+
+    def claim_done(self, work: Work, run: Run, started: asyncio.Event, task: asyncio.Task[None]) -> None:
+        if started.is_set():
+            return
+
+        async def cleanup() -> None:
+            try:
+                if self.closed:
+                    await self.store.release_work(work)
+                else:
+                    await self.store.finish_work(work, "interrupted")
+                if not run.finished:
+                    run.outcome = "cancelled"
+                    self.state.finish(run)
+            finally:
+                if self.work_tasks.get(work.session_id) is task:
+                    self.work_tasks.pop(work.session_id)
+                self.work_cleanup.pop(work.session_id, None)
+                self.changed.set()
+
+        self.work_cleanup[work.session_id] = asyncio.create_task(cleanup(), name=f"ngn-claim-cleanup-{work.session_id}")
+
+    async def join_claim_cleanup(self, session_id: str) -> None:
+        cleanup = self.work_cleanup.get(session_id)
+        if cleanup is not None:
+            await _join(cleanup)
+
+    async def execute_claim(self, work: Work, started: asyncio.Event) -> None:
+        started.set()
+        owner = self.state.run_for(work.session_id)
+        status = "failed"
+        try:
+            if work.command == "compact":
+                status = await self.state.compact_work(work)
+            elif work.acknowledgement:
+                await self.acknowledgement(work)
+                status = "completed"
+            else:
+                status = await self.state.execute_work(work)
+        except asyncio.CancelledError:
+            status = "queued" if self.closed and owner is not None and not owner.executing else "interrupted"
+            raise
+        except Exception:
+            pass
+        finally:
+
+            async def finish() -> None:
+                try:
+                    await self.store.finish_work(work, status)
+                finally:
+                    run = self.state.run_for(work.session_id)
+                    if run is not None and run.work is work and not run.finished:
+                        run.outcome = "cancelled" if status in {"interrupted", "queued"} else status
+                        self.state.finish(run)
+                    self.work_tasks.pop(work.session_id, None)
+                    self.changed.set()
+
+            # SQL alone joins its commit before propagating cancellation. Own
+            # the entire finalizer so Stop/shutdown cannot skip lane cleanup
+            # when cancellation arrives during that commit (or arrives again).
+            await _join(asyncio.create_task(finish(), name=f"ngn-claim-finish-{work.session_id}"))
 
     async def poll(self) -> None:
         previous: dict[str, str] = {}
@@ -648,13 +755,14 @@ class ChannelHost:
         # Stop the producer before joining its owner: execute_work deliberately
         # shields the model task from owner cancellation. Pending claims finish
         # gracefully and observe closed before execution, returning to queued.
-        if self.state.active is not None:
-            await self.state.stop(self.state.active)
+        await self.state.executions.close()
         for task in self.tasks[1:]:
             task.cancel()
         # Join a bounded command send or accepted configuration apply before
         # closing any connector that the worker may still be using.
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        await asyncio.gather(*tuple(self.work_tasks.values()), return_exceptions=True)
+        await asyncio.gather(*tuple(self.work_cleanup.values()), return_exceptions=True)
         await self.activities.close()
         for id in tuple(self.sources):
             await self.stop_source(id)

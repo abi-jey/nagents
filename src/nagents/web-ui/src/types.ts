@@ -12,11 +12,13 @@ export type Bootstrap = {
   active_run_id: string;
   active_session_id?: string;
   active_run_background?: boolean;
+  active_runs?: ActiveRun[];
 };
 
 export type Session = {
   id: string; title: string; updated_at: string;
   parent_session_id?: string;
+  forked_from?: string;
   active_run_id?: string;
   status?: string;
 };
@@ -65,6 +67,7 @@ export type Snapshot = {
   active_run?: ActiveRun | null;
   active_run_id?: string;
   active_session_id?: string;
+  active_runs?: ActiveRun[];
   history: {
     role: string;
     deliveries?: LocalDelivery[];

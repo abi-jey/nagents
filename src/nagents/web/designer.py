@@ -212,7 +212,7 @@ class Designer:
             harness = DesignedHarness(self.config, design, name, recorder)
             if session_id:
                 harness.session_id = session_id
-            run = Run(harness.session_id)
+            run = Run(harness.session_id, harness=harness)
             await self.traces.start(run.id, run.session_id, harness.agent_id, serialize(harness.design))
             self.state.active = run
             run.task = asyncio.create_task(self.execute(run, harness, recorder, body.prompt), name=f"designer-{run.id}")
@@ -220,6 +220,10 @@ class Designer:
             return {"run_id": run.id, "session_id": run.session_id}
 
     async def execute(self, run: Run, harness: DesignedHarness, recorder: Recorder, prompt: str) -> None:
+        with self.state.executions.scope(run):
+            await self._execute(run, harness, recorder, prompt)
+
+    async def _execute(self, run: Run, harness: DesignedHarness, recorder: Recorder, prompt: str) -> None:
         token = observer.set(recorder)
         finished = asyncio.Event()
 
@@ -293,6 +297,7 @@ class Designer:
         harness.approval_handler = approve
         writer: asyncio.Task[None] | None = None
         try:
+            await self.state.executions.borrow_auth(harness)
             writer = asyncio.create_task(persist())
             recorder("user_message", {"text": prompt, "agent_id": harness.agent_id})
             async with aclosing(harness.run(prompt)) as events:
@@ -481,7 +486,7 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
     async def trace(run_id: str, after: int) -> dict[str, object]:
         try:
             result = await get().traces.read(run_id, max(0, after))
-            active = get().state.active
+            active = get().state.run_by_id(run_id)
             result["approval"] = active.pending.record if active and active.id == run_id and active.pending else {}
             result["channel_session"] = await get().state.designed_channels.pinned(str(result["session_id"]))
             return result
@@ -497,7 +502,7 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
 
     @app.delete("/api/designer/runs/{run_id}")
     async def remove(run_id: str) -> dict[str, str]:
-        active = get().state.active
+        active = get().state.run_by_id(run_id)
         if active and active.id == run_id:
             raise HTTPException(409, "Finish or cancel this run first")
         await get().traces.delete(run_id)
