@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../components/Icon.js";
 import { delegationDetails } from "./api.js";
 import { InspectionPayload, InspectionText } from "./InspectionPayload.js";
-import type { LiveDelegation, LiveDelegationDetails, LiveModelRequest } from "./types.js";
+import type { LiveAppendRecord, LiveDelegation, LiveDelegationDetails, LiveModelRequest } from "./types.js";
 
 const captureNote = (item: LiveModelRequest) => item.type === "model_context"
   ? "Post-plugin model input, before provider encoding."
@@ -10,6 +10,14 @@ const captureNote = (item: LiveModelRequest) => item.type === "model_context"
 
 function CaptureIdentity({ item }: { item: LiveModelRequest }) {
   return <dl className="inspection-identifiers"><dt>Model call</dt><dd>{item.model_call_id}</dd><dt>Round</dt><dd>{item.round}</dd>{item.attempt_id && <><dt>Attempt</dt><dd>{item.attempt_id}</dd></>}</dl>;
+}
+
+const updateNote = (item: LiveAppendRecord) => item.outcome === "sent"
+  ? "Written to the voice transport. This does not confirm provider acknowledgment or spoken audio."
+  : "This update was not confirmed as sent to voice. The assistant result remains available in chat.";
+
+function UpdateIdentity({ item }: { item: LiveAppendRecord }) {
+  return <dl className="inspection-identifiers"><dt>Channel</dt><dd>{item.kind}</dd><dt>Wire event</dt><dd>{item.wire_type || "Not confirmed"}</dd><dt>Write outcome</dt><dd>{item.outcome === "sent" ? "Sent" : "Failed"}</dd></dl>;
 }
 
 export function DelegationInspector({ token, delegation, delegations, select, close, viewChat }: {
@@ -34,6 +42,7 @@ export function DelegationInspector({ token, delegation, delegations, select, cl
   }, [token, delegation.id, delegation.sessionId, delegation.chatSessionId, delegation.runId, delegation.seq, revision]);
   const current = detailsToken === token && details?.delegation_id === delegation.id && details.voice_session_id === delegation.sessionId && details.chat_session_id === delegation.chatSessionId && (!delegation.runId || details.run_id === delegation.runId) ? details : undefined;
   const earlierCaptures = current?.model_requests?.filter(item => !current.timeline.some(event => event.seq === item.seq)) || [];
+  const earlierUpdates = current?.live_updates?.filter(item => !current.timeline.some(event => event.seq === item.seq)) || [];
   return <section className="delegation-inspector inspection-compact" aria-labelledby="delegation-inspector-title">
     <header><div><Icon name="channels" size={17} /><h3 id="delegation-inspector-title" ref={heading} tabIndex={-1}>Delegation details</h3></div><button type="button" aria-label="Close delegation details" onClick={close}><Icon name="close" /></button></header>
     <div className="delegation-inspector-body">
@@ -47,15 +56,21 @@ export function DelegationInspector({ token, delegation, delegations, select, cl
         {current.timeline_truncated && <p className="delegation-truncation">Showing the most recent events.</p>}
         <ol className="delegation-timeline">{current.timeline.map(event => {
           const capture = current.model_requests?.find(item => item.seq === event.seq);
+          const update = current.live_updates?.find(item => item.seq === event.seq);
+          const isLiveUpdate = event.detail_type === "live_append" || event.detail_type === "live_delivery_failed";
+          const eventType = isLiveUpdate ? event.detail_type : event.type || "delegation";
+          const status = isLiveUpdate ? event.detail_type === "live_append" ? "Sent" : "Failed" : event.status;
           const isModelEvent = event.type === "model_context" || event.type === "http_request_body";
-          return <li key={event.seq} data-status={event.status} data-event-type={event.type || "delegation"}>
+          return <li key={event.seq} data-status={event.status} data-event-type={eventType} data-write-outcome={update?.outcome}>
           <details className="inspection-event"><summary>
-            <code className="inspection-event-type">{event.type || "delegation"}</code><span className="delegation-event-status">{event.status}</span><small>#{event.seq}</small><span className="inspection-chevron" aria-hidden="true">›</span>
+            <code className="inspection-event-type">{eventType}{update && ` · ${update.kind}`}</code><span className="delegation-event-status">{status}</span><small>#{event.seq}</small><span className="inspection-chevron" aria-hidden="true">›</span>
             <span className="inspection-event-text">{event.capture_limited ? "Capture retention limit reached" : event.text}</span>
           </summary>
             {capture && <><p className="inspection-source-note">{captureNote(capture)}</p><InspectionText value={capture.payload} /><CaptureIdentity item={capture} /></>}
+            {update && <><p className="inspection-source-note">{updateNote(update)}</p><InspectionText value={update.content} /><UpdateIdentity item={update} /></>}
+            {isLiveUpdate && !update && <p className="inspection-source-note">This Live update payload is no longer retained.</p>}
             {isModelEvent && !capture && <p className="inspection-source-note">{event.capture_limited ? "This event marks a capture limit. No additional request payload was retained." : "This request payload is no longer retained."}</p>}
-            {isModelEvent ? <details className="inspection-event-metadata"><summary>Event metadata</summary><pre tabIndex={0}>{JSON.stringify(event, null, 2)}</pre></details> : <pre tabIndex={0}>{JSON.stringify(event, null, 2)}</pre>}
+            {isModelEvent || isLiveUpdate ? <details className="inspection-event-metadata"><summary>Event metadata</summary><pre tabIndex={0}>{JSON.stringify(event, null, 2)}</pre></details> : <pre tabIndex={0}>{JSON.stringify(event, null, 2)}</pre>}
           </details>
         </li>; })}</ol>
         <p className="delegation-source-note">Application lifecycle events and capture metadata. Tool execution and approvals are shown in the chat.</p>
@@ -67,6 +82,12 @@ export function DelegationInspector({ token, delegation, delegations, select, cl
           key={item.seq} title={`${item.type} · round ${item.round} · #${item.seq}`} value={item.payload} empty="This model request was not captured."
           note={captureNote(item)}
         ><CaptureIdentity item={item} /></InspectionPayload>)}
+        {current.live_updates_truncated && <p className="delegation-truncation">Some Live update payloads are no longer retained.</p>}
+        {!!earlierUpdates.length && <h4>Earlier Live updates</h4>}
+        {earlierUpdates.map(item => <InspectionPayload key={item.seq}
+          title={`live_append · ${item.kind} · ${item.outcome === "sent" ? "Sent" : "Failed"} · #${item.seq}`}
+          value={item.content} empty="This Live update was not captured." note={updateNote(item)}
+        ><UpdateIdentity item={item} /></InspectionPayload>)}
         {!current.model_requests?.length && <p className="inspection-source-note">No model request was captured for this delegation.</p>}
         <InspectionPayload title={current.result?.kind === "terminal_explanation" ? "Outcome" : "Assistant result"} value={current.result} empty="The assistant has not returned a result yet." />
         <details className="delegation-payload delegation-identifiers"><summary>Request identifiers</summary><dl><dt>Delegation</dt><dd>{current.delegation_id}</dd><dt>Voice session</dt><dd>{current.voice_session_id}</dd><dt>Chat</dt><dd>{current.chat_session_id}</dd><dt>Run</dt><dd>{current.run_id || "Not admitted yet"}</dd><dt>Source</dt><dd>{current.source}</dd></dl></details>

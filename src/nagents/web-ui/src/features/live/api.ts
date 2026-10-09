@@ -1,5 +1,6 @@
 import { request } from "../../api/client.js";
 import { readVoiceContext } from "./context.js";
+import { providerDelegationId } from "./identifiers.js";
 import type { DelegationText, LiveCapability, LiveCreated, LiveDelegation, LiveDelegationDetails, LiveDelegationTimelineEvent, LiveSnapshot, VoiceContext, VoiceContextDetailsRecord } from "./types.js";
 
 function boundedText(value: unknown, limit: number): value is DelegationText {
@@ -19,7 +20,8 @@ export async function capability(token: string, signal?: AbortSignal): Promise<L
 }
 
 export async function delegationDetails(token: string, delegation: LiveDelegation, signal: AbortSignal): Promise<LiveDelegationDetails> {
-  const data: LiveDelegationDetails = await (await request(`live/sessions/${encodeURIComponent(delegation.sessionId)}/delegations/${encodeURIComponent(delegation.id)}`, token, undefined, signal)).json();
+  if (!providerDelegationId(delegation.id)) throw new Error("The voice request identifier is invalid. Refresh and try again.");
+  const data: LiveDelegationDetails = await (await request(`live/sessions/${encodeURIComponent(delegation.sessionId)}/delegation-details?delegation_id=${encodeURIComponent(delegation.id)}`, token, undefined, signal)).json();
   if (!data || data.voice_session_id !== delegation.sessionId || data.chat_session_id !== delegation.chatSessionId || data.delegation_id !== delegation.id || data.source !== "app_callback" || (delegation.runId && data.run_id !== delegation.runId))
     throw new Error("These details belong to a different voice request. Refresh and try again.");
   const event = (item: LiveDelegationTimelineEvent) => !!item && typeof item === "object" && item.voice_session_id === data.voice_session_id && item.chat_session_id === data.chat_session_id && item.delegation_id === data.delegation_id &&
@@ -30,7 +32,8 @@ export async function delegationDetails(token: string, delegation: LiveDelegatio
     (!(item.type === "model_context" || item.type === "http_request_body") || (identifier(item.model_call_id) && round(item.round))) &&
     (item.attempt_id === undefined || identifier(item.attempt_id)) &&
     (item.type !== "http_request_body" || (identifier(item.attempt_id) && item.segmented === true)) &&
-    (item.capture_limited === undefined || item.capture_limited === true);
+    (item.capture_limited === undefined || item.capture_limited === true) &&
+    (item.detail_type === undefined || ["delegation", "model_context", "http_request_body", "live_append", "live_delivery_failed"].includes(item.detail_type));
   if (!Number.isSafeInteger(data.seq) || data.seq < delegation.seq || !event(data) || !data.request || typeof data.request !== "object" || Array.isArray(data.request) ||
       (data.request.transcript !== undefined && !boundedText(data.request.transcript, 32768)) || (data.request.input !== undefined && !boundedText(data.request.input, 32768)) ||
       (data.result !== undefined && (!boundedText(data.result, 16384) || !["assistant_output", "terminal_explanation"].includes(data.result.kind))) ||
@@ -44,6 +47,21 @@ export async function delegationDetails(token: string, delegation: LiveDelegatio
         new TextEncoder().encode(item.payload.text).length <= 65536) ||
         data.model_requests.reduce((total, item) => total + new TextEncoder().encode(item.payload.text).length, 0) > 262144)))
     throw new Error("The delegation details were incomplete or inconsistent. Refresh and try again.");
+  if ((data.live_updates_truncated !== undefined && typeof data.live_updates_truncated !== "boolean") ||
+      (data.live_updates !== undefined && (!Array.isArray(data.live_updates) || data.live_updates.length > 96 || !data.live_updates.every(item =>
+        !!item && typeof item === "object" && Number.isSafeInteger(item.seq) && item.seq > 0 && item.seq <= data.seq &&
+        ["thinking", "commentary", "instructions"].includes(item.kind) &&
+        (item.outcome === "failed" ? item.wire_type === "" : item.outcome === "sent" &&
+          ["delegation.context.append", "session.context.append", `session.${item.kind}.append`].includes(item.wire_type)) &&
+        boundedText(item.content, 2000) && new TextEncoder().encode(item.content.text).length <= 2000) ||
+        data.live_updates.reduce((total, item) => total + new TextEncoder().encode(item.content.text).length, 0) > 192000)))
+    throw new Error("The Live update details were incomplete or inconsistent. Refresh and try again.");
+  const liveUpdates = data.live_updates || [];
+  if (new Set(liveUpdates.map(item => item.seq)).size !== liveUpdates.length || liveUpdates.some(item => {
+    const metadata = data.timeline.find(event => event.seq === item.seq);
+    return data.model_requests?.some(capture => capture.seq === item.seq) || metadata &&
+      ((metadata.type !== undefined && metadata.type !== "delegation") || metadata.detail_type !== (item.outcome === "sent" ? "live_append" : "live_delivery_failed"));
+  })) throw new Error("The Live updates did not match their events. Refresh and try again.");
   const captures = data.model_requests || [];
   if (new Set(captures.map(item => item.seq)).size !== captures.length || captures.some(item => {
     const metadata = data.timeline.find(event => event.seq === item.seq);

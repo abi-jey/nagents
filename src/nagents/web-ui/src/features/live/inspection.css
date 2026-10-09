@@ -11,6 +11,7 @@
 .inspection-event > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 8px; align-items: center; gap: 2px 7px; width: auto; min-height: 40px; padding: 5px 2px; list-style: none; cursor: pointer; }
 .inspection-event > summary::-webkit-details-marker { display: none; }
 .inspection-event-type { min-width: 0; overflow-wrap: anywhere; color: #acd6c0; font: 10px/1.45 ui-monospace, monospace; }
+.inspection-compact [data-write-outcome="failed"] .delegation-event-status { color: var(--state-error); }
 .inspection-event .delegation-event-status { display: inline; font-size: 10px; color: var(--text-secondary); }
 .inspection-event summary > small { color: var(--text-tertiary, #a3b4a9); font: 10px ui-monospace, monospace; }
 .inspection-event-text { grid-column: 1 / -1; min-width: 0; font-size: 11px; color: var(--text-reading); overflow-wrap: anywhere; }

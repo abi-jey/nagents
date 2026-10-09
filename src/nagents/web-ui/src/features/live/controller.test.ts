@@ -544,3 +544,32 @@ test("ending voice prevents a pending device switch from committing to the ended
   assert.equal(f.controller.getSnapshot().phase, "ended");
   f.controller.dispose();
 });
+
+test("opaque provider IDs retain late inspection revisions without reopening or reassigning completed work", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture(100); t.after(() => f.controller.dispose());
+  const id = "provider:handoff/one.v2";
+  const start = f.controller.start("sol", revision, "ngn-chat-root"); f.prepare.resolve(); f.create.resolve(created); await start;
+  const completed = handoff(id, 4, "completed");
+  f.read.resolve({ ...snapshot, cursor: 4, events: [], delegations: [completed] }); await setImmediate();
+  assert.equal(f.controller.getSnapshot().delegations[0].id, id);
+  f.nextRead(Promise.resolve({ ...snapshot, cursor: 5, events: [], delegations: [{ ...completed, seq: 5 }] }));
+  t.mock.timers.tick(100); await setImmediate();
+  assert.equal(f.controller.getSnapshot().delegations[0].seq, 5, "a late Live write refreshes an open inspector");
+  assert.equal(f.controller.getSnapshot().delegations[0].status, "completed");
+  const stable = f.controller.getSnapshot().delegations;
+  for (const mutation of [{ status: "working" }, { run_id: "another-run" }, { agent: "Another agent" }, { provider: "other-provider" }, { model: "other-model" }]) {
+    f.nextRead(Promise.resolve({ ...snapshot, cursor: 6, events: [], delegations: [{ ...completed, seq: 6, ...mutation }] } as LiveSnapshot));
+    t.mock.timers.tick(100); await setImmediate();
+    assert.equal(f.controller.getSnapshot().delegations, stable);
+  }
+});
+
+test("delegation ID bounds apply to provider IDs without excluding their Unicode or path punctuation", async t => {
+  const f = fixture(); t.after(() => f.controller.dispose());
+  const start = f.controller.start("sol", revision, "ngn-chat-root"); f.prepare.resolve(); f.create.resolve(created); await start;
+  const ids = ["provider:handoff/one.v2", ".", "..", "界".repeat(256), "x".repeat(257), " \n"];
+  f.read.resolve({ ...snapshot, cursor: 6, events: [], delegations: ids.map((id, index) => handoff(id, index + 1, "queued")) });
+  await setImmediate();
+  assert.deepEqual(f.controller.getSnapshot().delegations.map(item => item.id), ids.slice(0, 4));
+});
