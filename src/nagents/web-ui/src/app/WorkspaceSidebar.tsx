@@ -1,11 +1,12 @@
 import { useState, type RefObject } from "react";
-import { Icon } from "../components/Icon";
-import { SessionSidebar } from "../features/sessions/SessionSidebar";
-import { TrashNotice } from "../features/sessions/TrashDialog";
-import { restoreDeletionFocus } from "../api/deletion";
+import { Icon } from "../components/Icon.js";
+import { SessionSidebar } from "../features/sessions/SessionSidebar.js";
+import { TrashNotice } from "../features/sessions/TrashDialog.js";
+import { restoreDeletionFocus } from "../api/deletion.js";
 import type { Client } from "./useClient";
 import { useChatFolders } from "../features/sessions/useChatFolders.js";
-import { SessionTitleDialog, type SessionTitleAction } from "../features/sessions/SessionTitleDialog.js";
+import { SessionTitleDialog } from "../features/sessions/SessionTitleDialog.js";
+import type { Session } from "../types.js";
 
 export function WorkspaceSidebar({ client, composer, open, close, select, collapsed, toggleCollapsed }: {
   client: Client;
@@ -17,8 +18,15 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
   toggleCollapsed: () => void;
 }) {
   const { sessions, available } = client;
-  const [titleAction, setTitleAction] = useState<SessionTitleAction>();
+  const [renaming, setRenaming] = useState<Session>();
+  const [forkFailed, setForkFailed] = useState(false);
   const folders = useChatFolders(sessions.config?.token || "", sessions.sessions.map(session => session.id));
+  async function fork(session: Session) {
+    client.dismissError(); setForkFailed(false);
+    if (await client.forkSession(session.id)) {
+      close(); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
+    } else setForkFailed(true);
+  }
   async function moveToTrash(session: typeof sessions.sessions[number]) {
     const previous = document.activeElement;
     if (await client.softDelete(session)) requestAnimationFrame(() => {
@@ -32,28 +40,26 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
       workspace={sessions.config?.workspace || ""} sessions={sessions.sessions} selected={sessions.sessionId}
       folders={folders}
       disabled={!available.navigate} newDisabled={!available.create} open={open} close={close}
-      select={(id) => void select(id)} remove={(session) => void moveToTrash(session)}
+      select={(id) => { setForkFailed(false); void select(id); }} remove={(session) => void moveToTrash(session)}
       permanent={(session) => client.deletionController.show(session)}
-      rename={(session) => { client.dismissError(); setTitleAction({ kind: "rename", session }); }}
-      fork={(session) => { client.dismissError(); setTitleAction({ kind: "fork", session }); }} canFork={client.canForkSession}
+      rename={(session) => { client.dismissError(); setForkFailed(false); setRenaming(session); }}
+      fork={(session) => void fork(session)} canFork={client.canForkSession}
       canDelete={(id) => !client.deletion.target && client.canDeleteSession(id)}
       trash={client.trashController.show} trashDisabled={!available.trash}
-      notice={!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController}
-        openSession={(id) => void select(id)} blocked={client.busy} openDisabled={false} />}
+      notice={<>{forkFailed && <div className="error-banner" role="alert">
+        <span>{client.error || "Could not fork this chat. Try again."}</span>
+        <button type="button" aria-label="Dismiss fork error" onClick={() => { setForkFailed(false); client.dismissError(); }}>
+          <Icon name="close" size={14} /></button>
+      </div>}
+      {!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController}
+        openSession={(id) => void select(id)} blocked={client.busy} openDisabled={false} />}</>}
       settings={client.settings.show} settingsDisabled={!available.settings}
       tools={client.showTools} toolsDisabled={!available.tools}
       designer={() => { close(); client.showDesigner(); }} designerDisabled={!available.designer}
       channels={client.channels.show} channelsDisabled={!available.channels} demo={!!sessions.config?.demo}
     />
-    {titleAction && <SessionTitleDialog key={`${titleAction.kind}:${titleAction.session.id}`} action={titleAction} error={client.error}
-      close={() => setTitleAction(undefined)} save={async title => {
-        const saved = titleAction.kind === "rename" ? await client.renameSession(titleAction.session.id, title)
-          : await client.forkSession(titleAction.session.id, title);
-        if (saved && titleAction.kind === "fork") {
-          close(); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
-        }
-        return saved;
-      }} />}
+    {renaming && <SessionTitleDialog key={renaming.id} session={renaming} error={client.error}
+      close={() => setRenaming(undefined)} save={title => client.renameSession(renaming.id, title)} />}
     <button type="button" className="sidebar-divider-toggle"
       aria-label={collapsed ? "Expand sessions sidebar" : "Collapse sessions sidebar"}
       title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
