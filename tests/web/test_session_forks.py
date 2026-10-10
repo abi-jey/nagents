@@ -185,6 +185,47 @@ def test_fork_preserves_voice_upload_and_delivery_bytes_independently_of_parent(
     asyncio.run(scenario())
 
 
+def test_omitted_and_blank_fork_titles_keep_numbering_after_rename_trash_and_delete(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = app.state.web
+            await quiet(state)
+            source = state.selected_session_id
+            renamed = await client.post(f"/api/sessions/{source}/rename", headers=headers, json={"title": "Design"})
+            assert renamed.status_code == 200
+
+            async def fork(number: int, body: dict[str, str]) -> str:
+                response = await client.post(f"/api/sessions/{source}/fork", headers=headers, json=body)
+                assert response.status_code == 200, response.text
+                selected = response.json()["session_id"]
+                item = next(item for item in response.json()["sessions"] if item["id"] == selected)
+                assert item["title"] == f"Design · fork {number}" and item["forked_from"] == source
+                return str(selected)
+
+            first = await fork(1, {})
+            second = await fork(2, {"title": "   "})
+            assert (
+                await client.post(f"/api/sessions/{first}/rename", headers=headers, json={"title": "Custom name"})
+            ).status_code == 200
+            assert (
+                await client.request("DELETE", f"/api/sessions/{second}", headers=headers, json={})
+            ).status_code == 200
+            await fork(3, {"title": ""})
+            assert (
+                await client.request("DELETE", f"/api/sessions/{first}", headers=headers, json={"permanent": True})
+            ).status_code == 200
+        async with client_app(tmp_path) as (_, client, headers, _):
+            response = await client.post(f"/api/sessions/{source}/fork", headers=headers, json={})
+            assert response.status_code == 200
+            selected = response.json()["session_id"]
+            assert (
+                next(item for item in response.json()["sessions"] if item["id"] == selected)["title"]
+                == "Design · fork 4"
+            )
+
+    asyncio.run(scenario())
+
+
 def test_fork_and_rename_reject_invalid_roots_and_keep_explicit_empty_sessions(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):

@@ -187,12 +187,36 @@ MIGRATION_005_FORKS = Migration(
 )
 
 
+MIGRATION_006_FORK_NUMBERS = Migration(
+    version=6,
+    description="Persistent per-conversation fork numbering",
+    up_sql="""
+        CREATE TABLE ngn_session_fork_counters (
+            session_id TEXT PRIMARY KEY,
+            last_number INTEGER NOT NULL CHECK(last_number >= 0)
+        );
+        INSERT INTO ngn_session_fork_counters
+            SELECT f.forked_from, COUNT(*) FROM ngn_session_forks f
+            JOIN v2_sessions s ON s.id = f.forked_from
+            WHERE f.forked_from != '' GROUP BY f.forked_from;
+        CREATE TRIGGER ngn_session_fork_counter_delete BEFORE DELETE ON v2_sessions BEGIN
+            DELETE FROM ngn_session_fork_counters WHERE session_id = OLD.id;
+        END;
+    """,
+    down_sql="""
+        DROP TRIGGER ngn_session_fork_counter_delete;
+        DROP TABLE ngn_session_fork_counters;
+    """,
+)
+
+
 migrations = [
     MIGRATION_001_INITIAL,
     MIGRATION_002_COMPACTION,
     MIGRATION_003_DELIVERIES,
     MIGRATION_004_UPLOADS,
     MIGRATION_005_FORKS,
+    MIGRATION_006_FORK_NUMBERS,
 ]
 
 __all__ = [
@@ -201,5 +225,6 @@ __all__ = [
     "MIGRATION_003_DELIVERIES",
     "MIGRATION_004_UPLOADS",
     "MIGRATION_005_FORKS",
+    "MIGRATION_006_FORK_NUMBERS",
     "migrations",
 ]
