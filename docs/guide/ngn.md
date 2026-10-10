@@ -115,7 +115,7 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 | --- | --- |
 | `/help` | Show the live command registry. |
 | `/new` | Start a new local conversation. |
-| `/fork [title]` | In the TUI, copy the idle conversation into a new independent root and select it. Saved context and attachments are copied; active work and approvals are not. |
+| `/fork [title]` | In the TUI, copy the idle conversation into a new independent root and select it. Omit the title for `<chat title> · fork 1`, `fork 2`, etc. Saved context and attachments are copied; active work and approvals are not. |
 | `/rename <title>` | In the TUI, persist a name of 1–80 printable characters for the current conversation. |
 | `/sessions` | List and resume this workspace's saved conversations. |
 | `/compact` | Compact active context with the configured strategy. |
