@@ -160,6 +160,7 @@ class Executions:
             replacement.approval_handler = self.state.approve
             replacement.wakeup_handler = self.state.schedule
             replacement.resources.logger = primary.resources.logger
+            replacement.resources.inherit_mcp_failures(primary.resources)
             replacement.agent.plugins.append(self.state.history.identity)
             await replacement.initialize(create_session=False)
             self.state.settings.values.apply(replacement)
@@ -206,6 +207,7 @@ class Executions:
                         harness.approval_handler = self.state.approve
                         harness.wakeup_handler = self.state.schedule
                         harness.resources.logger = primary.resources.logger
+                        harness.resources.inherit_mcp_failures(primary.resources)
                         harness.agent.plugins.append(self.state.history.identity)
                         await harness.initialize(create_session=False)
                         self._tools[run.session_id] = self.state.channels.register_runtime(harness)

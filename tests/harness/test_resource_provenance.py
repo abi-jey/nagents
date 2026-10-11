@@ -327,8 +327,8 @@ async def test_reload_failure_provenance_distinguishes_parse_start_and_discovery
             assert harness.agent.tool_registry.get("mcp__fixture__echo") is original
             write(str(tmp_path / "missing-server"))
             await harness.resources.reload()
-            assert "stage=mcp_start" in harness.resources.last_error
-            assert harness.agent.tool_registry.get("mcp__fixture__echo") is original
+            assert harness.resources.mcp_diagnostics().failed_servers[0].stage == "mcp_start"
+            assert harness.agent.tool_registry.get("mcp__fixture__echo") is None
             write(configured.command)
 
             async def fail_discovery(self: MCPClient) -> list[dict[str, object]]:
@@ -336,15 +336,18 @@ async def test_reload_failure_provenance_distinguishes_parse_start_and_discovery
 
             monkeypatch.setattr(MCPClient, "list_tools", fail_discovery)
             await harness.resources.reload()
-            assert "stage=mcp_discover" in harness.resources.last_error
-            assert harness.agent.tool_registry.get("mcp__fixture__echo") is original
+            assert harness.resources.mcp_diagnostics().failed_servers[0].stage == "mcp_discover"
+            assert harness.agent.tool_registry.get("mcp__fixture__echo") is None
         failures = [
             record.getMessage()
             for record in caplog.records
             if record.getMessage().startswith("Resource reload failed:")
         ]
-        assert len(failures) == 3
+        assert len(failures) == 1
         assert all(str(source) in message and "previous tools" in message for message in failures)
+        assert (
+            len([record for record in caplog.records if record.getMessage().startswith("MCP server unavailable:")]) == 2
+        )
         assert all(
             value not in caplog.text
             for value in (
@@ -354,6 +357,10 @@ async def test_reload_failure_provenance_distinguishes_parse_start_and_discovery
                 "PRIVATE_UPSTREAM_VALUE",
             )
         )
-        assert len([message for message in harness.diagnostics if message.startswith("Resource reload failed:")]) == 1
+        assert not any(message.startswith("Resource reload failed:") for message in harness.diagnostics)
+        assert (
+            len([message for message in harness.diagnostics if message.startswith("MCP server fixture is unavailable")])
+            == 1
+        )
     finally:
         await harness.close()

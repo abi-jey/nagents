@@ -57,3 +57,15 @@
 .tools-mcp code { font-size: 11px; overflow-wrap: anywhere; }
 .tools-mcp-ignored { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-group); }
 .tools-mcp-ignored > strong { color: var(--state-pending); font-weight: 500; }
+.tools-mcp-failures { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border-group); }
+.tools-mcp-failures > p { color: var(--state-pending); }
+.tools-mcp li.tools-mcp-failure { display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 12px; padding: 12px 0; }
+.tools-mcp-failure + .tools-mcp-failure { border-top: 1px solid var(--border-group); }
+.tools-mcp-failure > div { flex: 1; min-width: 0; }
+.tools-mcp-failure strong { display: block; overflow-wrap: anywhere; font-size: 13px; }
+.tools-mcp-failure-category { display: block; margin-top: 3px; }
+.tools-mcp-failure p { margin: 6px 0; overflow-wrap: anywhere; }
+.tools-mcp-failure small { color: var(--text-secondary); font-size: 11px; }
+.tools-mcp-failure button { flex-shrink: 0; min-height: 36px; font-size: 12px; }
+.tools-mcp-feedback { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .tools-mcp-failure button { min-height: 44px; } }

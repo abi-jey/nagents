@@ -65,6 +65,13 @@ finally:
     return MCPServerConfig("fixture", sys.executable, ["-u", str(source)], cwd=str(tmp_path))
 
 
+def revise_server(tmp_path: Path, version: str) -> None:
+    """A changed installation, unlike unrelated data, invalidates reuse."""
+    (tmp_path / "version").write_text(version)
+    source = tmp_path / "server.py"
+    source.write_text(source.read_text() + f"\n# server revision {version}\n")
+
+
 def plugin(path: Path, version: str) -> None:
     path.write_text(f"""from nagents import AgentPlugin
 from pathlib import Path
@@ -117,7 +124,7 @@ async def test_every_response_reloads_mcp_plugins_and_final_with_pinned_calls(
             assert "mcp__fixture__echo" in provider.schemas[-1]
             assert messages[-1].content == "plugin:one"
             plugin(extension, "two")
-            (tmp_path / "version").write_text("two")
+            revise_server(tmp_path, "two")
             yield ToolCallEvent(id="mcp-one", name="mcp__fixture__echo", arguments={"payload": {"a-b": None}})
             yield ToolCallEvent(id="plugin-one", name="current_session", arguments={})
         elif calls == 2:
@@ -130,7 +137,7 @@ async def test_every_response_reloads_mcp_plugins_and_final_with_pinned_calls(
             assert "current_session" not in provider.schemas[-1]
             # Final response must install changes even without another request.
             plugin(extension, "tri")
-            (tmp_path / "version").write_text("tri")
+            revise_server(tmp_path, "tri")
             configure()
             yield TextDoneEvent(text="finished")
 
@@ -161,8 +168,8 @@ async def test_every_response_reloads_mcp_plugins_and_final_with_pinned_calls(
         assert harness.agent.tool_registry.get("mcp__fixture__echo").description == "tri"  # type: ignore[union-attr]
         assert harness.commands.get("custom-alias").description.startswith("Alias for /custom. tri")  # type: ignore[union-attr]
         assert (
-            len((tmp_path / "starts").read_text().splitlines()) == 5
-        )  # initialization, entry, populated responses and completed tool batches
+            len((tmp_path / "starts").read_text().splitlines()) == 3
+        )  # Initialization, changed installation, then explicit removal/re-addition.
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
@@ -173,7 +180,9 @@ async def test_every_response_reloads_mcp_plugins_and_final_with_pinned_calls(
 
 @pytest.mark.requires_posix
 @pytest.mark.asyncio
-async def test_unchanged_mcp_restarts_after_each_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unchanged_mcp_connection_is_reused_after_each_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         if len(provider.requests) < 3:
             yield ToolCallEvent(id=str(len(provider.requests)), name="mcp__fixture__echo", arguments={})
@@ -190,7 +199,7 @@ async def test_unchanged_mcp_restarts_after_each_response(tmp_path: Path, monkey
     try:
         events = await collect(harness)
         assert not [event.error for event in events if isinstance(event, ToolResultEvent) and event.error]
-        assert len((tmp_path / "starts").read_text().splitlines()) == 7
+        assert len((tmp_path / "starts").read_text().splitlines()) == 1
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
@@ -290,7 +299,7 @@ async def test_serve_exposes_mcp_tools_and_reloads_after_final_response(
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         assert "mcp__fixture__echo" in provider.schemas[-1]
-        (tmp_path / "version").write_text("web")
+        revise_server(tmp_path, "web")
         yield TextDoneEvent(text="web response")
 
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
@@ -336,7 +345,7 @@ async def test_tui_loads_and_reloads_same_mcp_owner(tmp_path: Path, monkeypatch:
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         assert "mcp__fixture__echo" in provider.schemas[-1]
-        (tmp_path / "version").write_text("tui")
+        revise_server(tmp_path, "tui")
         yield TextDoneEvent(text="tui response")
 
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
@@ -404,7 +413,7 @@ async def test_repeated_refresh_inside_tool_retires_unadvertised_candidates(
     harness.approval_handler = approve
     try:
         await collect(harness)
-        assert len((tmp_path / "starts").read_text().splitlines()) == 7
+        assert len((tmp_path / "starts").read_text().splitlines()) == 1
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
@@ -443,7 +452,7 @@ def setup(harness):
 
 @pytest.mark.requires_posix
 @pytest.mark.asyncio
-async def test_failed_mcp_candidate_closes_partial_start_and_keeps_previous_calls(
+async def test_failed_mcp_server_is_isolated_and_keeps_previous_calls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     working = server(tmp_path)
@@ -466,7 +475,10 @@ async def test_failed_mcp_candidate_closes_partial_start_and_keeps_previous_call
     try:
         events = await collect(harness)
         assert isinstance(events[-1], DoneEvent)
-        assert "previous tools and MCP connections retained" in harness.resources.last_error
+        assert harness.resources.last_error == ""
+        failure = harness.resources.mcp_diagnostics().failed_servers[0]
+        assert failure.name == "bad" and failure.category == "executable_not_found"
+        assert len((tmp_path / "starts").read_text().splitlines()) == 1
     finally:
         await harness.close()
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(
@@ -521,7 +533,7 @@ async def test_mcp_approval_identity_tracks_captured_configuration_schema_and_so
             ToolCall("collision", "mcp__fixture__echo", {"foo-bar": "hyphen", "foo_bar": "underscore"})
         )
         assert result.error is None and result.result == 'one:{"foo-bar": "hyphen", "foo_bar": "underscore"}'
-        (tmp_path / "version").write_text("changed-server-version")
+        revise_server(tmp_path, "changed-server-version")
         changed.append(await identity())
         source = tmp_path / "server.py"
         source.write_text(source.read_text() + "\n# source revision\n")

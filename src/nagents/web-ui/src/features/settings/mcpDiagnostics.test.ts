@@ -54,3 +54,37 @@ test("disabled and programmatic discovery does not claim configured servers were
   const legacy = render();
   try { assert.equal(legacy.window.document.body.textContent, ""); } finally { legacy.window.close(); }
 });
+
+test("isolated server failures keep healthy counts and expose an actionable, escaped warning", () => {
+  const value: McpDiagnostics = { ...empty, status: "partial", configured_servers: 2, connected_servers: 1,
+    registered_tools: 13, advertised_tools: 12, failed_servers: [{ name: "<betterstack>", stage: "mcp_start",
+      category: "missing_environment", message: "Configure the required environment variable on the server.", retry_pending: false }] };
+  const dom = new JSDOM(renderToStaticMarkup(createElement(McpDiscovery, { value, retry: () => {} })));
+  try {
+    assert.match(dom.window.document.body.textContent!, /1 connected.*13 tools registered.*12 available/);
+    assert.match(dom.window.document.body.textContent!, /Unavailable servers are skipped.*Healthy tools remain available/);
+    assert.match(dom.window.document.body.textContent!, /Missing environment variable/);
+    assert.match(dom.window.document.body.textContent!, /Skipped until you retry or its configuration changes/);
+    assert.equal(dom.window.document.querySelector("betterstack"), null);
+    const button = dom.window.document.querySelector<HTMLButtonElement>('button[aria-label="Retry <betterstack>"]');
+    assert.equal(button?.disabled, false);
+    assert.equal(button?.textContent, "Retry");
+  } finally { dom.window.close(); }
+});
+
+test("queued and in-flight retries are accessible and cannot issue duplicate requests", () => {
+  for (const queued of [false, true]) {
+    const value: McpDiagnostics = { ...empty, status: "partial", failed_servers: [{ name: "broken", stage: "mcp_start",
+      category: "timeout", message: "The server did not initialize in time.", retry_pending: queued }] };
+    const dom = new JSDOM(renderToStaticMarkup(createElement(McpDiscovery, { value, retry: () => {},
+      retrying: queued ? "" : "broken", error: "Retry status could not be refreshed." })));
+    try {
+      const button = dom.window.document.querySelector<HTMLButtonElement>("button")!;
+      assert.equal(button.disabled, true);
+      assert.equal(button.getAttribute("aria-busy"), String(!queued));
+      assert.equal(button.textContent, queued ? "Retry queued" : "Retrying…");
+      assert.match(dom.window.document.querySelector('[role="alert"]')!.textContent!, /Retry status/);
+      if (queued) assert.match(dom.window.document.body.textContent!, /next safe response boundary or message/);
+    } finally { dom.window.close(); }
+  }
+});

@@ -79,7 +79,7 @@ export function WorkspaceInfoDialog({ workspace, name, demo, count, running, con
         <div><dt>Tools enabled for {agent || "this agent"}</dt><dd>{snapshot ? <><strong>{enabled} <small>/ {snapshot.tools.length}</small></strong><span>{readOnly ? "Read-only restrictions apply" : "Registered tools"}</span></> :
           <span role="status">{failed ? "Could not load tools" : token ? "Loading…" : "Reconnect to load tools"}</span>}</dd></div></dl>
       {mcp && <p className="workspace-mcp">{mcp.connected_servers} of {mcp.configured_servers} MCP servers connected
-        {mcp.status === "retained" ? " · Previous configuration; reload failed" : mcp.status === "disabled" ? " · Startup disabled" : mcp.status === "not_loaded" ? " · Discovery pending" : ""}
+        {mcp.status === "retained" ? " · Previous configuration; reload failed" : mcp.status === "partial" ? " · Unavailable servers skipped; see Tools" : mcp.status === "disabled" ? " · Startup disabled" : mcp.status === "not_loaded" ? " · Discovery pending" : ""}
         {mcp.status !== "retained" && !!mcp.error && " · Connection error; see Tools"}</p>}
       {failed && <button type="button" className="workspace-retry" onClick={() => setRevision(value => value + 1)}>Retry tools</button>}
     </section>

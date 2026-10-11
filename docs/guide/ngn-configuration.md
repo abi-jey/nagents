@@ -491,12 +491,14 @@ Remote HTTP/SSE transports are not supported by this stdio loader.
 
 The harness rereads the trusted configuration sources, tool selections, discovered
 skills and applicable instructions **after every completed model response**, even
-when files are unchanged and even for a final answer. It starts fresh MCP processes
-and reloads Python extension source. Added, changed and removed definitions become
+when files are unchanged and even for a final answer. It reloads Python extension
+source and reuses healthy MCP connections whose declaration, direct script source,
+and effective process environment are unchanged. A server's `tools/list_changed`
+notification triggers fresh discovery on the same connection at the next boundary.
+Added, changed and removed definitions become
 available without restarting the UI or losing conversation history. User-message
-boundaries also refresh. This deliberately costs a server restart/discovery per
-response and completed tool batch; MCP servers should tolerate overlapping old
-and new instances briefly. The tool-batch boundary ensures that a tool's own
+boundaries also refresh. A changed server can briefly have overlapping old and new
+instances while calls finish. The tool-batch boundary ensures that a tool's own
 configuration/source edits are visible to the immediately following model request.
 
 Tool calls returned by a response execute against that response's original
@@ -504,8 +506,16 @@ implementation and schema. Its old MCP process stays alive until those calls and
 approvals finish; current permissions still apply. Saved tool allowances match
 captured source/configuration/schema identities, so unchanged reloads preserve
 permissions and changed implementations require approval again. Changes to project
-instructions invalidate old file-edit snapshots. Replacement errors retain the
-last working generation and produce a warning. Cancellation/shutdown closes owned
+instructions invalidate old file-edit snapshots. Configuration parsing and Python
+extension errors retain the last working generation and produce a warning.
+MCP startup and discovery failures are isolated per server: other healthy tools,
+including newly added servers, stay available. An unavailable server is skipped
+at later response, tool, and message boundaries until its configuration, direct
+script source, or effective environment changes, or an operator explicitly retries.
+Environment values enter only a private digest; diagnostics never expose them.
+New configuration owners and parallel chat runtimes inherit known failures so
+saving settings or opening a chat does not silently retry a failed process.
+Cancellation/shutdown closes owned
 processes. Offline demo starts no MCP servers, and read-only profiles cannot launch
 custom server subprocesses. Native child agents do not inherit parent MCP servers.
 
@@ -532,8 +542,14 @@ unchanged settings and **zero configured servers**. The summary includes configu
 and connected server counts, registered/available tool counts, logical ngn config
 paths and their read/trust status, and the effective MCP source. `ngn doctor` and
 the web **Tools → MCP discovery** section show the same metadata. When a reload
-fails, the counts and source list describe the retained working generation and the
-failure is reported separately. A higher-priority `"mcp_servers": {}` still clears
+fails as a whole, the counts and source list describe the retained working generation
+and the failure is reported separately. A partially available generation lists each
+unavailable server with its safe category and recovery guidance. **Retry** in
+**Tools → MCP discovery** attempts that server again; during active work it queues
+the attempt for the next safe boundary. Healthy connections remain open, and
+settings stay available while a retry is waiting. An attempt can still fail; its
+warning remains visible until recovery or removal from the trusted configuration.
+A higher-priority `"mcp_servers": {}` still clears
 earlier declarations; the effective source makes that precedence visible. Warnings distinguish configuration parsing, MCP
 startup and tool discovery failures. Tool-call authorization failures are separate
 from registration. Diagnostics do not echo server arguments, environment values,

@@ -1,5 +1,5 @@
 export interface McpDiagnostics {
-  status: "not_loaded" | "loaded" | "retained" | "disabled";
+  status: "not_loaded" | "loaded" | "partial" | "retained" | "disabled";
   configured_servers: number;
   connected_servers: number;
   registered_tools: number;
@@ -8,9 +8,34 @@ export interface McpDiagnostics {
   sources: { path: string; trusted: boolean; status: "read" | "missing" | "ignored" | "unavailable" | "not_read" }[];
   ignored_configs: string[];
   error: string;
+  failed_servers?: {
+    name: string;
+    stage: "mcp_start" | "mcp_discover";
+    category: string;
+    message: string;
+    retry_pending: boolean;
+  }[];
 }
 
-export function McpDiscovery({ value }: { value?: McpDiagnostics }) {
+const failureCategory: Record<string, string> = {
+  missing_environment: "Missing environment variable",
+  authorization: "Authorization needed",
+  timeout: "Connection timed out",
+  executable_not_found: "Executable not found",
+  permission_denied: "Permission denied",
+  disconnected: "Connection closed",
+  invalid_configuration: "Invalid configuration",
+  server_error: "Server error",
+};
+
+export function McpDiscovery({ value, retry, retrying = "", disabled = false, notice = "", error = "" }: {
+  value?: McpDiagnostics;
+  retry?: (server: string) => void;
+  retrying?: string;
+  disabled?: boolean;
+  notice?: string;
+  error?: string;
+}) {
   if (!value) return null;
   const sourceStatus = { read: "Read", missing: "Missing", ignored: "Ignored", unavailable: "Unavailable", not_read: "Not read" };
   return <section className="tools-mcp" aria-labelledby="tools-mcp-title">
@@ -21,6 +46,20 @@ export function McpDiscovery({ value }: { value?: McpDiagnostics }) {
     {value.status === "disabled" && <p>MCP startup is disabled for this harness. Configured servers were not started.</p>}
     {value.status === "not_loaded" && <p>MCP discovery has not completed yet.</p>}
     {!!value.error && <p className="error-text">{value.error}</p>}
+    {!!value.failed_servers?.length && <div className="tools-mcp-failures">
+      <p role="status">Unavailable servers are skipped. Healthy tools remain available.</p>
+      <ul aria-label="Unavailable MCP servers">{value.failed_servers.map(server => <li key={server.name} className="tools-mcp-failure">
+        <div><strong>{server.name}</strong><span className="tools-mcp-failure-category">{failureCategory[server.category] || "Server unavailable"}</span>
+          <p>{server.message}</p>
+          <small>{server.retry_pending ? "Retry queued for the next safe response boundary or message." : "Skipped until you retry or its configuration changes."}</small>
+        </div>
+        {retry && <button type="button" disabled={disabled || !!retrying || server.retry_pending}
+          aria-label={`Retry ${server.name}`} aria-busy={retrying === server.name}
+          onClick={() => retry(server.name)}>{retrying === server.name ? "Retrying…" : server.retry_pending ? "Retry queued" : "Retry"}</button>}
+      </li>)}</ul>
+    </div>}
+    {notice && <p role="status" className="tools-mcp-feedback">{notice}</p>}
+    {error && <p role="alert" className="tools-mcp-feedback error-text">{error}</p>}
     <details open={!value.configured_servers || value.status === "retained"}>
       <summary>Configuration sources</summary>
       <p>Effective MCP source: <code>{value.effective_source}</code></p>

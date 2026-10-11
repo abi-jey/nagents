@@ -9,6 +9,7 @@ import inspect
 import keyword
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from typing import cast
 
@@ -20,8 +21,22 @@ from .client import MCPClient
 from .client import MCPError
 from .client import MCPServerConfig
 from .client import _extract_text_content
+from .client import _failure_category
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _Connection:
+    """A client remains alive until all advertised generations release it."""
+
+    client: MCPClient
+    references: int = 1
+
+    async def release(self) -> None:
+        self.references -= 1
+        if self.references == 0:
+            await finish_on_cancel(self.client.disconnect())
 
 
 def _mcp_type_to_python(prop: dict[str, Any], name: str) -> type:
@@ -90,7 +105,9 @@ class MCPManager:
         self.configs = server_configs
         self.request_timeout = request_timeout
         self._clients: dict[str, MCPClient] = {}
+        self._connections: dict[str, _Connection] = {}
         self._tool_map: dict[str, _MCPToolInfo] = {}
+        self._tool_revisions: dict[str, int] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -116,12 +133,18 @@ class MCPManager:
         async def _connect_one(config: MCPServerConfig) -> MCPClient:
             client = MCPClient(config, request_timeout=self.request_timeout)
             await client.connect()
+            self._clients[config.name] = client
+            self._connections[config.name] = _Connection(client)
             return client
 
-        results = await asyncio.gather(
-            *(_connect_one(c) for c in self.configs),
-            return_exceptions=True,
-        )
+        try:
+            results = await asyncio.gather(
+                *(_connect_one(c) for c in self.configs),
+                return_exceptions=True,
+            )
+        except BaseException:
+            await finish_on_cancel(self.disconnect_all())
+            raise
 
         for config, result in zip(self.configs, results, strict=True):
             if isinstance(result, Exception):
@@ -131,8 +154,6 @@ class MCPManager:
                     type(result).__name__,
                 )
                 # Continue with other servers
-            else:
-                self._clients[config.name] = cast("MCPClient", result)
 
         if not self._clients:
             raise MCPError(
@@ -184,41 +205,85 @@ class MCPManager:
                 message=f"Failed to connect to MCP server '{config.name}' ({type(e).__name__})",
                 code=-1,
                 stage="mcp_start",
+                category=_failure_category(e, client),
             ) from e
 
         self._clients[config.name] = client
+        self._connections[config.name] = _Connection(client)
         if all(c.name != config.name for c in self.configs):
             self.configs.append(config)
 
         # Discover only this server's tools. On failure the connection is
         # kept (refresh_tools() can rediscover later) — mirroring connect_all's
         # per-server error tolerance.
-        wrappers: list[Callable[..., Any]] = []
         try:
-            tools = await client.list_tools()
-        except Exception as e:
+            wrappers = await self.refresh_server_tools(config.name)
+        except BaseException as e:
+            if strict or not isinstance(e, Exception):
+                await finish_on_cancel(self.remove_server(config.name))
+            if not isinstance(e, Exception):
+                raise
             logger.error("MCP discovery failed: server=%s error_type=%s", config.name, type(e).__name__)
             if strict:
-                raise MCPError("MCP tool discovery failed", code=-1, stage="mcp_discover") from None
-            return wrappers
-
-        for tool in tools:
-            tool_name = tool.get("name", "")
-            if not tool_name:
-                continue
-            qualified_name = f"mcp__{config.name}__{tool_name}"
-            tool_info = _MCPToolInfo(
-                server_name=config.name,
-                tool_name=tool_name,
-                description=tool.get("description", ""),
-                input_schema=tool.get("inputSchema", {}),
-                title=tool.get("title"),
-            )
-            self._tool_map[qualified_name] = tool_info
-            wrappers.append(self._create_tool_wrapper(qualified_name, tool_info))
+                raise MCPError(
+                    "MCP tool discovery failed", code=-1, stage="mcp_discover", category=_failure_category(e, client)
+                ) from None
+            return []
 
         logger.info("MCP server '%s' added at runtime with %d tools", config.name, len(wrappers))
         return wrappers
+
+    def server_tools_changed(self, name: str) -> bool:
+        return self._tool_revisions.get(name, -1) != getattr(self._clients[name], "tools_revision", 0)
+
+    async def refresh_server_tools(self, name: str) -> list[Callable[..., Any]]:
+        """Rediscover one server without replacing its connection or other maps."""
+        client = self._clients[name]
+        revision = getattr(client, "tools_revision", 0)
+        try:
+            tools = await client.list_tools()
+            discovered: dict[str, _MCPToolInfo] = {}
+            wrappers: list[Callable[..., Any]] = []
+            for tool in tools:
+                tool_name = tool.get("name", "")
+                if not tool_name:
+                    continue
+                qualified_name = f"mcp__{name}__{tool_name}"
+                tool_info = _MCPToolInfo(
+                    server_name=name,
+                    tool_name=tool_name,
+                    description=tool.get("description", ""),
+                    input_schema=tool.get("inputSchema", {}),
+                    title=tool.get("title"),
+                )
+                discovered[qualified_name] = tool_info
+                wrappers.append(self._create_tool_wrapper(qualified_name, tool_info))
+        except Exception as error:
+            raise MCPError(
+                "MCP tool discovery failed", stage="mcp_discover", category=_failure_category(error, client)
+            ) from None
+        self._tool_map = {key: value for key, value in self._tool_map.items() if value.server_name != name}
+        self._tool_map.update(discovered)
+        self._tool_revisions[name] = revision
+        return wrappers
+
+    def retain_server(self, owner: "MCPManager", name: str) -> None:
+        """Share an unchanged discovered connection with another generation.
+
+        The operation has no await point; neither generation can lose ownership
+        during the transfer. Each keeps its own immutable advertised tool map.
+        """
+        if name in self._clients:
+            raise ValueError("MCP server is already registered in this manager")
+        connection = owner._connections[name]
+        if not connection.client.is_connected:
+            raise ValueError("Cannot retain a disconnected MCP server")
+        connection.references += 1
+        self._connections[name] = connection
+        self._clients[name] = connection.client
+        self.configs.append(connection.client.config)
+        self._tool_map.update({key: tool for key, tool in owner._tool_map.items() if tool.server_name == name})
+        self._tool_revisions[name] = owner._tool_revisions.get(name, -1)
 
     async def remove_server(self, name: str) -> int:
         """Disconnect a single server and drop its tools from the tool map.
@@ -229,14 +294,16 @@ class MCPManager:
         Returns:
             The number of tools removed.
         """
-        client = self._clients.pop(name, None)
-        if client is not None:
+        self._clients.pop(name, None)
+        connection = self._connections.pop(name, None)
+        if connection is not None:
             try:
-                await client.disconnect()
+                await connection.release()
             except Exception as e:
                 logger.error("MCP disconnect failed: server=%s error_type=%s", name, type(e).__name__)
 
         self.configs = [c for c in self.configs if c.name != name]
+        self._tool_revisions.pop(name, None)
 
         removed = [q for q, info in self._tool_map.items() if info.server_name == name]
         for q in removed:
@@ -247,40 +314,16 @@ class MCPManager:
 
     async def _discover_tools(self) -> None:
         """Discover tools from all connected MCP servers."""
-        self._tool_map.clear()
-
         for name, client in self._clients.items():
             if not client.is_connected:
+                self._tool_map = {key: tool for key, tool in self._tool_map.items() if tool.server_name != name}
+                self._tool_revisions.pop(name, None)
                 continue
 
             try:
-                tools = await client.list_tools()
+                await self.refresh_server_tools(name)
             except Exception as e:
                 logger.error("MCP discovery failed: server=%s error_type=%s", name, type(e).__name__)
-                continue
-
-            for tool in tools:
-                tool_name = tool.get("name", "")
-                if not tool_name:
-                    continue
-
-                # Prefix tool name with server name to prevent collisions
-                qualified_name = f"mcp__{name}__{tool_name}"
-
-                self._tool_map[qualified_name] = _MCPToolInfo(
-                    server_name=name,
-                    tool_name=tool_name,
-                    description=tool.get("description", ""),
-                    input_schema=tool.get("inputSchema", {}),
-                    title=tool.get("title"),
-                )
-
-                logger.debug(
-                    "Discovered MCP tool: %s (%s/%s)",
-                    qualified_name,
-                    name,
-                    tool_name,
-                )
 
     async def get_tools(self) -> list[Callable[..., Any]]:
         """Get all MCP tools as callables suitable for nagents Agent.
@@ -305,7 +348,7 @@ class MCPManager:
 
         return tools
 
-    async def get_tool_definitions(self) -> list[ToolDefinition]:
+    async def get_tool_definitions(self, *, server_name: str = "") -> list[ToolDefinition]:
         """Get all MCP tools as nagents ToolDefinition objects.
 
         Returns fully-formed ToolDefinition objects that can be
@@ -319,6 +362,8 @@ class MCPManager:
 
         registry = ToolRegistry()
         for qualified_name, tool_info in self._tool_map.items():
+            if server_name and tool_info.server_name != server_name:
+                continue
             wrapper = self._create_tool_wrapper(qualified_name, tool_info)
             registry.register(
                 wrapper,
@@ -454,17 +499,18 @@ class MCPManager:
         """Disconnect from all MCP servers gracefully."""
         logger.info("Disconnecting from %d MCP servers", len(self._clients))
 
-        async def _disconnect_one(name: str, client: MCPClient) -> None:
+        async def _disconnect_one(name: str, connection: _Connection) -> None:
             try:
-                await client.disconnect()
+                await connection.release()
                 logger.info("Disconnected from MCP server '%s'", name)
             except Exception as e:
                 logger.error("MCP disconnect failed: server=%s error_type=%s", name, type(e).__name__)
 
-        await asyncio.gather(*(_disconnect_one(name, client) for name, client in self._clients.items()))
-
+        connections, self._connections = self._connections, {}
         self._clients.clear()
         self._tool_map.clear()
+        self._tool_revisions.clear()
+        await asyncio.gather(*(_disconnect_one(name, connection) for name, connection in connections.items()))
 
     async def __aenter__(self) -> "MCPManager":
         await self.connect_all()
