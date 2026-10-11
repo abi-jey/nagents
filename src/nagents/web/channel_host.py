@@ -712,7 +712,7 @@ class ChannelHost:
                 if self.work_tasks.get(work.session_id) is task:
                     self.work_tasks.pop(work.session_id)
                 self.work_cleanup.pop(work.session_id, None)
-                self.changed.set()
+                self.state.changed()
 
         self.work_cleanup[work.session_id] = asyncio.create_task(cleanup(), name=f"ngn-claim-cleanup-{work.session_id}")
 
@@ -749,7 +749,10 @@ class ChannelHost:
                         run.outcome = "cancelled" if status in {"interrupted", "queued"} else status
                         self.state.finish(run)
                     self.work_tasks.pop(work.session_id, None)
-                    self.changed.set()
+                    # finish() may have woken the timer worker while this
+                    # durable claim still excluded its session. Notify both
+                    # schedulers after the lane is actually available.
+                    self.state.changed()
 
             # SQL alone joins its commit before propagating cancellation. Own
             # the entire finalizer so Stop/shutdown cannot skip lane cleanup
