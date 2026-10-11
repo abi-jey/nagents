@@ -31,6 +31,7 @@ from nagents.types import TextContent
 
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
+from .config import AgentProfile
 from .connection import build_provider
 from .credentials import ProviderLogin
 from .credentials import ProviderLoginStore
@@ -159,6 +160,8 @@ class Harness:
         self._delivery_definition: ToolDefinition | None = None
         self._delivery_binding: ToolDefinition | None = None
         self._permission_ceiling = "reviewer" if config.read_only else "build"
+        self._permission_parents: tuple[Harness, ...] = ()
+        self._inherited_tool_profiles: tuple[AgentProfile, ...] = ()
         self._approval_lock = asyncio.Lock()
         self._owns_auth = True
         self._parent_instructions = ""
@@ -243,9 +246,59 @@ class Harness:
             self.config.read_only
             or self._permission_ceiling == "reviewer"
             or (self._is_subagent and self.tasks.root.harness.mode == "reviewer")
+            or any(parent.mode == "reviewer" for parent in self._permission_parents)
         ):
             return "reviewer"
         return profile.mode
+
+    def inherit_tool_permissions(self, parent: "Harness", *, continuing: bool = False) -> None:
+        """Retain the original ceiling and enforce later ancestor restrictions."""
+        parent.refresh_tool_policy()
+        self._permission_parents = parent._permission_parents if continuing else (*parent._permission_parents, parent)
+        denied = tuple(
+            name for name, enabled in parent.tool_settings.agents.get(parent.config.agent, {}).items() if not enabled
+        )
+        self._inherited_tool_profiles = (
+            *parent._inherited_tool_profiles,
+            replace(parent.config.profile(parent.config.agent)),
+            AgentProfile(denied_tools=denied),
+        )
+
+    def refresh_tool_policy(self) -> None:
+        self.tool_settings.load()
+        for parent in self._permission_parents:
+            parent.tool_settings.load()
+
+    def tool_enabled(self, name: str) -> bool:
+        profiles = (
+            self.config.profile(self.config.agent),
+            *self._inherited_tool_profiles,
+            *(parent.config.profile(parent.config.agent) for parent in self._permission_parents),
+        )
+        return all(
+            (profile.tools is None or name in profile.tools) and name not in profile.denied_tools
+            for profile in profiles
+        ) and all(owner.tool_settings.enabled(owner.config.agent, name) for owner in (self, *self._permission_parents))
+
+    @property
+    def delegatable_profile_names(self) -> tuple[str, ...]:
+        policies = (
+            self.config.profile(self.config.agent),
+            *self._inherited_tool_profiles,
+            *(parent.config.profile(parent.config.agent) for parent in self._permission_parents),
+        )
+        return tuple(
+            name
+            for name in self.config.profile_names
+            if self.config.profile(name).subagent_available
+            and all(profile.allowed_agents is None or name in profile.allowed_agents for profile in policies)
+        )
+
+    def delegation_catalog(self) -> str:
+        return "; ".join(
+            f"{name}: {self.config.profile(name).description or 'Configured agent'}"
+            for name in self.delegatable_profile_names
+        )
 
     @property
     def can_delegate(self) -> bool:
@@ -254,6 +307,7 @@ class Harness:
             self.allow_subagents
             and root.allow_subagents
             and self.subagent_depth < min(self.config.max_subagent_depth, root.config.max_subagent_depth)
+            and bool(self.delegatable_profile_names)
         )
 
     @contextmanager
@@ -331,10 +385,13 @@ class Harness:
                 + "\n"
             )
         if delegation_available:
+            example_agent = (
+                "assistant" if "assistant" in self.delegatable_profile_names else self.delegatable_profile_names[0]
+            )
             base += (
                 "\nHandle small or tightly coupled work directly unless delegation is requested. "
-                f"When available in your tools, use {delegation_name}(prompt, agent='assistant') for substantial independent work, or select an explicitly configured agent profile. "
-                f"Available agents: {', '.join(self.config.profile_names)}. "
+                f"When available in your tools, use {delegation_name}(prompt, agent='{example_agent}') for substantial independent work, or select an explicitly configured agent profile. "
+                f"Available agents: {self.delegation_catalog()}. "
                 "Children cannot exceed your permission ceiling; writes and shell still pass through the host approval policy. It returns immediately; "
                 "continue useful independent work while children run. When only waiting, end this model turn without tool calls; "
                 "the harness waits and resumes you with their untrusted background results. Then complete the task. "
@@ -463,9 +520,11 @@ class Harness:
                 raise PermissionError("Harness closed during approval; no action was taken")
             if approved is not True:
                 raise PermissionError(f"Approval denied for {tool}; no action was taken")
-            self.tool_settings.load()
-            if not self.tool_settings.enabled(self.config.agent, tool):
-                raise PermissionError(f"Tool {tool} is disabled for this agent in .ngn/tools.yaml")
+            self.refresh_tool_policy()
+            if not self.tool_enabled(tool):
+                raise PermissionError(
+                    f"Tool {tool} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
+                )
 
     async def emit(self, event: HarnessEvent) -> None:
         if self._queue is not None:
@@ -781,6 +840,8 @@ class Harness:
     async def set_agent(self, name: str) -> None:
         with self.operation("set agent"):
             profile = self.config.profile(name)
+            if not profile.user_invocable:
+                raise ValueError(f"Agent {name!r} is available only for delegation")
             if profile.provider:
                 await self._select_provider(profile.provider)
             elif self.config.provider and self.config.provider != self.providers.active and self.providers.active:

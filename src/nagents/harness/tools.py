@@ -194,9 +194,11 @@ class HarnessExecutor(ToolExecutor):
         call = copy.deepcopy(tool_call)
         token = self.tools.call_id.set(call.id)
         try:
-            self.harness.tool_settings.load()
-            if not self.harness.tool_settings.enabled(self.harness.config.agent, call.name):
-                raise PermissionError(f"Tool {call.name} is disabled for this agent in .ngn/tools.yaml")
+            self.harness.refresh_tool_policy()
+            if not self.harness.tool_enabled(call.name):
+                raise PermissionError(
+                    f"Tool {call.name} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
+                )
             tool = self.harness.resources.definition(call.name)
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)
             if call.name == "delegate" and not self.harness.can_delegate:

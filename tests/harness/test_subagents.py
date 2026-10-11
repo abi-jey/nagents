@@ -706,7 +706,7 @@ def test_reviewer_delegation_and_post_hook_escalation_denial(tmp_path: Path, mon
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script, agent="reviewer")
         harness.config.profiles["audit"] = AgentProfile(
-            mode="reviewer", instructions="Look for races", model="ignored-child-model"
+            mode="reviewer", instructions="Look for races", model="configured-child-model"
         )
         harness.agent.plugins.append(Escalate())
         try:
@@ -724,7 +724,7 @@ def test_reviewer_delegation_and_post_hook_escalation_denial(tmp_path: Path, mon
             child = harness.tasks._create_child("audit")
             try:
                 assert child.mode == "reviewer"
-                assert child.agent.provider.model == harness.agent.provider.model
+                assert child.agent.provider.model == "configured-child-model"
                 assert "Look for races" in (child.agent.system_prompt or "")
                 child.config.profiles["audit"].mode = "build"
                 denied = await child.agent.tool_executor.execute(

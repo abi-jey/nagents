@@ -87,6 +87,7 @@ nav:
       - ngn Installation: guide/ngn-installation.md
       - API Changes in 0.23: guide/api-changes.md
       - ngn Configuration: guide/ngn-configuration.md
+      - Agent Definitions: guide/agent-definitions.md
       - ngn Local Web Client: guide/ngn-web.md
       - Agent Designer: guide/agent-designer.md
       - Private Web Deployment: guide/ngn-web-deployment.md

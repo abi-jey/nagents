@@ -517,6 +517,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides["plugins"] = tuple(plugins)
             overrides["cli_plugins"] = tuple(plugins[len(config.plugins) :])
         config = replace(config, **overrides)
+        if not getattr(args, "design", None) and not config.profile(config.agent).user_invocable:
+            raise ValueError(f"Agent {config.agent!r} is available only for delegation")
         if "model" in overrides:
             config.model_explicit = True
             config.model_config_explicit = True

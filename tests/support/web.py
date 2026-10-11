@@ -170,6 +170,7 @@ class LiveStream:
         self.input: asyncio.Queue[Message] = asyncio.Queue()
         self.input.put_nowait({"type": "websocket.connect"})
         self.accepted = asyncio.Event()
+        self.subscribed = asyncio.Event()
         self.admitted = asyncio.Event()
         scope: Scope = {
             "type": "websocket",
@@ -207,7 +208,9 @@ class LiveStream:
                         self.admitted.set()
                     self.output.put_nowait(record)
                 elif frame.get("type") == "snapshot":
-                    self.output.put_nowait({"event": "snapshot", **frame})
+                    # The subscription handshake is not a public event. A test
+                    # may already be consuming output while start() is waiting.
+                    self.subscribed.set()
         elif kind == "websocket.close":
             self.disconnected = True
 
@@ -216,12 +219,7 @@ class LiveStream:
         await self.input.put(
             {"type": "websocket.receive", "text": json.dumps({"type": "subscribe", "session_id": self.session_id})}
         )
-        while True:
-            frame = await asyncio.wait_for(self.output.get(), HANG_GUARD)
-            if frame.get("event") == "snapshot":
-                break
-            self.output.put_nowait(frame)
-            await asyncio.sleep(0)
+        await asyncio.wait_for(self.subscribed.wait(), HANG_GUARD)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=URL) as client:
             response = await client.post(
                 "/api/messages",

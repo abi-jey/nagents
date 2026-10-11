@@ -240,7 +240,8 @@ def test_root_ack_finishes_stream_then_wakes_once_without_subscriber(
             assert background[-1]["event"] == "run_finished" and background[-1]["status"] == "completed"
             assert len(background) > 64  # No subscriber is draining an HTTP queue.
             assert len({event["run_id"] for event in background}) == 1
-            assert background[0]["run_id"] != events[0]["run_id"]
+            foreground = next(event for event in events if event["event"] == "run_started")
+            assert background[0]["run_id"] != foreground["run_id"]
             assert all(event["session_id"] == session_id and event["schema_version"] == 1 for event in background)
             assert not activity["pending_wakeups"] and not activity["active_run_id"]
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
