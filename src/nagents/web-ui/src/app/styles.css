@@ -281,7 +281,7 @@ main {
 .workspace-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 20px; border: 1px solid var(--border-control); border-radius: 10px; color: var(--text-reading); background: var(--surface-navigation); }
 .workspace-dialog::backdrop { background: #10100dbd; }
 .provider-logo { display: inline-flex; width: 26px; height: 26px; margin-inline-end: 7px; flex: 0 0 26px; align-items: center; justify-content: center; vertical-align: middle; }
-.provider-logo.has-brand { background: #fff; border-radius: 6px; }
+.provider-logo.has-brand { background: #fff; border-radius: 6px; color-scheme: light; }
 .provider-logo img { display: block; object-fit: contain; }
 .workspace-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .workspace-dialog h2 { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0; font-size: 18px; overflow-wrap: anywhere; }
