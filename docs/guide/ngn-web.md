@@ -249,6 +249,11 @@ chat activity, enabled tool selections, and MCP connection status. **Manage tool
 and **Settings** open their corresponding controls. Provider logos are bundled
 with ngn and served locally; custom endpoints use a neutral connection icon.
 
+Choose **Fork chat** to immediately create a branch named `<chat title> · fork 1`,
+then `fork 2`, and so on. Numbers advance per parent chat for each successful fork,
+including forks given custom names with `/fork [title]`; renaming or deleting a
+branch does not reset the sequence. A fork of a fork has its own sequence.
+
 ### Browser Slash Commands
 
 Type `/` in the composer for suggestions, or submit `/help` to see the supported
@@ -260,7 +265,7 @@ draft and display an error.
 | --- | --- |
 | `/login` | Open server-side ChatGPT device sign-in. |
 | `/new` | Start or reuse a blank conversation. |
-| `/fork [title]` | Copy the current idle conversation into an independent branch and select it. Other chats may continue running. |
+| `/fork [title]` | Copy the current idle conversation into an independent branch and select it. Title is optional: defaults to `<chat title> · fork 1`, `fork 2`, etc. Other chats may continue running. |
 | `/rename <title>` | Persist a name of 1–80 printable characters for the current conversation. |
 | `/sessions [session ID]`, `/resume [session ID]` | Browse conversations or select one. |
 | `/compact` | Queue compaction of the submitted conversation. |
