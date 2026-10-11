@@ -59,7 +59,19 @@ async def idle_history(state: WebState, root: str, count: int) -> list[dict[str,
         while True:
             rows = await state.history.snapshot(root)
             if sum(row["role"] == "user" for row in rows) >= count and state.run_for(root) is None:
-                return rows
+                # The producer finishes before the inbox worker commits its
+                # terminal receipt. Forking also requires that queue to be idle.
+                pending = await state.channels.store._transaction(
+                    lambda db: (
+                        db.execute(
+                            "SELECT 1 FROM ngn_web_inbox WHERE session_id = ? AND status IN ('queued', 'running') LIMIT 1",
+                            (root,),
+                        ).fetchone()
+                        is not None
+                    )
+                )
+                if not pending:
+                    return rows
             await asyncio.sleep(0.005)
 
 
@@ -191,7 +203,7 @@ def test_retry_precedes_changed_skill_discovery_and_preserves_raw_chat_and_fork(
                 raw_history = await state.history.get_history(root)
                 assert raw_history[0].content == seen[0]
                 fork = await client.post(f"/api/sessions/{root}/fork", headers=headers, json={})
-                assert fork.status_code == 200
+                assert fork.status_code == 200, fork.text
                 copied = [row for row in fork.json()["history"] if row["role"] == "user"]
                 assert copied[0]["content"] == raw and not copied[0].get("message_id")
 
