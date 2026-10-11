@@ -165,7 +165,7 @@ def _deliveries(db: sqlite3.Connection, source: str, target: str, ids: dict[int,
 def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
     """Use the caller's BEGIN IMMEDIATE transaction; never commit partially."""
     previous = root_title(db, source)
-    title = title_text(title, optional=True) or ("Fork of " + (previous or "New session"))[:80]
+    title = title_text(title, optional=True)
     tables = {str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if (
         "ngn_web_inbox" in tables
@@ -174,6 +174,20 @@ def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
         ).fetchone()
     ):
         raise SessionForkError("Finish or cancel queued work in this chat before forking it.")
+    # Allocate in the same transaction as the copy: concurrent forks serialize,
+    # failed copies consume no number, and renamed/deleted children cannot reset it.
+    db.execute(
+        "INSERT INTO ngn_session_fork_counters VALUES (?, 1) "
+        "ON CONFLICT(session_id) DO UPDATE SET last_number = last_number + 1",
+        (source,),
+    )
+    number = db.execute(
+        "SELECT last_number FROM ngn_session_fork_counters WHERE session_id = ?",
+        (source,),
+    ).fetchone()[0]
+    if not title:
+        suffix = f" · fork {number}"
+        title = (previous or "New session")[: 80 - len(suffix)].rstrip() + suffix
     boundary = db.execute("SELECT compacted_at_message_id FROM v2_sessions WHERE id = ?", (source,)).fetchone()[0]
     target = f"ngn-{uuid4().hex[:16]}"
     db.execute("INSERT INTO v2_sessions (id, user_id) VALUES (?, 'harness')", (target,))

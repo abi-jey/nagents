@@ -13,6 +13,8 @@ from nagents.events import TextDoneEvent
 from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
 from nagents.session.forks import SessionForkError
+from nagents.session.forks import fork_in
+from nagents.session.forks import transaction
 from nagents.types import ImageContent
 from nagents.types import Message
 from nagents.types import TextContent
@@ -106,6 +108,7 @@ def test_failed_copy_rolls_back_root_metadata_and_selection(tmp_path: Path, monk
             assert len(await harness.list_sessions()) == 1
             with closing(sqlite3.connect(harness.agent.session.db_path)) as db:
                 assert db.execute("SELECT * FROM ngn_session_forks").fetchall() == []
+                assert db.execute("SELECT * FROM ngn_session_fork_counters").fetchall() == []
             with harness.operation("held"), pytest.raises(RuntimeError, match="busy"):
                 await harness.fork_session()
             for invalid in ("", "  ", "line\nbreak", "x" * 81):
@@ -118,6 +121,60 @@ def test_failed_copy_rolls_back_root_metadata_and_selection(tmp_path: Path, monk
             harness.wakeup_handler = schedule
             with pytest.raises(SessionForkError, match="host's fork"):
                 await harness.fork_session()
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+def test_fork_numbers_are_atomic_and_per_source_even_with_custom_titles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", demo=True))
+        monkeypatch.setattr(harness, "load_project_instructions", lambda: None)
+        try:
+            await harness.initialize()
+            source = harness.session_id
+            await harness.rename_session("Design")
+            custom = await harness.fork_session("Alternative")
+            nested = await harness.fork_session()
+            assert (
+                next(item for item in await harness.list_sessions() if item.id == nested).title
+                == "Alternative · fork 1"
+            )
+            path = harness.agent.session.db_path
+            forks = await asyncio.gather(*(transaction(path, lambda db: fork_in(db, source)) for _ in range(4)))
+            sessions = {item.id: item for item in await harness.list_sessions()}
+            assert {sessions[item].title for item in forks} == {f"Design · fork {number}" for number in range(2, 6)}
+            assert all(sessions[item].forked_from == source for item in forks)
+            await harness.resume(source)
+            await harness.rename_session("Renamed design")
+            following = await harness.fork_session("   ")
+            assert (
+                next(item for item in await harness.list_sessions() if item.id == following).title
+                == "Renamed design · fork 6"
+            )
+            assert sessions[custom].title == "Alternative"
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("name", ["x" * 80, "🌳" * 80])
+def test_automatic_fork_title_keeps_number_when_source_name_is_long(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    async def scenario() -> None:
+        harness = Harness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "state", demo=True))
+        monkeypatch.setattr(harness, "load_project_instructions", lambda: None)
+        try:
+            await harness.initialize()
+            await harness.rename_session(name)
+            target = await harness.fork_session()
+            title = next(item for item in await harness.list_sessions() if item.id == target).title
+            assert title.endswith(" · fork 1") and len(title) == 80
         finally:
             await harness.close()
 

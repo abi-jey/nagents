@@ -50,7 +50,34 @@ async def test_atomic_upgrade_preserves_existing_messages(tmp_path: Path) -> Non
             (3,),
             (4,),
             (5,),
+            (6,),
         ]
+
+
+@pytest.mark.asyncio
+async def test_fork_counter_upgrade_seeds_existing_children_and_cleans_only_deleted_parent(tmp_path: Path) -> None:
+    path = tmp_path / "forks-v5.db"
+    await MigrationManager(path, migrations=migrations[:5]).initialize()
+    with sqlite3.connect(path) as db:
+        db.executemany(
+            "INSERT INTO v2_sessions (id, user_id) VALUES (?, 'harness')",
+            [(name,) for name in ("root", "first", "second", "grandchild", "orphan")],
+        )
+        db.executemany(
+            "INSERT INTO ngn_session_forks VALUES (?, ?)",
+            [("first", "root"), ("second", "root"), ("grandchild", "first"), ("orphan", "")],
+        )
+    await SessionManager(path).initialize()
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT * FROM ngn_session_fork_counters ORDER BY session_id").fetchall() == [
+            ("first", 1),
+            ("root", 2),
+        ]
+        db.execute("DELETE FROM v2_sessions WHERE id = 'first'")
+        assert db.execute("SELECT * FROM ngn_session_fork_counters").fetchall() == [("root", 2)]
+        assert db.execute("SELECT forked_from FROM ngn_session_forks WHERE session_id = 'grandchild'").fetchone() == (
+            "",
+        )
 
 
 @pytest.mark.asyncio
@@ -87,6 +114,7 @@ async def test_independent_session_initializers_serialize_fresh_and_upgrade(tmp_
                 (3,),
                 (4,),
                 (5,),
+                (6,),
             ]
             assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
 
@@ -156,7 +184,7 @@ async def test_targeted_migration_persists_versions_independently_of_atomic_init
 ) -> None:
     path = tmp_path / "targeted.db"
     manager = MigrationManager(path, migrations=migrations, atomic=atomic)
-    for version in (1, 4, 5, 1, 5):
+    for version in (1, 4, 5, 6, 5, 1, 6):
         await manager.migrate_to(version)
         assert await manager.get_version() == version
         with sqlite3.connect(path) as db:
@@ -165,5 +193,6 @@ async def test_targeted_migration_persists_versions_independently_of_atomic_init
             ]
             names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             assert ("ngn_web_uploads" in names) == (version >= 4)
-            assert ("ngn_session_forks" in names) == (version == 5)
+            assert ("ngn_session_forks" in names) == (version >= 5)
+            assert ("ngn_session_fork_counters" in names) == (version >= 6)
             assert "v2_sessions" in names
