@@ -29,6 +29,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Configure model-based compaction | `ModelCompaction` | `compaction.py` |
 | Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
 | Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools.py` |
+| Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agent_definitions.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |
 | Prompt/local commands | `CommandRegistry.register`, `CommandResult` | `harness/commands.py` |
 | Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/subagents.py` |
@@ -63,11 +64,39 @@ then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
 }
 ```
 
-`AgentProfile` has `mode`, `instructions`, and `model`. `assistant` is the only
-built-in agent and uses build mode. Other names require explicit profiles; use
-`"mode": "reviewer"` for read-only behavior. Custom profiles cannot replace
-`assistant`. A profile's nonempty model is selected on activation; inspect the
-effective model rather than assuming the top-level model always wins.
+`AgentProfile` contains instructions, description, mode, model/provider routing,
+tool restrictions, delegation target restrictions, and invocation availability.
+`assistant` is the only built-in agent. Other names require JSON profiles or
+discovered/imported definitions; `mode: reviewer` restricts them to read-only
+operation. Custom profiles cannot replace `assistant`. A nonempty profile model
+applies to selection and delegated children; inspect the effective model rather
+than assuming the top-level model always wins.
+
+For reusable native agents, create `.ngn/agents/<name>.md` with YAML frontmatter
+and a Markdown instruction body. `description` is required; `name` defaults to
+the filename. Optional fields are `mode`, `model`, `provider`, `tools`,
+`denied_tools`, `allowed_agents`, `user_invocable`, and `subagent_available`.
+Omitted tools inherit; `tools: []` allows no tools. Parent and ancestor ceilings
+and `.ngn/tools.yaml` remain additional restrictions, including on follow-ups.
+`user_invocable: false` hides an agent from user selection;
+`subagent_available: false` prevents delegation.
+
+Discovery runs at startup; workspace roots require `--trust-project`. Personal
+native definitions live in `$XDG_CONFIG_HOME/ngn/agents`. Foreign Markdown roots
+for Claude, Copilot/VS Code, OpenCode, Cursor, Gemini and Antigravity, plus Codex
+`.codex/agents/*.toml`, have separate strict adapters. `.agents/agents` uses
+Antigravity semantics, including no tools when omitted. Do not move a native ngn
+definition there and assume identical permissions.
+
+Use trusted JSON `agent_imports: [{"path": "../.claude/agents/review.md", "format":
+"claude", "model": "exact-model-id", "provider": "connection-name"}]` for explicit
+imports and model mapping. Foreign model aliases require an explicit override;
+unknown tool names require an explicit `tool_map` to installed ngn tools.
+Unsupported restrictions, hooks and MCP declarations reject that definition and
+produce a source diagnostic. Importing a definition never starts its foreign
+runtime. Inspect `config.agent_diagnostics` or web settings before claiming it
+loaded, and restart ngn after changing definitions. JSON profiles and Designer
+YAML remain distinct; Designer `instructions.file` is literal prompt text.
 
 JSON plugin paths and `data_dir` resolve relative to the config file. CLI
 `--plugin` paths resolve relative to the invoking directory. JSON plugin lists

@@ -309,7 +309,7 @@ export function SettingsDialog({
                   )}
                   {!!snapshot.agent_diagnostics?.length && (
                     <details className="settings-disclosure"><summary>Agent loading diagnostics ({snapshot.agent_diagnostics.length})</summary>
-                      <ul>{snapshot.agent_diagnostics.map((note, index) => <li key={index}>{note}</li>)}</ul>
+                      <ul className="settings-agent-diagnostics">{snapshot.agent_diagnostics.map((note, index) => <li key={index}>{note}</li>)}</ul>
                     </details>
                   )}
                   {errors.agent && (

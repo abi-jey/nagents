@@ -197,7 +197,7 @@ class HarnessExecutor(ToolExecutor):
             self.harness.refresh_tool_policy()
             if not self.harness.tool_enabled(call.name):
                 raise PermissionError(
-                    f"Tool {call.name} is disabled by this agent's inherited tool policy or .ngn/tools.yaml"
+                    f"Tool {call.name} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
                 )
             tool = self.harness.resources.definition(call.name)
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)

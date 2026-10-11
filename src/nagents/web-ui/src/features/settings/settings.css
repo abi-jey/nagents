@@ -356,6 +356,12 @@
     min-height: 44px;
   }
 }
+.settings-agent-diagnostics {
+  padding-inline-start: 18px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+}
 .settings-disclosure {
   border-top: 1px solid var(--border-group);
 }

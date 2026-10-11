@@ -523,7 +523,7 @@ class Harness:
             self.refresh_tool_policy()
             if not self.tool_enabled(tool):
                 raise PermissionError(
-                    f"Tool {tool} is disabled by this agent's inherited tool policy or .ngn/tools.yaml"
+                    f"Tool {tool} is disabled for this agent by its inherited tool policy or .ngn/tools.yaml"
                 )
 
     async def emit(self, event: HarnessEvent) -> None:
