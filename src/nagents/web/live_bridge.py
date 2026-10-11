@@ -21,6 +21,7 @@ from .service import Run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Collection
 
     from nagents.live.delegation import LiveAppend
 
@@ -58,43 +59,25 @@ def _speech_data(transcript: str) -> tuple[list[dict[str, object]], bool]:
     return recent, len(recent) < len(fragments)
 
 
-def voice_prompt(transcript: str) -> str:
-    """Keep recent speech as data, preserving speaker order without inventing turns."""
-    recent, omitted = _speech_data(transcript)
-    if not recent or not any(part["speaker"] == "user" for part in recent):
+def voice_prompt(transcript: str, seen: Collection[str] = ()) -> str:
+    """Join new caller fragments; transport metadata is inspected separately."""
+    recent, _ = _speech_data(transcript)
+    text = "".join(
+        str(part["text"])
+        for part in recent
+        if part["speaker"] == "user"
+        and json.dumps([part["text"], part.get("start_ms"), part.get("end_ms")], ensure_ascii=False) not in seen
+    ).strip()
+    if not text:
         raise ValueError("No caller speech is available yet; ask the caller to repeat the request")
-    prefix = "Earlier speech is omitted; consult this chat's saved history for previous outcomes. " if omitted else ""
-    return (
-        "Live voice request for the selected chat. The JSON below contains partial speech fragments, "
-        "not verified complete turns. Respond to the latest unresolved caller request, respect corrections "
-        "and previously committed chat history, and do not repeat completed actions. "
-        "Use your usual tools and approval rules. Return a concise answer for the voice to speak. "
-        + prefix
-        + "Speech data:\n"
-        + json.dumps(recent, ensure_ascii=False)
-    )
+    return text
 
 
 def native_voice_prompt(request: LoginHandoff) -> str:
-    """The native handoff owns the task; captions are optional historical context."""
+    """Send only the explicit request; captions and IDs stay in inspection data."""
     if not request.text.strip() or len(request.text) > MAX_HANDOFF_TEXT:
         raise ValueError("A native voice handoff needs a bounded request")
-    recent, omitted = _speech_data(request.transcript)
-    data: dict[str, object] = {"delegation_id": request.identifier, "request": request.text}
-    if request.offset_ms is not None:
-        data["offset_ms"] = request.offset_ms
-    return (
-        "Live voice request for the selected chat. Perform the explicit request in the handoff data below. "
-        "The separate speech data is optional historical context captured when this handoff arrived; "
-        "it may be partial or absent and must not replace the explicit request with an earlier task. "
-        "Respect this chat's saved history and previously completed actions. "
-        "Use your usual tools and approval rules. Return a concise answer for the voice to speak. "
-        + ("Earlier speech is omitted. " if omitted else "")
-        + "Handoff data:\n"
-        + json.dumps(data, ensure_ascii=False)
-        + "\nSpeech data:\n"
-        + json.dumps(recent, ensure_ascii=False)
-    )
+    return request.text.strip()
 
 
 def voice_display(transcript: str, seen: set[str]) -> tuple[str, set[str]]:
@@ -208,7 +191,7 @@ class MainAgentBridge:
 
     def _admitted(self, identifier: str, run_id: str, prompt: str) -> None:
         self._request_runs[identifier] = run_id
-        self._report(identifier, "working", "The queued request reached the assistant.", run_id, request_input=prompt)
+        self._report(identifier, "working", "Processing…", run_id, request_input=prompt)
 
     def _model(self, identifier: str, run_id: str, request: dict[str, object]) -> None:
         if self._request_runs.get(identifier) == run_id:
@@ -379,7 +362,7 @@ class MainAgentBridge:
             status("queued", "Waiting for the assistant.", request_transcript=transcript)
         try:
             if native is None:
-                prompt = voice_prompt(transcript)
+                prompt = voice_prompt(transcript, self._displayed_speech)
                 display, speech = voice_display(transcript, self._displayed_speech)
             else:
                 prompt = native_voice_prompt(native)
@@ -424,9 +407,7 @@ class MainAgentBridge:
                             async with state.history.voice_request(
                                 self.session_id, run.id, display, voice_session_id=self.voice_session_id
                             ):
-                                status(
-                                    "working", "The request was sent to the assistant.", run.id, request_input=prompt
-                                )
+                                status("working", "Processing…", run.id, request_input=prompt)
                                 await state.produce_session(run, prompt)
                     except asyncio.CancelledError:
                         run.outcome = "cancelled"
@@ -465,7 +446,7 @@ class MainAgentBridge:
 
                 run.task = asyncio.create_task(execute(), name=f"ngn-live-backend-{run.id}")
                 run.task.add_done_callback(finished)
-                status("working", "The assistant is working.", run.id)
+                status("working", "Processing…", run.id)
         except (HTTPException, TimeoutError):
             status("failed", "The assistant stayed busy; this request did not start.")
             return "The assistant is still busy with another request. Please ask again in a moment."

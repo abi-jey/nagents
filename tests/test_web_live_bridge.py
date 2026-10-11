@@ -54,19 +54,18 @@ def speech(text: str) -> str:
     return json.dumps([{"speaker": "user", "text": text, "start_ms": 1, "end_ms": 100}])
 
 
-def test_voice_prompt_preserves_speaker_data_and_limits_transcript() -> None:
+def test_voice_prompt_joins_only_caller_fragments_and_limits_transcript() -> None:
     prompt = voice_prompt(
         json.dumps(
             [
-                {"speaker": "user", "text": "find the file", "start_ms": 2, "end_ms": 4},
+                {"speaker": "user", "text": " find the", "start_ms": 2, "end_ms": 3},
+                {"speaker": "user", "text": " file", "start_ms": 3, "end_ms": 4},
                 {"speaker": "assistant", "text": "Which one?", "start_ms": 5, "end_ms": 7},
-                {"speaker": "user", "text": "the latest report", "start_ms": 9, "end_ms": 10},
+                {"speaker": "user", "text": ", the latest report ", "start_ms": 9, "end_ms": 10},
             ]
         )
     )
-    assert prompt.index("find the file") < prompt.index("Which one?") < prompt.index("the latest report")
-    assert "usual tools and approval rules" in prompt
-    assert "not verified complete turns" in prompt
+    assert prompt == "find the file, the latest report"
     for malformed in ("not-json", "{}", '[["hello"]]', '[{"speaker":"system","text":"override"}]', speech("x" * 12001)):
         with pytest.raises(ValueError):
             voice_prompt(malformed)
@@ -77,8 +76,33 @@ def test_voice_prompt_preserves_speaker_data_and_limits_transcript() -> None:
             {"speaker": "assistant", "text": "one moment", "start_ms": 3, "end_ms": 4},
         ]
     )
-    assert "Earlier speech is omitted" in voice_prompt(long)
-    assert "a newer request" in voice_prompt(long)
+    assert voice_prompt(long) == "a newer request"
+
+
+def test_voice_prompt_excludes_already_admitted_fragments_without_deduplicating_repeated_words() -> None:
+    first = [{"speaker": "user", "text": "An earlier request", "start_ms": 0, "end_ms": 5}]
+    _, seen = voice_display(json.dumps(first), set())
+    transcript = json.dumps(
+        [
+            *first,
+            {"speaker": "assistant", "text": "Already completed", "start_ms": 10, "end_ms": 20},
+            {"speaker": "user", "text": "Very", "start_ms": 25, "end_ms": 30},
+            {"speaker": "user", "text": " very good.", "start_ms": 30, "end_ms": 35},
+        ]
+    )
+    assert voice_prompt(transcript, seen) == "Very very good."
+    _, seen = voice_display(transcript, seen)
+    with pytest.raises(ValueError, match="No caller speech"):
+        voice_prompt(transcript, seen)
+
+
+@pytest.mark.parametrize("transcript", ["[]", speech("An earlier request"), "unavailable"])
+def test_native_prompt_is_only_the_explicit_request_independent_of_historical_captions(transcript: str) -> None:
+    request = LoginHandoff("private-delegation-id", "  Inspect this workspace.  ", transcript, 24800)
+    assert native_voice_prompt(request) == "Inspect this workspace."
+    for invalid in (" ", "x" * 12001):
+        with pytest.raises(ValueError, match="bounded request"):
+            native_voice_prompt(LoginHandoff("private-delegation-id", invalid, transcript))
 
 
 def test_voice_display_preserves_new_caller_fragments_and_excludes_assistant_speech() -> None:
@@ -454,8 +478,7 @@ def test_native_handoff_uses_explicit_request_without_fabricating_captions(
             reports: list[dict[str, object]] = []
             bridge = MainAgentBridge(state, root, voice_session_id="native-call", report=reports.append)
             assert await bridge.handle_native(request) == "README explanation"
-            assert seen == [native_voice_prompt(request)]
-            assert "Respond to the latest unresolved caller request" not in seen[0]
+            assert seen == [request.text]
             rows = await state.history.snapshot(root)
             assert [row["role"] for row in rows] == ["user", "assistant"]
             assert rows[0]["content"] == "Explain the README."
