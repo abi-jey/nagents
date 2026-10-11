@@ -157,7 +157,7 @@ test("snapshot recovery of a missed result replaces pending tool status without 
 });
 
 for (const [type, tag] of [["image/png", "img"], ["audio/wav", "audio"], ["video/mp4", "video"]]) {
-  test(`mounted ${tag} loads on demand, preserves its URL on replay, offers download and revokes on navigation`, async (t) => {
+  test(`mounted ${tag} ${tag === "img" ? "loads automatically" : "loads on demand"}, preserves its URL on replay, offers download and revokes on navigation`, async (t) => {
     const dom = new JSDOM("<div id='root'></div>");
     const descriptors = Object.getOwnPropertyDescriptors(globalThis);
     Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
@@ -172,8 +172,8 @@ for (const [type, tag] of [["image/png", "img"], ["audio/wav", "audio"], ["video
     }
     try {
       await render(value);
-      assert.equal(fetch.mock.callCount(), 0);
-      await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+      assert.equal(fetch.mock.callCount(), tag === "img" ? 1 : 0);
+      if (tag !== "img") await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
       const player = container.querySelector(tag)!;
       assert.equal(player.getAttribute("src"), "blob:preview");
       assert.equal(player.hasAttribute("autoplay"), false);
@@ -186,7 +186,10 @@ for (const [type, tag] of [["image/png", "img"], ["audio/wav", "audio"], ["video
       assert.equal(container.querySelector("a[download]")?.getAttribute("href"), "blob:preview");
       await render({ ...value, session_id: "different-root" });
       assert.equal(revoke.mock.callCount(), 1);
-      assert.equal(container.querySelector(tag), null);
+      if (tag === "img") {
+        assert.notEqual(container.querySelector(tag), player);
+        assert.equal(create.mock.callCount(), 2);
+      } else assert.equal(container.querySelector(tag), null);
     } finally {
       await act(async () => root.unmount());
       dom.window.close();

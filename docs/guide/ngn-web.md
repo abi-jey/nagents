@@ -942,6 +942,12 @@ Audio/video understanding, upload-to-external-channel forwarding, and uploads in
 offline demo/custom persistence adapters are outside this input path. See
 [browser input lifecycle](channels.md#browser-image-and-pdf-input) for details.
 
+Images delivered by the assistant appear inline automatically as their cards
+approach the visible chat area. **Download** saves the original file; **Unload
+preview** releases its memory, and **Show image preview** loads it again. Several
+images load in turn, with bounded memory use and a retry control if a preview
+cannot load. Audio and video deliveries retain their explicit load controls.
+
 ### GPT-Live Voice Conversations
 
 The **Voice** button beside **Attach** starts voice in the current chat. Grant
