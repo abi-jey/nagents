@@ -28,7 +28,7 @@ Definitions load at startup; restart ngn after editing them.
 ## Native format
 
 Use UTF-8 Markdown with a YAML header enclosed by `---`, followed by nonempty
-instructions. Multiline YAML strings work. The file's basename supplies the name
+instructions. Multiline YAML strings work; line endings normalize to LF. The file's basename supplies the name
 when `name` is omitted; `research/agent.md` uses the directory name.
 
 | Field | Meaning |

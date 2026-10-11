@@ -61,6 +61,16 @@ def test_native_omitted_and_explicit_empty_tools_differ(tmp_path: Path, field: s
     assert batch.profiles[0].tools == expected
 
 
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r"])
+def test_manifest_line_endings_normalize_without_losing_markdown(tmp_path: Path, separator: str) -> None:
+    path = tmp_path / "review.md"
+    body = "# Review\n\nKeep **formatting**.\n\n---\n\nMore instructions."
+    path.write_bytes(_markdown("description: Review", body).replace("\n", separator).encode("utf-8"))
+    batch = import_agents([{"path": str(path), "format": "native"}], tmp_path)
+    assert batch.diagnostics == ()
+    assert batch.profiles[0].instructions == body
+
+
 @pytest.mark.parametrize(
     "header, message",
     [
@@ -121,14 +131,14 @@ def test_discovery_order_and_collision_winner_are_deterministic(tmp_path: Path) 
     _write(tmp_path, ".claude/agents/b.md", _markdown("name: same\ndescription: Foreign"))
     _write(tmp_path, ".ngn/agents/z.md", _markdown("name: same\ndescription: Native winner"))
     _write(tmp_path, ".ngn/agents/a.md", _markdown("description: Alphabetical first"))
-    _write(tmp_path, ".ngn/agents/m.md", _markdown("name: same\ndescription: Earlier native"))
+    earlier = _write(tmp_path, ".ngn/agents/m.md", _markdown("name: same\ndescription: Earlier native"))
     first = discover_agents(tmp_path)
     assert first == discover_agents(tmp_path)
     assert [profile.name for profile in first.profiles] == ["a", "same"]
     assert first.profiles[-1].description == "Native winner"
     assert len(first.diagnostics) == 2
     assert "replaces" in first.diagnostics[-1]
-    assert ".ngn/agents/m.md" in first.diagnostics[-1]
+    assert str(earlier) in first.diagnostics[-1]
 
 
 @pytest.mark.parametrize(
@@ -362,7 +372,7 @@ def test_explicit_imports_map_models_and_tools_with_config_relative_paths(tmp_pa
         ([{"path": "a.md", "format": "native", "model": ""}], "model override must be nonempty"),
         ([{"path": "a.md", "format": "native", "tool_map": {"Read": []}}], "nonempty lists"),
         ([{"path": "a.md", "format": "native", "tool_map": {"Read": ["*"]}}], "invalid name"),
-        ([{"path": "missing.md", "format": "native"}], "No such file"),
+        ([{"path": "missing.md", "format": "native"}], "agent source file does not exist"),
     ],
 )
 def test_invalid_import_entries_are_actionable(tmp_path: Path, value: object, message: str) -> None:

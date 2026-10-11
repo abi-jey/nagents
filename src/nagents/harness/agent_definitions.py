@@ -298,15 +298,19 @@ def _checked_path(path: Path) -> Path:
 
 def _read(path: Path) -> str:
     path = _checked_path(path)
-    if not stat.S_ISREG(path.stat().st_mode):
+    try:
+        metadata = path.stat()
+    except FileNotFoundError:
+        raise ValueError("agent source file does not exist") from None
+    if not stat.S_ISREG(metadata.st_mode):
         raise ValueError("agent source must be a regular file")
-    if path.stat().st_size > MAX_AGENT_BYTES:
+    if metadata.st_size > MAX_AGENT_BYTES:
         raise ValueError("agent source exceeds 256 KiB")
     with path.open("rb") as stream:
         raw = stream.read(MAX_AGENT_BYTES + 1)
     if len(raw) > MAX_AGENT_BYTES:
         raise ValueError("agent source exceeds 256 KiB")
-    return raw.decode("utf-8-sig")
+    return raw.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _parse(path: Path, options: _Import) -> ParsedAgent:
