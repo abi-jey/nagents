@@ -127,7 +127,7 @@ main {
   .sidebar-collapsed .sidebar-header { justify-content: center; padding: 12px 4px; }
   .sidebar-collapsed .nav-brand > span:not(.brand-mark),
   .sidebar-collapsed .session-label, .sidebar-collapsed .session .session-title,
-  .sidebar-collapsed .session-delete, .sidebar-collapsed .session-more, .sidebar-collapsed .session-menu,
+  .sidebar-collapsed .session-delete, .sidebar-collapsed .session-more,
   .sidebar-collapsed .new-session > span, .sidebar-collapsed .sidebar-utility > span,
   .sidebar-collapsed .sidebar-utility > svg:last-child,
   .sidebar-collapsed .workspace-caption, .sidebar-collapsed .workspace-trigger > svg { display: none; }
@@ -280,6 +280,9 @@ main {
 .workspace-caption strong { font-weight: 500; font-size: 12px; color: var(--text-reading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 20px; border: 1px solid var(--border-control); border-radius: 10px; color: var(--text-reading); background: var(--surface-navigation); }
 .workspace-dialog::backdrop { background: #10100dbd; }
+.provider-logo { display: inline-flex; width: 26px; height: 26px; margin-inline-end: 7px; flex: 0 0 26px; align-items: center; justify-content: center; vertical-align: middle; }
+.provider-logo.has-brand { background: #fff; border-radius: 6px; }
+.provider-logo img { display: block; object-fit: contain; }
 .workspace-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .workspace-dialog h2 { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0; font-size: 18px; overflow-wrap: anywhere; }
 .workspace-dialog header button { display: grid; place-items: center; flex-shrink: 0; }
@@ -288,6 +291,25 @@ main {
 .workspace-dialog dd { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 14px; }
 .workspace-dialog footer { display: flex; justify-content: flex-end; margin-top: 24px; }
 .workspace-dialog footer button { display: inline-flex; align-items: center; gap: 8px; }
+.workspace-overview { overflow: auto; }
+.workspace-connection { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: var(--text-secondary); font-size: 12px; }
+.workspace-connection > span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-secondary); }
+.workspace-connection > span.connected { background: var(--text-positive, #72957d); }
+.workspace-location code { font-size: 12px; }
+.workspace-overview section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-group); }
+.workspace-overview h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.workspace-assistant dl { display: grid; gap: 10px; margin: 12px 0 0; }
+.workspace-assistant dl > div { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.workspace-assistant dt, .workspace-assistant dd, .workspace-resources dt { margin: 0; }
+.workspace-readonly { margin-left: 8px; color: var(--text-secondary); font-size: 11px; }
+.workspace-resources dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 12px 0 0; }
+.workspace-resources dd { display: flex; flex-direction: column; gap: 3px; }
+.workspace-resources dd strong { font-size: 21px; font-weight: 500; }
+.workspace-resources dd small { color: var(--text-secondary); font-size: 13px; font-weight: 400; }
+.workspace-resources dd > span, .workspace-mcp { color: var(--text-secondary); font-size: 12px; }
+.workspace-mcp { margin: 14px 0 0; overflow-wrap: anywhere; }
+.workspace-retry { margin-top: 10px; font-size: 12px; }
+.workspace-overview footer { gap: 8px; flex-wrap: wrap; }
 .sidebar-footer p {
   margin: 4px 0 0;
   overflow-wrap: anywhere;

@@ -55,7 +55,7 @@ const registry = {
   kinds: { openai: { label: "OpenAI", auth: ["auto", "api-key"], apis: ["auto", "responses"], env: "OPENAI_API_KEY", endpoint_required: false, version_required: false, live: true } },
 };
 
-test("one sidebar Settings entry opens both scopes without nesting settings under workspace information", async () => {
+test("sidebar Settings remains direct while workspace information links to the same settings", async () => {
   const view = browser();
   let opened = 0;
   const noop = () => {};
@@ -72,7 +72,11 @@ test("one sidebar Settings entry opens both scopes without nesting settings unde
     assert.equal(opened, 1);
     await act(async () => view.container.querySelector<HTMLButtonElement>(".workspace-trigger")!.click());
     assert.match(view.container.querySelector(".workspace-dialog")!.textContent!, /Workspace folder/);
-    assert.doesNotMatch(view.container.querySelector(".workspace-dialog")!.textContent!, /settings/i);
+    assert.equal(view.container.querySelector(".workspace-dialog .settings-dialog"), null);
+    const settingsLink = [...view.container.querySelectorAll<HTMLButtonElement>(".workspace-dialog button")].find(button => button.textContent === "Settings")!;
+    await act(async () => settingsLink.click());
+    assert.equal(view.container.querySelector(".workspace-dialog"), null);
+    assert.equal(opened, 2);
   } finally { await view.cleanup(); }
 });
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "../../components/Icon.js";
+import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { AudioDeviceSettings } from "./AudioDeviceSettings.js";
 import { LiveSettingsController, settingsApi } from "./settings.js";
 import type { AudioDeviceSelection, LiveSettingsSnapshot, LiveTransport, VoicePreferences } from "./types.js";
@@ -84,7 +85,7 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
           {preference("model", "GPT-Live model", <input value={values.model} disabled={scope === "workspace" && !Object.hasOwn(overrides, "model")} autoComplete="off" spellCheck={false} maxLength={128} onChange={event => controller.edit({ model: event.target.value })} />)}
           {values.backend_mode === "hosted" && preference("backend_model", "Hosted backend model", <input value={values.backend_model} disabled={scope === "workspace" && !Object.hasOwn(overrides, "backend_model")} autoComplete="off" spellCheck={false} maxLength={128} onChange={event => controller.edit({ backend_model: event.target.value })} />)}
         </div>
-        <div className="live-connection-summary" role="status"><strong>Saved voice connection</strong>
+        <div className="live-connection-summary" role="status"><strong><ProviderLogo provider={snapshot.values.provider} />Saved voice connection</strong>
           {snapshot.profile_name ? <p><span>{snapshot.profile_name} · {providerLabel(snapshot.values.provider)}</span><br />{snapshot.live_supported === false ? "Choose a connection that supports GPT-Live." : chatgptLogin ? snapshot.key_configured ? "Uses your existing ChatGPT/Codex login on the server." : "Sign in to ChatGPT/Codex for this provider connection before connecting." : snapshot.voice_auth === "entra" ? snapshot.key_configured ? "Uses Microsoft Entra ID on the server." : "Configure Microsoft Entra ID for this provider before connecting." : snapshot.key_configured ? "Uses the selected provider’s API credentials on the server." : "Configure credentials for the selected provider before connecting."}</p> : <p>Configure a provider connection that supports Live to use voice.</p>}
           {dirty && <small>Your connection selection applies after saving.</small>}
           {configureConnection && <button type="button" disabled={dirty} onClick={configureConnection}>Manage provider connections</button>}

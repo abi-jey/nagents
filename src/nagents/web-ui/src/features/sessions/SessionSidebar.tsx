@@ -2,38 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../../components/Icon.js";
 import type { Session } from "../../types";
 import type { ReactNode } from "react";
-import { SessionMenu } from "./SessionMenu.js";
+import { SessionRow } from "./SessionRow.js";
 import { SessionFolders } from "./SessionFolders.js";
 import type { ChatFolderActions } from "./useChatFolders.js";
-
-function WorkspaceDialog({ workspace, name, demo, count, close }: {
-  workspace: string; name: string; demo: boolean; count: number; close: () => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const element = dialog.current;
-    const previous = document.activeElement;
-    element?.showModal();
-    return () => {
-      element?.close();
-      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
-    };
-  }, []);
-  return <dialog ref={dialog} className="workspace-dialog" aria-labelledby="workspace-dialog-title"
-    onCancel={(event) => { event.preventDefault(); close(); }}>
-    <header><h2 id="workspace-dialog-title"><Icon name="folder" />{name}</h2>
-      <button type="button" autoFocus onClick={close} aria-label="Close workspace information"><Icon name="close" /></button>
-    </header>
-    <dl>
-      <dt>Workspace folder</dt><dd>{workspace || "Connecting…"}</dd>
-      <dt>Mode</dt><dd>{demo ? "Offline demo" : "Live provider"}</dd>
-      <dt>Saved sessions</dt><dd>{count}</dd>
-    </dl>
-  </dialog>;
-}
+import { WorkspaceInfoDialog, type WorkspaceConnection } from "./WorkspaceInfoDialog.js";
 
 export function SessionSidebar({
   workspace,
+  connection,
   sessions,
   folders,
   selected,
@@ -62,6 +38,7 @@ export function SessionSidebar({
   close,
 }: {
   workspace: string;
+  connection?: WorkspaceConnection;
   sessions: Session[];
   folders?: ChatFolderActions;
   selected: string;
@@ -160,27 +137,9 @@ export function SessionSidebar({
       </button>
       </div>
       <SessionFolders sessions={sessions} selected={selected} folders={folders} workspace={workspace} renderSession={(session, move) => (
-          <div key={session.id} className={`session-row${selected === session.id ? " selected" : ""}`} data-session-id={session.id}>
-          <button
-            className={`session ${selected === session.id ? "selected" : ""}`}
-            aria-label={`${session.title || "New session"}${session.active_run_id ? " — Working" : ""}`}
-            aria-current={selected === session.id ? "page" : undefined}
-            disabled={disabled}
-            onClick={() => select(session.id)}
-            title={`${session.title} · Updated ${session.updated_at.slice(0, 10)}`}
-          >
-            <Icon name={session.forked_from ? "branch" : "chat"} size={15} />
-            <span className="session-title">{session.title || "New session"}</span>
-            {session.active_run_id && <span className="session-working" title="Working"><span className="sr-only">Working</span></span>}
-            <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
-          </button>
-          <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
-            title="Move to Trash" disabled={!canDelete(session.id) || !!session.active_run_id}
-            onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
-          <SessionMenu session={session} disabled={!canDelete(session.id) || !!session.active_run_id} permanent={permanent} move={move}
-            rename={!disabled && rename ? () => rename(session) : undefined}
-            fork={fork ? () => fork(session) : undefined} forkDisabled={disabled || !canFork(session.id)} />
-          </div>
+          <SessionRow key={session.id} session={session} selected={selected === session.id} disabled={disabled}
+            canDelete={canDelete(session.id)} canFork={canFork(session.id)} select={select} remove={remove}
+            permanent={permanent} rename={rename} fork={fork} move={move} />
         )} />
       <div className="sidebar-footer">
         {notice}
@@ -211,7 +170,9 @@ export function SessionSidebar({
         </div>
       </div>
     </aside>
-    {workspaceOpen && <WorkspaceDialog workspace={workspace} name={workspaceName} demo={demo} count={sessions.length} close={() => setWorkspaceOpen(false)} />}
+    {workspaceOpen && <WorkspaceInfoDialog workspace={workspace} name={workspaceName} demo={demo} count={sessions.length}
+      running={sessions.filter(session => session.active_run_id).length} connection={connection} close={() => setWorkspaceOpen(false)}
+      settings={settings} settingsDisabled={settingsDisabled} tools={tools} toolsDisabled={toolsDisabled} />}
     </>
   );
 }
