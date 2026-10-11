@@ -17,11 +17,15 @@ test("context metadata remains bound to the selected chat and the advertised byt
   assert.equal(readVoiceContext({ ...context, mode: "none", method: "none", chat_session_id: "", fingerprint: "", bytes: 0, characters: 0, message_count: 0 }, "ngn-chat")?.mode, "none");
 });
 
-test("context details explain omissions and summary fallback without exposing a raw payload", () => {
+test("context stays compact with seed explanations collapsed and raw payloads fetched on demand", () => {
   const document = new JSDOM(renderToStaticMarkup(createElement(VoiceContextDetails, { context, token: "fixture-token", sessionId: "voice-one", close() {} }))).window.document;
-  assert.match(document.body.textContent || "", /Prepared brief and recent conversation/);
-  assert.match(document.body.textContent || "", /Some history or non-text content was left out/);
-  assert.match(document.body.textContent || "", /main assistant uses this chat’s saved history and summaries/);
+  assert.equal(document.querySelector(".voice-context-summary")?.textContent, "Chat brief + recent messages · Partial history");
+  const seedDetails = document.querySelector("details")!;
+  assert.equal(seedDetails.open, false);
+  assert.match(seedDetails.querySelector("summary")?.textContent || "", /6 text items · 2.7 KB/);
+  assert.match(seedDetails.textContent || "", /not the model’s context window/);
+  assert.match(seedDetails.textContent || "", /main assistant retains the saved conversation/);
+  assert.match(seedDetails.textContent || "", /A brief and recent messages were prepared/);
   assert.equal(document.querySelector("pre, textarea"), null);
   assert.equal(contextLabel(context), "Chat brief");
   assert.equal(contextLabel({ ...context, method: "recent_fallback" }), "Chat context");

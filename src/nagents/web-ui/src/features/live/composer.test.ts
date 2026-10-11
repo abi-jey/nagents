@@ -94,7 +94,7 @@ test("delegation shows the actual assistant handoff and keeps ongoing work disti
   try {
     await ui.render();
     const card = ui.container.querySelector('[aria-label="Voice delegation"]')!;
-    assert.match(card.textContent!, /Assistant working/);
+    assert.match(card.textContent!, /Processing…/);
     await ui.click(".voice-view-chat");
     assert.equal(ui.actions.at(-1), "view-chat:run-1");
     ui.props.state.phase = "ended"; await ui.render();

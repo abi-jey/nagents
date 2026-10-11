@@ -966,7 +966,11 @@ provider connection.
 Speech captions appear in the same chat, marked **Live** with their speaker and
 call-relative time. Ordinary messages and assistant work retain their usual
 presentation. Captions remain visible after ending the call or reloading the page.
-A composer status line shows the handoff when the main assistant takes a request: waiting, working, completed, stopped, or failed.
+A composer status line shows the handoff when the main assistant takes a request: queued, processing, completed, stopped, or failed.
+**Processing…** is a lifecycle status, not an assistant response. The assistant
+receives the explicit delegated request as plain user text. For transcript-only
+requests, ngn joins fresh user speech fragments; assistant speech, timestamps, and
+delegation identifiers stay in the inspection data instead of the user message.
 **View in chat** opens the associated run's progress and result. Muting or ending
 voice does not imply that an admitted assistant task has stopped.
 **Request & events** expands inline with the received voice payload, the
@@ -994,12 +998,15 @@ entire model context, tool outputs, attachments, or private reasoning. Open
 - **Start without chat context** sends no saved history at startup. The main
   assistant can still consult its conversation when the caller requests help.
 
-The final seed contains at most 14 text items and 7,000 UTF-8 bytes, leaving
-headroom under GPT-Live's startup-input limit. The optional summary source uses
+The final seed contains at most 14 text items and 7,000 UTF-8 bytes. This is ngn's
+budget for starting chat text, not the model's context window; the main assistant
+retains the saved conversation. The optional summary source uses
 at most 128 messages plus a bounded window of saved caption fragments and
 96,000 UTF-8 bytes. It explicitly marks missing, compacted, or clipped material;
 a generated brief is never presented as the complete conversation. **Chat brief**
-or **Chat context** beside the voice timer explains what was included.
+or **Chat context** beside the voice timer opens a compact overview. Exact voice
+instructions and startup history remain expandable; **Seed details** contains the
+size, omissions, and budget explanation.
 
 GPT-Live can ask the main assistant for an earlier detail or a fuller recap through
 its existing client-delegation path. That assistant keeps the authoritative
