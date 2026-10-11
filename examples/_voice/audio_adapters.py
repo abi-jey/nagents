@@ -1,8 +1,8 @@
 """
 Reference sounddevice adapters for the Realtime duplex protocols.
 
-The nagents library ships the :class:`~nagents.realtime.AudioInput` and
-:class:`~nagents.realtime.AudioOutput` protocols plus file/in-memory reference
+The nagents library ships the :class:`~nagents.audio.AudioInput` and
+:class:`~nagents.audio.AudioOutput` protocols plus file/in-memory reference
 implementations. It deliberately does not depend on a capture/playback backend,
 so a real microphone/speaker adapter is provided here on top of ``sounddevice``
 (a dev dependency).

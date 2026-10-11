@@ -187,7 +187,7 @@ def test_login_readiness_uses_saved_auth_without_api_keys_or_secret_disclosure(
         async with client_app(tmp_path, config=configuration(tmp_path, auth)) as (app, client, headers, _):
             await configure(client, headers)
             capability = await client.get("/api/live", headers=headers)
-            settings = await client.get("/api/live/settings", headers=headers)
+            settings = await client.get("/api/live/settings?scope=workspace", headers=headers)
             assert capability.json()["available"] and capability.json()["key_configured"]
             assert capability.json()["voice_auth"] == settings.json()["voice_auth"] == "chatgpt"
             assert capability.json()["transport"] == "websocket"
@@ -326,10 +326,10 @@ def test_voice_defaults_follow_auth_without_overwriting_saved_choices(
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path, "auto")) as (_, client, headers, harnesses):
             await configure(client, headers, **({"voice": saved_voice} if saved_voice else {}))
-            before = (await client.get("/api/live/settings", headers=headers)).json()
+            before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             for available, expected_voice in [(True, native_voice), (False, api_voice), (True, native_voice)]:
                 login.available = available
-                current = (await client.get("/api/live/settings", headers=headers)).json()
+                current = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
                 assert current["voice_auth"] == ("chatgpt" if available else "api-key")
                 assert current["values"]["voice"] == expected_voice
                 assert current["global_preferences"] == before["global_preferences"]

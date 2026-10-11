@@ -19,6 +19,7 @@ import aiosqlite
 
 from nagents._async import join_owned as _await_cleanup
 from nagents.agent import Agent
+from nagents.compaction import ModelCompaction
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.observation import scope as observation_scope
@@ -208,9 +209,8 @@ class Harness:
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
             streaming=True,
             max_tool_rounds=config.max_tool_rounds,
-            compactor="self",
             save_tool_outputs=False,
-            compaction_strategy=DemoCompaction() if config.demo else None,
+            compaction_strategy=DemoCompaction() if config.demo else ModelCompaction(),
             skill_discoverer=HarnessSkillDiscoverer(self.tools),
             skill_token_limit=config.skill_token_limit,
         )

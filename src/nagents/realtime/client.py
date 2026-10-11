@@ -54,6 +54,8 @@ from urllib.parse import urlencode
 import aiohttp
 
 from ..adapters.openai import format_realtime_tools
+from ..audio import AudioInput
+from ..audio import AudioOutput
 from ..events import AudioChunkEvent
 from ..events import AudioTranscriptDeltaEvent
 from ..events import DoneEvent
@@ -78,8 +80,6 @@ from ..tools import ToolExecutor
 from ..tools import ToolRegistry
 from ..types import ToolCall
 from ..types import ToolDefinition
-from .audio import AudioInput
-from .audio import AudioOutput
 from .types import DEFAULT_REALTIME_MODEL
 from .types import RealtimeConfig
 

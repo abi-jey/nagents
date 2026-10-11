@@ -1,9 +1,8 @@
 # Private ngn Web Deployment
 
 This reusable example is for an explicitly owner-approved, single-user deployment
-of the React client in [ngn serve](ngn-web.md), not a new remote mode or a deployment
-of the legacy `nagents.server`. It is a narrowly scoped exception to the local
-client's normal "do not reverse proxy" guidance.
+of the React client and HTTP API in [ngn serve](ngn-web.md). It is a narrowly
+scoped exception to the local client's normal "do not reverse proxy" guidance.
 
 The standalone client binds **127.0.0.1** by default. This example opts into a
 routable bind by passing an explicit `--host 0.0.0.0`, so the in-cluster Service

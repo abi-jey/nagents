@@ -66,7 +66,7 @@ async def application(
 
     def harness(config: HarnessConfig) -> Harness:
         instance = Harness(config)
-        instance.agent.compactor = None
+        instance.agent.compaction_strategy = None
         return instance
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)

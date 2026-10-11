@@ -102,8 +102,7 @@ class WorkspaceTools:
 
     def enabled(self, agent: str, name: str) -> bool:
         tools = self.agents.get(agent, {})
-        canonical = "schedule_wakeup" if name == "wake_up_in" else name
-        return tools.get(name, True) and tools.get(canonical, True)
+        return tools.get(name, True)
 
     def save(self, agents: dict[str, dict[str, bool]], revision: str) -> None:
         source = yaml.safe_dump({"version": 1, "agents": agents}, sort_keys=True)
@@ -144,21 +143,6 @@ class HarnessToolRegistry(ToolRegistry):
             for tool in super().get_all()
             if policy.enabled(self.harness.config.agent, tool.name) and self._available(tool)
         ]
-        definitions = {tool.name: tool for tool in tools}
-        canonical, alias = definitions.get("schedule_wakeup"), definitions.get("wake_up_in")
-        originals = self.harness.tools._wakeup_definitions
-        if (
-            canonical is not None
-            and alias is not None
-            and canonical is originals.get("schedule_wakeup")
-            and alias is originals.get("wake_up_in")
-            and canonical.func == alias.func == self.harness.tools.schedule_wakeup
-            and canonical.description == alias.description
-            and canonical.parameters == alias.parameters
-        ):
-            # Keep legacy execution/history and workspace settings intact while
-            # advertising only one copy of the same native scheduling contract.
-            tools.remove(alias)
         return tools
 
     def _available(self, tool: ToolDefinition) -> bool:

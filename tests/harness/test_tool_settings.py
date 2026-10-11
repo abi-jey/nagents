@@ -42,7 +42,8 @@ def test_workspace_tool_file_roundtrip_conflicts_and_validation(tmp_path: Path) 
     loaded.load()
     assert loaded.agents == policy.agents
     assert not loaded.enabled("build", "shell")
-    assert not loaded.enabled("build", "wake_up_in")
+    assert not loaded.enabled("build", "schedule_wakeup")
+    assert loaded.enabled("build", "wake_up_in")  # A custom tool has its own selection.
     assert loaded.enabled("reviewer", "read_file")
     with pytest.raises(FileExistsError):
         loaded.save({}, "")

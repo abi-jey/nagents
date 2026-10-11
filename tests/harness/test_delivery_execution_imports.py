@@ -101,7 +101,7 @@ if mode in {'custom', 'custom_subclass'}:
         adapter_type = SessionManager if mode == 'custom' else UnknownAdapter
         harness.agent.session = adapter_type(harness.agent.session.db_path)
         harness.agent.provider = FakeProvider(harness.config, 0, script)
-        harness.agent.compactor = None
+        harness.agent.compaction_strategy = None
         harness.approval_handler = approve
         definition = harness.agent.register_tool(channel_send)
         try:

@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 
 import anyio
 from fastapi import HTTPException
-from starlette.responses import StreamingResponse
 
 from nagents.cli import _event_record
 from nagents.cli import _json_default
@@ -60,14 +59,9 @@ from .wakeups import Chain
 from .wakeups import Wakeups
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
     from collections.abc import Awaitable
     from collections.abc import Callable
     from collections.abc import Iterator
-
-    from starlette.types import Receive
-    from starlette.types import Scope
-    from starlette.types import Send
 
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
@@ -101,7 +95,6 @@ class Pending:
 class Run:
     session_id: str
     id: str = field(default_factory=lambda: secrets.token_urlsafe(24))
-    queue: asyncio.Queue[dict[str, object]] = field(default_factory=lambda: asyncio.Queue(maxsize=64))
     task: asyncio.Task[None] = field(init=False)
     pending: Pending | None = None
     notices: ChannelNotices | None = field(default=None, repr=False)
@@ -486,8 +479,6 @@ class WebState:
 
     async def send(self, run: Run, record: dict[str, object]) -> None:
         self.publish(run, record)
-        if not run.background and not run.server_owned:
-            await run.queue.put(record)
 
     async def approve(self, request: ApprovalRequest) -> bool:
         run = self.active
@@ -659,13 +650,6 @@ class WebState:
                 "active_runs": self.active_runs(),
             }
         )
-
-    async def produce_session(self, run: Run, prompt: str | list[ContentPart]) -> None:
-        with self.executions.scope(run):
-            async with self.designed_channels.execution(run) as harness:
-                self.running_harness = harness
-                await harness.resume(run.session_id)
-                await self.produce(run, prompt)
 
     async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
         notices = run.notices = ChannelNotices(self, run)
@@ -993,41 +977,3 @@ class WebState:
                 self.finish(run)
             self.changed()
             await self.executions.release_idle(run.session_id)
-
-
-class RunResponse(StreamingResponse):
-    def __init__(self, state: WebState, run: Run) -> None:
-        self.state = state
-        self.run = run
-        self.finished = False
-        super().__init__(self.events(), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
-
-    async def events(self) -> AsyncIterator[str]:
-        run = self.run
-
-        def line(record: dict[str, object]) -> str:
-            return (
-                json.dumps(
-                    {**record, "schema_version": 1, "run_id": run.id, "session_id": run.session_id},
-                    default=_json_default,
-                    ensure_ascii=True,
-                )
-                + "\n"
-            )
-
-        yield line({"event": "run_started", "session_id": run.session_id})
-        while not run.task.done() or not run.queue.empty():
-            try:
-                record = await asyncio.wait_for(run.queue.get(), timeout=1)
-            except TimeoutError:
-                yield line({"event": "heartbeat"})
-            else:
-                yield line(record)
-        yield line({"event": "run_finished", "status": run.outcome, "session_id": run.session_id})
-        self.finished = True
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        try:
-            await super().__call__(scope, receive, send)
-        finally:
-            await self.state.stop(self.run, cancel=not self.finished)

@@ -92,8 +92,7 @@ bundle without building or reloading, and is also the Docker default.
 missing or stale, then watches Python and frontend source to restart the backend
 and rebuild frontend changes. Refresh the browser after reload; active tasks are
 cancelled by a restart. Use a separate virtualenv and editable installation in
-each worktree. See the [web client guide](../guide/ngn-web.md) for operation and
-the [legacy API server](../guide/server.md) for its explicit launch command.
+each worktree. See the [web client guide](../guide/ngn-web.md) for operation.
 
 ## Development Workflow
 

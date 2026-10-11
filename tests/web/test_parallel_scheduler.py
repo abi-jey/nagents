@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -70,9 +71,15 @@ def test_held_sql_claim_blocks_timer_and_http_reservations_then_unstarted_timers
                 assert len(state.wakeups.pending) == 2 and all(chain.activations == 0 for chain in chains)
                 assert not state.executions.runs
                 response = await client.post(
-                    "/api/run", headers=headers, json={"session_id": root, "prompt": "competing request"}
+                    "/api/messages",
+                    headers=headers,
+                    json={
+                        "session_id": root,
+                        "message_id": str(uuid.uuid4()),
+                        "prompt": "competing request",
+                    },
                 )
-                assert response.status_code == 409
+                assert response.status_code == 200 and response.json()["status"] == "queued"
                 worker = state.channels.tasks[0]
                 worker.cancel()
                 release.set()

@@ -261,7 +261,7 @@ def test_named_live_reads_same_env_and_revisions_without_key_table(
         before = await settings.connection()
         assert before.revision != saved.revision and before.key_configured
         assert (await settings.connection()).revision == before.revision
-        assert (await settings.snapshot())["profile_name"] == "voice"
+        assert (await settings.snapshot("workspace"))["profile_name"] == "voice"
         agent = create_agent(before)
         try:
             assert agent.provider.api_key == "voice-key-value"

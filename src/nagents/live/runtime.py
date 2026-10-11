@@ -119,7 +119,6 @@ class LiveConfig:
     close_timeout: float = 15
     close_session_on_exit: bool = True
     backend_options: dict[str, object] = field(default_factory=dict)
-    client_handler: Callable[[str], Awaitable[str]] | None = None
     client_request_handler: ClientDelegationHandler | None = None
     client_request_observer: ClientDelegationObserver | None = None
     client_concurrency: int = 4
@@ -131,8 +130,6 @@ class LiveConfig:
             raise ValueError("Live delegation must be responses or client")
         if self.attach_to and self.fork_from:
             raise ValueError("Choose attachment or a stored fork, not both")
-        if self.client_handler is not None and self.client_request_handler is not None:
-            raise ValueError("Choose a legacy or typed client handler, not both")
         if type(self.client_concurrency) is not int or not 1 <= self.client_concurrency <= 32:
             raise ValueError("Live client concurrency must be between 1 and 32")
         if len(self.history) > 128 or self.backend_timeout <= 0 or self.close_timeout <= 0 or self.event_queue_size < 1:
@@ -288,8 +285,8 @@ class ClientDelegations:
                 self.revision += 1
                 if text.strip():
                     self.ready.set()
-                    # Legacy transcript-only handlers can wait for the first
-                    # caller caption. Freeze it once, before subsequent speech.
+                    # Local delegation agents can wait for the first caller
+                    # caption. Freeze it once, before subsequent speech.
                     # Typed handlers always receive the notice-time snapshot.
                     for waiting_id in self._awaiting_context:
                         waiting = self.requests[waiting_id]
@@ -676,8 +673,6 @@ class _LiveConnection:
 
         async def backend(transcript: str, identifier: str) -> str:
             if not isinstance(self.backend, Agent):
-                if self.options.client_handler:
-                    return await self.options.client_handler(transcript)
                 return "No backend capability is configured for this request."
             live_id = "" if identifier.startswith("application:") else identifier
             token = _delegation_scope.set(_DelegationScope(self.updates, self.backend, live_id))

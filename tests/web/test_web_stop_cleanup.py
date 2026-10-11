@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING
 from typing import cast
 
 import pytest
 
 from nagents.events import TextChunkEvent
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.live_bridge import MainAgentBridge
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
+from tests.support.web import LiveStream
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
@@ -52,18 +54,24 @@ async def test_owned_run_cleanup_error_preserves_stop_without_hiding_other_failu
             raise failure(private_error)
 
     monkeypatch.setattr(ControlledHarness, "run", fail_during_cleanup)
-    async with client_app(tmp_path) as (app, client, headers, _), asyncio.timeout(HANG_GUARD):
+    async with (
+        client_app(tmp_path) as (app, client, headers, _),
+        asyncio.timeout(HANG_GUARD),
+        AsyncExitStack() as cleanup,
+    ):
         state = cast("WebState", app.state.web)
         reports: list[dict[str, object]] = []
         bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
         if voice:
-            spoken = asyncio.create_task(bridge.handle(json.dumps([{"speaker": "user", "text": "Work"}])))
+
+            async def append(kind: str, content: str, identifier: str) -> str:
+                return f"session.{kind}.append"
+
+            bridge.attach(append)
+            cleanup.push_async_callback(bridge.close)
+            await bridge.handle_request(ClientDelegationRequest("cleanup-request", "Work"))
         else:
-            chat = asyncio.create_task(
-                client.post(
-                    "/api/run", headers=headers, json={"session_id": state.selected_session_id, "prompt": "Work"}
-                )
-            )
+            stream = LiveStream(app, headers, state.selected_session_id, "Work")
         await entered.wait()
         run = state.active
         assert run is not None
@@ -73,14 +81,15 @@ async def test_owned_run_cleanup_error_preserves_stop_without_hiding_other_failu
         else:
             release.set()
         if voice:
-            result = await spoken
-            assert private_error not in result + repr(reports)
-            status = reports[-1]["status"]
+            while not any(report.get("status") in {"completed", "failed", "cancelled"} for report in reports):
+                await asyncio.sleep(0.001)
+            assert private_error not in repr(reports)
+            status = next(report["status"] for report in reversed(reports) if "status" in report)
         else:
-            response = await chat
-            assert private_error not in response.text
-            records = [json.loads(line) for line in response.text.splitlines() if line]
-            status = next(record["status"] for record in records if record["event"] == "run_finished")
+            finished = await stream.event("run_finished")
+            status = str(finished["status"])
+            await stream.disconnect()
+        await state.channels.join_claim_cleanup(run.session_id)
         assert cleaned.is_set() and run.task.done() and state.active is None
         assert status == run.outcome == ("cancelled" if cancel else "failed")
         assert ("Run producer failed during cancellation:" in caplog.text) is cancel

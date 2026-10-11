@@ -123,9 +123,8 @@ async def test_direct_file_search_keeps_discovery_and_snapshot_guards(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("alias", ["schedule_wakeup", "wake_up_in"])
 async def test_actual_harness_wakeup_requires_advertised_reason_and_acknowledges_valid_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Exercise the real scheduler contract without unrelated guarded-file reads.
     monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
@@ -133,12 +132,14 @@ async def test_actual_harness_wakeup_requires_advertised_reason_and_acknowledges
 
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         if len(provider.requests) == 1:
-            yield ToolCallEvent(id="missing", name=alias, arguments={"seconds": 1})
+            yield ToolCallEvent(id="missing", name="schedule_wakeup", arguments={"seconds": 1})
         elif len(provider.requests) == 2:
             assert "missing reason" in str(messages[-1].content)
             assert "reason: string (required)" in str(messages[-1].content)
             yield ToolCallEvent(
-                id="valid", name=alias, arguments={"seconds": 0.5, "minutes": 1, "reason": " Check requested work "}
+                id="valid",
+                name="schedule_wakeup",
+                arguments={"seconds": 0.5, "minutes": 1, "reason": " Check requested work "},
             )
         else:
             yield TextDoneEvent(text="The requested wakeup was scheduled.")
@@ -150,7 +151,7 @@ async def test_actual_harness_wakeup_requires_advertised_reason_and_acknowledges
     harness, _ = setup_harness(tmp_path, monkeypatch, script)
     harness.wakeup_handler = schedule
     try:
-        definition = harness.agent.tool_registry.get(alias)
+        definition = harness.agent.tool_registry.get("schedule_wakeup")
         assert definition is not None and definition.parameters["required"] == ["reason"]
         properties = definition.parameters["properties"]
         assert "default" not in properties["reason"]
@@ -183,9 +184,8 @@ async def test_wakeup_metadata_is_inherited_by_native_children_without_rewriting
     child = harness.tasks._create_child("assistant")
     try:
         for owner in (harness, child):
-            for alias in ("schedule_wakeup", "wake_up_in"):
-                definition = owner.agent.tool_registry.get(alias)
-                assert definition is not None and definition.parameters["required"] == ["reason"]
+            definition = owner.agent.tool_registry.get("schedule_wakeup")
+            assert definition is not None and definition.parameters["required"] == ["reason"]
         replacement = harness.agent.register_tool(custom_schedule, name="schedule_wakeup")
         harness.refresh_instructions()
         assert replacement.parameters["required"] == ["reminder"]
@@ -216,8 +216,8 @@ async def test_wakeup_schema_dedup_preserves_custom_contracts(
     harness.wakeup_handler = schedule
     try:
         registry = harness.agent.tool_registry
-        assert "wake_up_in" not in {tool.name for tool in registry.get_all()}
-        assert registry.get("wake_up_in") is not None
+        if name == "wake_up_in":
+            registry.register(custom, name=name)
         definition = registry.get(name)
         assert definition is not None
         if change == "replace":
@@ -226,15 +226,14 @@ async def test_wakeup_schema_dedup_preserves_custom_contracts(
             definition.description = "Custom scheduling behavior."
         else:
             definition.parameters["properties"]["reason"]["description"] = "Custom purpose."
-        assert {"schedule_wakeup", "wake_up_in"} <= {tool.name for tool in registry.get_all()}
+        assert name in {tool.name for tool in registry.get_all()}
     finally:
         await harness.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["schedule_wakeup", "wake_up_in"])
 async def test_wakeup_schema_dedup_keeps_workspace_disable_policy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         yield TextDoneEvent(text="Unused")
@@ -246,11 +245,12 @@ async def test_wakeup_schema_dedup_keeps_workspace_disable_policy(
 
     harness.wakeup_handler = schedule
     try:
-        harness.tool_settings.save({"assistant": {name: False}}, "")
+        harness.tool_settings.save({"assistant": {"schedule_wakeup": False}}, "")
         visible = {tool.name for tool in harness.agent.tool_registry.get_all()}
-        assert "wake_up_in" not in visible
-        assert ("schedule_wakeup" in visible) is (name == "wake_up_in")
-        result = await harness.agent.tool_executor.execute(ToolCall("disabled", name, {"reason": "test", "seconds": 1}))
+        assert "schedule_wakeup" not in visible
+        result = await harness.agent.tool_executor.execute(
+            ToolCall("disabled", "schedule_wakeup", {"reason": "test", "seconds": 1})
+        )
         assert result.error
     finally:
         await harness.close()

@@ -22,7 +22,6 @@ MAX_HANDOFF_TEXT = 12000
 MAX_HANDOFF_PARTS = 512
 _CLARIFY = "I could not read that request. Please repeat it clearly or type it in the chat."
 Payload = dict[str, object]
-LoginHandoff = ClientDelegationRequest
 
 
 def handoff_offset(value: object) -> float | None:
@@ -63,7 +62,7 @@ class LoginDelegations:
 
     def __init__(
         self,
-        backend: Callable[[LoginHandoff], Awaitable[str]],
+        backend: Callable[[ClientDelegationRequest], Awaitable[str]],
         send: Callable[[Payload], Awaitable[None]],
         *,
         observer: ClientDelegationObserver | None = None,
@@ -76,7 +75,7 @@ class LoginDelegations:
             raise ValueError("Live client concurrency must be between 1 and 32")
         self.concurrency = concurrency
         self.closed = False
-        self.pending: asyncio.Queue[LoginHandoff] = asyncio.Queue(maxsize=32)
+        self.pending: asyncio.Queue[ClientDelegationRequest] = asyncio.Queue(maxsize=32)
         self.seen: set[str] = set()
         self.fragments: deque[Payload] = deque()
         self.characters = 0
@@ -114,7 +113,7 @@ class LoginDelegations:
             text = _request_text(raw.get("item"))
             fragments = sorted(self.fragments, key=lambda part: cast("float", part["start_ms"]))
             transcript = json.dumps(fragments, ensure_ascii=False) if text else "[]"
-            request = LoginHandoff(identifier, text, transcript, handoff_offset(raw.get("offset_ms")))
+            request = ClientDelegationRequest(identifier, text, transcript, handoff_offset(raw.get("offset_ms")))
             if self.pending.full():
                 raise RuntimeError("Live client delegation queue is full")
             if self.observer is not None:

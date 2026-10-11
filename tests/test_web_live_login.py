@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents import Agent
-    from nagents.web.live_handoff import LoginHandoff
+    from nagents.live.delegation import ClientDelegationRequest
     from nagents.web.live_login import Payload
 
 OFFER = "v=0\r\ns=fixture-offer\r\n"
@@ -38,11 +38,11 @@ async def credentials() -> CodexCredentials:
     return CodexCredentials(SECRET, "fixture-account")
 
 
-async def answer(request: LoginHandoff) -> str:
+async def answer(request: ClientDelegationRequest) -> str:
     return "Four."
 
 
-def config(handler: Callable[[LoginHandoff], Awaitable[str]] = answer) -> LoginVoiceConfig:
+def config(handler: Callable[[ClientDelegationRequest], Awaitable[str]] = answer) -> LoginVoiceConfig:
     return LoginVoiceConfig(credentials, "gpt-live-1-codex", "cove", "Use the selected assistant.", handler)
 
 
@@ -71,7 +71,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
     async def scenario() -> None:
         requests: list[str] = []
         commands: list[Payload] = []
-        handoffs: list[LoginHandoff] = []
+        handoffs: list[ClientDelegationRequest] = []
         replied = asyncio.Event()
         history: tuple[Payload, ...] = (
             ({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Old saved request"}]},)
@@ -79,7 +79,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
             else ()
         )
 
-        async def backend(handoff: LoginHandoff) -> str:
+        async def backend(handoff: ClientDelegationRequest) -> str:
             handoffs.append(handoff)
             return "Four."
 
@@ -181,10 +181,10 @@ def test_login_results_keep_each_requesting_delegation_item_id_across_chunks_and
         expected = {"item-first": "First result. " * 90, "item-second": "Second result."}
         results = {identifier: "" for identifier in expected}
         order: list[str] = []
-        calls: list[LoginHandoff] = []
+        calls: list[ClientDelegationRequest] = []
         replied = asyncio.Event()
 
-        async def backend(handoff: LoginHandoff) -> str:
+        async def backend(handoff: ClientDelegationRequest) -> str:
             calls.append(handoff)
             return expected[handoff.identifier]
 
@@ -275,7 +275,7 @@ def test_native_late_and_session_updates_use_verified_channels_and_stop_at_close
         handled = asyncio.Event()
         commands: asyncio.Queue[Payload] = asyncio.Queue()
 
-        async def backend(request: LoginHandoff) -> str:
+        async def backend(request: ClientDelegationRequest) -> str:
             handled.set()
             return ""  # Application owns progress and later results separately.
 
@@ -411,7 +411,7 @@ def test_login_supervisor_waits_for_final_event_and_does_not_treat_eof_as_confir
         commands: list[str] = []
         attachments = 0
 
-        async def pending_backend(handoff: LoginHandoff) -> str:
+        async def pending_backend(handoff: ClientDelegationRequest) -> str:
             backend_started.set()
             try:
                 await asyncio.Event().wait()

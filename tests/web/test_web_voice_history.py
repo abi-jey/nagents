@@ -11,6 +11,7 @@ from typing import cast
 import pytest
 
 from nagents.extensions import AgentPlugin
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import Message
 from nagents.web.live_bridge import MainAgentBridge
 from tests.support.channels import site
@@ -41,9 +42,19 @@ def received(app: Site) -> list[dict[str, object]]:
 def request(app: Site, text: str, voice_session_id: str = "") -> None:
     assert app.client.portal is not None
     bridge = MainAgentBridge(app.state, app.main, voice_session_id=voice_session_id)
+
+    async def append(kind: str, content: str, identifier: str) -> str:
+        return f"session.{kind}.append"
+
     transcript = json.dumps([{"speaker": "user", "text": text, "start_ms": 0, "end_ms": 100}])
-    app.client.portal.call(bridge.handle, transcript)
+
+    async def dispatch() -> None:
+        bridge.attach(append)
+        await bridge.handle_request(ClientDelegationRequest("history-request", transcript=transcript))
+
+    app.client.portal.call(dispatch)
     app.idle()
+    app.client.portal.call(bridge.close)
 
 
 def projection_count(path: Path) -> int:
@@ -59,7 +70,7 @@ def test_voice_history_is_readable_but_model_context_and_typed_lookalikes_stay_i
         request(app, text)
         rows = users(app, app.main)
         assert len(rows) == 1 and rows[0]["content"] == text and rows[0]["voice_verified"] is True
-        assert rows[0]["parts"] == [] and rows[0]["source_verified"] is False
+        assert rows[0]["parts"] == [] and rows[0]["source_verified"] is True
         event = received(app)[0]
         assert event["text"] == text and event["history_id"] == rows[0]["history_id"]
         assert event["voice_verified"] is True

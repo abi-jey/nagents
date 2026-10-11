@@ -202,7 +202,9 @@ def inbound(message_id: str = "m", *, conversation: str = "room", sender: str = 
 
 
 def make_agent(path: Path, provider: OfflineProvider, *plugins: AgentPlugin) -> Agent:
-    return Agent(provider, SessionManager(path), compactor=None, system_prompt="Original instructions", plugins=plugins)
+    return Agent(
+        provider, SessionManager(path), compaction_strategy=None, system_prompt="Original instructions", plugins=plugins
+    )
 
 
 async def cancel(task: asyncio.Task[None]) -> None:

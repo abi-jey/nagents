@@ -12,6 +12,11 @@ from nagents import Provider
 from nagents import ProviderType
 from nagents import SessionManager
 from nagents.adapters.openai import format_realtime_tools
+from nagents.audio import AudioFormat
+from nagents.audio import BytesAudioInput
+from nagents.audio import BytesAudioOutput
+from nagents.audio import WAVFileAudioInput
+from nagents.audio import WAVFileAudioOutput
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
@@ -19,13 +24,8 @@ from nagents.events import RealtimeRateLimitsEvent
 from nagents.events import ResponseCancelledEvent
 from nagents.events import ResponseCreatedEvent
 from nagents.events import ToolCallEvent
-from nagents.realtime import AudioFormat
-from nagents.realtime import BytesAudioInput
-from nagents.realtime import BytesAudioOutput
 from nagents.realtime import RealtimeConfig
 from nagents.realtime import RealtimeSession
-from nagents.realtime import WAVFileAudioInput
-from nagents.realtime import WAVFileAudioOutput
 from nagents.types import ToolDefinition
 
 
@@ -105,7 +105,7 @@ def test_agent_realtime_inherits_instructions_without_mutating_config(
         SessionManager(tmp_path / "voice.db"),
         system_prompt="Keep all operations read-only.",
         tools=[_weather],
-        compactor=None,
+        compaction_strategy=None,
     )
     try:
         session = agent.realtime_session(config=config if source == "explicit" else None, voice="cedar")

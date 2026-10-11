@@ -102,7 +102,7 @@ remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
 [custom Python behavior example](examples/harness/custom_behavior.py), and
 [upstream research](docs/development/harness-research.md).
 
-## HTTP Interfaces
+## Web Client and HTTP API
 
 The current checkout includes a web-only **Agent Designer**: a YAML-backed agent
 canvas with per-agent providers, instructions, selected tools/MCPs, delegation,
@@ -110,12 +110,11 @@ chat, and persisted context/request inspection. See the
 [Agent Designer guide](docs/guide/agent-designer.md) for configuration and terminal
 execution with `ngn --design`.
 
-These are separate applications, not interchangeable launch commands:
-
-| Command | Purpose | Installation |
-| --- | --- | --- |
-| `python -m nagents.server` | Legacy HTTP/SSE API server. The current source has no bundled chat UI. | Current checkout with `[server]`; see the [legacy API server guide](docs/guide/server.md) for token, bind, and deployment setup. |
-| `ngn serve` | Local React client for the ngn coding harness, sharing its workspace sessions and approvals. Also the Docker image's default command. | Install `nagents[web]` for a published wheel with built frontend assets, or build an editable checkout. See the [local web client guide](docs/guide/ngn-web.md). |
+`ngn serve` runs the React client and HTTP API for the ngn coding harness,
+sharing its workspace sessions, tools, and approvals. It is also the Docker
+image's default command. Install `nagents[web]` for a published wheel with built
+frontend assets, or build an editable checkout. See the
+[web client guide](docs/guide/ngn-web.md).
 
 The frontend source lives in `src/nagents/web-ui/`; its Vite build goes to
 `src/nagents/web/static/`. Plain `ngn serve` uses the bundled assets without
@@ -125,10 +124,7 @@ assets and reload after frontend or Python edits. Source build/check commands ar
 For the runtime image's no-config startup, mounted YAML and Kubernetes Secret or
 environment-variable examples, see the [container configuration guide](docs/guide/ngn-container.md).
 
-The legacy server's authentication hardening and removal of its old UI are also
-post-`0.5.0` changes. Do not apply the current security guarantees to that older
-wheel or an unverified container image. Both applications are trusted-operator
-tools, not sandboxes or multi-user services.
+The web client is a trusted-operator tool, not a sandbox or multi-user service.
 
 ## Quick Start
 
@@ -213,10 +209,10 @@ async for event in agent.run("Remember my name is Alice", session_id="user-123")
 ## Documentation
 
 - [ngn Installation](docs/guide/ngn-installation.md)
+- [API Changes in 0.23](docs/guide/api-changes.md)
 - [ngn Usage Guide](docs/guide/ngn.md)
 - [ngn Configuration Reference](docs/guide/ngn-configuration.md)
 - [ngn Local Web Client](docs/guide/ngn-web.md)
-- [Legacy API Server](docs/guide/server.md)
 - [Installation](https://abi-jey.github.io/nagents/getting-started/installation/)
 - [Quick Start](https://abi-jey.github.io/nagents/getting-started/quickstart/)
 - [Providers Guide](https://abi-jey.github.io/nagents/guide/providers/)

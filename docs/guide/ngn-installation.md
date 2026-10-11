@@ -27,8 +27,7 @@ required, and consult the [release notes](https://github.com/abi-jey/nagents/rel
 !!! important "Documentation follows the checkout"
     This guide can describe changes newer than your installed distribution.
     Compare release notes and installed commands before relying on a particular
-    feature or fix. Use the [web client guide](ngn-web.md) for `ngn serve` and the
-    [legacy API server guide](server.md) for `python -m nagents.server`.
+    feature or fix. Use the [web client guide](ngn-web.md) for `ngn serve`.
 
 The editable workflows below are for development. Local version metadata can
 lag source changes; check `ngn --help`, installed source, and release contents as

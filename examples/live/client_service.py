@@ -8,10 +8,11 @@ from _support import execute
 from _support import parser
 from _support import voice
 
+from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 
 
-async def clock_service(transcript: str) -> str:
+async def clock_service(request: ClientDelegationRequest) -> str:
     # This deliberately narrow service always returns the clock, not guessed intent.
     return "The clock service reports UTC time " + datetime.now(UTC).isoformat()
 
@@ -19,7 +20,7 @@ async def clock_service(transcript: str) -> str:
 async def main() -> None:
     args = parser(__doc__ or "Client service").parse_args()
     agent = voice(
-        LiveConfig(delegation="client", client_handler=clock_service),
+        LiveConfig(delegation="client", client_request_handler=clock_service),
         instructions="You have a UTC clock backend. Delegate time questions. Clarify other requests.",
     )
     await drive(agent, duration=args.duration)

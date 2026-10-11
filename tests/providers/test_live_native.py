@@ -708,7 +708,7 @@ def test_fork_connection_sends_limited_session_start(tmp_path: Path, monkeypatch
         agent = Agent(
             provider,
             SessionManager(tmp_path / "fork.db"),
-            compactor=None,
+            compaction_strategy=None,
             audio=AudioDuplex(input=None, output=BytesAudioOutput()),
         )
         async with ws_server(monkeypatch, handle, prefix="/live"):
@@ -764,7 +764,7 @@ def test_hosted_programmatic_submit_reaches_server(tmp_path: Path, monkeypatch: 
         agent = Agent(
             provider,
             SessionManager(tmp_path / "hosted.db"),
-            compactor=None,
+            compaction_strategy=None,
             audio=AudioDuplex(input=None, output=BytesAudioOutput()),
         )
         async with ws_server(monkeypatch, handle, prefix="/live"):
@@ -788,7 +788,7 @@ def test_agent_live_property_requires_startup(tmp_path: Path) -> None:
     agent = Agent(
         Provider(ProviderType.OPENAI_COMPATIBLE, "test-key", "gpt-live-1", live_config=LiveConfig()),
         SessionManager(tmp_path / "voice.db"),
-        compactor=None,
+        compaction_strategy=None,
     )
     with pytest.raises(RuntimeError, match="has not started a Live connection"):
         _ = agent.live
@@ -921,7 +921,7 @@ def test_live_configuration_encodes_local_tools_for_http_create(tmp_path: Path) 
         ),
         SessionManager(tmp_path / "configuration.db"),
         tools=[weather],
-        compactor=None,
+        compaction_strategy=None,
     )
     plain = agent.live_configuration()
     media = agent.live_configuration(media=True)
@@ -996,7 +996,7 @@ def test_reflected_audio_chunk_preserves_timestamps(tmp_path: Path, monkeypatch:
         agent = Agent(
             provider,
             SessionManager(tmp_path / "timestamps.db"),
-            compactor=None,
+            compaction_strategy=None,
             audio=AudioDuplex(input=None, output=BytesAudioOutput()),
         )
         async with ws_server(monkeypatch, handle, prefix="/live"):

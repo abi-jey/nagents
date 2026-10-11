@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -462,9 +461,8 @@ def test_auto_reply_rechecks_live_policy_and_callable_after_awaited_ownership(
         assert not automatic_events(app) and not app.channels[0].deliveries and not invoked
 
 
-@pytest.mark.parametrize("mode", ["queued", "direct"])
 def test_owned_historical_session_web_followup_can_message_owner_without_subscriber(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
         app.configure(auto_reply=True)
@@ -482,7 +480,7 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
             assert active is not None and active.source == {} and not active.background
             assert app.state.harness._worker is asyncio.current_task()
             ingress = app.state.history.ingress.get()
-            assert ingress is None if mode == "direct" else ingress is not None and ingress.work.channel == ""
+            assert ingress is not None and ingress.work.channel == ""
             if messages[-1].role != "tool":
                 yield ToolCallEvent(id="owned-list", name="channel_list", arguments={})
                 yield ToolCallEvent(
@@ -500,57 +498,34 @@ def test_owned_historical_session_web_followup_can_message_owner_without_subscri
                 yield TextDoneEvent(text="sent")
 
         app.providers[0].script = script
-        if mode == "queued":
-            app.submit("Please send an independent message", session=root)
-            app.idle()
-            assert app.state.selected_session_id == app.main
-        else:
-            # Bound the negative-control path: an incorrect gate would otherwise
-            # wait for an interactive approval on this request-owned stream.
-            app.state.approval_timeout = lambda: 0.01
-            assert (
-                app.client.post("/api/sessions/resume", headers=app.headers, json={"session_id": root}).status_code
-                == 200
-            )
-            response = app.client.post(
-                "/api/run", headers=app.headers, json={"session_id": root, "prompt": "Send independently"}
-            )
-            assert response.status_code == 200
-            assert not any(json.loads(line).get("event") == "approval" for line in response.text.splitlines())
+        app.submit("Please send an independent message", session=root)
+        app.idle()
+        assert app.state.selected_session_id == app.main
         assert not app.state.bus.subscribers
         assert len(app.channels[0].deliveries) == before + 1
         sent = app.channels[0].deliveries[-1]
         assert (sent.destination, sent.thread_id, sent.reply_to) == ("chat-a", "chosen-thread", "chosen-reply")
         assert app.bindings()["chat-a"] == attached
-        assert [record["tool"] for record in automatic_events(app)] == (
-            ["channel_list", "channel_send"] if mode == "queued" else ["channel_list"]
-        )
+        assert [record["tool"] for record in automatic_events(app)] == ["channel_list", "channel_send"]
         assert all(record["session_id"] == root for record in automatic_events(app))
 
 
 @pytest.mark.parametrize("voice", [False, True])
 @pytest.mark.parametrize("proof", ["owned", "copied-work", "missing-history"])
-@pytest.mark.parametrize("direct", [False, True])
 def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_history(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool, proof: str, direct: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool, proof: str
 ) -> None:
-    with site(tmp_path, monkeypatch) as app, ThreadPoolExecutor(max_workers=1) as requests:
+    with site(tmp_path, monkeypatch) as app:
         app.configure(auto_reply=True)
         app.emit("seed")
         app.idle()
         root = app.bindings()["chat-a"]
-        if direct:
-            assert (
-                app.client.post("/api/sessions/resume", headers=app.headers, json={"session_id": root}).status_code
-                == 200
-            )
-            app.state.approval_timeout = lambda: 0.01
         app.state.harness.config.submit_mode = "queue"
         started, release = asyncio.Event(), asyncio.Event()
         notices: list[ChannelExecutionEvent] = []
         work_ids: list[str] = []
         run_ids: list[str] = []
-        first_id = "" if direct else "11111111-1111-1111-1111-111111111111"
+        first_id = "11111111-1111-1111-1111-111111111111"
         (tmp_path / "proof.txt").write_text("read-only fixture")
 
         async def on_event(channel: FakeChannel, event: ChannelExecutionEvent) -> None:
@@ -585,14 +560,11 @@ def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_hi
                 )
             yield ToolCallEvent(id="next-read", name="read_file", arguments={"path": "proof.txt"})
             yield ToolCallEvent(id="next-list", name="channel_list", arguments={})
-            if not direct:
-                # Direct /api/run has a separate, existing context-reply send
-                # capability; channel_list always exercises the approval gate.
-                yield ToolCallEvent(
-                    id="next-send",
-                    name="channel_send",
-                    arguments={"channel": "fixture", "destination": "chat-a", "text": "followup auto reply"},
-                )
+            yield ToolCallEvent(
+                id="next-send",
+                name="channel_send",
+                arguments={"channel": "fixture", "destination": "chat-a", "text": "followup auto reply"},
+            )
 
         async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
             return f"session.{kind}.append"
@@ -617,17 +589,8 @@ def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_hi
         bridge = app.client.portal.call(attach) if voice else None
         app.providers[0].script = script
         before = len(app.channels[0].deliveries)
-        response = None
         try:
-            if direct:
-                response = requests.submit(
-                    app.client.post,
-                    "/api/run",
-                    headers=app.headers,
-                    json={"session_id": root, "prompt": "initial request"},
-                )
-            else:
-                app.submit("initial request", session=root, id=first_id)
+            app.submit("initial request", session=root, id=first_id)
             app.client.portal.call(ready)
             if bridge is None:
                 app.submit("followup request", session=root)
@@ -637,9 +600,9 @@ def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_hi
             app.idle()
             assert len(run_ids) == 2 and run_ids[0] == run_ids[1]
             assert len(work_ids) == 1
-            assert len(app.channels[0].deliveries) == before + (proof == "owned" and not direct)
+            assert len(app.channels[0].deliveries) == before + (proof == "owned")
             assert [record["tool"] for record in automatic_events(app)] == (
-                (["channel_list"] if direct else ["channel_list", "channel_send"]) if proof == "owned" else []
+                ["channel_list", "channel_send"] if proof == "owned" else []
             )
             requested = {event.call_id: event.message_id for event in notices if event.phase == "tool_requested"}
             assert requested == {"first-read": first_id, "next-read": work_ids[0]}
@@ -648,8 +611,6 @@ def test_in_run_followup_auto_reply_requires_exact_claimed_work_and_committed_hi
             app.client.portal.call(resume)
             if bridge is not None:
                 app.client.portal.call(bridge.close)
-            if response is not None:
-                assert response.result(timeout=HANG_GUARD).status_code == 200
 
 
 def test_child_approval_keeps_initial_inbox_receipt_after_root_followup(

@@ -339,14 +339,6 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             else:
                 setattr(config, key, value)
         diagnostics.append(f"Loaded trusted configuration: {path}")
-    if config.agent in {"build", "agent", "reviewer"} and config.agent not in config.profiles:
-        previous = config.agent
-        config.agent = "assistant"
-        config.read_only = config.read_only or previous == "reviewer"
-        diagnostics.append(
-            f"Migrated legacy agent selection {previous!r} to assistant"
-            + (" in read-only mode" if config.read_only else "")
-        )
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
     config.explicit_config_paths = (explicit,) if explicit is not None else ()

@@ -19,6 +19,7 @@ from nagents.harness import load_config
 from nagents.mcp import MCPServerConfig
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -311,10 +312,8 @@ async def test_serve_exposes_mcp_tools_and_reloads_after_final_response(
         headers = {"Origin": "http://127.0.0.1:8765", "X-Ngn-Token": bootstrap["token"]}
         snapshot = (await client.get("/api/tools", headers=headers)).json()
         assert any(tool["name"] == "mcp__fixture__echo" for tool in snapshot["tools"])
-        response = await client.post(
-            "/api/run", headers=headers, json={"session_id": harness.session_id, "prompt": "check MCP"}
-        )
-        assert response.status_code == 200 and "web response" in response.text
+        events = await submit_and_wait(app, headers, harness.session_id, "check MCP")
+        assert any(event.get("event") == "text_done" and event.get("text") == "web response" for event in events)
         definition = harness.agent.tool_registry.get("mcp__fixture__echo")
         assert definition is not None and definition.description == "web"
     assert sorted((tmp_path / "starts").read_text().splitlines()) == sorted(

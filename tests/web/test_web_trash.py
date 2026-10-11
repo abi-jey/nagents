@@ -312,9 +312,11 @@ def test_trash_hides_membership_from_http_ws_harness_channels_and_admission(tmp_
                     },
                 )
             ).status_code == 404
-            assert (
-                await client.post("/api/run", headers=headers, json={"session_id": root, "prompt": "must not run"})
-            ).status_code == 404
+            assert not await rows(
+                state,
+                "SELECT message_id FROM ngn_web_inbox WHERE message_id = ?",
+                "12345678-1234-1234-1234-123456789abc",
+            )
             peer = Peer()
             task = await peer.start(state.bus, state.snapshot, state.disconnected)
             peer.subscribe(root)

@@ -9,6 +9,7 @@ from _support import voice
 from nagents import Agent
 from nagents import Event
 from nagents import InputTranscriptDeltaEvent
+from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 from nagents.live.audio import PlaybackOutput
 
@@ -18,10 +19,10 @@ async def main() -> None:
     blocked = False
     transcript = ""
 
-    async def protected_lookup(context: str) -> str:
+    async def protected_lookup(request: ClientDelegationRequest) -> str:
         if blocked:
             return "This request is blocked by application policy. No action was performed."
-        return "The demo service contains no private customer records."
+        return f"The demo service contains no private customer records for {request.transcript}."
 
     audio = microphone(controlled=True)
     assert isinstance(audio.output, PlaybackOutput)
@@ -41,7 +42,7 @@ async def main() -> None:
                 player.resume()  # Explicit demo recovery policy, not an acknowledgment side effect.
 
     await drive(
-        voice(LiveConfig(delegation="client", client_handler=protected_lookup), audio=audio),
+        voice(LiveConfig(delegation="client", client_request_handler=protected_lookup), audio=audio),
         check,
         duration=args.duration,
     )

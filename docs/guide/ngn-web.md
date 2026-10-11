@@ -2,7 +2,7 @@
 
 `ngn serve` serves a React client for the existing **ngn Harness**. It shares the
 terminal client's workspace-scoped sessions, tools, provider configuration, and
-per-call approvals. It does not use the older `nagents.server` application.
+per-call approvals.
 
 ## Source Availability
 
@@ -597,17 +597,15 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `POST channels/refresh` | Refresh installed connector discovery after package installation |
 | `PUT channels/{id}` | Save a connection and its enabled/main-session configuration at an idle boundary |
 | `DELETE channels/{id}` | Remove a configured connection using its current revision |
-| `POST run` | Compatibility API: `{session_id, prompt}` starts a request-owned NDJSON response |
 | `POST cancel` | `{run_id}` cancels/joins exactly that active run |
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
 | `POST live/sessions` | `{voice?: string, revision, session_id}` starts a GPT-Live call through the server. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, context?}` with an opaque application session ID. No provider SDP or credentials reach the browser. |
-| `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. Negotiated `ngn.live.v2` also accepts server-only `{"type":"interrupt"}` to clear queued playback; legacy `ngn.live.v1` remains PCM-only. |
+| `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. Required `ngn.live.v2` also accepts server-only `{"type":"interrupt"}` to clear queued playback. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
-| `GET live/sessions/{session_id}/delegations/{delegation_id}` | On-demand request, dispatched input, result, and application event timeline for one delegation; authenticated and bounded. |
-| `GET live/sessions/{session_id}/delegation-details?delegation_id=…` | Exact opaque provider-ID lookup, including slash and dot-only IDs; the same authenticated details response. |
+| `GET live/sessions/{session_id}/delegation-details?delegation_id=…` | On-demand request, dispatched input, result, and event timeline for one exact opaque provider ID, including slash and dot-only IDs; authenticated and bounded. |
 | `POST live/sessions/{session_id}/close` | Ends the named voice call and returns its lifecycle status; send `{}` |
 
 The run stream uses the CLI's normalized `schema_version: 1` event names and
@@ -872,9 +870,7 @@ Python modules underneath executing tools.
 
 ### Scheduled Wakeups
 
-The web Harness provides `schedule_wakeup`, with `wake_up_in` retained as the
-historical tool name. This is a native Harness tool, not the legacy server's
-global scheduler. For example, an agent can call:
+The web Harness provides `schedule_wakeup`. For example, an agent can call:
 
 ```python
 schedule_wakeup(minutes=5, reason="Check the earlier result and report back.")
@@ -1238,10 +1234,8 @@ and cannot be changed by Voice settings. `POST /api/live/settings` accepts
 overrides}`. An empty overrides object clears every workspace override. Unknown
 fields and invalid input are rejected without echoing values.
 
-For existing installations without a selected named provider, the unscoped
-`GET/POST /api/live/settings` legacy connection/key contract remains available.
-Scoped Voice preferences take effect when a named connection is selected; legacy
-saved key values are not copied into provider YAML or the Voice records.
+Both reads and writes require an explicit scope. Configure authentication in the
+provider registry; Voice preferences select a connection and contain no API keys.
 
 Each scope has a revisioned SQLite record. Global defaults live under the ngn
 configuration directory and workspace overrides in the workspace session DB;
@@ -1267,7 +1261,7 @@ reporting the call ready. The response contains only application session metadat
 For every provider, the browser exchanges only binary PCM16 mono audio at 24 kHz
 on `/api/live/sessions/{session_id}/audio`. The server owns provider session setup.
 Each browser WebSocket uses
-`ngn.live.v1` and `ngn.token.<bootstrap token>` subprotocols, with no query
+`ngn.live.v2` and `ngn.token.<bootstrap token>` subprotocols, with no query
 parameters or provider credentials. Frames are bounded to 100 ms; a browser
 disconnect ends and finalizes the call. Session creation accepts no connection
 override, arbitrary command, or tool configuration input; connection changes
@@ -1403,8 +1397,7 @@ depth, and client capabilities before model requests. For example, read-only pro
 do not receive modifying or custom tools, and native wake-up tools require a client
 scheduler. The complete registered catalog remains editable even when a tool is
 unavailable; changing these capabilities does not replace its registered definition.
-Disabling `schedule_wakeup` also disables its `wake_up_in` alias. **Reset agent**
-removes that agent's overrides when saved. Changes use revision checks and atomic
+**Reset agent** removes that agent's overrides when saved. Changes use revision checks and atomic
 file replacement; no credentials are written to this configuration.
 
 **Saved tool approvals** lists the web operator's saved decisions separately from
@@ -1427,7 +1420,7 @@ button is disabled with an explanation, and **Allow once** remains available.
 
 The built-in **`compact_history`** requests compaction of the current conversation.
 The agent finishes pending tool calls, persists their results, then compacts before
-the next model round. It uses the configured compactor/strategy and emits normal
+the next model round. It uses the configured compaction strategy and emits normal
 compaction events; it does not start a nested run. A cancelled or finished run
 discards any unprocessed session-scoped request. The tool is also selectable in
 Agent Designer.
@@ -1475,7 +1468,7 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `read_only` | Boolean workspace restriction; startup-enforced read-only operation cannot be relaxed by web preferences |
 | `provider` | An allowlisted provider name from `providers`, for example `openrouter` or `openai_compatible` |
 | `base_url` | Empty for the provider default, or an HTTP(S) endpoint without credentials, query parameters, or fragments, at most 300 characters; required for `litellm` |
-| `api` | One of `auto`, `chat_completions`, `responses`, or `messages` (`completions` is rejected for the harness) |
+| `api` | One of `auto`, `chat_completions`, `responses`, or `messages` |
 | `auth` | One of `auto`, `api-key`, or `chatgpt`; `chatgpt` remains limited to the default OpenAI provider endpoint |
 | `api_key_env` | Environment variable name for the key, at most 64 characters; never a literal secret |
 | `shell_timeout` | Finite number greater than 0 and at most 600 seconds |
@@ -1488,13 +1481,15 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `compact_messages` | Integer, 1 through 10,000; the conversation length used when `compact_trigger` is `messages` |
 | `submit_mode` | `queue` (default) or `interrupt` for new messages in the active web conversation |
 
-POST carries the settings values plus the write-only `api_key` field. Unknown
-fields, numeric strings, booleans used as numbers, and nonfinite numbers are
+POST carries `{revision, values}`. Provider, endpoint, API, authentication, and
+key-environment fields are read-only projections of the selected connection;
+edit them through Provider connections. Unknown fields, numeric strings,
+booleans used as numbers, and nonfinite numbers are
 rejected with HTTP 422, as are invalid provider combinations (for example,
 `litellm` without an endpoint, `chatgpt` with a custom endpoint, credentials in
 an endpoint URL, or an unsupported API mode). Changing profile selects its
-trusted instructions/mode, but the explicitly submitted model takes precedence
-over that profile's model. Model IDs are free text: settings GET/save never query
+trusted instructions/mode; an explicit profile model overrides the workspace
+model preference. Model IDs are free text: settings GET/save never query
 a model catalog or test entitlement. A later provider request may reject an
 unavailable ID. Permission ceilings and per-call approvals remain enforced.
 Existing sessions, history, provider credentials, and tools are retained. New
@@ -1503,19 +1498,14 @@ under the existing child continuation contract.
 
 `compact_trigger = auto` leaves the provider's context-limit default in place,
 `tokens` compacts near 70% of `compact_tokens`, `messages` compacts once the
-conversation reaches `compact_messages`, and `off` disables automatic compaction.
+conversation reaches `compact_messages`, and `off` disables compaction.
 The choice applies to the shared Harness on the next run and persists with the
-other overrides; manual `Harness.compact()` and the channel `/compact` command
-remain available regardless.
+other overrides. Manual `Harness.compact()` and `/compact` use the configured
+strategy; enable one before compacting when this preference is `off`.
 
-An optional `api_key` stores a write-only key for the submitted provider; an
-empty value leaves any stored key unchanged. `clear_api_key` removes it. A
-stored key is installed only into this process's environment under
-`api_key_env`, is never included in `values`, `defaults`, `connection`, logs, or
-any response, and `key_configured` only signals its presence. Removing it
-restores the process environment captured at startup, so deployment-provided
-keys remain the fallback. Provider routing changes are applied by rebuilding the
-provider after the save commits; the previous client is closed exactly once.
+Settings requests reject `api_key` and `clear_api_key`. Configure the selected
+provider's credential reference or ChatGPT/Codex login in Provider connections.
+Credential values never enter the settings response.
 
 Mutations reject HTTP 409 during a run, approval, or another mutation, or when the
 submitted revision is stale. Reload before retrying; do not automatically overwrite
@@ -1525,8 +1515,9 @@ during a save. Error `detail` is a safe string, never raw request/provider data.
 The versioned `ngn_web_settings` singleton row lives in the **existing workspace
 session SQLite database**, resolved by the Harness under `data_dir`. It stores only
 the approved preferences and revision, never a key value or the full
-configuration. Write-only keys live in a separate `ngn_web_provider_keys` table
-in the same private database; both are deleted on reset. The override applies
+configuration. Existing credential rows from older installations remain private
+and are not rewritten by ordinary preference saves; reset removes the stored
+workspace overrides and their old credential rows. The override applies
 across sessions and web-server restarts for that resolved workspace. One process
 must own the workspace; this is not multi-process settings synchronization.
 ConfigMap/JSON, CLI, profile and initial authentication/model resolution

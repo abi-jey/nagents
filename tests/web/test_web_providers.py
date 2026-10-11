@@ -103,7 +103,7 @@ def test_provider_crud_model_catalog_and_live_are_shared(
                 )
                 assert stale.status_code == 409
                 assert harnesses[0].config.provider == "work"
-                live = (await client.get("/api/live/settings", headers=headers)).json()
+                live = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
                 assert live["source"] == "providers" and live["profile_name"] == "work"
                 assert live["connection_scope"] == "workspace"
                 assert live["values"]["model"] == "gpt-live-1"
@@ -219,7 +219,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
             assert inherited["origins"] == {"personal": "global"}
             assert not store.workspace_store.path.exists()
             assert store.global_store.path.is_file()
-            live_before = (await client.get("/api/live/settings", headers=headers)).json()
+            live_before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             selected = await client.post(
                 "/api/provider-scopes/workspace/providers/personal/activate",
                 headers=headers,
@@ -228,7 +228,7 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
                 },
             )
             assert selected.status_code == 200 and not selected.json()["inherited_active"]
-            live_selected = (await client.get("/api/live/settings", headers=headers)).json()
+            live_selected = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             assert live_selected["revision"] != live_before["revision"]
             stale_live = await client.post(
                 "/api/live/settings",
@@ -269,7 +269,9 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
             )
             assert active.status_code == 200, active.text
             assert harnesses[0].config.provider == "local"
-            assert (await client.get("/api/live/settings", headers=headers)).json()["connection_scope"] == "workspace"
+            assert (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()[
+                "connection_scope"
+            ] == "workspace"
             restored = await client.post(
                 "/api/providers/inherit",
                 headers=headers,
@@ -280,7 +282,9 @@ def test_global_connections_are_inherited_or_selected_per_workspace(tmp_path: Pa
             assert restored.status_code == 200, restored.text
             assert restored.json()["inherited_active"] and restored.json()["active"] == "personal"
             assert harnesses[0].config.provider == "personal"
-            assert (await client.get("/api/live/settings", headers=headers)).json()["connection_scope"] == "global"
+            assert (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()[
+                "connection_scope"
+            ] == "global"
             assert (
                 await client.post(
                     "/api/providers/import", headers=headers, json={"revision": restored.json()["revision"]}

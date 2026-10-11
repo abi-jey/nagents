@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 
 from nagents.web.live_handoff import MAX_HANDOFF_PARTS
 from nagents.web.live_handoff import MAX_HANDOFF_TEXT
 from nagents.web.live_handoff import LoginDelegations
-from nagents.web.live_handoff import LoginHandoff
 from nagents.web.live_login import normalize_event
 from tests.support.hang_guard import HANG_GUARD
+
+if TYPE_CHECKING:
+    from nagents.live.delegation import ClientDelegationRequest
 
 
 def notice(identifier: str, text: str, offset: object = 1000) -> dict[str, object]:
@@ -40,10 +43,10 @@ def test_native_handoffs_freeze_their_own_text_and_history_before_queued_work_ru
     async def scenario() -> None:
         entered = asyncio.Event()
         release = asyncio.Event()
-        calls: list[LoginHandoff] = []
+        calls: list[ClientDelegationRequest] = []
         results: asyncio.Queue[dict[str, object]] = asyncio.Queue()
 
-        async def backend(request: LoginHandoff) -> str:
+        async def backend(request: ClientDelegationRequest) -> str:
             calls.append(request)
             if len(calls) == 1:
                 entered.set()
@@ -117,10 +120,10 @@ def test_native_handoffs_freeze_their_own_text_and_history_before_queued_work_ru
 )
 def test_invalid_native_content_returns_same_id_explanation_without_reusing_prior_speech(content: object) -> None:
     async def scenario() -> None:
-        calls: list[LoginHandoff] = []
+        calls: list[ClientDelegationRequest] = []
         results: asyncio.Queue[dict[str, object]] = asyncio.Queue()
 
-        async def backend(request: LoginHandoff) -> str:
+        async def backend(request: ClientDelegationRequest) -> str:
             calls.append(request)
             return "Valid new result"
 
@@ -150,7 +153,7 @@ def test_invalid_native_content_returns_same_id_explanation_without_reusing_prio
 
 
 def test_native_text_joining_is_exact_and_history_has_an_independent_bound() -> None:
-    async def backend(request: LoginHandoff) -> str:
+    async def backend(request: ClientDelegationRequest) -> str:
         raise AssertionError("This test inspects queued requests only")
 
     async def send(event: dict[str, object]) -> None:
@@ -184,7 +187,7 @@ def test_native_text_joining_is_exact_and_history_has_an_independent_bound() -> 
 
 
 def test_native_snapshot_orders_late_fragments_by_timing_without_merging_or_changing_text() -> None:
-    async def backend(request: LoginHandoff) -> str:
+    async def backend(request: ClientDelegationRequest) -> str:
         raise AssertionError("No worker was started")
 
     async def send(event: dict[str, object]) -> None:
@@ -224,7 +227,7 @@ def test_native_offset_is_preserved_only_as_valid_observed_chronology(offset: ob
 
 
 def test_native_pending_requests_remain_bounded_and_duplicates_do_not_consume_slots() -> None:
-    async def backend(request: LoginHandoff) -> str:
+    async def backend(request: ClientDelegationRequest) -> str:
         raise AssertionError("No worker was started")
 
     async def send(event: dict[str, object]) -> None:
@@ -242,9 +245,9 @@ def test_native_pending_requests_remain_bounded_and_duplicates_do_not_consume_sl
 
 @pytest.mark.parametrize("identifier", [None, True, 1, "", " \t", "x" * 257])
 def test_native_ingress_rejects_invalid_ids_before_observation_or_admission(identifier: object) -> None:
-    observed: list[LoginHandoff] = []
+    observed: list[ClientDelegationRequest] = []
 
-    async def backend(request: LoginHandoff) -> str:
+    async def backend(request: ClientDelegationRequest) -> str:
         raise AssertionError("No worker was started")
 
     async def send(event: dict[str, object]) -> None:
@@ -261,7 +264,7 @@ def test_native_ingress_rejects_invalid_ids_before_observation_or_admission(iden
 
 @pytest.mark.parametrize("identifier", ["x" * 256, "opaque:provider/id.with.dots"])
 def test_native_ingress_preserves_valid_opaque_ids(identifier: str) -> None:
-    async def backend(request: LoginHandoff) -> str:
+    async def backend(request: ClientDelegationRequest) -> str:
         raise AssertionError("No worker was started")
 
     async def send(event: dict[str, object]) -> None:

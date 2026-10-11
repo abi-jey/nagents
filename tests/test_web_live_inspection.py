@@ -17,6 +17,7 @@ from nagents.extensions import AgentPlugin
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.runtime import Harness
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.observation import observe
 from nagents.observation import observer
 from nagents.observation import scope
@@ -26,7 +27,6 @@ from nagents.types import GenerationConfig
 from nagents.types import Message
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.live_context import LiveSeed
-from nagents.web.live_handoff import LoginHandoff
 from nagents.web.live_inspection import MAX_CONTEXT_BYTES
 from nagents.web.live_inspection import MAX_INSTRUCTION_BYTES
 from nagents.web.live_inspection import MAX_MODEL_BYTES
@@ -101,12 +101,25 @@ def test_real_harness_captures_post_plugin_context_and_actual_provider_body(
                         voice_session_id=record.identifier,
                         report=service.delegation_reporter(record.identifier),
                     )
-                    assert (
-                        await bridge.handle_native(LoginHandoff("native-request", "Caller input")) == "Confirmed answer"
-                    )
+
+                    async def append(kind: str, content: str, identifier: str) -> str:
+                        return f"session.{kind}.append"
+
+                    bridge.attach(append)
+                    request = ClientDelegationRequest("native-request", "Caller input")
+                    await bridge.handle_request(request)
+                    async with asyncio.timeout(5):
+                        while state.active is None:
+                            await asyncio.sleep(0.001)
+                        run = state.active
+                        await run.task
+                    await bridge.close()
+                    assert (await state.history.snapshot(state.selected_session_id))[-1][
+                        "content"
+                    ] == "Confirmed answer"
                     identifier = next(iter(record.delegations))
-                    path = f"/api/live/sessions/{record.identifier}/delegations/{identifier}"
-                    response = await client.get(path, headers=headers)
+                    path = f"/api/live/sessions/{record.identifier}/delegation-details"
+                    response = await client.get(path, params={"delegation_id": identifier}, headers=headers)
                     assert response.status_code == 200
                     assert "synthetic-only-key" not in response.text
                     details = response.json()

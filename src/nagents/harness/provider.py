@@ -37,11 +37,6 @@ class HarnessProvider(Provider):
         request_timeout: float = 120.0,
     ) -> None:
         profile = config.provider_profile()
-        if profile.api == "completions":
-            raise ValueError(
-                "The coding harness requires conversation roles and tools; the legacy completions API is text-only. "
-                "Use api='chat_completions', 'responses', or 'messages', or use Provider directly with one text prompt."
-            )
         self.harness_config = config
         # A saved ngn login supplies the key only when the environment does not.
         self.login_store = login_store

@@ -9,28 +9,19 @@ from typing import TYPE_CHECKING
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import HTTPException
-
 from nagents.live.delegation import ClientDelegationRequest
 
 from .live_handoff import MAX_HANDOFF_TEXT
-from .live_handoff import LoginHandoff
-from .live_inspection import model_requests
 from .live_updates import AssistantUpdates
-from .service import Run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from collections.abc import Collection
 
     from nagents.live.delegation import LiveAppend
 
+    from .service import Run
     from .service import WebState
 
-# The voice waiter has a shorter budget than the provider's 420-second client
-# delegation timeout (including up to 60 seconds waiting for the assistant).
-# The application-owned task itself continues until completion or explicit Stop.
-VOICE_REPLY_SECONDS = 300.0
 DelegationStatus = Literal["queued", "working", "completed", "failed", "cancelled"]
 
 
@@ -59,21 +50,7 @@ def _speech_data(transcript: str) -> tuple[list[dict[str, object]], bool]:
     return recent, len(recent) < len(fragments)
 
 
-def voice_prompt(transcript: str, seen: Collection[str] = ()) -> str:
-    """Join new caller fragments; transport metadata is inspected separately."""
-    recent, _ = _speech_data(transcript)
-    text = "".join(
-        str(part["text"])
-        for part in recent
-        if part["speaker"] == "user"
-        and json.dumps([part["text"], part.get("start_ms"), part.get("end_ms")], ensure_ascii=False) not in seen
-    ).strip()
-    if not text:
-        raise ValueError("No caller speech is available yet; ask the caller to repeat the request")
-    return text
-
-
-def native_voice_prompt(request: LoginHandoff) -> str:
+def delegation_prompt(request: ClientDelegationRequest) -> str:
     """Send only the explicit request; captions and IDs stay in inspection data."""
     if not request.text.strip() or len(request.text) > MAX_HANDOFF_TEXT:
         raise ValueError("A native voice handoff needs a bounded request")
@@ -288,7 +265,7 @@ class MainAgentBridge:
                     self._report(request.identifier, "failed", "The voice request could not be read.")
                     return ""
             try:
-                prompt = native_voice_prompt(explicit)
+                prompt = delegation_prompt(explicit)
                 _, signatures = voice_display(explicit.transcript, self._displayed_speech)
                 message_id = (
                     "voice-" + hashlib.sha256((self.voice_session_id + "\0" + request.identifier).encode()).hexdigest()
@@ -330,147 +307,3 @@ class MainAgentBridge:
             "provider": config.provider or config.provider_profile().kind,
             "model": harness.agent.provider.model,
         }
-
-    async def handle(self, transcript: str) -> str:
-        return await self._handle(transcript)
-
-    async def handle_native(self, request: LoginHandoff) -> str:
-        return await self._handle(request.transcript, request)
-
-    async def _handle(self, transcript: str, native: LoginHandoff | None = None) -> str:
-        # This is an application request identity, not a guessed correlation with
-        # the provider's notice ID. Public client handlers supply speech only.
-        identifier = uuid4().hex
-        target = self._target()
-
-        def status(phase: DelegationStatus, text: str, run_id: str = "", **details: object) -> None:
-            if self.report is not None:
-                self.report(
-                    {
-                        "delegation_id": identifier,
-                        "voice_session_id": self.voice_session_id,
-                        "chat_session_id": self.session_id,
-                        "run_id": run_id,
-                        "status": phase,
-                        "text": text,
-                        **target,
-                        **details,
-                    }
-                )
-
-        if native is None:
-            status("queued", "Waiting for the assistant.", request_transcript=transcript)
-        try:
-            if native is None:
-                prompt = voice_prompt(transcript, self._displayed_speech)
-                display, speech = voice_display(transcript, self._displayed_speech)
-            else:
-                prompt = native_voice_prompt(native)
-                display, speech = native.text.strip(), self._displayed_speech
-        except ValueError:
-            if native is not None:
-                status("queued", "Waiting for the assistant.", request_transcript=transcript)
-            status("failed", "The voice request could not be read. Please repeat it.")
-            return "I need a clear, shorter request. Could you say it again?"
-        if native is not None:
-            status("queued", "Waiting for the assistant.", request_transcript=transcript, request_input=prompt)
-        state = self.state
-        try:
-            # The sideband can delegate before the provisioning HTTP request
-            # releases the host's reservation. Do not lose that first request.
-            async with asyncio.timeout(60):
-                while state.mutating or state.active is not None or state.harness._busy:
-                    if state.channels.closed:
-                        status("cancelled", "The assistant shut down before this request started.")
-                        return "The assistant is shutting down and cannot take this request."
-                    await asyncio.sleep(0.05)
-            with state.idle():
-                self._displayed_speech = speech
-                target = self._target()
-                run = Run(self.session_id, server_owned=True, voice=True)
-                state.active = run
-                state.publish(run, {"event": "run_started", "source": "live_voice"})
-                state.status()
-
-                async def execute() -> None:
-                    try:
-
-                        def captured(request: dict[str, object]) -> None:
-                            text = (
-                                "Model request capture limit reached."
-                                if request.get("capture_limited")
-                                else "Assistant model request captured."
-                            )
-                            status("working", text, run.id, model_request=request)
-
-                        with model_requests(self.session_id, state.harness.agent.provider, captured):
-                            async with state.history.voice_request(
-                                self.session_id, run.id, display, voice_session_id=self.voice_session_id
-                            ):
-                                status("working", "Processing…", run.id, request_input=prompt)
-                                await state.produce_session(run, prompt)
-                    except asyncio.CancelledError:
-                        run.outcome = "cancelled"
-                        raise
-                    except Exception:
-                        run.outcome = "failed"
-                        state.publish(
-                            run,
-                            {"event": "error", "message": "The assistant could not complete this voice request."},
-                        )
-                    finally:
-                        state.harness.session_id = state.selected_session_id
-                        state.harness.tools.read_hashes.clear()
-
-                def finished(task: asyncio.Task[None]) -> None:
-                    if task.cancelled():
-                        run.outcome = "cancelled"
-                    state.finish(run)
-                    outcome: DelegationStatus = (
-                        "completed"
-                        if run.outcome == "completed"
-                        else "cancelled"
-                        if run.outcome == "cancelled"
-                        else "failed"
-                    )
-                    status(
-                        outcome,
-                        {
-                            "completed": "The assistant finished. Its answer is ready.",
-                            "cancelled": "The assistant request was stopped.",
-                            "failed": "The assistant request failed. Check the chat for details.",
-                        }[outcome],
-                        run.id,
-                        **({"result_text": run.final_text} if outcome == "completed" else {}),
-                    )
-
-                run.task = asyncio.create_task(execute(), name=f"ngn-live-backend-{run.id}")
-                run.task.add_done_callback(finished)
-                status("working", "Processing…", run.id)
-        except (HTTPException, TimeoutError):
-            status("failed", "The assistant stayed busy; this request did not start.")
-            return "The assistant is still busy with another request. Please ask again in a moment."
-        except asyncio.CancelledError:
-            status("cancelled", "Voice ended before this request started.")
-            raise
-
-        # Voice owns this waiter, while WebState owns the assistant task. Ending
-        # speech or a voice timeout must not cancel an in-flight workspace action.
-        # The normal Stop run control and server shutdown still cancel and join it.
-        try:
-            async with asyncio.timeout(VOICE_REPLY_SECONDS):
-                await asyncio.shield(run.task)
-        except TimeoutError:
-            if not run.task.done():
-                return "The assistant is still working. Follow its progress and results in the chat."
-        except asyncio.CancelledError:
-            waiter = asyncio.current_task()
-            if not run.task.cancelled() or (waiter is not None and waiter.cancelling()):
-                raise
-            # Stop run cancels the assistant, not the surrounding voice session.
-            return "The assistant request was stopped. Check the chat for any actions already completed."
-        if run.outcome != "completed":
-            return "The assistant could not complete that request. Check the chat for details before trying again."
-        if len(run.final_text) > 4000:
-            return "The assistant wrote a detailed response in this chat. Please review it there or ask me about a specific part."
-        return run.final_text or "The assistant finished without a spoken answer. Check the chat for the result."

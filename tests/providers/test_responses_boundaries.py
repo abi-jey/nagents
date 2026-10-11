@@ -535,7 +535,7 @@ async def test_real_harness_releases_only_validated_calls_even_when_tool_approva
                 providers=connection(base_url=url, api="responses", api_key_env="NGN_BOUNDARY_TEST_KEY"),
             )
         )
-        harness.agent.compactor = None
+        harness.agent.compaction_strategy = None
         harness.agent.register_tool(other_tool)
         harness.approval_handler = approve
         try:

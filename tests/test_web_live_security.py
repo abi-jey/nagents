@@ -9,7 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 from nagents.web.security import LocalOnly
 
 
-@pytest.mark.parametrize("protocol", ["ngn.live.v1", "ngn.live.v2"])
+@pytest.mark.parametrize("protocol", ["ngn.live.v2"])
 @pytest.mark.parametrize("change", ["token", "origin", "host", "query", "protocol", "duplicate", "path"])
 def test_live_audio_socket_rejects_invalid_credentials_or_route(change: str, protocol: str) -> None:
     app = FastAPI()
@@ -46,7 +46,7 @@ def test_live_audio_socket_rejects_invalid_credentials_or_route(change: str, pro
         assert rejected.value.code == 1008
 
 
-@pytest.mark.parametrize("protocol", ["ngn.live.v1", "ngn.live.v2"])
+@pytest.mark.parametrize("protocol", ["ngn.live.v2"])
 def test_live_audio_socket_accepts_only_same_origin_token_subprotocol(protocol: str) -> None:
     app = FastAPI()
     app.add_middleware(LocalOnly, authority="testserver", token="secret", enforce_authority=True)
@@ -66,3 +66,24 @@ def test_live_audio_socket_accepts_only_same_origin_token_subprotocol(protocol: 
     ):
         assert socket.accepted_subprotocol == protocol
         assert socket.receive_text() == "owned"
+
+
+def test_live_audio_socket_rejects_retired_v1_protocol() -> None:
+    app = FastAPI()
+    app.add_middleware(LocalOnly, authority="testserver", token="secret", enforce_authority=True)
+
+    @app.websocket("/api/live/sessions/{session_id}/audio")
+    async def audio(socket: WebSocket, session_id: str) -> None:
+        await socket.accept(subprotocol="ngn.live.v1")
+
+    with TestClient(app, base_url="http://testserver") as client:
+        with (
+            pytest.raises(WebSocketDisconnect) as rejected,
+            client.websocket_connect(
+                "/api/live/sessions/owned/audio",
+                headers={"Origin": "http://testserver"},
+                subprotocols=["ngn.live.v1", "ngn.token.secret"],
+            ),
+        ):
+            pytest.fail("Retired v1 audio protocol accepted")
+        assert rejected.value.code == 1008

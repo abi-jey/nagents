@@ -78,9 +78,7 @@ values outside configuration. Credentials are not copied from another
 coding assistant's configuration, and ngn does not automatically load `.env`.
 
 Use `api: auto` for provider-native defaults, or choose `chat_completions`,
-`responses`, `messages`, or `completions` for an endpoint supporting that route.
-Legacy Completions is a text-only library route: ngn rejects it during harness
-setup because coding requires conversation roles and tools.
+`responses`, or `messages` for an endpoint supporting that route.
 LiteLLM requires an explicit `base_url` and an API-key reference such as
 `api_key_env: LITELLM_API_KEY`; it does not use ChatGPT OAuth or require a
 gateway SDK in ngn. See [provider recipes](ngn-configuration.md#provider-recipes).
@@ -353,7 +351,7 @@ discarded, and task outcomes are not replayed after restart. Child transcripts
 remain in local storage but do not clutter the ordinary session picker.
 
 The [web client](ngn-web.md#scheduled-wakeups) additionally owns a process-local
-timer service for `schedule_wakeup` (historical name: `wake_up_in`). It resumes the
+timer service for `schedule_wakeup`. It resumes the
 scheduling root or child without keeping a browser request open. Ordinary
 CLI/TUI instances do not own that service and reject timer requests explicitly.
 Timers do not survive a server or pod restart.
@@ -584,7 +582,7 @@ after the subcommand; prefer supplying each option only once.
 | --- | --- |
 | `ngn` | Full-screen terminal client. Requires the `tui` extra and a terminal. |
 | `ngn run [--json] [prompt ...]` | Headless prompt execution. `-`, or no prompt with piped stdin, reads stdin. |
-| `ngn serve` | New local React client for the harness. Requires the current checkout, `[web]`, and built assets; see [Local Web Client](ngn-web.md). Not the legacy `python -m nagents.server` API. |
+| `ngn serve` | React client and HTTP API for the harness. Install `[web]` with bundled assets, or build an editable checkout; see [Local Web Client](ngn-web.md). |
 | `ngn sessions` | List saved sessions for the selected workspace. |
 | `ngn resume [SESSION_ID]` | Resume a saved session in the full-screen client. With no ID, choose from an interactive list. Requires a terminal; errors on an ID from another workspace. |
 | `ngn doctor` | Initialize the harness and show configuration/extension diagnostics without an LLM request. Trusted plugins still execute. Use `--demo` to skip them. |
@@ -816,8 +814,9 @@ histories must keep tool calls and results paired.
 The strategy receives active history without the configured system prompt. It
 can trim complete turns, call its own summarizer, retain task state, retrieve
 memory, or implement another algorithm. Manual compaction uses the same strategy.
-The older `Compactor`, compaction prompts, and trigger options remain available
-to existing library callers.
+The default `ModelCompaction` strategy summarizes history using the selected
+provider. Configure its thresholds, prompt, or summarizer provider directly;
+set `compaction_strategy=None` to disable compaction.
 
 See the runnable example:
 

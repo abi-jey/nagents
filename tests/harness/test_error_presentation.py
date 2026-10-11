@@ -28,6 +28,7 @@ from nagents.web.provider_setup import provider_error
 from tests.support.config import connection
 from tests.support.tui import idle
 from tests.support.web import client_app
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -206,18 +207,15 @@ async def test_actual_harness_cli_explains_timeout_without_changing_json_or_outc
 async def test_actual_harness_web_uses_safe_explanation_without_extra_or_egress_advice(
     tmp_path: Path, native_timeout: Mock
 ) -> None:
-    async with client_app(tmp_path, config=native_config(tmp_path), controlled=False) as (_, client, headers, _):
+    async with client_app(tmp_path, config=native_config(tmp_path), controlled=False) as (app, client, headers, _):
         session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-        response = await client.post(
-            "/api/run", json={"session_id": session, "prompt": "offline fixture"}, headers=headers
-        )
-        records = [json.loads(line) for line in response.text.splitlines()]
+        records = await submit_and_wait(app, headers, session, "offline fixture")
         error = next(record for record in records if record["event"] == "error")
         assert error["message"] == RESPONSE_TIMEOUT and error["recoverable"] is False
         assert "extra" not in error and "transport" not in error
         assert records[-1]["status"] == "failed"
         assert not any(record.get("event") == "tool_call" for record in records)
-        assert "egress" not in response.text and ORIGINAL_TIMEOUT not in response.text
+        assert "egress" not in json.dumps(records) and ORIGINAL_TIMEOUT not in json.dumps(records)
     assert native_timeout.call_count == 1
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -24,6 +23,7 @@ from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,7 +56,7 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
         )
         async with (
             endpoint(monkeypatch, handle),
-            client_app(tmp_path, config=config) as (_, client, headers, harnesses),
+            client_app(tmp_path, config=config) as (app, client, headers, harnesses),
         ):
             harness = harnesses[0]
             harness.run = Harness.run.__get__(harness)  # type: ignore[method-assign]
@@ -70,24 +70,18 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
             async def capture() -> set[str]:
                 count = len(requests)
                 async with asyncio.timeout(HANG_GUARD):
-                    response = await client.post(
-                        "/api/run",
-                        headers=headers,
-                        json={"session_id": harness.session_id, "prompt": "Return fixture text"},
-                    )
-                assert response.status_code == 200, response.text
-                assert not any(json.loads(line)["event"] == "error" for line in response.text.splitlines() if line)
+                    events = await submit_and_wait(app, headers, harness.session_id, "Return fixture text")
+                assert not any(event["event"] == "error" for event in events)
                 assert len(requests) == count + 1
                 tools = requests[-1]["tools"]
                 assert isinstance(tools, list)
                 wire = {tool["name"] for tool in tools}
                 if not shadowed:
-                    assert "wake_up_in" not in wire
-                    assert harness.agent.tool_registry.get("wake_up_in") is definitions["wake_up_in"]
+                    assert harness.agent.tool_registry.get("schedule_wakeup") is definitions["schedule_wakeup"]
                 catalog = (await client.get("/api/tools", headers=headers)).json()
                 assert {tool["name"] for tool in catalog["tools"]} == set(definitions)
                 assert all(harness.agent.tool_registry.get(name) is tool for name, tool in definitions.items())
-                assert {"edit", "write", "shell", "delegate", "schedule_wakeup", "wake_up_in"} <= set(definitions)
+                assert {"edit", "write", "shell", "delegate", "schedule_wakeup"} <= set(definitions)
                 assert ("delegate" in wire) == (harness.can_delegate and not (shadowed and harness.mode == "reviewer"))
                 if harness.mode == "reviewer":
                     assert not {"edit", "write", "shell", "custom_read"} & wire
@@ -98,7 +92,7 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                 assert isinstance(instructions, str)
                 # Match orchestration guidance to native contracts in this actual
                 # provider request, not just familiar names in the editable catalog.
-                if not shadowed and {"schedule_wakeup", "wake_up_in"} & wire:
+                if not shadowed and {"schedule_wakeup"} & wire:
                     assert "only when a scheduler tool is advertised in this request" in instructions
                     assert "Scheduling acknowledges immediately" in instructions
                     assert "Scheduling and waking grant no additional tool permissions" in instructions
@@ -130,7 +124,7 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                 await capture()
 
             harness.wakeup_handler = None
-            assert not {"schedule_wakeup", "wake_up_in"} & await capture()
+            assert not {"schedule_wakeup"} & await capture()
             assert "use schedule_wakeup" not in str(requests[-1]["instructions"])
             harness.wakeup_handler = scheduler
             assert "schedule_wakeup" in await capture()
@@ -142,7 +136,7 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                 json={"revision": catalog["revision"], "agents": {"assistant": {"schedule_wakeup": False}}},
             )
             assert response.status_code == 200
-            assert not {"schedule_wakeup", "wake_up_in"} & await capture()
+            assert not {"schedule_wakeup"} & await capture()
             response = await client.post(
                 "/api/tools", headers=headers, json={"revision": response.json()["revision"], "agents": {}}
             )
@@ -150,18 +144,18 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
             assert "schedule_wakeup" in await capture()
 
             # Names never confer builtin authority on replacement plugin tools.
-            for name in ("read_file", "schedule_wakeup", "wake_up_in", "delegate"):
+            for name in ("read_file", "schedule_wakeup", "schedule_wakeup", "delegate"):
                 definitions[name] = harness.agent.register_tool(custom_read, name=name)
             shadowed = True
             harness.wakeup_handler = None
             build = await capture()
-            assert {"read_file", "schedule_wakeup", "wake_up_in"} <= build
+            assert {"read_file", "schedule_wakeup"} <= build
             assert "delegate" not in build  # The existing executor reserves this name at the depth limit.
             await settings(agent="assistant", depth=2)
             assert "delegate" in await capture()  # Its custom contract must not inherit native lifecycle guidance.
             await settings(agent="reviewer", depth=2)
             # This reviewer has no native delegate anymore, so all four shadows must disappear.
-            assert not {"read_file", "schedule_wakeup", "wake_up_in", "delegate"} & await capture()
+            assert not {"read_file", "schedule_wakeup", "delegate"} & await capture()
 
     asyncio.run(scenario())
 
@@ -186,7 +180,7 @@ def test_setup_plugin_instructions_survive_runs_and_scheduler_changes(
         )
         async with (
             endpoint(monkeypatch, handle),
-            client_app(tmp_path, config=config) as (_, client, headers, harnesses),
+            client_app(tmp_path, config=config) as (app, _, headers, harnesses),
         ):
             harness = harnesses[0]
             harness.run = Harness.run.__get__(harness)  # type: ignore[method-assign]
@@ -201,13 +195,8 @@ def test_setup_plugin_instructions_survive_runs_and_scheduler_changes(
                 harness.wakeup_handler = callback
                 count = len(requests)
                 async with asyncio.timeout(HANG_GUARD):
-                    response = await client.post(
-                        "/api/run",
-                        headers=headers,
-                        json={"session_id": harness.session_id, "prompt": "Return fixture text"},
-                    )
-                assert response.status_code == 200, response.text
-                assert not any(json.loads(line)["event"] == "error" for line in response.text.splitlines() if line)
+                    events = await submit_and_wait(app, headers, harness.session_id, "Return fixture text")
+                assert not any(event["event"] == "error" for event in events)
                 assert len(requests) == count + 1
                 assert str(harness.agent.system_prompt).count(marker) == 1
                 if replace_prompt:
@@ -217,8 +206,7 @@ def test_setup_plugin_instructions_survive_runs_and_scheduler_changes(
                 assert isinstance(tools, list)
                 advertised = {tool["name"] for tool in tools}
                 assert ("schedule_wakeup" in advertised) == (callback is not None)
-                assert "wake_up_in" not in advertised
-                assert harness.agent.tool_registry.get("wake_up_in") is not None
+                assert harness.agent.tool_registry.get("schedule_wakeup") is not None
                 if not replace_prompt:
                     expected = (
                         "only when a scheduler tool is advertised in this request"

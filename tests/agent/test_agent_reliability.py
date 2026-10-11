@@ -9,11 +9,10 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents import Agent
+from nagents import ModelCompaction
 from nagents import Provider
 from nagents import ProviderType
 from nagents import SessionManager
-from nagents.compactor import Compactor
-from nagents.compactor import Messages
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
@@ -76,7 +75,7 @@ def test_usage_aggregates_snapshots_once_and_preserves_details(tmp_path: Path) -
             """Return a local result."""
             return "result"
 
-        agent = Agent(provider, SessionManager(tmp_path / "usage.db"), tools=[work], compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "usage.db"), tools=[work], compaction_strategy=None)
         try:
             events = [event async for event in agent.run("go", session_id="s")]
             assert events[0].usage.session == TokenUsage(10, 1, 11)
@@ -106,7 +105,7 @@ def test_usage_survives_runs_without_cross_session_or_consumer_mutation(tmp_path
     async def drive() -> None:
         usage = Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14)
         provider = ScriptedProvider([[TextDoneEvent(text="done", usage=usage)]] * 3)
-        agent = Agent(provider, SessionManager(tmp_path / "sessions.db"), compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "sessions.db"), compaction_strategy=None)
         try:
             first = [event async for event in agent.run("one", session_id="s")]
             assert first[-1].usage.session == TokenUsage(10, 4, 14)
@@ -137,7 +136,7 @@ def test_usage_keeps_failed_rounds_but_does_not_reuse_missing_usage(tmp_path: Pa
                 [TextDoneEvent(text="done")],
             ]
         )
-        agent = Agent(provider, SessionManager(tmp_path / "failure.db"), compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "failure.db"), compaction_strategy=None)
         try:
             events = [event async for event in agent.run("go", session_id="s")]
             assert events[-1].usage.session == TokenUsage(10, 4, 14)
@@ -158,7 +157,7 @@ def test_usage_keeps_failed_rounds_but_does_not_reuse_missing_usage(tmp_path: Pa
 def test_done_preserves_provider_finish_reason(tmp_path: Path, reason: FinishReason) -> None:
     async def drive() -> None:
         provider = ScriptedProvider([[TextDoneEvent(text="answer", finish_reason=reason)]])
-        agent = Agent(provider, SessionManager(tmp_path / "finish.db"), compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "finish.db"), compaction_strategy=None)
         try:
             events = [event async for event in agent.run("go", session_id="s")]
             assert isinstance(events[-1], DoneEvent)
@@ -173,7 +172,7 @@ def test_done_preserves_provider_finish_reason(tmp_path: Path, reason: FinishRea
 def test_round_limit_does_not_report_a_natural_stop(tmp_path: Path) -> None:
     async def drive() -> None:
         provider = ScriptedProvider([[ToolCallEvent(id="a", name="missing", usage=Usage(10, 4, 14))]])
-        agent = Agent(provider, SessionManager(tmp_path / "limit.db"), compactor=None, max_tool_rounds=1)
+        agent = Agent(provider, SessionManager(tmp_path / "limit.db"), compaction_strategy=None, max_tool_rounds=1)
         try:
             events = [event async for event in agent.run("go", session_id="s")]
             assert isinstance(events[-2], ErrorEvent)
@@ -186,14 +185,9 @@ def test_round_limit_does_not_report_a_natural_stop(tmp_path: Path) -> None:
     asyncio.run(drive())
 
 
-@pytest.mark.parametrize("explicit_default", [False, True])
 @pytest.mark.parametrize("concurrent", [False, True])
-def test_default_compactor_isolates_agents_and_preserves_template(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_default: bool, concurrent: bool
-) -> None:
+def test_default_model_compaction_isolates_agents(tmp_path: Path, concurrent: bool) -> None:
     async def drive() -> None:
-        template = Compactor(system_prompt="custom default prompt", compact_on=Messages(length=100))
-        monkeypatch.setattr("nagents.agent.DEFAULT_COMPACTOR", template)
         providers = [ScriptedProvider([[TextDoneEvent(text=f"summary {name}")]]) for name in ("first", "second")]
         agents = []
         for name, provider in zip(("first", "second"), providers, strict=True):
@@ -201,31 +195,24 @@ def test_default_compactor_isolates_agents_and_preserves_template(
             session = SessionManager(tmp_path / f"{name}.db")
             await session.get_or_create_session("s", "u")
             await session.add_message("s", Message(role="user", content=f"private history {name}"))
-            agents.append(
-                Agent(provider, session, compactor=template) if explicit_default else Agent(provider, session)
-            )
+            agents.append(Agent(provider, session))
         try:
-            if concurrent:
-                results = await asyncio.wait_for(asyncio.gather(*(agent.compact("s") for agent in agents)), timeout=10)
-            else:
-                results = [await agent.compact("s") for agent in agents]
+            results = (
+                await asyncio.wait_for(asyncio.gather(*(agent.compact("s") for agent in agents)), timeout=10)
+                if concurrent
+                else [await agent.compact("s") for agent in agents]
+            )
             assert [result.summary_text for result in results] == ["summary first", "summary second"]
-            assert [result.compactor_used for result in results] == ["first", "second"]
+            assert [result.compactor_used for result in results] == ["ModelCompaction", "ModelCompaction"]
             for name, agent, provider in zip(("first", "second"), agents, providers, strict=True):
                 assert await agent.session.get_history("s") == [
                     Message(role="compaction_summary", content=f"summary {name}")
                 ]
                 assert len(provider.requests) == 1
-                assert provider.requests[0][0] == Message(role="system", content="custom default prompt")
                 assert f"private history {name}" in str(provider.requests[0][-1].content)
-                resolved = agent._resolve_compactor()
-                assert isinstance(resolved, Compactor)
-                assert resolved is not template
-                assert resolved.provider is provider and resolved.session is agent.session
-                assert resolved.compact_on == template.compact_on
-                assert resolved.compact_on is not template.compact_on
-            assert template.provider is None and template.session is None
-            assert agents[0]._resolve_compactor() is not agents[1]._resolve_compactor()
+                assert isinstance(agent.compaction_strategy, ModelCompaction)
+                assert agent.compaction_strategy.provider is None
+            assert agents[0].compaction_strategy is not agents[1].compaction_strategy
         finally:
             for agent in agents:
                 await agent.close()
@@ -233,16 +220,15 @@ def test_default_compactor_isolates_agents_and_preserves_template(
     asyncio.run(drive())
 
 
-def test_explicit_compactor_keeps_its_configured_provider(tmp_path: Path) -> None:
+def test_explicit_compaction_strategy_uses_its_configured_provider(tmp_path: Path) -> None:
     async def drive() -> None:
         provider = ScriptedProvider([])
         summarizer = ScriptedProvider([[TextDoneEvent(text="dedicated summary")]])
-        compactor = Compactor(provider=summarizer, system_prompt="dedicated prompt")
-        agent = Agent(provider, SessionManager(tmp_path / "dedicated.db"), compactor=compactor)
+        strategy = ModelCompaction(provider=summarizer, prompt="dedicated prompt")
+        agent = Agent(provider, SessionManager(tmp_path / "dedicated.db"), compaction_strategy=strategy)
         try:
             await agent.session.get_or_create_session("s", "u")
             await agent.session.add_message("s", Message(role="user", content="history"))
-            assert agent._resolve_compactor() is compactor
             result = await agent.compact("s")
             assert result.summary_text == "dedicated summary"
             assert provider.requests == []

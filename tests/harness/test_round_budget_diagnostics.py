@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,6 +20,7 @@ from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
 from tests.support.web import client_app
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -124,13 +124,9 @@ def test_actual_web_stream_reports_budget_failure_without_an_extra_model_turn(
 
     async def scenario() -> None:
         config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", demo=True, max_tool_rounds=1)
-        async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, harnesses):
             session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-            response = await client.post(
-                "/api/run", headers=headers, json={"session_id": session, "prompt": "offline budget probe"}
-            )
-            assert response.status_code == 200
-            records = [json.loads(line) for line in response.text.splitlines()]
+            records = await submit_and_wait(app, headers, session, "offline budget probe")
             error = next(record for record in records if record["event"] == "error")
             assert error["message"] == provider_error(ErrorEvent(code="MAX_TOOL_ROUNDS"))[1]
             assert error["recoverable"] is False

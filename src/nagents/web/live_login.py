@@ -22,7 +22,6 @@ from nagents.live.runtime import _no_redirects
 from nagents.live.runtime import result_chunks
 
 from .live_handoff import LoginDelegations
-from .live_handoff import LoginHandoff
 from .live_handoff import handoff_offset
 
 if TYPE_CHECKING:
@@ -31,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents.live.delegation import ClientDelegationObserver
+    from nagents.live.delegation import ClientDelegationRequest
     from nagents.live.delegation import LiveAppendKind
     from nagents.provider.openai import CodexCredentials
 
@@ -47,7 +47,7 @@ class LoginVoiceConfig:
     model: str
     voice: str
     instructions: str
-    handler: Callable[[LoginHandoff], Awaitable[str]]
+    handler: Callable[[ClientDelegationRequest], Awaitable[str]]
     history: tuple[Payload, ...] = ()
     observer: ClientDelegationObserver | None = None
 

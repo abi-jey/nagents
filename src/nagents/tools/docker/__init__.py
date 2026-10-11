@@ -1,4 +1,4 @@
-"""Docker execution for agent servers.
+"""Docker execution for agent tools.
 
 Provides :func:`docker_run` — runs shell commands inside a Docker container,
 returning stdout, stderr, and exit code.
@@ -9,12 +9,12 @@ from __future__ import annotations
 import os
 import subprocess
 
-# Defaults are read from env vars so the server config controls the execution environment.
-_DEFAULT_IMAGE = os.getenv("NAGENTS_SERVER_IMAGE", "python:3.12-slim")
-_DEFAULT_NETWORK = os.getenv("NAGENTS_SERVER_NETWORK", "bridge")
-_DEFAULT_MEMORY = os.getenv("NAGENTS_SERVER_MEMORY", "512m")
-_DEFAULT_CPUS = os.getenv("NAGENTS_SERVER_CPUS", "1.0")
-_DEFAULT_TIMEOUT = int(os.getenv("NAGENTS_SERVER_TIMEOUT", "120"))
+# Defaults are read from the tool's environment.
+_DEFAULT_IMAGE = os.getenv("NAGENTS_DOCKER_IMAGE", "python:3.12-slim")
+_DEFAULT_NETWORK = os.getenv("NAGENTS_DOCKER_NETWORK", "bridge")
+_DEFAULT_MEMORY = os.getenv("NAGENTS_DOCKER_MEMORY", "512m")
+_DEFAULT_CPUS = os.getenv("NAGENTS_DOCKER_CPUS", "1.0")
+_DEFAULT_TIMEOUT = int(os.getenv("NAGENTS_DOCKER_TIMEOUT", "120"))
 
 
 def docker_run(
@@ -31,7 +31,7 @@ def docker_run(
 
     Args:
         command: Shell command to execute.
-        image: Docker image (default: from NAGENTS_SANDBOX_IMAGE env or python:3.12-slim).
+        image: Docker image (default: NAGENTS_DOCKER_IMAGE or python:3.12-slim).
         network: Docker network mode — ``bridge`` allows internet, ``none`` blocks it.
         memory: Memory limit (e.g. ``512m``, ``1g``).
         cpus: CPU limit (e.g. ``1.0``, ``2.0``).

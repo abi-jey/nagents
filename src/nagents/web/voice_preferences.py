@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ from pydantic import AfterValidator
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import ValidationError
 
 from nagents.live import LiveConfig
 
@@ -113,10 +115,58 @@ class VoicePreferenceStore:
             "INSERT OR IGNORE INTO voice_global.ngn_voice_preferences VALUES (1, 1, ?, ?)",
             (VoicePreferences().model_dump_json(), secrets.token_hex(32)),
         )
-        db.execute(
-            "INSERT OR IGNORE INTO main.ngn_voice_preferences VALUES (1, 1, ?, ?)",
-            (VoiceOverrides().model_dump_json(exclude_unset=True), secrets.token_hex(32)),
-        )
+        with closing(db.execute("SELECT 1 FROM main.ngn_voice_preferences WHERE id = 1")) as cursor:
+            workspace_exists = cursor.fetchone() is not None
+        if not workspace_exists:
+            migrated = self._legacy_workspace_preferences(db)
+            payload = (migrated or VoiceOverrides()).model_dump_json(exclude_unset=True)
+            db.execute(
+                "INSERT INTO main.ngn_voice_preferences VALUES (1, 1, ?, ?)",
+                (payload, secrets.token_hex(32)),
+            )
+
+    @staticmethod
+    def _legacy_workspace_preferences(db: sqlite3.Connection) -> VoiceOverrides | None:
+        """Copy user preferences from the retired row without inspecting its connection key."""
+        with closing(
+            db.execute("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?", ("ngn_web_live_settings",))
+        ) as cursor:
+            if cursor.fetchone() is None:
+                return None
+        with closing(
+            db.execute(
+                "SELECT version, CASE WHEN typeof(values_json) = 'text' "
+                "AND length(CAST(values_json AS BLOB)) <= ? THEN values_json END "
+                "FROM main.ngn_web_live_settings WHERE id = 1",
+                (MAX_VOICE_BYTES,),
+            )
+        ) as cursor:
+            row = cursor.fetchone()
+        if row is None or type(row[0]) is not int or row[0] != 1 or not isinstance(row[1], str):
+            raise ValueError("Invalid saved Voice preferences")
+        try:
+            legacy = json.loads(row[1])
+            if not isinstance(legacy, dict):
+                raise ValueError("Invalid saved Voice preferences")
+            supported = {
+                field: legacy[field]
+                for field in (
+                    "enabled",
+                    "connection_id",
+                    "backend_mode",
+                    "model",
+                    "backend_model",
+                    "voice",
+                    "instructions",
+                    "context_mode",
+                )
+                if field in legacy
+            }
+            # Older installations defaulted to hosted Voice when this field was absent.
+            supported.setdefault("backend_mode", "hosted")
+            return VoiceOverrides.model_validate(supported)
+        except (json.JSONDecodeError, UnicodeError, ValueError, ValidationError):
+            raise ValueError("Invalid saved Voice preferences") from None
 
     def transaction(
         self, operation: Callable[[sqlite3.Connection, VoicePreferences, VoiceOverrides, str, str], T]

@@ -1,10 +1,9 @@
-"""Global defaults and workspace overrides; workspace-scoped write-only keys.
+"""Global defaults and workspace overrides for the shared Harness.
 
 Trusted startup configuration remains the source of defaults and the ceiling.
-Saved workspace overrides may select an allowlisted provider, endpoint and API
-key environment name. A key entered in the browser is stored outside the
-settings JSON, is never returned by any endpoint, and is installed only into
-this process's environment before the provider is (re)built.
+Provider connections own routing and authentication. Saved credential rows from
+older installations are read only for migration and are never exposed by an
+endpoint. New settings requests cannot write keys or change connection fields.
 """
 
 import asyncio
@@ -23,8 +22,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
-from nagents.compactor import Messages
-from nagents.compactor import Tokens
+from nagents.compaction import ModelCompaction
 from nagents.harness.providers import API_NAMES
 from nagents.harness.providers import PROVIDERS
 
@@ -36,7 +34,7 @@ if TYPE_CHECKING:
 
 MAX_SETTINGS_BYTES = 16384
 MAX_API_KEY_BYTES = 4096
-PROVIDER_APIS: tuple[str, ...] = tuple(name for name in API_NAMES if name != "completions")
+PROVIDER_APIS: tuple[str, ...] = API_NAMES
 PROVIDER_AUTHS: tuple[str, ...] = ("auto", "api-key", "chatgpt", "codex", "entra")
 _CONNECTION_FIELDS = frozenset({"provider", "base_url", "api", "auth", "api_key_env"})
 COMPACTION_TRIGGERS: tuple[str, ...] = ("auto", "tokens", "messages", "off")
@@ -51,31 +49,29 @@ _GLOBAL_SETTINGS_TABLE = (
 
 def _current_compaction(harness: "Harness") -> tuple[str, int, int]:
     """Project the live agent's compaction criteria into settings fields."""
-    if harness.agent.compactor is None:
+    configured = harness.agent.compaction_strategy
+    if configured is None:
         return "off", DEFAULT_COMPACT_TOKENS, DEFAULT_COMPACT_MESSAGES
-    configured = harness.agent.compact_on
-    if isinstance(configured, Messages):
-        return "messages", DEFAULT_COMPACT_TOKENS, configured.length
-    if isinstance(configured, Tokens):
-        window = configured.total or configured.input or DEFAULT_COMPACT_TOKENS
-        return "tokens", window, DEFAULT_COMPACT_MESSAGES
+    if isinstance(configured, ModelCompaction):
+        if configured.message_threshold is not None:
+            return "messages", DEFAULT_COMPACT_TOKENS, configured.message_threshold
+        if configured.token_threshold is not None:
+            return "tokens", (configured.token_threshold * 10 + 6) // 7, DEFAULT_COMPACT_MESSAGES
     return "auto", DEFAULT_COMPACT_TOKENS, DEFAULT_COMPACT_MESSAGES
 
 
 def _apply_compaction(harness: "Harness", trigger: str, tokens: int, messages: int) -> None:
     """Apply a validated criteria choice to the shared live agent."""
     if trigger == "off":
-        harness.agent.compactor = None
-        harness.agent.compact_on = None
+        harness.agent.compaction_strategy = None
         return
-    harness.agent.compactor = "self"
     if trigger == "tokens":
-        harness.agent.compact_on = Tokens(total=tokens)
+        # Saved preferences express a context window, with 30% kept in reserve.
+        harness.agent.compaction_strategy = ModelCompaction(token_threshold=tokens * 7 // 10)
     elif trigger == "messages":
-        harness.agent.compact_on = Messages(length=messages)
+        harness.agent.compaction_strategy = ModelCompaction(message_threshold=messages)
     else:
-        # Provider default: context-limit-based, resolved per run.
-        harness.agent.compact_on = None
+        harness.agent.compaction_strategy = ModelCompaction()
 
 
 class _SettingsValuesV1(BaseModel):
@@ -211,18 +207,6 @@ class SettingsRevision(BaseModel):
 
 class SettingsInput(SettingsRevision):
     values: SettingsValues
-    # Write-only provider credential. Empty leaves any stored key unchanged;
-    # clear_api_key removes the stored key explicitly. Neither value is ever
-    # persisted in the settings JSON or returned by an endpoint.
-    api_key: str = Field(default="", max_length=MAX_API_KEY_BYTES)
-    clear_api_key: bool = False
-
-    @field_validator("api_key")
-    @classmethod
-    def provider_key(cls, value: object) -> object:
-        if isinstance(value, str) and any(not char.isprintable() for char in value):
-            raise ValueError("API key must be printable text")
-        return value
 
 
 class WebSettings:
@@ -639,12 +623,8 @@ class WebSettings:
         revision: str,
         values: SettingsValues,
         *,
-        api_key: str = "",
-        clear_api_key: bool = False,
         reset: bool = False,
     ) -> None:
-        if api_key or clear_api_key:
-            raise HTTPException(422, "Configure a named provider connection; API keys are not saved here.")
         if any(getattr(values, name) != getattr(self.values, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
         if "submit_mode" not in values.model_fields_set:
@@ -663,13 +643,7 @@ class WebSettings:
             raise HTTPException(409, "Settings changed. Reload settings before saving.")
         try:
             with self.harness.operation("web settings"):
-                await _join(
-                    asyncio.create_task(
-                        self._save(
-                            values, payload, overrides, api_key=api_key, clear_api_key=clear_api_key, reset=reset
-                        )
-                    )
-                )
+                await _join(asyncio.create_task(self._save(values, payload, overrides, reset=reset)))
         except RuntimeError:
             raise HTTPException(409, "Harness busy. Cancel or finish the active operation first.") from None
 
@@ -679,8 +653,6 @@ class WebSettings:
         payload: str,
         overrides: dict[str, object],
         *,
-        api_key: str,
-        clear_api_key: bool,
         reset: bool,
     ) -> None:
         harness = self.harness
@@ -704,14 +676,6 @@ class WebSettings:
                         "revision = excluded.revision",
                         (payload, revision),
                     )
-                    if api_key:
-                        await db.execute(
-                            "INSERT INTO ngn_web_provider_keys (provider, secret) VALUES (?, ?) "
-                            "ON CONFLICT(provider) DO UPDATE SET secret = excluded.secret",
-                            (provider, api_key),
-                        )
-                    elif clear_api_key:
-                        await db.execute("DELETE FROM ngn_web_provider_keys WHERE provider = ?", (provider,))
                 previous = (
                     config.model,
                     config.agent,
@@ -733,10 +697,6 @@ class WebSettings:
                 try:
                     if reset:
                         self.keys.clear()
-                    elif api_key:
-                        self.keys[provider] = api_key
-                    elif clear_api_key:
-                        self.keys.pop(provider, None)
                     self._restore_key()
                     secret = self.keys.get(provider, "") if not self.provider_config(values).provider else ""
                     if secret:

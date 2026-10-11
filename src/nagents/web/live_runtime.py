@@ -681,17 +681,14 @@ class LiveService:
         source, sink = call.audio_in, call.audio_out
         assert source is not None and sink is not None
         call.browser = True
-        protocol = "ngn.live.v2" if "ngn.live.v2" in socket.scope.get("subprotocols", ()) else "ngn.live.v1"
+        protocol = "ngn.live.v2"
         await socket.accept(subprotocol=protocol)
         source.connected.set()
 
         async def playback() -> None:
             async for packet in sink.packets():
                 if packet.interrupted:
-                    # Cached v1 clients accept PCM only. Explicit v2 negotiation
-                    # is required before sending any playback-control text.
-                    if protocol == "ngn.live.v2":
-                        await socket.send_json({"type": "interrupt"})
+                    await socket.send_json({"type": "interrupt"})
                 else:
                     await socket.send_bytes(packet.data)
 
@@ -996,15 +993,8 @@ class LiveService:
                     or config.delegation not in {"responses", "client"}
                     or config.attach_to
                     or config.fork_from
-                    or (
-                        config.delegation == "responses"
-                        and (config.client_handler is not None or config.client_request_handler is not None)
-                    )
-                    or (
-                        config.delegation == "client"
-                        and config.client_handler is None
-                        and config.client_request_handler is None
-                    )
+                    or (config.delegation == "responses" and config.client_request_handler is not None)
+                    or (config.delegation == "client" and config.client_request_handler is None)
                     or agent.delegation_agent is not None
                     or agent.tool_registry.get_all()
                     or not isinstance(config.voice, str)
@@ -1085,15 +1075,8 @@ class LiveService:
                     or config.delegation not in {"responses", "client"}
                     or config.attach_to
                     or config.fork_from
-                    or (
-                        config.delegation == "responses"
-                        and (config.client_handler is not None or config.client_request_handler is not None)
-                    )
-                    or (
-                        config.delegation == "client"
-                        and config.client_handler is None
-                        and config.client_request_handler is None
-                    )
+                    or (config.delegation == "responses" and config.client_request_handler is not None)
+                    or (config.delegation == "client" and config.client_request_handler is None)
                     or agent.delegation_agent is not None
                     or agent.tool_registry.get_all()
                     or not isinstance(config.voice, str)

@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from dataclasses import asdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -33,6 +34,7 @@ from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import FakeProvider
 from tests.support.web import LiveStream
 from tests.support.web import client_app
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -44,7 +46,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from nagents.web.app import Run
+    from nagents.web.service import Run
     from tests.support.providers import Script
 
 
@@ -73,7 +75,7 @@ async def scheduled_app(
         instance = WebState(harness)
         instance.wakeups.clock = clock
         states.append(instance)
-        harness.agent.compactor = None
+        harness.agent.compaction_strategy = None
         return instance
 
     monkeypatch.setattr(runtime, "HarnessProvider", provider)
@@ -196,26 +198,33 @@ def test_root_ack_finishes_stream_then_wakes_once_without_subscriber(
     async def check() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "check later"})
+                yield ToolCallEvent(
+                    id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "check later"}
+                )
             else:
                 for _ in range(100):
                     yield TextChunkEvent(chunk="text")
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             session_id = state.harness.session_id
-            response = await client.post(
-                "/api/run", json={"session_id": session_id, "prompt": "start"}, headers=headers
-            )
-            events = [json.loads(line) for line in response.text.splitlines()]
-            ack = next(event["result"] for event in events if event["event"] == "tool_result")
+            events = await submit_and_wait(app, headers, session_id, "start")
+            result = next(event["result"] for event in events if event["event"] == "tool_result")
+            assert isinstance(result, dict)
+            ack = cast("dict[str, object]", result)
             assert ack["status"] == "scheduled" and ack["task_id"] == ""
             assert all(isinstance(value, str) for value in ack.values())
             assert events[-1]["status"] == "completed" and state.active is None
             assert len(providers[0].requests) == 2 and not state.harness.tasks.list()
-            before = (await client.get(f"/api/activity/{session_id}/0", headers=headers)).json()
-            assert [event["event"] for event in before["events"]] == ["wakeup"]
-            assert before["pending_wakeups"][0]["wakeup_id"] == ack["wakeup_id"]
+            before_value = (await client.get(f"/api/activity/{session_id}/0", headers=headers)).json()
+            assert isinstance(before_value, dict)
+            before = cast("dict[str, object]", before_value)
+            assert isinstance(before.get("events"), list)
+            before_events = cast("list[dict[str, object]]", before["events"])
+            assert isinstance(before.get("pending_wakeups"), list)
+            pending = cast("list[dict[str, object]]", before["pending_wakeups"])
+            assert [event["event"] for event in before_events] == ["wakeup"]
+            assert pending[0]["wakeup_id"] == ack["wakeup_id"]
             await state.wakeups.tick()
             assert len(providers[0].requests) == 2
             clock.now += 10
@@ -285,10 +294,10 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             else:
                 yield TextDoneEvent(text="recorded result")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, _):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, _):
             first = state.harness.session_id
             assert (await client.get("/api/sessions", headers=headers)).json()["retained_tasks"] == []
-            await client.post("/api/run", json={"session_id": first, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, first, "start")
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             retained = snapshot["retained_tasks"]
             assert retained == [asdict(info) for info in state.harness.tasks.list()]
@@ -331,12 +340,10 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             else:
                 yield TextDoneEvent(text=f"result from {provider.index}")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             session_id = state.harness.session_id
-            response = await client.post(
-                "/api/run", json={"session_id": session_id, "prompt": "start"}, headers=headers
-            )
-            assert json.loads(response.text.splitlines()[-1])["status"] == "completed"
+            events = await submit_and_wait(app, headers, session_id, "start")
+            assert events[-1]["status"] == "completed"
             infos = sorted(state.harness.tasks.list(), key=lambda item: item.depth)
             assert len(infos) == 2
             parent, child = infos
@@ -432,7 +439,8 @@ def test_reused_call_ids_keep_grandchild_approval_and_wakeup_activation_scope(
             assert reads[0].get("task_id", "") == ""
             closed = next(event for event in foreground if event["event"] == "approval_closed")
             assert (closed["task_id"], closed["activation"], closed["call_id"]) == (child.id, 0, "shared-call")
-            assert foreground[-1]["status"] == "completed"
+            assert next(event["status"] for event in foreground if event["event"] == "run_finished") == "completed"
+            await stream.disconnect()
             assert next(iter(state.wakeups.pending.values())).task_id == child.id
             cursor = state.wakeups.cursor
             clock.now += 10
@@ -479,10 +487,10 @@ def test_large_real_tool_results_are_byte_bounded_without_subscribers(
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             state.harness.config.max_output = output_size
             session_id = state.harness.session_id
-            await client.post("/api/run", json={"session_id": session_id, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, session_id, "start")
             clock.now += 10
             await asyncio.wait_for(state.wakeups.tick(), HANG_GUARD)
             assert len(providers[0].requests) == 4 and state.active is None
@@ -515,13 +523,15 @@ def test_due_wakeup_runs_beside_other_session_and_can_be_cancelled_independently
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             latest = next(str(message.content) for message in reversed(messages) if message.role == "user")
             if latest == "start" and messages[-1].role == "user":
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "wake first"})
+                yield ToolCallEvent(
+                    id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "wake first"}
+                )
             elif latest == "busy second":
                 busy.set()
                 await asyncio.Event().wait()
             elif "wake first" in latest and messages[-1].role == "user":
                 yield ToolCallEvent(
-                    id="dependent-timer", name="wake_up_in", arguments={"seconds": 20, "reason": "dependent wake"}
+                    id="dependent-timer", name="schedule_wakeup", arguments={"seconds": 20, "reason": "dependent wake"}
                 )
             elif "wake first" in latest:
                 waking.set()
@@ -535,7 +545,7 @@ def test_due_wakeup_runs_beside_other_session_and_can_be_cancelled_independently
 
         async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, _, clock):
             first = state.harness.session_id
-            await client.post("/api/run", json={"session_id": first, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, first, "start")
             second = (await client.post("/api/sessions/new", json={}, headers=headers)).json()["session_id"]
             stream = LiveStream(app, headers, second, "busy second")
             started = await stream.event("run_started")
@@ -547,21 +557,18 @@ def test_due_wakeup_runs_beside_other_session_and_can_be_cancelled_independently
             assert (
                 await client.post("/api/cancel", json={"run_id": started["run_id"]}, headers=headers)
             ).status_code == 200
-            await stream.task
+            await asyncio.gather(stream.task, return_exceptions=True)
             assert len(state.wakeups.pending) == 1  # Unrelated human chain cancellation.
             cursor = state.wakeups.cursor
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["active_session_id"] == first and bootstrap["active_run_background"] is True
             active = state.active
-            assert active is not None and active.queue.empty()
+            assert active is not None and active.background
             assert len(state.wakeups.pending) == 1
             assert (await client.post("/api/sessions/new", json={}, headers=headers)).status_code == 200
             assert (
                 await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)
             ).status_code == 200
-            assert (
-                await client.post("/api/run", json={"session_id": first, "prompt": "conflict"}, headers=headers)
-            ).status_code == 409
             assert (
                 await client.post("/api/sessions/resume", json={"session_id": second}, headers=headers)
             ).status_code == 200
@@ -605,7 +612,7 @@ def test_originating_foreground_cancellation_removes_timers_and_joins(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "pending"})
+                yield ToolCallEvent(id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "pending"})
             else:
                 blocked.set()
                 try:
@@ -624,13 +631,20 @@ def test_originating_foreground_cancellation_removes_timers_and_joins(
                 ).status_code == 200
             elif action == "disconnect":
                 await stream.disconnect()
+                assert not cleaned.is_set() and state.run_for(state.harness.session_id) is not None
+                assert len(state.wakeups.pending) == 1
+                assert (
+                    await client.post("/api/cancel", json={"run_id": started["run_id"]}, headers=headers)
+                ).status_code == 200
             if action != "shutdown":
-                await stream.task
+                await asyncio.gather(stream.task, return_exceptions=True)
                 assert cleaned.is_set() and not state.wakeups.pending
                 clock.now += 10
                 await state.wakeups.tick()
                 assert state.active is None
-        await stream.task
+        await asyncio.gather(stream.task, return_exceptions=True)
+        if action != "shutdown" and not stream.disconnected:
+            await stream.disconnect()
         assert cleaned.is_set()
         activity = state.wakeups.activity(state.harness.session_id, 0, "")
         assert isinstance(activity["events"], list)
@@ -654,7 +668,7 @@ def test_unattended_write_shell_and_custom_approvals_fail_closed(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "later"})
+                yield ToolCallEvent(id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "later"})
             elif len(provider.requests) == 3:
                 yield ToolCallEvent(id="write", name="write", arguments={"path": "blocked.txt", "content": "blocked"})
                 yield ToolCallEvent(id="shell", name="shell", arguments={"command": "exit 0"})
@@ -662,10 +676,10 @@ def test_unattended_write_shell_and_custom_approvals_fail_closed(
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, _, clock):
             state.harness.agent.register_tool(custom)
             session_id = state.harness.session_id
-            await client.post("/api/run", json={"session_id": session_id, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, session_id, "start")
             cursor = state.wakeups.cursor
             clock.now += 10
             with patch("asyncio.create_subprocess_exec", side_effect=AssertionError("Must not start shell")) as shell:
@@ -690,7 +704,7 @@ def test_background_failures_are_safe_one_shot_and_restore_session(
     async def check() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "later"})
+                yield ToolCallEvent(id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "later"})
             elif len(provider.requests) == 3:
                 if failure == "exception":
                     raise RuntimeError("SECRET-provider-error")
@@ -698,9 +712,9 @@ def test_background_failures_are_safe_one_shot_and_restore_session(
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             first = state.harness.session_id
-            await client.post("/api/run", json={"session_id": first, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, first, "start")
             second = (await client.post("/api/sessions/new", json={}, headers=headers)).json()["session_id"]
             clock.now += 10
             context = (
@@ -729,15 +743,15 @@ def test_automatic_rescheduling_keeps_original_budget(tmp_path: Path, monkeypatc
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if messages[-1].role == "user":
                 yield ToolCallEvent(
-                    id=f"timer-{len(provider.requests)}", name="wake_up_in", arguments={"seconds": 1, "reason": "again"}
+                    id=f"timer-{len(provider.requests)}",
+                    name="schedule_wakeup",
+                    arguments={"seconds": 1, "reason": "again"},
                 )
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
-            await client.post(
-                "/api/run", json={"session_id": state.harness.session_id, "prompt": "start"}, headers=headers
-            )
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, _, headers, state, providers, clock):
+            await submit_and_wait(app, headers, state.harness.session_id, "start")
             chain = next(iter(state.wakeups.pending.values())).chain
             for _ in range(wakeups.MAX_ACTIVATIONS):
                 assert len(state.wakeups.pending) == 1
@@ -764,7 +778,7 @@ def test_shutdown_joins_active_scheduler_and_its_background_run(
             count = len(provider.requests)
             if count in {1, 3}:
                 yield ToolCallEvent(
-                    id=f"timer-{count}", name="wake_up_in", arguments={"seconds": 10, "reason": "later"}
+                    id=f"timer-{count}", name="schedule_wakeup", arguments={"seconds": 10, "reason": "later"}
                 )
             elif count == 4:
                 started.set()
@@ -775,10 +789,8 @@ def test_shutdown_joins_active_scheduler_and_its_background_run(
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script, start=True) as (_, client, headers, state, _, clock):
-            await client.post(
-                "/api/run", json={"session_id": state.harness.session_id, "prompt": "start"}, headers=headers
-            )
+        async with scheduled_app(tmp_path, monkeypatch, script, start=True) as (app, _, headers, state, _, clock):
+            await submit_and_wait(app, headers, state.harness.session_id, "start")
             clock.now += 10
             state.wakeups.changed.set()
             await asyncio.wait_for(started.wait(), HANG_GUARD)
@@ -801,13 +813,13 @@ def test_cancellation_before_background_producer_starts_is_observable(
     async def check() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if len(provider.requests) == 1:
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "later"})
+                yield ToolCallEvent(id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "later"})
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             session_id = state.harness.session_id
-            await client.post("/api/run", json={"session_id": session_id, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, session_id, "start")
             original = state._wake
 
             def cancel_before_start(run: Run, wakeup: Wakeup) -> Coroutine[object, object, None]:
@@ -835,13 +847,13 @@ def test_child_wakeup_obeys_current_root_permission_settings(
             if provider.index == 0 and len(provider.requests) == 1:
                 yield ToolCallEvent(id="delegate", name="delegate", arguments={"prompt": "child"})
             elif provider.index == 1 and len(provider.requests) == 1:
-                yield ToolCallEvent(id="timer", name="wake_up_in", arguments={"seconds": 10, "reason": "later"})
+                yield ToolCallEvent(id="timer", name="schedule_wakeup", arguments={"seconds": 10, "reason": "later"})
             else:
                 yield TextDoneEvent(text="finished")
 
-        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, providers, clock):
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             first = state.harness.session_id
-            await client.post("/api/run", json={"session_id": first, "prompt": "start"}, headers=headers)
+            await submit_and_wait(app, headers, first, "start")
             settings = (await client.get("/api/settings", headers=headers)).json()
             values = {
                 **settings["values"],

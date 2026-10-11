@@ -362,20 +362,18 @@ def test_conflicted_root_rejects_web_admission_and_all_outbound_dispatch(tmp_pat
 
             await host.store._transaction(legacy)
             await host.store.initialize()
-            assert (
-                await client.post("/api/run", headers=headers, json={"session_id": root, "prompt": "do not execute"})
-            ).status_code == 409
-            assert (
-                await client.post(
-                    "/api/messages",
-                    headers=headers,
-                    json={
-                        "session_id": root,
-                        "message_id": "12345678-1234-1234-1234-123456789abc",
-                        "prompt": "do not execute",
-                    },
-                )
-            ).status_code == 409
+            message_id = "12345678-1234-1234-1234-123456789abc"
+            rejected = await client.post(
+                "/api/messages",
+                headers=headers,
+                json={
+                    "session_id": root,
+                    "message_id": message_id,
+                    "prompt": "do not execute",
+                },
+            )
+            assert rejected.status_code == 409
+            assert not await rows(state, "SELECT message_id FROM ngn_web_inbox WHERE message_id = ?", message_id)
             channel = AddressedChannel("bridge")
             host.channels["bridge"] = channel
             host.update_tools()

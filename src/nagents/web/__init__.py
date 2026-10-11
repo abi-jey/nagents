@@ -1,4 +1,4 @@
-"""Optional, local-only web client for the ngn Harness, not nagents.server."""
+"""Optional web client and HTTP API for the ngn Harness."""
 
 import hashlib
 import ipaddress

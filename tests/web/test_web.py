@@ -2,7 +2,7 @@
 
 import asyncio
 import builtins
-import json
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -145,7 +145,7 @@ def test_security_boundary_and_static_paths(tmp_path: Path) -> None:
                 await client.post("/api/sessions/new", json={"extra": "SECRET"}, headers=headers)
             ).status_code == 422
             assert (await client.get("/api/bootstrap?token=do-not-log")).status_code == 400
-            assert (await client.options("/api/run", headers=headers)).status_code == 405
+            assert (await client.post("/api/run", json={}, headers=headers)).status_code == 404
 
     asyncio.run(check())
 
@@ -426,7 +426,8 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
                 cancelled = await client.post("/api/cancel", json={"run_id": pending["run_id"]}, headers=headers)
                 assert cancelled.status_code == 200
                 assert (await stream.event("run_finished"))["status"] == "cancelled"
-                await asyncio.wait_for(stream.task, HANG_GUARD)
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait_for(stream.task, HANG_GUARD)
                 assert harness.stopped.is_set() and harness.decisions == [False]
                 assert (await client.get("/api/bootstrap")).json()["active_run_id"] == ""
                 await stream.disconnect()
@@ -443,17 +444,20 @@ def test_catalog_read_does_not_take_over_pending_approval(tmp_path: Path, monkey
 @pytest.mark.requires_posix
 def test_demo_run_uses_workspace_tools(tmp_path: Path) -> None:
     async def check() -> None:
-        async with client_app(tmp_path, controlled=False) as (_, client, headers, _):
+        async with client_app(tmp_path, controlled=False) as (app, client, headers, _):
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             first = snapshot["session_id"]
-            response = await client.post("/api/run", json={"session_id": first, "prompt": "hello"}, headers=headers)
-            events = [json.loads(line) for line in response.text.splitlines()]
-            assert events[0]["event"] == "run_started"
+            stream = LiveStream(app, headers, first, "hello")
+            events = await stream.run_to_completion()
             assert events[-1]["event"] == "run_finished" and events[-1]["status"] == "completed"
-            assert all(event["schema_version"] == 1 for event in events)
             assert any(event["event"] == "tool_call" for event in events)
             assert any(event["event"] == "text_chunk" for event in events)
-            assert any("OFFLINE DEMO" in event.get("text", "") for event in events)
+            assert any(
+                isinstance(text, str) and "OFFLINE DEMO" in text
+                for event in events
+                if (text := event.get("text")) is not None
+            )
+            await stream.disconnect()
 
     asyncio.run(check())
 
@@ -474,13 +478,25 @@ def test_session_history_and_workspace_membership(tmp_path: Path) -> None:
                 response = await client.post("/api/sessions/resume", json={"session_id": session}, headers=headers)
                 assert response.status_code in {404, 422}
             assert (
-                await client.post("/api/run", json={"session_id": second, "prompt": "no"}, headers=headers)
-            ).status_code == 409
+                await client.post(
+                    "/api/messages",
+                    json={"session_id": second, "prompt": "no", "message_id": str(uuid.uuid4())},
+                    headers=headers,
+                )
+            ).status_code == 200
             assert (
-                await client.post("/api/run", json={"session_id": first, "prompt": " "}, headers=headers)
+                await client.post(
+                    "/api/messages",
+                    json={"session_id": first, "prompt": " ", "message_id": str(uuid.uuid4())},
+                    headers=headers,
+                )
             ).status_code == 422
             assert (
-                await client.post("/api/run", json={"session_id": first, "prompt": "a" * 32001}, headers=headers)
+                await client.post(
+                    "/api/messages",
+                    json={"session_id": first, "prompt": "a" * 32001, "message_id": str(uuid.uuid4())},
+                    headers=headers,
+                )
             ).status_code == 422
 
     asyncio.run(check())
@@ -496,7 +512,7 @@ def test_stream_exact_approvals_and_conflicts(tmp_path: Path) -> None:
             first = await stream.event("approval")
             assert (
                 await client.post("/api/run", json={"session_id": original_session, "prompt": "no"}, headers=headers)
-            ).status_code == 409
+            ).status_code == 404
             created = await client.post("/api/sessions/new", json={}, headers=headers)
             assert created.status_code == 200 and created.json()["session_id"] != original_session
             assert harness.session_id == original_session
@@ -535,7 +551,8 @@ def test_stream_exact_approvals_and_conflicts(tmp_path: Path) -> None:
             ).status_code == 200
             assert (await stream.event("approval_closed"))["decision"] == "allow"
             assert (await stream.event("run_finished"))["status"] == "completed"
-            await asyncio.wait_for(stream.task, HANG_GUARD)
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait_for(stream.task, HANG_GUARD)
             assert harness.decisions == [False, True]
             assert (await client.post("/api/approval", json=body, headers=headers)).status_code == 409
             assert (await client.get("/api/sessions", headers=headers)).status_code == 200
@@ -561,17 +578,23 @@ def test_cancellation_joins_run_and_denies_pending(tmp_path: Path, action: str, 
                 assert (await client.post("/api/cancel", json={"run_id": "wrong"}, headers=headers)).status_code == 409
                 assert (await client.post("/api/cancel", json=body, headers=headers)).status_code == 200
                 assert (await stream.event("run_finished"))["status"] == "cancelled"
-                await asyncio.wait_for(stream.task, HANG_GUARD)
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait_for(stream.task, HANG_GUARD)
                 assert (await client.post("/api/cancel", json=body, headers=headers)).status_code == 409
             elif action == "disconnect":
                 await stream.disconnect()
+                assert not harness.stopped.is_set() and not stream.task.done()
+                await client.post("/api/cancel", json={"run_id": started["run_id"]}, headers=headers)
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait_for(stream.task, HANG_GUARD)
             if action != "shutdown":
                 assert harness.stopped.is_set()
                 assert (await client.post("/api/sessions/new", json={}, headers=headers)).status_code == 200
         assert harness.stopped.is_set() and harness.closed
         assert True not in harness.decisions
         if action != "disconnect":
-            await asyncio.wait_for(stream.task, HANG_GUARD)
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait_for(stream.task, HANG_GUARD)
 
     asyncio.run(check())
 
@@ -595,12 +618,12 @@ def test_approval_expiry_fails_closed(tmp_path: Path) -> None:
 
 def test_safe_errors_and_lifespan_initialization_failure(tmp_path: Path) -> None:
     async def check() -> None:
-        async with client_app(tmp_path, controlled=True) as (_, client, headers, harnesses):
-            response = await client.post(
-                "/api/run", json={"session_id": harnesses[0].session_id, "prompt": "error"}, headers=headers
-            )
-            assert "SECRET" not in response.text
-            assert '"status": "failed"' in response.text
+        async with client_app(tmp_path, controlled=True) as (app, _, headers, harnesses):
+            stream = LiveStream(app, headers, harnesses[0].session_id, "error")
+            events = await stream.run_to_completion()
+            assert not any("SECRET" in str(event) for event in events)
+            assert events[-1]["status"] == "failed"
+            await stream.disconnect()
         harness = ControlledHarness(HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", demo=True))
         app = create_app(
             harness.config, assets=tmp_path / "static", resume_session="ngn-unknown", harness_factory=lambda _: harness

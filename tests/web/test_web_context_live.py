@@ -1,4 +1,4 @@
-"""Live context accounting: active-run streaming replies and pinned designed agents.
+"""Live context accounting: active-run updates and pinned designed agents.
 
 The context endpoint must stay read-only and safe while a run is active. It reads
 the running harness for the active session (no idle gate), folds in the bounded

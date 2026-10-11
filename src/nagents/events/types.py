@@ -363,7 +363,7 @@ class CompactionStartedEvent(Event):
     """Event emitted when compaction begins.
 
     Attributes:
-        trigger: The trigger that caused compaction (Tokens or Messages)
+        trigger: Optional strategy trigger description
         message_count: Number of messages before compaction
         estimated_tokens: Estimated token count before compaction
         session_id: Original session ID
@@ -371,7 +371,7 @@ class CompactionStartedEvent(Event):
     """
 
     type: EventType = field(default=EventType.COMPACTION_STARTED)
-    trigger: Any = None  # Tokens | Messages - using Any to avoid circular import
+    trigger: str | None = None
     message_count: int = 0
     estimated_tokens: int = 0
     session_id: str = ""
@@ -389,7 +389,7 @@ class CompactionDoneEvent(Event):
         summary_tokens: Estimated tokens in the summary
         summary_text: Full summary text
         trigger: The trigger that caused compaction
-        compactor_used: Model name used for compaction ("self" or model name)
+        compactor_used: Strategy name used for compaction
         session_id: Original session ID
         compaction_session_id: Session ID used for compaction
     """
@@ -400,7 +400,7 @@ class CompactionDoneEvent(Event):
     new_message_count: int = 0
     summary_tokens: int = 0
     summary_text: str = ""
-    trigger: Any = None  # Tokens | Messages - using Any to avoid circular import
+    trigger: str | None = None
     compactor_used: str = ""
     session_id: str = ""
     compaction_session_id: str = ""

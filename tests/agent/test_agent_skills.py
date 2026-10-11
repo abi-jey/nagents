@@ -12,7 +12,7 @@ from nagents import Agent
 from nagents import DirectorySkillDiscoverer
 from nagents import SessionManager
 from nagents import Skill
-from nagents.compactor import Messages
+from nagents.compaction import ModelCompaction
 from nagents.events import Event
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
@@ -72,7 +72,7 @@ def task_loads(request: ModelRequest) -> list[SkillLoadResult]:
 def test_no_skills_preserves_ordinary_agent(tmp_path: Path) -> None:
     async def drive() -> None:
         provider = OfflineProvider()
-        agent = Agent(provider, SessionManager(tmp_path / "ordinary.db"), compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "ordinary.db"), compaction_strategy=None)
         await collect(agent, "$missing")
         assert agent.skills == {}
         assert agent.tool_registry.names() == []
@@ -94,7 +94,7 @@ def test_catalog_does_not_change_user_or_tool_message_order(tmp_path: Path, syst
             SessionManager(tmp_path / "message-order.db"),
             system_prompt=system_prompt,
             skill_discoverer=source,
-            compactor=None,
+            compaction_strategy=None,
         )
 
         async def work() -> str:
@@ -127,7 +127,9 @@ def test_bounded_manifest_retains_full_catalog_and_omitted_explicit_loads(tmp_pa
         entries = [(descriptor(f"guide-{index:04}", "long metadata " * 70), "BODY_MARKER") for index in range(500)]
         source = MemorySkills(entries)
         provider = OfflineProvider()
-        agent = Agent(provider, SessionManager(tmp_path / "large-catalog.db"), skill_discoverer=source, compactor=None)
+        agent = Agent(
+            provider, SessionManager(tmp_path / "large-catalog.db"), skill_discoverer=source, compaction_strategy=None
+        )
         await collect(agent, "$guide-0499")
         manifest = manifests(provider.requests[0])[0]
         assert estimate_skill_tokens(manifest) <= MAX_SKILL_MANIFEST_TOKENS
@@ -159,7 +161,7 @@ def test_live_sequential_batch_and_full_source_replacement(tmp_path: Path) -> No
                 [TextDoneEvent(text="done")],
             ]
         )
-        agent = Agent(provider, SessionManager(tmp_path / "live.db"), skill_discoverer=source, compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "live.db"), skill_discoverer=source, compaction_strategy=None)
 
         async def install() -> str:
             assert list(agent.skills) == ["old"]
@@ -220,7 +222,7 @@ def test_refresh_before_message_hooks_and_each_model(tmp_path: Path) -> None:
             SessionManager(tmp_path / "boundary.db"),
             skill_discoverer=source,
             plugins=[BoundaryPlugin()],
-            compactor=None,
+            compaction_strategy=None,
         )
         await collect(agent)
         assert source.discoveries == 2
@@ -250,7 +252,7 @@ def test_filesystem_changes_are_visible_within_the_same_run(tmp_path: Path) -> N
             provider,
             SessionManager(tmp_path / "filesystem.db"),
             skill_discoverer=DirectorySkillDiscoverer([root]),
-            compactor=None,
+            compaction_strategy=None,
         )
 
         async def change(step: str) -> str:
@@ -292,7 +294,7 @@ def test_explicit_references_are_bounded_ephemeral_and_user_level(tmp_path: Path
             SessionManager(tmp_path / "explicit.db"),
             skill_discoverer=source,
             skill_token_limit=10,
-            compactor=None,
+            compaction_strategy=None,
         )
         message: list[ContentPart] = [TextContent("Use $one, $one and $two then $three; ignore \\$three.")]
         events = [event async for event in agent.run(message, session_id="s")]
@@ -327,7 +329,9 @@ def test_no_activation_from_tools_history_or_non_user_message(tmp_path: Path) ->
                 [TextDoneEvent(text="done")],
             ]
         )
-        agent = Agent(provider, SessionManager(tmp_path / "tool-text.db"), skill_discoverer=source, compactor=None)
+        agent = Agent(
+            provider, SessionManager(tmp_path / "tool-text.db"), skill_discoverer=source, compaction_strategy=None
+        )
 
         async def read() -> str:
             return "$guide"
@@ -377,7 +381,7 @@ def test_skill_loading_honors_executor_authorization_and_hooks(tmp_path: Path, e
             SessionManager(tmp_path / "denied.db"),
             skill_discoverer=source,
             plugins=[Hooks()],
-            compactor=None,
+            compaction_strategy=None,
         )
         agent.tool_executor = Deny(agent.tool_registry)
         await collect(agent, "$guide" if explicit else "go")
@@ -388,7 +392,7 @@ def test_skill_loading_honors_executor_authorization_and_hooks(tmp_path: Path, e
     asyncio.run(drive())
 
 
-def test_long_skill_reaches_model_and_legacy_compactor_without_tool_truncation(tmp_path: Path) -> None:
+def test_long_skill_reaches_model_and_model_compaction_without_tool_truncation(tmp_path: Path) -> None:
     async def drive() -> None:
         body = "line\n" * 1500 + "x" * 24000 + "END_OF_SKILL"
         source = MemorySkills([(descriptor("large"), body)])
@@ -403,8 +407,7 @@ def test_long_skill_reaches_model_and_legacy_compactor_without_tool_truncation(t
             provider,
             SessionManager(tmp_path / "compact.db"),
             skill_discoverer=source,
-            compactor="self",
-            compact_on=Messages(length=3),
+            compaction_strategy=ModelCompaction(message_threshold=3),
         )
         await collect(agent)
         assert "END_OF_SKILL" in str(provider.requests[1].messages)
@@ -425,7 +428,6 @@ def test_explicit_context_survives_custom_compaction(tmp_path: Path) -> None:
             SessionManager(tmp_path / "strategy.db"),
             skill_discoverer=source,
             compaction_strategy=strategy,
-            compactor=None,
         )
 
         async def work() -> str:
@@ -452,7 +454,7 @@ def test_atomic_refresh_protocol_errors_and_inflight_source_swap(tmp_path: Path)
 
         source = MemorySkills([(descriptor("old"), "body")])
         agent = Agent(
-            OfflineProvider(), SessionManager(tmp_path / "atomic.db"), skill_discoverer=source, compactor=None
+            OfflineProvider(), SessionManager(tmp_path / "atomic.db"), skill_discoverer=source, compaction_strategy=None
         )
         snapshot = await agent.refresh_skills()
         source.entries = [(descriptor("new"), "body"), (descriptor("new"), "duplicate")]
@@ -504,7 +506,11 @@ def test_cancellation_unwinds_discovery_loading_and_run_hooks(tmp_path: Path, bo
         source = Blocking([(descriptor("guide"), "body")])
         provider = OfflineProvider([[ToolCallEvent(id="a", name="work")]])
         agent = Agent(
-            provider, SessionManager(tmp_path / "cancel.db"), skill_discoverer=source, plugins=[Hooks()], compactor=None
+            provider,
+            SessionManager(tmp_path / "cancel.db"),
+            skill_discoverer=source,
+            plugins=[Hooks()],
+            compaction_strategy=None,
         )
 
         async def work() -> str:
@@ -534,7 +540,9 @@ def test_discovery_failure_stops_before_model_and_cleans_up(tmp_path: Path) -> N
                 raise RuntimeError("source unavailable")
 
         provider = OfflineProvider()
-        agent = Agent(provider, SessionManager(tmp_path / "failure.db"), skill_discoverer=Broken(), compactor=None)
+        agent = Agent(
+            provider, SessionManager(tmp_path / "failure.db"), skill_discoverer=Broken(), compaction_strategy=None
+        )
         with pytest.raises(RuntimeError, match="source unavailable"):
             await collect(agent)
         assert provider.requests == []
@@ -555,7 +563,9 @@ def test_load_failure_is_a_tool_error_and_discovery_still_refreshes(tmp_path: Pa
         provider = OfflineProvider(
             [[ToolCallEvent(id="a", name="skill", arguments={"name": "guide"})], [TextDoneEvent(text="recovered")]]
         )
-        agent = Agent(provider, SessionManager(tmp_path / "load-error.db"), skill_discoverer=source, compactor=None)
+        agent = Agent(
+            provider, SessionManager(tmp_path / "load-error.db"), skill_discoverer=source, compaction_strategy=None
+        )
         events = await collect(agent)
         result = next(event for event in events if isinstance(event, ToolResultEvent))
         assert result.error == "skill disappeared"
@@ -571,7 +581,9 @@ def test_skills_reject_unsupported_modes(tmp_path: Path) -> None:
         source = MemorySkills()
         with pytest.raises(ValueError, match="batch"):
             Agent(OfflineProvider(), SessionManager(tmp_path / "batch.db"), skill_discoverer=source, batch=True)
-        agent = Agent(OfflineProvider(), SessionManager(tmp_path / "modes.db"), skill_discoverer=source, compactor=None)
+        agent = Agent(
+            OfflineProvider(), SessionManager(tmp_path / "modes.db"), skill_discoverer=source, compaction_strategy=None
+        )
         with pytest.raises(ValueError, match="voice"):
             agent.realtime_session()
         with pytest.raises(ValueError, match="simple"):

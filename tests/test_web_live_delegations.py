@@ -251,10 +251,13 @@ def test_inspector_route_is_opt_in_and_scoped_to_retained_call_and_delegation(tm
             service = cast("LiveService", app.state.live)
             record = _Record()
             service._records[record.identifier] = record
-            record.delegation({**update(record, "task", "queued"), "request_transcript": "Exact caller payload\n"})
-            record.delegation({**update(record, "task", "working", "run"), "request_input": "Exact assistant input\n"})
-            path = f"/api/live/sessions/{record.identifier}/delegations/task"
-            response = await client.get(path, headers=headers)
+            identifier = "task/with/slash"
+            record.delegation({**update(record, identifier, "queued"), "request_transcript": "Exact caller payload\n"})
+            record.delegation(
+                {**update(record, identifier, "working", "run"), "request_input": "Exact assistant input\n"}
+            )
+            path = f"/api/live/sessions/{record.identifier}/delegation-details"
+            response = await client.get(path, params={"delegation_id": identifier}, headers=headers)
             assert response.status_code == 200
             details = response.json()
             assert details["voice_session_id"] == record.identifier and details["chat_session_id"] == "ngn-chat"
@@ -265,13 +268,17 @@ def test_inspector_route_is_opt_in_and_scoped_to_retained_call_and_delegation(tm
             assert snapshot.status_code == 200 and "Exact caller payload" not in snapshot.text
             assert "Exact assistant input" not in snapshot.text and "timeline" not in snapshot.text
             assert (await client.get(path + "?after=0", headers=headers)).status_code == 400
-            assert (await client.get(path.replace("/task", "/missing"), headers=headers)).status_code == 404
-            assert (await client.get(path.replace(record.identifier, "missing"), headers=headers)).status_code == 404
-            assert (await client.get(path.replace("/task", "/unknown!"), headers=headers)).status_code == 404
-            assert (await client.get(path.replace("/task", "/" + "x" * 257), headers=headers)).status_code == 422
-            record.delegation({**update(record, "task", "completed", "run"), "result_text": "Actual result"})
+            assert (await client.get(path, params={"delegation_id": "missing"}, headers=headers)).status_code == 404
+            missing_session = "/api/live/sessions/missing/delegation-details"
+            assert (
+                await client.get(missing_session, params={"delegation_id": identifier}, headers=headers)
+            ).status_code == 404
+            retired_path = f"/api/live/sessions/{record.identifier}/delegations/{identifier}"
+            assert (await client.get(retired_path, headers=headers)).status_code == 404
+            assert (await client.get(path, params={"delegation_id": "x" * 257}, headers=headers)).status_code == 400
+            record.delegation({**update(record, identifier, "completed", "run"), "result_text": "Actual result"})
             record.transition("closed", "Voice ended")
-            ended = (await client.get(path, headers=headers)).json()
+            ended = (await client.get(path, params={"delegation_id": identifier}, headers=headers)).json()
             assert ended["result"]["text"] == "Actual result" and ended["status"] == "completed"
 
     asyncio.run(scenario())
