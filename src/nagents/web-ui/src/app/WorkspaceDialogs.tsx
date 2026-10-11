@@ -1,4 +1,6 @@
 import { CommandHelp } from "../features/chat/CommandHelp.js";
+import { SkillsDialog } from "../features/chat/SkillsDialog.js";
+import { skillCommand } from "../features/chat/commands.js";
 import { LoginDialog } from "../features/settings/LoginDialog.js";
 import "../features/chat/commands.css";
 import { ApprovalReview } from "../features/approvals/ApprovalReview.js";
@@ -21,6 +23,10 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
   function openRestored(id: string) { client.trashController.close(); void select(id); }
   return <>
     {client.commandHelp && <CommandHelp close={client.closeCommandHelp} />}
+    {client.skills.open && <SkillsDialog skills={client.skills} choose={skill => {
+      client.chat.setPrompt(`/${skillCommand(skill)} `); client.skills.close();
+      requestAnimationFrame(() => document.getElementById("composer")?.focus());
+    }} />}
     {client.loginOpen && config && <LoginDialog token={config.token} close={client.closeLogin} applied={client.connect} />}
     {client.panel === "designer" && config && <Designer token={config.token} configureChannels={client.channels.show} close={closePanel} />}
     {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={client.busy} close={closePanel} />}

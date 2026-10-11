@@ -285,7 +285,7 @@ class WebHistory(_HarnessSession):
         return (
             "SELECT m.id, m.session_id, m.role, m.tool_calls, m.tool_call_id, m.name, m.created_at, "
             "CASE WHEN i.channel = '' AND i.attachments != '[]' THEN NULL ELSE m.content END AS content, "
-            "i.id AS origin_id, i.channel AS origin_channel, i.message_id AS origin_message_id, "
+            "i.id AS origin_id, i.channel AS origin_channel, i.command AS origin_command, i.message_id AS origin_message_id, "
             "i.prompt AS origin_prompt, (SELECT json_group_array(json_object('upload_id', u.upload_id, "
             "'filename', u.filename, 'media_type', u.media_type, 'byte_length', u.byte_length)) "
             "FROM (SELECT upload_id, filename, media_type, byte_length, inbox_id, position "
@@ -340,6 +340,8 @@ class WebHistory(_HarnessSession):
         message_id = str(row["origin_message_id"])
         if not row["origin_channel"]:
             uploads = json.loads(row["upload_metadata"])
+            if row["origin_command"] == "skill":
+                record.update(content=str(row["origin_prompt"]), parts=[])
             if uploads:
                 record["uploads"] = uploads
                 record["parts"] = []

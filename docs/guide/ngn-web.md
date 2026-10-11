@@ -264,6 +264,8 @@ draft and display an error.
 | Command | Browser action |
 | --- | --- |
 | `/login` | Open server-side ChatGPT device sign-in. |
+| `/skills [search]` | Browse discovered skills and insert a selected skill into the draft. |
+| `/<skill-name> [task]`, `/skill:<skill-name> [task]` | Invoke a discovered skill through the conversation's normal input queue. |
 | `/new` | Start or reuse a blank conversation. |
 | `/fork [title]` | Copy the current idle conversation into an independent branch and select it. Title is optional: defaults to `<chat title> · fork 1`, `fork 2`, etc. Other chats may continue running. |
 | `/rename <title>` | Persist a name of 1–80 printable characters for the current conversation. |
@@ -282,6 +284,21 @@ no explicit command field, remains model input. Compaction preserves the selecte
 session when it runs against another submitted root, and reports normal
 compaction/error events. There is no browser endpoint for arbitrary Python command
 callbacks or terminal-only actions.
+
+Discovered skills appear alongside commands in the slash picker with a **Skill**
+label and description. Built-ins such as `/login` keep their normal behavior;
+use `/skill:login` to invoke a skill with that name. The picker refreshes when
+opened, when returning to the tab, and after runs; **Refresh** reloads its catalog
+on demand. Selecting a skill inserts its command without executing it.
+
+Skill submissions carry `command: "skill"` and the original slash text to
+`POST /api/messages`. The server resolves discovered skills and loads their
+instructions at the normal queued response boundary. The transcript shows the
+original command, and multiline task arguments are preserved. Unknown or disabled
+skills fail validation; the browser retains an unaccepted draft. Skill invocation
+does not enable disabled tools or execute scripts at load time. Attachments must
+be removed before submitting a skill command. See [Skills](skills.md) for discovery
+locations, argument substitution, and load budgets.
 
 ### Delete A Session
 

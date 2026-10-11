@@ -106,7 +106,7 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 `/help` all use the same live harness registry, including:
 
 - Built-in actions such as `/new`, `/model`, `/agent`, `/tasks`, and `/queue`.
-- Discovered skills as `/skill:<name> [task]`, loaded on demand through the Agent's
+- Discovered skills as `/<name> [task]` or `/skill:<name> [task]`, loaded on demand through the Agent's
   skill loader. Workspace reads remain guarded; bundled skills load from package
   resources. Suggestions refresh metadata without activating skills or running scripts.
 - Trusted Python-plugin commands, labeled with their plugin source.
@@ -123,6 +123,7 @@ arguments, then press Enter again to execute. The menu, Ctrl+P palette, and
 | `/agent [name]` | Show or switch the built-in/custom profile. |
 | `/context` | Inspect effective context and configuration. |
 | `/plugins` | Inspect configured and loaded Python extensions. |
+| `/skills [filter]` | Browse discovered skills and prefill a command without executing it. |
 | `/tasks` | Open the agent tree, inspect conversations, and send follow-ups. |
 | `/queue [resume\|clear]` | Inspect, resume, or explicitly discard queued input. |
 | `/login`, `/logout` | Manage ngn's local OpenAI device login. |
@@ -691,9 +692,13 @@ and calls `skill(name)` to load relevant instructions as tool-result task contex
 The preview has a separate 10,000-estimated-token cap, complete sorted entries,
 and an omission notice; omitted names remain in the full catalog for named loads.
 Explicitly select one as user-level task context with `$ngn-customize` or
-`$ngn-channels`, including ordinary web/Telegram messages. In the TUI,
-`/skill:ngn-customize [task]` is also supported. Dollar mentions and slash commands
-are ngn/client conventions, not universal Agent Skills syntax.
+`$ngn-channels`, including ordinary web/Telegram messages. The web UI and TUI also
+provide `/skills [filter]`, `/ngn-customize [task]`, and `/skill:ngn-customize [task]`.
+Short names yield to built-in or registered commands; the `skill:` form resolves
+collisions. Arguments retain their whitespace, replace literal `$ARGUMENTS` in the
+skill, or append as task text when no placeholder exists. Existing load budgets
+and tool permissions still apply. Dollar mentions and slash commands are
+ngn/client conventions, not universal Agent Skills syntax.
 
 The catalog refreshes at incoming text boundaries, before each model request,
 and before/after every tool invocation. Changes therefore become available during

@@ -40,6 +40,7 @@ from . import built_assets
 from . import empty_sessions
 from . import is_loopback_host
 from . import local_authority
+from . import skills
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
 from .catalog import ChannelRevision
@@ -113,7 +114,7 @@ class MessageInput(SessionInput):
     prompt: str = Field(default="", max_length=32000)
     attachments: list[str] = Field(default_factory=list, max_length=3)
     message_id: str = Field(pattern=r"^[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$")
-    command: Literal["", "compact"] = ""
+    command: Literal["", "compact", "skill"] = ""
 
 
 class RunInput(Input):
@@ -393,6 +394,7 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
+    skills.register(app, lambda: state)
     register_session_groups(app, lambda: session_groups)
     register_session_actions(app, lambda: state, lambda: live)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
@@ -442,8 +444,10 @@ def create_app(
             raise HTTPException(409, "Select a named provider connection before sending a message.")
         if not body.prompt.strip() and not body.attachments:
             raise HTTPException(422, "Prompt must not be blank.")
-        if body.command and (body.prompt != "/compact" or body.attachments):
+        if body.command == "compact" and (body.prompt != "/compact" or body.attachments):
             raise HTTPException(422, "The compact command accepts no arguments or attachments.")
+        if body.command == "skill" and body.attachments:
+            raise HTTPException(422, "Skill commands do not accept attachments. Send them as a separate message.")
 
         async def accept() -> dict[str, str]:
             if body.command:

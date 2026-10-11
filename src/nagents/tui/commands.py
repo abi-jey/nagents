@@ -67,12 +67,22 @@ class SlashMenu(Vertical):
         options = self.query_one(OptionList)
         selected = self.selected()
         query = query.casefold()
+        direct_skills = {
+            command.name for command in commands if command.source == "skill" and not command.name.startswith("skill:")
+        }
         self.matches = [
             command
             for command in commands
-            if query in command.name.casefold()
-            or query in command.description.casefold()
-            or query in command.source.casefold()
+            if (
+                query.startswith("skill:")
+                or not command.name.startswith("skill:")
+                or command.name[6:] not in direct_skills
+            )
+            and (
+                query in command.name.casefold()
+                or query in command.description.casefold()
+                or query in command.source.casefold()
+            )
         ]
         self.matches.sort(key=lambda command: (command.name != query, not command.name.startswith(query)))
         options.clear_options()

@@ -6,20 +6,32 @@ import asyncio
 from contextlib import asynccontextmanager
 from contextlib import nullcontext
 from contextvars import ContextVar
+from functools import partial
 from typing import TYPE_CHECKING
 from typing import Literal
 
+from fastapi import HTTPException
+
+from nagents.harness.commands import split_command
 from nagents.harness.followups import RunInput
 
+from . import skills
 from ._async import finish_on_cancel
 from ._async import join_owned
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from nagents.harness import Harness
+    from nagents.types import ContentPart
+
     from .routing import Work
     from .service import Run
     from .service import WebState
+
+
+class SkillInvocationError(ValueError):
+    """An admitted skill became unavailable before its owned response boundary."""
 
 
 class QueuedInputs:
@@ -58,12 +70,18 @@ class QueuedInputs:
         attachments: tuple[str, ...] = (),
         supported_media_types: tuple[str, ...] = (),
         *,
-        command: Literal["", "compact"] = "",
+        command: Literal["", "compact", "skill"] = "",
         voice_session_id: str = "",
         voice_delegation_id: str = "",
         voice_display: str = "",
     ) -> tuple[str, bool]:
         async def accept() -> tuple[str, bool]:
+            if command == "skill":
+                if attachments or any((voice_session_id, voice_delegation_id, voice_display)):
+                    raise HTTPException(422, "Skill commands accept only a typed invocation without attachments.")
+                if await self.state.channels.store.skill_retry(session_id, message_id, prompt):
+                    return session_id, False
+                await skills.validate(self.state, session_id, prompt)
             root, admitted = await self.state.channels.store.web(
                 session_id,
                 message_id,
@@ -117,6 +135,13 @@ class QueuedInputs:
     async def context(self, run: Run, work: Work) -> AsyncIterator[None]:
         token = self.current.set(work)
         try:
+            if work.command == "skill":
+                await self.state.channels.store._transaction(
+                    lambda db: db.execute(
+                        "UPDATE harness_sessions SET title = ? WHERE id = ? AND title = ''",
+                        (" ".join(work.prompt.split())[:80], work.session_id),
+                    ).close()
+                )
             with self.state.history.admitted(work, run.id):
                 async with (
                     self.state.history.voice_request(
@@ -129,41 +154,58 @@ class QueuedInputs:
         finally:
             self.current.reset(token)
 
+    async def content(self, work: Work, harness: Harness) -> str | list[ContentPart]:
+        if work.command != "skill":
+            return await self.state.uploads.content(work, harness)
+        try:
+            name, arguments = split_command(work.prompt)
+            return await harness.commands.skill_prompt(name, arguments, reserved=skills.WEB_RESERVED)
+        except (ValueError, PermissionError, OSError) as error:
+            raise SkillInvocationError(f"Skill command could not run: {error}") from None
+
     async def pull(self, run: Run) -> RunInput | None:
         state = self.state
         # Channel-owned replies keep their existing delivery owner. Browser
         # inputs wait behind them rather than leaking into an external reply.
         if state.active is not run or run.finished or run.source or state.channels.closed:
             return None
-        claim = asyncio.create_task(state.channels.store.claim_work(web_only=True, session_id=run.session_id))
-        try:
-            work = await asyncio.shield(claim)
-        except asyncio.CancelledError:
+        while True:
+            claim = asyncio.create_task(state.channels.store.claim_work(web_only=True, session_id=run.session_id))
+            try:
+                work = await asyncio.shield(claim)
+            except asyncio.CancelledError:
 
-            async def interrupt_claim() -> None:
-                claimed = await claim
-                if claimed is not None:
-                    await state.channels.store.release_work(claimed)
+                async def interrupt_claim(pending: asyncio.Task[Work | None]) -> None:
+                    claimed = await pending
+                    if claimed is not None:
+                        await state.channels.store.release_work(claimed)
 
-            await join_owned(asyncio.create_task(interrupt_claim()))
-            raise
-        if work is None:
-            return None
-        if state.active is not run or run.finished or state.channels.closed:
-            await state.channels.store.release_work(work)
-            return None
-        self.claimed.setdefault(run.id, []).append(work)
-        self.admitted(run, work, initial=False)
-        await state.channels.store.validate_work(work)
-        prompt = await state.uploads.content(work, state.running_harness)
-        return RunInput(
-            prompt,
-            work.voice_delegation_id,
-            "followup",
-            context=lambda: self.context(run, work),
-            voice_session_id=work.voice_session_id,
-            message_id=work.message_id,
-        )
+                await join_owned(asyncio.create_task(interrupt_claim(claim)))
+                raise
+            if work is None:
+                return None
+            if state.active is not run or run.finished or state.channels.closed:
+                await state.channels.store.release_work(work)
+                return None
+            self.claimed.setdefault(run.id, []).append(work)
+            self.admitted(run, work, initial=False)
+            await state.channels.store.validate_work(work)
+            try:
+                prompt = await self.content(work, state.running_harness)
+            except SkillInvocationError as error:
+                await state.channels.store.finish_work(work, "failed")
+                self.claimed[run.id].remove(work)
+                state.publish(run, {"event": "error", "message": str(error), "message_id": work.message_id})
+                state.channels.changed.set()
+                continue
+            return RunInput(
+                prompt,
+                work.voice_delegation_id,
+                "followup",
+                context=partial(self.context, run, work),
+                voice_session_id=work.voice_session_id,
+                message_id=work.message_id,
+            )
 
     async def finish(self, run: Run) -> None:
         status = "interrupted" if run.outcome == "cancelled" else run.outcome

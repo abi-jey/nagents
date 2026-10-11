@@ -54,6 +54,8 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
       addAttachments={(files) => void client.uploads.add(files)}
       attachments={<UploadPreviews state={client.uploadState} disabled={client.operating} remove={(id) => client.uploads.remove(id)} />}
       canSubmit={client.available.submit} running={busy && !!chat.runId} submit={submit} cancel={() => void client.cancel()}
+      skills={client.skills.items} skillsLoading={client.skills.loading} skillsError={client.skills.error}
+      refreshSkills={() => void client.skills.refresh()}
       voiceControl={!client.liveOpen && <div className="voice-entry"><button type="button" id="live-launch" className="live-launch" aria-label="Start voice" title="Talk in this chat" disabled={!client.available.live} onClick={() => client.showLive()}><Icon name="wave" size={17} /><span>Voice</span></button><button type="button" className="voice-entry-settings" aria-label="Voice settings" title="Voice settings" aria-haspopup="dialog" aria-controls="voice-settings-dialog" disabled={!client.available.live} onClick={() => client.showLive("settings")}><Icon name="settings" size={16} /></button></div>}
       status={<span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>{runStatus}</span>}
     />

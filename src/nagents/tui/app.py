@@ -41,6 +41,7 @@ from nagents.events import ToolResultEvent
 from nagents.harness import Harness
 from nagents.harness import provider_login
 from nagents.harness.commands import BUILTIN_COMMANDS
+from nagents.harness.commands import split_command
 from nagents.harness.credentials import ProviderLogin
 from nagents.harness.execution import host_run
 from nagents.harness.types import Notice
@@ -160,6 +161,7 @@ class NagentsApp(App[None]):
         self._pick_session = pick_session
         self._active: asyncio.Task[None] | None = None
         self._skill_completion_worker: Worker[None] | None = None
+        self._skill_commands_enabled = False
         self._backend_ready = False
         self._shutting_down = False
         self._last_error = ""
@@ -374,7 +376,7 @@ class NagentsApp(App[None]):
         )
         menu.display = eligible
         if eligible:
-            menu.update_commands(self.harness.commands.list(), text[1:])
+            menu.update_commands(self._completion_commands(), text[1:])
             if self._backend_ready:
                 self._skill_completion_worker = self.run_worker(
                     self._discover_command_skills, group="skill-completions", exclusive=True, exit_on_error=False
@@ -384,17 +386,28 @@ class NagentsApp(App[None]):
         """Refresh suggestions in an owned, replaceable worker, never in list()."""
         try:
             await self.harness.agent.refresh_skills()
+            self._skill_commands_enabled = (
+                any(command.source == "skill" for command in self.harness.commands.list())
+                and self.harness.commands.skills_enabled()
+            )
         except Exception:
             # Command execution reports discovery failures explicitly. A menu
             # refresh must not interrupt an in-flight run or discard its draft.
-            return
+            self._skill_commands_enabled = False
         if self._shutting_down or not self.query("#slash-menu"):
             return
         menu = self.query_one(SlashMenu)
         if menu.display:
             text = self.query_one(Composer).text.lstrip()
             if text.startswith("/") and not any(character.isspace() for character in text):
-                menu.update_commands(self.harness.commands.list(), text[1:])
+                menu.update_commands(self._completion_commands(), text[1:])
+
+    def _completion_commands(self) -> list[Command]:
+        return [
+            command
+            for command in self.harness.commands.list()
+            if command.source != "skill" or self._skill_commands_enabled
+        ]
 
     def _hide_completions(self) -> None:
         composer = self.query_one(Composer)
@@ -708,11 +721,7 @@ class NagentsApp(App[None]):
         name = command.split(maxsplit=1)[0]
         if is_command:
             name = "/" + self.harness.commands.canonical_name(name[1:])
-        custom_command = (
-            is_command
-            and (name.startswith("/skill:") or self.harness.commands.get(name[1:]) is not None)
-            and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
-        )
+        custom_command = is_command and name != "/" and all(builtin.name != name[1:] for builtin in BUILTIN_COMMANDS)
         if (
             self.busy
             and is_command
@@ -748,7 +757,7 @@ class NagentsApp(App[None]):
         composer.remember(event.text)
         composer.clear()
         if command.startswith("/"):
-            self.command(command)
+            self.command(event.text)
         else:
             self._launch(lambda: self._send(event.text), "Working  /  Esc to cancel")
 
@@ -766,7 +775,7 @@ class NagentsApp(App[None]):
         prompt = self._queued_prompts.popleft()
         self._update_queue()
         if prompt.lstrip().startswith("/"):
-            self.command(prompt.strip())
+            self.command(prompt)
             if not self.busy:
                 self._queue_paused = True
                 self._update_queue()
@@ -1154,10 +1163,16 @@ class NagentsApp(App[None]):
 
     def command(self, text: str) -> None:
         self._hide_completions()
-        parts = text.split(maxsplit=1)
-        name = parts[0] if parts else "/"
-        name = "/" + self.harness.commands.canonical_name(name.removeprefix("/"))
-        argument = parts[1].strip() if len(parts) > 1 else ""
+        if text.strip() in {"", "/"}:
+            name, command_name, raw_argument = "/", "", ""
+        else:
+            try:
+                command_name, raw_argument = split_command(text.lstrip())
+            except ValueError as exc:
+                self._status(str(exc), error=True)
+                return
+            name = "/" + self.harness.commands.canonical_name(command_name)
+        argument = raw_argument.strip()
         if name == "/":
             self.action_commands()
         elif name == "/quit":
@@ -1197,6 +1212,8 @@ class NagentsApp(App[None]):
             self._status("Already working. Esc cancels before changing the session or configuration.")
         elif name == "/sessions":
             self._launch(self._sessions, "Loading sessions...")
+        elif name == "/skills":
+            self._launch(lambda: self._skills(argument), "Discovering skills...")
         elif name == "/login":
             self.push_screen(LoginMethodModal(), self._chosen_login)
         elif name == "/provider":
@@ -1227,10 +1244,29 @@ class NagentsApp(App[None]):
             )
         elif name in ("/new", "/fork", "/rename", "/compact", "/agent", "/model"):
             self._launch(lambda: self._change(name, argument), f"{name[1:].capitalize()}...")
-        elif name.startswith("/skill:") or self.harness.commands.get(name[1:]) is not None:
-            self._launch(lambda: self._custom_command(name[1:], argument), f"Running {name}...")
         else:
-            self._status(f"Unknown command: {name}. Use /help.", error=True)
+            # Freshly installed skills may not be in the last completion snapshot.
+            # The shared registry refreshes discovery before resolving or rejecting.
+            self._launch(lambda: self._custom_command(command_name, raw_argument), f"Running /{command_name}...")
+
+    async def _skills(self, query: str) -> None:
+        if not self._backend_ready:
+            await self._initialize()
+        await self.harness.agent.refresh_skills()
+        skills = [command for command in self.harness.commands.list() if command.source == "skill"]
+        if skills and not self.harness.commands.skills_enabled():
+            await self._notice("Skill loading is disabled for this agent. Enable its skill tool in .ngn/tools.yaml.")
+            return
+        direct = {command.name for command in skills if not command.name.startswith("skill:")}
+        choices = [
+            (command.name, f"/{command.name}  {command.description}")
+            for command in skills
+            if not command.name.startswith("skill:") or command.name[6:] not in direct
+        ]
+        if not choices:
+            await self._notice("No skills are available for this agent.")
+            return
+        self.push_screen(ChoiceModal("SKILLS", choices, initial_filter=query.strip()), self._chosen_command)
 
     async def _custom_command(self, name: str, argument: str) -> None:
         if not self._backend_ready:

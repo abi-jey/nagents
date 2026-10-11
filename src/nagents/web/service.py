@@ -49,6 +49,7 @@ from .live_inspection import model_requests
 from .provider_setup import provider_error
 from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
+from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
 from .subscriptions import EventBus
 from .tool_approvals import ToolApprovals
@@ -853,6 +854,9 @@ class WebState:
             except asyncio.CancelledError:
                 run.outcome = "cancelled"
                 raise
+            except SkillInvocationError as error:
+                run.outcome = "failed"
+                self.publish(run, {"event": "error", "message": str(error), "message_id": work.message_id})
             except Exception:
                 run.outcome = "failed"
                 self.publish(
@@ -868,7 +872,7 @@ class WebState:
                     prompt: str | list[ContentPart] = (
                         await self.channels.inbound_content(work.channel, work.prompt)
                         if work.channel
-                        else await self.uploads.content(work, harness)
+                        else await self.queued_inputs.content(work, harness)
                     )
                     await self.produce(run, prompt)
 
