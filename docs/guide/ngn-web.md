@@ -225,7 +225,9 @@ Use **New folder** beside Sessions to group chats by project or topic. Folders
 form a tree: create subfolders or move a folder beneath another folder, up to 12
 levels deep. Names must be unique among siblings, so different projects can each
 have a Notes folder. Open a
-chat's actions menu and choose **Move to folder…** to move it, or choose
+chat's actions menu using its **More actions** button, right-click, or
+**Shift+F10** / the keyboard Menu key. Opening the menu does not switch chats.
+Choose **Move to folder…** to move it, or choose
 **Ungrouped** to remove its folder assignment. Moving a chat changes only its
 sidebar organization; its selected conversation, active work, approvals, and
 history are unaffected.
@@ -241,6 +243,11 @@ a chat also removes its folder membership. Updates are revision-checked so two
 browser windows cannot silently overwrite each other's folder edits.
 An otherwise empty draft explicitly moved to a folder is kept as an organized
 chat; untouched, ungrouped drafts continue to use normal empty-session cleanup.
+
+Click the workspace name to see its server folder, current assistant/provider/model,
+chat activity, enabled tool selections, and MCP connection status. **Manage tools**
+and **Settings** open their corresponding controls. Provider logos are bundled
+with ngn and served locally; custom endpoints use a neutral connection icon.
 
 ### Browser Slash Commands
 

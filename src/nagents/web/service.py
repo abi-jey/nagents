@@ -787,6 +787,18 @@ class WebState:
             self.wakeups.cancel(run.chain)
             raise
         except Exception:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                # An owned operation can finish with its own error while Stop
+                # is joining it. Keep the stop outcome, as with child workers.
+                run.outcome = "cancelled"
+                logger.warning(
+                    "Run producer failed during cancellation: session=%s run=%s reason=cleanup_failed",
+                    run.session_id,
+                    run.id,
+                )
+                self.wakeups.cancel(run.chain)
+                raise asyncio.CancelledError from None
             run.outcome = "failed"
             # Readiness is advisory: an injected/scripted provider can run without
             # the configured connection's key. When the real provider fails, give
