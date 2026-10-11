@@ -555,6 +555,8 @@ def test_settings_routes_create_real_provider_websockets_after_reload(
                     assert saved["revision"] == revision and saved["key_configured"] is True
                     assert saved["values"]["base_url"] == ("" if provider == "openai" else base_url)
                     assert SECRET not in str(saved)
+                    accepted_model = "voice-next-model" if restart else "voice-ui-model"
+                    accepted_voice = "marin" if restart else "cedar"
                     info = (await client.get("/api/live", headers=headers)).json()
                     assert info["available"] and info["provider"] == provider and info["active_session_id"] == ""
                     before_history = await harnesses[0].history()
@@ -565,8 +567,8 @@ def test_settings_routes_create_real_provider_websockets_after_reload(
                     session_ids.append(identifier)
                     assert {key: created.json()[key] for key in ("session_id", "model", "voice")} == {
                         "session_id": identifier,
-                        "model": "voice-ui-model",
-                        "voice": "cedar",
+                        "model": accepted_model,
+                        "voice": accepted_voice,
                     }
                     assert created.json()["context"]["mode"] == "none"
                     assert created.json()["context"]["bytes"] == 0
@@ -587,12 +589,33 @@ def test_settings_routes_create_real_provider_websockets_after_reload(
                         ("user", "Hello"),
                         ("assistant", "Hi [redacted]"),
                     ]
-                    blocked = await client.post(
+                    next_model = "voice-ui-model" if restart else "voice-next-model"
+                    next_voice = "cedar" if restart else "marin"
+                    changed = await client.post(
                         "/api/live/settings",
                         headers=headers,
-                        json={"scope": "workspace", "revision": revision, "overrides": saved["overrides"]},
+                        json={
+                            "scope": "workspace",
+                            "revision": revision,
+                            "overrides": {
+                                **saved["overrides"],
+                                "model": next_model,
+                                "backend_model": "hosted-ui-model" if restart else "hosted-next-model",
+                                "voice": next_voice,
+                            },
+                        },
                     )
-                    assert blocked.status_code == 409
+                    assert changed.status_code == 200 and SECRET not in changed.text
+                    revision = changed.json()["revision"]
+                    assert revision != saved["revision"]
+                    assert changed.json()["values"]["voice"] == next_voice
+                    current = (await client.get("/api/live", headers=headers)).json()
+                    assert current["active_session_id"] == identifier
+                    assert current["model"] == next_model and current["voice"] == next_voice
+                    snapshot = (await client.get(f"/api/live/sessions/{identifier}", headers=headers)).json()
+                    assert snapshot["status"] == "connected"
+                    assert snapshot["model"] == accepted_model and snapshot["voice"] == accepted_voice
+                    assert len(started) == (2 if restart else 1)
                     if not restart:
                         async with asyncio.timeout(HANG_GUARD):
                             closed = await client.post(
@@ -607,17 +630,23 @@ def test_settings_routes_create_real_provider_websockets_after_reload(
             assert len(set(session_ids)) == 2
             assert commands == [("native-1", "session.close"), ("native-2", "session.close")]
             assert len(started) == 2
-            for session in started:
+            for session, model, backend_model, voice in zip(
+                started,
+                ("voice-ui-model", "voice-next-model"),
+                ("hosted-ui-model", "hosted-next-model"),
+                ("cedar", "marin"),
+                strict=True,
+            ):
                 assert isinstance(session, dict)
-                assert session["model"] == "voice-ui-model" and session["store"] is False and session["input"] == []
+                assert session["model"] == model and session["store"] is False and session["input"] == []
                 assert session["audio"] == {
                     "format": {"type": "audio/pcm", "rate": 24000},
-                    "output": {"voice": "cedar"},
+                    "output": {"voice": voice},
                 }
                 assert session["delegation"] == {
                     "type": "responses",
                     "responses": {
-                        "model": "hosted-ui-model",
+                        "model": backend_model,
                         "instructions": LiveConfig().backend_instructions,
                         "tools": [],
                         "tool_choice": "auto",
@@ -661,7 +690,7 @@ def test_unavailable_setup_and_demo_remain_configurable(
     asyncio.run(check())
 
 
-def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_changes(
+def test_voice_preferences_save_during_active_calls_but_stale_revisions_and_provisioning_conflict(
     tmp_path: Path, services: list[FakeLiveService]
 ) -> None:
     async def check() -> None:
@@ -707,6 +736,34 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
             finally:
                 service.release.set()
             assert (await creating).status_code == 201
+            assert len(service.configs) == 1
+            accepted = service.configs[0]
+            assert accepted.voice == "sol"
+            changed = await client.post(
+                "/api/live/settings",
+                headers=headers,
+                json={
+                    "scope": "workspace",
+                    "revision": revision,
+                    "overrides": {**current["overrides"], "voice": "cove", "instructions": "Speak concisely."},
+                },
+            )
+            assert changed.status_code == 200 and SECRET not in changed.text
+            next_revision = changed.json()["revision"]
+            assert next_revision != revision
+            assert changed.json()["values"]["voice"] == "cove"
+            assert service.active_session_id == SESSION and service.configs == [accepted]
+            assert accepted.voice == "sol" and "Speak concisely." not in accepted.instructions
+            assert not service.closes
+            # Editing next-call defaults neither admits a second active call nor
+            # permits a stale settings revision to overwrite the saved change.
+            assert (
+                await client.post(
+                    "/api/live/sessions",
+                    headers=headers,
+                    json={"revision": next_revision, "session_id": harnesses[0].session_id},
+                )
+            ).status_code == 409
             assert (
                 await client.post(
                     "/api/live/settings",
@@ -714,15 +771,17 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
                     json={"scope": "workspace", "revision": revision, "overrides": current["overrides"]},
                 )
             ).status_code == 409
-            assert len(service.configs) == 1
-            await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
-            assert (
-                await client.post(
-                    "/api/live/settings",
-                    headers=headers,
-                    json={"scope": "workspace", "revision": revision, "overrides": current["overrides"]},
-                )
-            ).status_code == 200
+            closed = await client.post(f"/api/live/sessions/{SESSION}/close", headers=headers, json={})
+            assert closed.status_code == 200
+            reconnected = await client.post(
+                "/api/live/sessions",
+                headers=headers,
+                json={"revision": next_revision, "session_id": harnesses[0].session_id},
+            )
+            assert reconnected.status_code == 201 and reconnected.json()["voice"] == "cove"
+            assert len(service.configs) == 2 and service.configs[0] is accepted
+            assert service.configs[1].voice == "cove"
+            assert "Speak concisely." in service.configs[1].instructions
 
     asyncio.run(check())
 
