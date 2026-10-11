@@ -259,9 +259,11 @@ async def test_late_untrusted_project_is_reported_once_and_never_loaded(
         assert "--trust-project" in warnings[0] and "approved declaration" in warnings[0]
         assert "PROJECT_SECRET_VALUE" not in caplog.text and "MUST_NOT_RUN" not in caplog.text
         assert not harness.resources.current.manager.configs
-        assert (
-            sum("Ignoring untrusted project configuration" in str(getattr(event, "text", "")) for event in events) == 1
+        assert not any(
+            "Ignoring untrusted project configuration" in str(getattr(event, "text", "")) for event in events
         )
+        sources = {source.path: source for source in harness.resources.mcp_diagnostics().sources}
+        assert sources[str(project)].status == "ignored" and not sources[str(project)].trusted
     finally:
         await harness.close()
 

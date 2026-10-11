@@ -568,7 +568,6 @@ class HarnessResources(AgentPlugin):
                 "--trust-project to explicitly trust this workspace. Project trust is unchanged."
             )
             self.logger.warning("%s", text)
-            await self.harness.emit(Notice(text, "warning"))
 
     async def _report_foreign_configs(self) -> None:
         ignored = ignored_foreign_configs(self.harness.config)
@@ -579,7 +578,6 @@ class HarnessResources(AgentPlugin):
                     "configure mcp_servers in an ngn configuration you explicitly trust."
                 )
                 self.logger.warning("%s", message)
-                await self.harness.emit(Notice(message, "warning"))
         self._ignored_foreign = ignored
 
     def mcp_diagnostics(self) -> MCPDiagnostics:

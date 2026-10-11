@@ -25,11 +25,11 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const sameOutput = matchingOutput && !separateResult.current;
   const panels: Panel[] = [];
   if (entry.result !== undefined && !sameOutput) panels.push({
-    key: "result", label: "Result", content: <ExecutionValue label="Result" text={entry.result} />,
+    key: "result", label: "Result", content: <ExecutionValue label="Result" text={entry.result} formatOutput toolName={name} />,
   });
   if (entry.text) panels.push({
     key: "stream", label: sameOutput ? "Result" : "Output",
-    content: <ExecutionValue label={sameOutput ? "Result" : "Streamed output"} text={entry.text} />,
+    content: <ExecutionValue label={sameOutput ? "Result" : "Streamed output"} text={entry.text} formatOutput={sameOutput} toolName={name} preserveReadingSurface />,
   });
   if (entry.inputs !== undefined) panels.push({
     key: "inputs", label: "Inputs", content: <>

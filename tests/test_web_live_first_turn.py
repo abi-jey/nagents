@@ -123,12 +123,17 @@ def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_
         async def unused(context: str, identifier: str) -> str:
             raise AssertionError("The typed request handler owns the backend")
 
+        configuration = _config(tmp_path)
+        configuration.diagnostics = (
+            "Applied provider connection: anthropic",
+            f"Loaded trusted configuration: {tmp_path / 'config.json'}",
+        )
         with (
             patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
             patch.object(HarnessProvider, "generate", generate),
         ):
             async with (
-                client_app(tmp_path, config=_config(tmp_path), controlled=False) as (app, _, _, _),
+                client_app(tmp_path, config=configuration, controlled=False) as (app, _, _, _),
                 asyncio.timeout(HANG_GUARD),
             ):
                 state = app.state.web
@@ -213,6 +218,7 @@ def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_
                     answers = [row for row in history if row["role"] == "assistant" and row["content"] == answer]
                     assert len(answers) == 3 and len({row["history_id"] for row in answers}) == 3
                     for records in frames:
+                        assert not any(text in str(records) for text in configuration.diagnostics)
                         done = []
                         for frame in records:
                             record = frame.get("record")

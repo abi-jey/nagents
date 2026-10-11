@@ -387,9 +387,9 @@ class LiveSettings:
         return (await self.scoped(scope)).snapshot()
 
     @contextmanager
-    def _idle(self) -> Iterator[None]:
+    def _idle(self, *, allow_active: bool = False) -> Iterator[None]:
         self._ready()
-        if self._busy or self.active():
+        if self._busy or (self.active() and not allow_active):
             raise HTTPException(409, "Live is busy. End the call or wait for Voice settings to finish saving.")
         self._busy = True
         try:
@@ -398,7 +398,7 @@ class LiveSettings:
             self._busy = False
 
     async def change(self, body: GlobalVoiceInput | WorkspaceVoiceInput) -> dict[str, object]:
-        with self._idle():
+        with self._idle(allow_active=True):
             scope = body.scope
             global_registry = self.providers.load_scope("global")
             local_registry = self.providers.load_scope("workspace")

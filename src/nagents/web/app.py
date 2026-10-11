@@ -252,16 +252,16 @@ def create_app(
                 if active is not None and active.session_id == root
                 else ""
             )
-            seed = await read_seed(
-                harness.agent.session.db_path, root, connection.values.context_mode, task_state=task_state
-            )
+            seed = await read_seed(state.history.db_path, root, connection.values.context_mode, task_state=task_state)
             if seed.mode == "summary" and seed.summary_source:
-                brief = await voice_summaries.prepare(
-                    source=seed.summary_source,
-                    fingerprint=seed.fingerprint,
-                    session_id=root,
-                    provider=harness.agent.provider,
-                )
+                # Live admission already owns the configuration boundary.
+                async with state.executions.auxiliary_provider(configuring=True) as provider:
+                    brief = await voice_summaries.prepare(
+                        source=seed.summary_source,
+                        fingerprint=seed.fingerprint,
+                        session_id=root,
+                        provider=provider,
+                    )
                 seed = (
                     with_summary(seed, brief.text)
                     if brief.text
@@ -284,7 +284,7 @@ def create_app(
         app.state.web = state
         app.state.live = live
         app.state.live_settings = live_settings
-        provider_login = ProviderLogin(state, lambda: live.active_session_id)
+        provider_login = ProviderLogin(state)
         app.state.provider_login = provider_login
         try:
             await harness.initialize(create_session=not (resume_session or continue_session))
@@ -355,10 +355,11 @@ def create_app(
                         try:
                             await state.wakeups.close()
                         finally:
-                            harness.agent.plugins[:] = [
-                                plugin for plugin in harness.agent.plugins if plugin is not state.history.identity
+                            primary = state.harness
+                            primary.agent.plugins[:] = [
+                                plugin for plugin in primary.agent.plugins if plugin is not state.history.identity
                             ]
-                            await harness.close()
+                            await primary.close()
 
             async def close_resources() -> None:
                 try:
@@ -473,7 +474,7 @@ def create_app(
 
     @app.post("/api/channels/refresh")
     async def refresh_channels() -> dict[str, object]:
-        with state.idle():
+        with state.idle(allow_running=True):
             state.channels.catalog.discover(descriptors=True)
             result = await state.channels.snapshot()
             logger.info("Channel plugins refreshed: count=%d", len(state.channels.catalog.plugins))
@@ -481,7 +482,7 @@ def create_app(
 
     @app.put("/api/channels/{id}")
     async def save_channel(id: ChannelId, body: ConnectionInput) -> dict[str, object]:
-        with state.idle():
+        with state.idle(allow_running=True):
             with anyio.CancelScope(shield=True):
                 result = await finish_on_cancel(state.channels.save(id, body))
             logger.info("Channel connection saved: id=%s plugin=%s enabled=%s", id, body.plugin, body.enabled)
@@ -489,7 +490,7 @@ def create_app(
 
     @app.delete("/api/channels/{id}")
     async def delete_channel(id: ChannelId, body: ChannelRevision) -> dict[str, object]:
-        with state.idle():
+        with state.idle(allow_running=True):
             with anyio.CancelScope(shield=True):
                 result = await finish_on_cancel(state.channels.delete(id, body.revision))
             logger.info("Channel connection removed: id=%s", id)
@@ -512,7 +513,6 @@ def create_app(
 
     @app.get("/api/models")
     async def models() -> dict[str, object]:
-        provider = state.harness.agent.provider
         logger.info(
             "Model catalog requested: active=%s provider=%s",
             state.harness.config.provider or "(unconfigured)",
@@ -521,13 +521,16 @@ def create_app(
         if state.harness.config.demo:
             raise HTTPException(501, "Model discovery is unavailable in offline demo mode. Enter a model ID manually.")
         try:
-            with catalog_logging(logger):
-                model_ids = await provider.get_model_list()
-            source = (
-                "codex"
-                if isinstance(provider, OpenAIProvider) and provider.uses_chatgpt_auth
-                else provider.provider_type.value
-            )
+            async with state.executions.auxiliary_provider() as provider:
+                with catalog_logging(logger):
+                    model_ids = await provider.get_model_list()
+                source = (
+                    "codex"
+                    if isinstance(provider, OpenAIProvider) and provider.uses_chatgpt_auth
+                    else provider.provider_type.value
+                )
+        except HTTPException:
+            raise
         except NotImplementedError:
             logger.info(
                 "Model catalog unsupported: provider=%s",
@@ -574,9 +577,7 @@ def create_app(
         name: Annotated[str, PathParameter(pattern=r"^[a-z][a-z0-9_-]{0,63}$")],
         body: ProviderInput,
     ) -> dict[str, object]:
-        with state.idle():
-            if live.active_session_id:
-                raise HTTPException(409, "End the active Live call before editing providers.")
+        async with state.configure():
             profile = _provider_profile(body.profile)
             try:
                 await _join(asyncio.create_task(state.harness.save_provider(name, profile, body.revision, scope)))
@@ -594,9 +595,7 @@ def create_app(
         name: Annotated[str, PathParameter(pattern=r"^[a-z][a-z0-9_-]{0,63}$")],
         body: ProviderRevision,
     ) -> dict[str, object]:
-        with state.idle():
-            if live.active_session_id:
-                raise HTTPException(409, "End the active Live call before editing providers.")
+        async with state.configure():
             try:
                 await _join(asyncio.create_task(state.harness.delete_provider(name, body.revision, scope)))
             except ValueError:
@@ -610,9 +609,7 @@ def create_app(
         name: Annotated[str, PathParameter(pattern=r"^[a-z][a-z0-9_-]{0,63}$")],
         body: ProviderRevision,
     ) -> dict[str, object]:
-        with state.idle():
-            if live.active_session_id:
-                raise HTTPException(409, "End the active Live call before switching providers.")
+        async with state.configure():
             try:
                 await _join(asyncio.create_task(state.harness.activate_provider(name, body.revision, scope)))
             except ValueError:
@@ -625,9 +622,7 @@ def create_app(
 
     @app.post("/api/providers/inherit")
     async def inherit_provider(body: ProviderRevision) -> dict[str, object]:
-        with state.idle():
-            if live.active_session_id:
-                raise HTTPException(409, "End the active Live call before switching providers.")
+        async with state.configure():
             try:
                 await _join(asyncio.create_task(state.harness.inherit_provider(body.revision)))
             except ValueError:
@@ -664,7 +659,7 @@ def create_app(
 
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:
-        with state.idle():
+        async with state.configure():
             await state.settings.change(body.revision, body.values)
             logger.info(
                 "Workspace settings saved: provider=%s agent=%s model=%s",
@@ -676,7 +671,7 @@ def create_app(
 
     @app.post("/api/settings/reset")
     async def reset_settings(body: SettingsRevision) -> dict[str, object]:
-        with state.idle():
+        async with state.configure():
             await state.settings.load_global()
             await state.settings.change(body.revision, state.settings.defaults, reset=True)
             logger.info("Workspace settings reset to inherited defaults")
@@ -689,7 +684,7 @@ def create_app(
 
     @app.post("/api/settings/global")
     async def save_global_settings(body: SettingsInput) -> dict[str, object]:
-        with state.idle():
+        async with state.configure():
             try:
                 await finish_on_cancel(state.settings.change_global(body.revision, body.values))
             except ValueError:
@@ -699,7 +694,7 @@ def create_app(
 
     @app.post("/api/settings/global/reset")
     async def reset_global_settings(body: SettingsRevision) -> dict[str, object]:
-        with state.idle():
+        async with state.configure():
             await finish_on_cancel(
                 state.settings.change_global(body.revision, state.settings.startup_defaults, reset=True)
             )

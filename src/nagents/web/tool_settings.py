@@ -85,7 +85,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     @app.post("/api/tools")
     async def save(body: ToolSettingsInput) -> dict[str, object]:
         state = get()
-        with state.idle():
+        with state.idle(allow_running=True):
             try:
                 state.harness.tool_settings.save(body.agents, body.revision)
                 return snapshot(state)
@@ -99,7 +99,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     @app.post("/api/tools/approvals/revoke")
     async def revoke(body: ToolApprovalRevoke) -> dict[str, object]:
         state = get()
-        with state.idle():
+        with state.idle(allow_running=True):
             try:
                 if not state.tool_approvals.revoke(body.tool, body.revision):
                     raise HTTPException(409, "This saved permission changed. Refresh tools before trying again.")

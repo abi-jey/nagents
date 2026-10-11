@@ -5,14 +5,14 @@ import { availability } from "./availability.js";
 const idle = { ready: true, operating: false, running: false,
   modal: false, approval: false, uploadsReady: true };
 
-test("a running conversation permits follow-ups, navigation and voice while idle-only changes wait", () => {
+test("a running conversation permits follow-ups, navigation, settings, tools and designer", () => {
   const access = availability({ ...idle, running: true });
   assert.equal(access.submit, true);
   assert.equal(access.navigate, true);
   assert.equal(access.channels, true);
   assert.equal(access.create, true);
-  assert.equal(access.settings, false);
-  assert.equal(access.designer, false);
+  assert.equal(access.settings, true);
+  assert.equal(access.designer, true);
   assert.equal(access.live, true);
 });
 
@@ -27,7 +27,7 @@ test("a pending approval permits navigating or creating another chat without per
   assert.equal(access.navigate, true);
   assert.equal(access.create, true);
   assert.equal(access.submit, false);
-  assert.equal(access.settings, false);
+  assert.equal(access.settings, true);
   assert.equal(access.live, false);
 });
 

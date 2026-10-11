@@ -553,7 +553,7 @@ def test_settings_stale_other_client_and_harness_busy(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("prompt", ["approval", "wait"])
-def test_settings_reject_active_run_and_approval(tmp_path: Path, prompt: str) -> None:
+def test_settings_save_and_reset_while_run_or_approval_continues(tmp_path: Path, prompt: str) -> None:
     async def check() -> None:
         async with client_app(tmp_path) as (app, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
@@ -561,16 +561,26 @@ def test_settings_reject_active_run_and_approval(tmp_path: Path, prompt: str) ->
             await stream.event("approval" if prompt == "approval" else "text_chunk")
             try:
                 assert (await client.get("/api/settings", headers=headers)).json() == before
-                assert (
-                    await client.post(
-                        "/api/settings",
-                        json={"revision": before["revision"], "values": before["values"]},
-                        headers=headers,
-                    )
-                ).status_code == 409
-                assert (
-                    await client.post("/api/settings/reset", json={"revision": before["revision"]}, headers=headers)
-                ).status_code == 409
+                owner = app.state.web.running_harness
+                provider = owner.agent.provider
+                saved = await client.post(
+                    "/api/settings",
+                    json={"revision": before["revision"], "values": {**before["values"], "model": "next-model"}},
+                    headers=headers,
+                )
+                assert saved.status_code == 200, saved.text
+                assert app.state.web.running_harness is owner
+                assert owner.agent.provider is provider
+                assert owner.config.model == before["values"]["model"]
+                assert app.state.web.harness is not owner
+                assert app.state.web.harness.config.model == "next-model"
+                assert not owner._closed
+                reset = await client.post(
+                    "/api/settings/reset", json={"revision": saved.json()["revision"]}, headers=headers
+                )
+                assert reset.status_code == 200, reset.text
+                assert app.state.web.running_harness is owner
+                assert not owner._closed
             finally:
                 await stream.disconnect()
 

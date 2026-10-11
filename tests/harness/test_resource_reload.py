@@ -16,6 +16,7 @@ from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
 from nagents.harness import ApprovalRequest
 from nagents.harness import load_config
+from nagents.harness.types import Notice
 from nagents.mcp import MCPServerConfig
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
@@ -215,13 +216,18 @@ async def test_failed_replacement_retains_tools_aliases_and_host_infrastructure(
     harness.config.plugins = (str(extension) + ":setup",)
     executor = harness.agent.tool_executor
     try:
-        await collect(harness)
+        events = await collect(harness)
+        warnings = [event.text for event in events if isinstance(event, Notice) and event.level == "warning"]
+        assert len(warnings) == 1 and "Resource reload failed:" in warnings[0]
         assert harness.agent.tool_executor is executor
         assert "host-owned agent.tool_executor" in harness.resources.last_error
         assert harness.commands.get("custom-alias") is not None
         definition = harness.agent.tool_registry.get("current_session")
         assert definition is not None and definition.func is not None
         assert await definition.func() == "one:" + harness.session_id
+        # A continuing failure stays in Tools/doctor without being replayed as
+        # a new warning at the start of every conversation turn.
+        assert not any(isinstance(event, Notice) for event in await collect(harness))
     finally:
         await harness.close()
 

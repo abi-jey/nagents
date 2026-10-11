@@ -21,8 +21,6 @@ from nagents.harness.providers import ProviderProfile
 from ._async import join_owned
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from .service import WebState
 
 LoginStatus = Literal["idle", "starting", "pending", "completed", "failed", "cancelled"]
@@ -39,9 +37,8 @@ class LoginSnapshot(TypedDict):
 
 
 class ProviderLogin:
-    def __init__(self, state: WebState, live_active: Callable[[], str]) -> None:
+    def __init__(self, state: WebState) -> None:
         self.state = state
-        self.live_active = live_active
         self.tasks: list[asyncio.Task[None]] = []
         self.ready: list[asyncio.Future[None]] = []
         self.id = ""
@@ -87,15 +84,14 @@ class ProviderLogin:
     async def run(self, ready: asyncio.Future[None]) -> None:
         committed = False
         try:
-            with self.state.idle():
-                if self.live_active():
-                    raise HTTPException(409, "End the active Live session before signing in.")
+            with self.state.idle(allow_running=True):
                 harness = self.state.harness
                 if harness.config.demo:
                     raise HTTPException(409, "Device login is unavailable in offline demo mode.")
                 store = harness.provider_store
                 registry = store.load()
-                name = harness.config.provider
+                selected_provider = harness.config.provider
+                name = selected_provider
                 profile = registry.providers.get(name) if name else ProviderProfile(kind="openai", auth="chatgpt")
                 if (
                     profile is None
@@ -122,35 +118,39 @@ class ProviderLogin:
                 self.message = "Requesting a device code."
                 self.clear_code()
                 ready.set_result(None)
-                authorization = await harness.openai_auth.start_device_login()
-                if (
-                    authorization.verification_url != ISSUER + "/codex/device"
-                    or re.fullmatch(r"[A-Za-z0-9-]{1,64}", authorization.user_code) is None
-                    or not math.isfinite(authorization.expires_at)
-                    or authorization.expires_at <= monotonic()
-                ):
-                    raise ValueError("Invalid device authorization")
-                self.url = authorization.verification_url
-                self.code = authorization.user_code
-                self.expires_at = authorization.expires_at
-                self.status = "pending"
-                self.message = "Approve the device code in your browser."
-                # Bound the entire wait even if an auth implementation fails to
-                # enforce its own deadline. Tokens stay in the protected store.
-                async with asyncio.timeout(min(900.0, authorization.expires_at - monotonic())):
-                    await harness.openai_auth.complete_device_login(authorization)
-                self.clear_code()
-                self.status = "starting"
-                self.message = "Saving login and refreshing the connection."
+            authorization = await harness.openai_auth.start_device_login()
+            if (
+                authorization.verification_url != ISSUER + "/codex/device"
+                or re.fullmatch(r"[A-Za-z0-9-]{1,64}", authorization.user_code) is None
+                or not math.isfinite(authorization.expires_at)
+                or authorization.expires_at <= monotonic()
+            ):
+                raise ValueError("Invalid device authorization")
+            self.url = authorization.verification_url
+            self.code = authorization.user_code
+            self.expires_at = authorization.expires_at
+            self.status = "pending"
+            self.message = "Approve the device code in your browser."
+            # Bound the entire wait even if an auth implementation fails to
+            # enforce its own deadline. Tokens stay in the protected store.
+            async with asyncio.timeout(min(900.0, authorization.expires_at - monotonic())):
+                await harness.openai_auth.complete_device_login(authorization)
+            self.clear_code()
+            self.status = "starting"
+            self.message = "Saving login and refreshing the connection."
 
-                async def apply() -> None:
-                    nonlocal committed
-                    saved = await harness.save_provider(name, replace(profile, auth="chatgpt"), revision, scope)
-                    if not harness.config.provider:
-                        await harness.activate_provider(name, saved.revision, scope)
-                    self.state.settings.sync_provider()
-                    committed = True
+            async def apply() -> None:
+                nonlocal committed
+                harness = self.state.harness
+                if harness.config.provider != selected_provider:
+                    raise ValueError("Provider selection changed during login")
+                saved = await harness.save_provider(name, replace(profile, auth="chatgpt"), revision, scope)
+                if not harness.config.provider:
+                    await harness.activate_provider(name, saved.revision, scope)
+                self.state.settings.sync_provider()
+                committed = True
 
+            async with self.state.configure():
                 await join_owned(asyncio.create_task(apply()))
         except asyncio.CancelledError:
             if not committed:

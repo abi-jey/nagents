@@ -147,13 +147,13 @@ test("the full settings form exposes devices, voice, scope, connection and model
   } finally { await ui.close(); }
 });
 
-test("connected audio devices remain editable while voice and provider preferences are blocked", async (t) => {
+test("connected audio devices and next-conversation voice preferences remain editable", async (t) => {
   const ui = view();
   const changes: [string, string][] = [];
   let dismissed = 0, managed = 0;
   t.mock.method(globalThis, "fetch", async () => Response.json({ ...snapshot, live_supported: true }));
   const props = {
-    token: "token", blocked: true, audioActive: true, audioDisabled: false,
+    token: "token", blocked: false, audioActive: true, audioDisabled: false,
     audioSelection: { inputId: "mic-one", outputId: "speaker-one" },
     applyDevice: async (kind: "input" | "output", id: string) => { changes.push([kind, id]); },
     configureConnection: () => { managed++; },
@@ -165,13 +165,13 @@ test("connected audio devices remain editable while voice and provider preferenc
     assert.equal(ui.select("Speaker").disabled, false);
     assert.equal(ui.select("Microphone").value, "mic-one");
     assert.equal(ui.select("Speaker").value, "speaker-one");
-    assert.equal(ui.container.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, true);
-    assert.equal(ui.button("Save settings").disabled, true);
-    assert.equal(ui.button("Manage provider connections").matches(":disabled"), true);
+    assert.equal(ui.container.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, false);
+    assert.equal(ui.button("Save settings").disabled, false);
+    assert.equal(ui.button("Manage provider connections").matches(":disabled"), false);
     await act(async () => ui.button("Manage provider connections").click());
-    assert.equal(managed, 0, "the disabled connection fieldset prevents navigation during voice");
+    assert.equal(managed, 1, "provider settings stay accessible during voice");
     assert.match(ui.container.textContent!, /Applies immediately/);
-    assert.match(ui.container.textContent!, /before changing voice behavior, starting context, connection, or model/);
+    assert.match(ui.container.textContent!, /changes apply to your next voice conversation/);
     await ui.change("Microphone", "");
     assert.deepEqual(changes, [["input", ""]]);
     assert.equal(readAudioDevices().inputId, "");

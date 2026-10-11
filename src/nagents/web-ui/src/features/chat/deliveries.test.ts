@@ -87,10 +87,9 @@ test("saved image previews use the same bounded loader as delivery assets", asyn
       createElement(UploadSession.Provider, { value: "root" }, createElement(UploadAttachment, {
         upload: { upload_id: "asset-one", filename: "photo.png", media_type: "image/png", byte_length: 3 }, ready: true,
       })))));
-    assert.match(container.textContent!, /Media budget is full/);
+    assert.doesNotMatch(container.textContent!, /budget|preview|Unload/i);
     assert.equal(fetch.mock.callCount(), 0);
-    held.forEach((reservation) => reservation.release());
-    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => held.forEach((reservation) => reservation.release()));
     assert.equal(container.querySelector("img")?.getAttribute("src"), "blob:upload");
     assert.equal(create.mock.callCount(), 1);
     assert.equal(fetch.mock.callCount(), 1);
@@ -157,7 +156,7 @@ test("snapshot recovery of a missed result replaces pending tool status without 
 });
 
 for (const [type, tag] of [["image/png", "img"], ["audio/wav", "audio"], ["video/mp4", "video"]]) {
-  test(`mounted ${tag} ${tag === "img" ? "loads automatically" : "loads on demand"}, preserves its URL on replay, offers download and revokes on navigation`, async (t) => {
+  test(`mounted ${tag} loads automatically, preserves its URL on replay, offers download and revokes on navigation`, async (t) => {
     const dom = new JSDOM("<div id='root'></div>");
     const descriptors = Object.getOwnPropertyDescriptors(globalThis);
     Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
@@ -172,8 +171,7 @@ for (const [type, tag] of [["image/png", "img"], ["audio/wav", "audio"], ["video
     }
     try {
       await render(value);
-      assert.equal(fetch.mock.callCount(), tag === "img" ? 1 : 0);
-      if (tag !== "img") await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+      assert.equal(fetch.mock.callCount(), 1);
       const player = container.querySelector(tag)!;
       assert.equal(player.getAttribute("src"), "blob:preview");
       assert.equal(player.hasAttribute("autoplay"), false);
@@ -182,14 +180,12 @@ for (const [type, tag] of [["image/png", "img"], ["audio/wav", "audio"], ["video
       assert.equal(container.querySelector(tag), player);
       assert.equal(create.mock.callCount(), 1);
       await act(async () => player.dispatchEvent(new dom.window.Event("error")));
-      assert.match(container.textContent!, /could not decode/);
+      assert.match(container.textContent!, /could not be displayed/);
       assert.equal(container.querySelector("a[download]")?.getAttribute("href"), "blob:preview");
       await render({ ...value, session_id: "different-root" });
       assert.equal(revoke.mock.callCount(), 1);
-      if (tag === "img") {
-        assert.notEqual(container.querySelector(tag), player);
-        assert.equal(create.mock.callCount(), 2);
-      } else assert.equal(container.querySelector(tag), null);
+      assert.notEqual(container.querySelector(tag), player);
+      assert.equal(create.mock.callCount(), 2);
     } finally {
       await act(async () => root.unmount());
       dom.window.close();

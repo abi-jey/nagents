@@ -14,8 +14,8 @@ const MAX_WAITING = 16;
 class MediaLoadingBusy extends Error {}
 
 // Reservations include in-flight bytes and retained object URLs across all cards.
-// Automatic previews may wait for a fetch slot, with a bounded, abortable queue.
-// Exhausted retained-byte capacity remains an explicit retryable UI state.
+// Visible media waits for both byte capacity and a fetch slot. The shared queue
+// stays bounded and abortable so moving offscreen immediately releases its place.
 export class MediaBudget {
   private bytes = 0;
   private fetching = 0;
@@ -31,7 +31,7 @@ export class MediaBudget {
       try { return this.reserve(size); }
       catch (error) {
         if (!(error instanceof MediaLoadingBusy)) throw error;
-        if (this.waiting.size >= MAX_WAITING) throw new Error("Too many previews are loading. Retry shortly.");
+        if (this.waiting.size >= MAX_WAITING) throw new Error("Too many media items are loading. Try again shortly.");
         await new Promise<void>((resolve, reject) => {
           const cleanup = () => { this.waiting.delete(ready); signal.removeEventListener("abort", abort); };
           const ready = () => { cleanup(); resolve(); };
@@ -44,8 +44,9 @@ export class MediaBudget {
   }
   reserve(size: number) {
     if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE) throw new Error("Invalid media size.");
+    if (size > this.limit) throw new Error("Media item exceeds the available memory limit.");
     if (this.bytes + size > this.limit)
-      throw new Error("Media budget is full. Unload another preview or retry when loading finishes.");
+      throw new MediaLoadingBusy("Media budget is full. Waiting for available memory.");
     if (this.fetching >= this.concurrency)
       throw new MediaLoadingBusy("Media budget is full. Retry when loading finishes.");
     this.bytes += size; this.fetching++;
@@ -64,12 +65,13 @@ export async function loadAsset(token: string, delivery: LocalDelivery, asset: D
 }
 
 export async function loadMedia(token: string, path: string, asset: Pick<DeliveryAsset, "media_type" | "byte_length">,
-  signal: AbortSignal, budget = mediaBudget, waitForSlot = false): Promise<{ url: string; release: () => void }> {
-  if (!MEDIA_TYPES.has(asset.media_type)) throw new Error("This attachment type cannot be previewed.");
+  signal: AbortSignal, budget = mediaBudget, waitForSlot = false, onStart?: () => void): Promise<{ url: string; release: () => void }> {
+  if (!MEDIA_TYPES.has(asset.media_type)) throw new Error("This attachment type cannot be displayed.");
   const reservation = waitForSlot ? await budget.reserveWhenReady(asset.byte_length, signal) : budget.reserve(asset.byte_length);
   let url = "";
   try {
     signal.throwIfAborted();
+    onStart?.();
     const response = await request(path, token, undefined, signal);
     if (response.headers.get("Content-Type") !== asset.media_type ||
         (response.headers.has("Content-Length") && Number(response.headers.get("Content-Length")) !== asset.byte_length)) {
@@ -78,6 +80,9 @@ export async function loadMedia(token: string, path: string, asset: Pick<Deliver
     }
     if (!response.body) throw new Error("Media response is empty.");
     const reader = response.body.getReader();
+    const abortReader = () => { void reader.cancel(signal.reason).catch(() => {}); };
+    signal.addEventListener("abort", abortReader, { once: true });
+    if (signal.aborted) abortReader();
     const chunks: Uint8Array<ArrayBuffer>[] = [];
     let size = 0;
     try {
@@ -93,6 +98,7 @@ export async function loadMedia(token: string, path: string, asset: Pick<Deliver
       if (size !== asset.byte_length) throw new Error("Media response was incomplete.");
       url = URL.createObjectURL(new Blob(chunks, { type: asset.media_type }));
     } finally {
+      signal.removeEventListener("abort", abortReader);
       await reader.cancel().catch(() => {});
       reader.releaseLock();
     }

@@ -43,7 +43,7 @@ export function settingsFailure(cause: unknown, writing: boolean) {
     cause instanceof Error ? cause.message : "Settings request failed.";
   if (cause instanceof RequestError && cause.status === 409) {
     return {
-      message: `${message} Your draft is kept. Wait for any active run to finish, then reload settings before trying again. No request was retried.`,
+      message: `${message} Your draft is kept. Reload saved settings before trying again. No request was retried.`,
       needsRefresh: true,
     };
   }

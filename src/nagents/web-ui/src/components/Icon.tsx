@@ -1,6 +1,9 @@
-type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch";
+type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch" | "download" | "expand" | "image";
 
 const paths: Record<IconName, string> = {
+  download: "M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4",
+  expand: "M7 3H3v4M13 3h4v4M17 13v4h-4M7 17H3v-4",
+  image: "M3 3h14v14H3ZM3 13l4-4 4 4 3-3 3 3M12 6h.01",
   branch: "M5 3v10a3 3 0 0 0 3 3h7M5 8h5a5 5 0 0 0 5-5M3 3h4M13 3h4M15 14l2 2-2 2",
   plus: "M10 4v12M4 10h12",
   chat: "M4 3h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-5 3V5a2 2 0 0 1 1-2Z",

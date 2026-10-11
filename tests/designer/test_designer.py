@@ -423,7 +423,16 @@ def test_designer_approvals_busy_slot_and_cancellation(tmp_path: Path) -> None:
                         while active.pending is None:
                             await asyncio.sleep(0.01)
                     competing = await client.post("/api/designer/run", json={"source": source, "prompt": "Other"})
-                    assert competing.status_code == 409
+                    assert competing.status_code == 200
+                    other = app.state.web.run_by_id(competing.json()["run_id"])
+                    assert other is not None and other.session_id != active.session_id
+                    async with asyncio.timeout(5):
+                        while other.pending is None:
+                            await asyncio.sleep(0.01)
+                    same_session = await client.post(
+                        "/api/designer/run", json={"source": source, "prompt": "Again", "previous_run": run_id}
+                    )
+                    assert same_session.status_code == 409
                     if cancel:
                         response = await client.post("/api/cancel", json={"run_id": run_id})
                     else:
@@ -438,6 +447,9 @@ def test_designer_approvals_busy_slot_and_cancellation(tmp_path: Path) -> None:
                         )
                     assert response.status_code == 200
                     await asyncio.gather(active.task, return_exceptions=True)
+                    assert app.state.web.run_by_id(other.id) is other
+                    assert (await client.post("/api/cancel", json={"run_id": other.id})).status_code == 200
+                    await asyncio.gather(other.task, return_exceptions=True)
                     trace = (await client.get(f"/api/designer/runs/{run_id}/0")).json()
                     assert trace["status"] == ("cancelled" if cancel else "completed")
                     assert app.state.web.active is None

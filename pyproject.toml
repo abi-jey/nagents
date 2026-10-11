@@ -1,6 +1,6 @@
 [project]
 name = "nagents"
-version = "0.23.0"
+version = "0.23.1"
 description = "A lightweight, dependency-free LLM agent framework with direct HTTP-based provider integration"
 readme = "README.md"
 requires-python = ">=3.11, <4.0"
@@ -62,7 +62,7 @@ ignore = [ "E501",]
 quote-style = "double"
 
 [tool.hatch.build]
-artifacts = [ "/src/nagents/web/static/**", "/src/nagents/skills/bundled/**",]
+artifacts = [ "/src/nagents/web/static/**", "/src/nagents/skills/bundled/**", "/src/nagents/harness/instructions/AGENTS.md",]
 
 [tool.ruff.lint.isort]
 force-single-line = true

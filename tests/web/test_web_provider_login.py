@@ -84,7 +84,8 @@ def test_login_completes_selected_provider_and_hides_secrets(
         duplicate = app.client.post("/api/login/chatgpt", headers=app.headers, json={})
         assert duplicate.json()["id"] == pending["id"]
         assert "private-device-id" not in response.text + duplicate.text
-        assert app.client.post("/api/sessions/new", headers=app.headers, json={}).status_code == 409
+        assert not app.state.mutating
+        assert app.client.post("/api/sessions/new", headers=app.headers, json={}).status_code == 200
         assert app.client.portal is not None
         app.client.portal.call(release.set)
         completed = wait_status(app, "completed")
@@ -143,12 +144,11 @@ def test_login_requires_same_origin_and_server_token(tmp_path: Path, monkeypatch
         assert app.client.post("/api/login/chatgpt", headers=app.headers, json={"api_key": "no"}).status_code == 422
 
 
-@pytest.mark.parametrize("condition", ["busy", "live", "demo", "custom-provider"])
+@pytest.mark.parametrize("condition", ["busy", "demo", "custom-provider"])
 def test_login_rejects_conflicting_or_unsupported_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, condition: str
 ) -> None:
     with site(tmp_path, monkeypatch) as app:
-        service = login_service(app)
         called = False
 
         async def unexpected_start() -> DeviceAuthorization:
@@ -159,8 +159,6 @@ def test_login_rejects_conflicting_or_unsupported_operation(
         monkeypatch.setattr(app.state.harness.openai_auth, "start_device_login", unexpected_start)
         if condition == "busy":
             app.state.mutating = True
-        elif condition == "live":
-            monkeypatch.setattr(service, "live_active", lambda: "active-voice")
         elif condition == "demo":
             app.state.harness.config.demo = True
         else:

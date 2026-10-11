@@ -320,6 +320,12 @@ jobs:
         working-directory: src/nagents/web-ui
         run: npm test
 
+      - name: Check subagent interaction demos
+        working-directory: src/nagents/web-ui
+        run: |
+          npm run demo:subagents:build -- --outDir "$RUNNER_TEMP/ngn-subagent-concepts"
+          npm run demo:subagents:test
+
       - name: Build web assets
         working-directory: src/nagents/web-ui
         run: npm run build
@@ -338,7 +344,7 @@ jobs:
       - name: Build wheel and sdist
         run: python -m build
 
-      - name: Verify bundled web assets and skills
+      - name: Verify bundled web assets, skills, and instructions
         shell: python
         run: |
           import hashlib
@@ -354,6 +360,10 @@ jobs:
               assert manifest["sources"] and manifest["assets"]
               for path, digest in manifest["assets"].items():
                   assert hashlib.sha256(wheel.read(f"nagents/web/static/{path}")).hexdigest() == digest, path
+              instructions_path = "nagents/harness/instructions/AGENTS.md"
+              instructions = wheel.read(instructions_path)
+              assert instructions == Path(f"src/{instructions_path}").read_bytes()
+              assert instructions.decode("utf-8").strip()
           with tarfile.open(next(Path("dist").glob("*.tar.gz"))) as sdist:
               sdist_files = [name.split("/", 1)[-1] for name in sdist.getnames()]
               prefix = sdist.getnames()[0].split("/", 1)[0]
@@ -361,6 +371,9 @@ jobs:
                   source = sdist.extractfile(f"{prefix}/src/nagents/web-ui/{path}")
                   assert source is not None, path
                   assert hashlib.sha256(source.read()).hexdigest() == digest, path
+              source = sdist.extractfile(f"{prefix}/src/{instructions_path}")
+              assert source is not None, instructions_path
+              assert source.read() == instructions
 
           assert "nagents/web/static/index.html" in wheel_files
           assert any(name.startswith("nagents/web/static/assets/") and name.endswith(".js") for name in wheel_files)
@@ -378,7 +391,7 @@ jobs:
           for name in wheel_files + sdist_files:
               assert not {"node_modules", ".vite", ".cache", ".test-build"}.intersection(Path(name).parts), name
               assert not name.endswith(".tsbuildinfo"), name
-          print("Web assets and built-in skills are bundled; frontend dependencies and caches are excluded")
+          print("Web assets, built-in skills, and default instructions are bundled; frontend dependencies and caches are excluded")
 
       - name: List artifacts
         run: ls -la dist/

@@ -421,7 +421,15 @@ class SubagentManager:
             if ancestor.mode == "reviewer" or (retained is not None and retained.mode == "reviewer"):
                 ceiling = "reviewer"
             ancestor = self._infos[ancestor.parent_task_id] if ancestor.parent_task_id else None
-        child = Harness(config, allow_subagents=self.root.harness.allow_subagents)
+        child = Harness(
+            config,
+            allow_subagents=self.root.harness.allow_subagents,
+            provider_registry=replace(
+                parent.providers,
+                providers={name: profile for name, profile in config.providers.items() if name},
+            ),
+            shared_auth=self.root.harness.openai_auth,
+        )
         child._is_subagent = True
         child._task_id = info.id if info else str(uuid.uuid4())
         child._task_name = info.name if info else "subagent"
@@ -433,8 +441,6 @@ class SubagentManager:
             child.session_id = info.child_session_id
             info.mode = ceiling
         child.tasks = SubagentManager(child, self.root)
-        child._owns_auth = False
-        child.openai_auth = self.root.harness.openai_auth
         child._parent_instructions, child._inherited_profile_instructions = parent.inherited_run_instructions(
             continuing=continuing
         )

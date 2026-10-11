@@ -7,6 +7,7 @@ import { SettingsDialog } from "./SettingsDialog.js";
 import { settingsValues } from "./testFixtures.js";
 import type { SettingsReply } from "./types.js";
 import { useSettings } from "./useSettings.js";
+import { availability } from "../../app/availability.js";
 
 function reply(revision: string, model = "original"): SettingsReply {
   const values = settingsValues({ model });
@@ -22,6 +23,61 @@ function deferred<T>() {
   let resolve!: (value: T) => void;
   return { promise: new Promise<T>((done) => { resolve = done; }), resolve };
 }
+
+test("settings are editable during execution and serialize only their own save", async (t) => {
+  const dom = new JSDOM("<div id='root'></div>");
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+  const response = deferred<Response>();
+  let writes = 0;
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path === "/api/settings" && init.method === "POST") { writes++; return response.promise; }
+    if (path === "/api/settings") return Response.json(reply("first"));
+    if (path === "/api/provider-scopes/workspace/providers") return Response.json({
+      revision: "registry", active: "", providers: {}, kinds: {}, scope: "workspace", path: "providers.yaml",
+    });
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  const root = createRoot(document.getElementById("root")!);
+  let settings!: ReturnType<typeof useSettings>;
+  function View() {
+    const access = availability({ ready: true, running: true, operating: false,
+      modal: false, approval: true, uploadsReady: true });
+    settings = useSettings({ token: "token", blocked: !access.settings,
+      operate: async (action) => { await action(); return true; }, accept: () => {} });
+    return settings.open ? createElement(SettingsDialog, { settings }) : null;
+  }
+  let save: Promise<void> | undefined;
+  try {
+    await act(async () => root.render(createElement(View)));
+    await act(async () => settings.show());
+    const model = document.querySelector<HTMLInputElement>("#settings-model")!;
+    assert.ok(model);
+    assert.equal(model.matches(":disabled"), false);
+    await act(async () => settings.update("model", "next-model"));
+    assert.equal(settings.draft?.model, "next-model");
+    await act(async () => { save = settings.save(); });
+    assert.equal(settings.pending, true);
+    assert.equal(model.matches(":disabled"), true);
+    await act(async () => { await settings.save(); });
+    assert.equal(writes, 1);
+    await act(async () => { response.resolve(Response.json(reply("saved", "next-model"))); await save; });
+    assert.equal(settings.pending, false);
+    assert.equal(model.matches(":disabled"), false);
+    assert.match(document.body.textContent || "", /Applies to your next run/);
+    assert.doesNotMatch(document.body.textContent || "", /read-only while work is active/);
+  } finally {
+    response.resolve(Response.json(reply("saved", "next-model")));
+    await act(async () => { await save; root.unmount(); });
+    dom.window.close();
+    for (const key of ["window", "document", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) {
+      if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+});
 
 test("polls both settings scopes only while open, updates clean drafts without loading, and ignores late responses", async (t) => {
   const dom = new JSDOM("<div id='root'></div>");

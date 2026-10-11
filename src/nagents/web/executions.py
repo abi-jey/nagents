@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from nagents.harness.config import HarnessConfig
     from nagents.harness.runtime import Harness
+    from nagents.provider import Provider
     from nagents.types import ToolDefinition
 
     from .service import Run
@@ -37,6 +38,10 @@ class Executions:
         self.owners: dict[str, Harness] = {}
         self.current: ContextVar[Run | None] = ContextVar("ngn_web_execution", default=None)
         self._tools: dict[str, list[ToolDefinition]] = {}
+        self._auxiliary: set[asyncio.Task[object]] = set()
+        self._leases: dict[Harness, int] = {}
+        self._released: dict[Harness, asyncio.Event] = {}
+        self._retired: dict[Harness, list[ToolDefinition]] = {}
         self.closed = False
 
     def active(self) -> Run | None:
@@ -91,6 +96,92 @@ class Executions:
             await previous.close()
 
     @asynccontextmanager
+    async def auxiliary_provider(self, *, configuring: bool = False) -> AsyncIterator[Provider]:
+        """Lease the accepted provider while a read-only request uses it.
+
+        A settings save detaches its configuration runtime rather than changing
+        this provider. The last reader joins cleanup if its owner has retired.
+        ``configuring`` is only for Live's already-owned admission boundary.
+        """
+        if self.closed:
+            raise HTTPException(503, "The server is shutting down.")
+        if self.state.mutating and not configuring:
+            raise HTTPException(409, "Settings are being saved. Retry the request shortly.")
+        harness = self.state.harness
+        task = asyncio.current_task()
+        assert task is not None
+        if task in self._auxiliary:
+            raise RuntimeError("Auxiliary provider leases cannot be nested in one request")
+        self._auxiliary.add(task)
+        self._leases[harness] = self._leases.get(harness, 0) + 1
+        self._released.setdefault(harness, asyncio.Event())
+        try:
+            yield harness.agent.provider
+        finally:
+            try:
+                self._leases[harness] -= 1
+                if not self._leases[harness]:
+                    del self._leases[harness]
+                    self._released.pop(harness).set()
+                    await self._close_retired(harness)
+            finally:
+                self._auxiliary.discard(task)
+
+    async def _close_retired(self, harness: Harness) -> None:
+        if harness in self._leases or harness in self.owners.values() or harness not in self._retired:
+            return
+        installed = self._retired.pop(harness)
+        try:
+            await join_owned(asyncio.create_task(harness.close()))
+        finally:
+            self.state.channels.unregister_runtime(harness, installed)
+
+    async def configuration_owner(self) -> None:
+        """Detach settings from a retained execution before changing its defaults.
+
+        A running root owns its provider, configuration and children until it
+        finishes. The first edit creates a new configuration owner; subsequent
+        edits reuse it. Existing lanes adopt the saved defaults on their next run.
+        The caller holds the host mutation boundary throughout this operation.
+        """
+        primary = self.state.harness
+        if primary not in self.owners.values() and primary not in self._leases:
+            return
+        replacement = self.factory(deepcopy(primary.config))
+        if replacement is primary or replacement in self.owners.values():
+            raise RuntimeError("The harness factory must provide an independent configuration runtime")
+        installed: list[ToolDefinition] = []
+        try:
+            replacement._permission_ceiling = primary._permission_ceiling
+            replacement.allow_subagents = primary.allow_subagents
+            await self.borrow_auth(replacement)
+            replacement.session_id = self.state.selected_session_id
+            replacement.agent.session = self.state.history
+            replacement.approval_handler = self.state.approve
+            replacement.wakeup_handler = self.state.schedule
+            replacement.resources.logger = primary.resources.logger
+            replacement.agent.plugins.append(self.state.history.identity)
+            await replacement.initialize(create_session=False)
+            self.state.settings.values.apply(replacement)
+            installed = self.state.channels.register_runtime(replacement)
+        except BaseException:
+            await join_owned(asyncio.create_task(replacement.close()))
+            self.state.channels.unregister_runtime(replacement, installed)
+            raise
+        # No await during ownership transfer: the old lane must not close the
+        # shared login when it releases its runtime after this point.
+        primary._owns_auth = False
+        replacement._owns_auth = True
+        self._retired[primary] = [
+            tool for tool in self.state.channels.tools if primary.agent.tool_registry.get(tool.name) is tool
+        ]
+        self.state.harness = replacement
+        self.state.settings.harness = replacement
+        if self.state._running_harness is primary:
+            self.state._running_harness = replacement
+        await self._close_retired(primary)
+
+    @asynccontextmanager
     async def harness(self, run: Run) -> AsyncIterator[Harness]:
         with self.scope(run):
             harness = self.owners.get(run.session_id)
@@ -123,9 +214,13 @@ class Executions:
                         raise
             run.harness = harness
             if harness is not self.state.harness:
-                # Global routing/settings changes happen only when every root
-                # is idle. Apply their next-turn view without losing this lane's
-                # retained children or scheduled task handles.
+                # Apply the latest saved next-turn view without changing a
+                # running lane or losing its retained children and wakeups.
+                if released := self._released.get(harness):
+                    # A retained lane may still serve a catalog/voice summary
+                    # from its previous turn. Only this next turn waits; saved
+                    # defaults and independent chats remain available.
+                    await released.wait()
                 primary = self.state.harness
                 await harness.reconfigure_provider(deepcopy(primary.config))
                 if settings := getattr(self.state, "settings", None):
@@ -141,11 +236,9 @@ class Executions:
                 harness.session_id = self.state.selected_session_id
                 harness.tools.read_hashes.clear()
             return
-        try:
-            await join_owned(asyncio.create_task(harness.close()))
-        finally:
-            installed = self._tools.pop(session_id, [])
-            self.state.channels.unregister_runtime(harness, installed)
+        installed = self._tools.pop(session_id, [])
+        self._retired.setdefault(harness, installed)
+        await self._close_retired(harness)
 
     async def release_idle(self, session_id: str) -> None:
         harness = self.owners.get(session_id)
@@ -159,6 +252,10 @@ class Executions:
 
     async def close(self) -> None:
         self.closed = True
+        auxiliary = tuple(self._auxiliary)
+        for task in auxiliary:
+            task.cancel()
+        await asyncio.gather(*auxiliary, return_exceptions=True)
         await asyncio.gather(*(self.state.stop(run) for run in tuple(self.runs.values())))
         for session_id in tuple(self.owners):
             await self.dispose(session_id)

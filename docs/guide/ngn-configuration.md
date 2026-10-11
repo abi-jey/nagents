@@ -511,8 +511,9 @@ custom server subprocesses. Native child agents do not inherit parent MCP server
 
 A newly created `<workspace>/.ngn/config.json` does not become trusted just because
 it was written from the web chat. Without `--trust-project` or an explicit selection
-of that file, the running harness ignores it and reports the trusted reload
-locations. An operator can merge the specifically approved MCP declaration into an
+of that file, the running harness ignores it. Server logs report the trusted reload
+locations; **Tools → MCP discovery** and `ngn doctor` show the ignored source.
+An operator can merge the specifically approved MCP declaration into an
 already trusted user/host configuration, preserving its other settings. Preserve
 relative path semantics when moving a declaration: an explicit absolute `cwd` is
 useful. Restart with `--trust-project` only when trusting the entire project
@@ -538,9 +539,15 @@ startup and tool discovery failures. Tool-call authorization failures are separa
 from registration. Diagnostics do not echo server arguments, environment values,
 request/response bodies or credentials.
 
+Startup provider/configuration details are logged once when the harness initializes
+and remain available through `ngn doctor`. They are not repeated in chat or Live
+delegation responses. New resource reload failures still produce an actionable
+conversation warning; their current status remains visible in MCP discovery.
+
 Workspace `.vscode/mcp.json` and `opencode.json` files produce an ignored-config
-notice when present. ngn checks their existence without reading or importing their
-contents. Add only the approved `mcp_servers` declarations to a trusted ngn config;
+server log and appear in MCP discovery when present. ngn checks their existence
+without reading or importing their contents. Add only the approved `mcp_servers`
+declarations to a trusted ngn config;
 foreign files do not grant project trust. An explicitly selected `--config` path
 still follows ngn's configuration schema, regardless of its filename.
 

@@ -8,6 +8,7 @@ import logging
 import secrets
 import sqlite3
 from contextlib import aclosing
+from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from contextlib import nullcontext
 from contextlib import suppress
@@ -59,6 +60,7 @@ from .wakeups import Chain
 from .wakeups import Wakeups
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from collections.abc import Awaitable
     from collections.abc import Callable
     from collections.abc import Iterator
@@ -365,6 +367,13 @@ class WebState:
         finally:
             self.mutating = False
             self.changed()
+
+    @asynccontextmanager
+    async def configure(self) -> AsyncIterator[None]:
+        """Serialize preference writes while allowing existing runs to continue."""
+        with self.idle(allow_running=True):
+            await _join(asyncio.create_task(self.executions.configuration_owner()))
+            yield
 
     async def list_sessions(self) -> list[SessionInfo]:
         sessions: list[SessionInfo] = []

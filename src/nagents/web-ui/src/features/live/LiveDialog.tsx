@@ -64,7 +64,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     try {
       const next = await capability(token, AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)]));
       if (abort.signal.aborted) return;
-      setConfig(next); setVoice(current => next.voices.includes(current) ? current : next.voice);
+      setConfig(next); setVoice(current => active || next.voices.includes(current) ? current : next.voice);
       if (firstLoad.current) {
         firstLoad.current = false;
         if (!next.enabled || !next.key_configured) { setSettingsVisited(true); setSettingsOpen(true); }
@@ -76,7 +76,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
   }
 
   async function saved(snapshot: LiveSettingsSnapshot) {
-    setVoice(snapshot.values.voice);
+    if (!active) setVoice(snapshot.values.voice);
     const next = await refresh();
     if (next?.available) {
       setSettingsOpen(false);
@@ -164,7 +164,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
         applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined}
         hidden={!settingsOpen} onSavingChange={setSettingsSaving}
         configureConnection={configureConnection && (() => { closeSettings(); configureConnection(); })}
-        blocked={active || !!config?.active_session_id} saved={snapshot => void saved(snapshot)} back={closeSettings} />
+        blocked={false} saved={snapshot => void saved(snapshot)} back={closeSettings} />
     </VoiceSettingsDialog>}
   </>;
 }

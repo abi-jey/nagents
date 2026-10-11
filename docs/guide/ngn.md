@@ -677,6 +677,28 @@ See the [full configuration reference](ngn-configuration.md) for every accepted
 field, exact types/defaults/ranges, provider recipes, and the distinction between
 configuration precedence and runtime profile model selection.
 
+## Default and workspace instructions
+
+Every coding Harness starts with ngn's bundled
+`nagents/harness/instructions/AGENTS.md`. The same Markdown resource ships in the
+wheel and source distribution; it contains the default coding, verification, and
+approval guidance. Framework maintainers can edit
+`src/nagents/harness/instructions/AGENTS.md` to change those defaults without
+editing Python prompt strings. Active workspace, profile, tool capabilities, and
+delegation limits are added by the runtime.
+
+For project-specific guidance, create or edit your workspace's `AGENTS.md`.
+The Harness loads an existing root file automatically when initialized, including
+when constructed programmatically; it never creates or overwrites this file.
+Native file tools also load applicable nested `AGENTS.md` files when accessing
+their paths. Nested guidance takes precedence within its subtree. These files
+provide task context and cannot grant tools, bypass approvals, or change project
+configuration trust. Ordinary delegated children receive the defaults once and
+retain the applicable workspace guidance.
+
+Agent Designer definitions keep their explicitly configured instructions and do
+not implicitly load either coding-harness defaults or workspace `AGENTS.md`.
+
 ## Skills
 
 The Harness includes `ngn-customize` for the application's customization

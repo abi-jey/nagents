@@ -287,14 +287,16 @@ history restore the same delivery. Compaction moves older entries into
 **Deliveries from earlier context**. Saved media remains available after the
 original workspace file changes or is deleted.
 
-Use **Load preview / download** to fetch an attachment. Images and native audio/
-video controls use authenticated, bounded byte reads and temporary object URLs;
-tokens never appear in media URLs. Media does not autoplay. Browser codec support
-varies, so a loaded file always has an explicit **Download** link. A decoder error
-leaves that fallback available. Use **Unload preview** to release its memory.
-The browser allows two concurrent media fetches and at most 60 MiB of reserved or
-retained media per page. Session changes and unmounting cancel stale requests and
-revoke object URLs.
+Images appear directly in chat; select an image to view it at full size or use
+**Download** to save it. Audio and video display native playback controls without
+autoplay. Attachments load automatically near the viewport through authenticated,
+bounded byte reads; tokens never appear in media URLs. **Download** remains
+available if the browser cannot decode a loaded file.
+
+The browser manages memory automatically, releasing offscreen media and fetching
+it again when needed. Open images and playing media stay loaded. Two concurrent
+fetches, a bounded waiting queue, and a 60 MiB byte budget limit page usage.
+Session changes and unmounting cancel stale requests and revoke object URLs.
 
 Assets are scoped to their active root conversation. Trash revokes server access,
 restore reinstates it, and permanent deletion removes saved metadata and bytes.

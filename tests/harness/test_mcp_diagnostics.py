@@ -142,6 +142,7 @@ def test_doctor_reports_missing_sources_and_ignored_files_even_when_demo_skips_p
     assert "MCP: 1 configured servers, 0 connected" in output
     assert "(disabled)" in output and "MCP subprocess startup is disabled" in output
     assert str(user) in output and str(tmp_path / ".ngn" / "config.json") in output
+    assert f"Loaded trusted configuration: {user}" in output
     assert "missing; not trusted" in output and str(foreign) in output
     assert "PRIVATE_COMMAND" not in output and "PRIVATE_FOREIGN_CONTENT" not in output
 
