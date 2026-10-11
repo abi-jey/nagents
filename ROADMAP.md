@@ -30,13 +30,6 @@ delivery dates. See the [README](README.md) for installation and usage.
 - OpenAI Realtime WebSocket sessions with audio input/output, transcription events,
   and function calling. This is not Gemini Live support.
 
-The optional legacy server provides HTTP/SSE chat, session management, and
-tool/MCP reload. Its bundled chat UI has been removed from the current source;
-`python -m nagents.server` remains the API-only Docker default. See the
-[legacy server guide](docs/guide/server.md) for its single-operator security
-boundary. These implementations do not imply identical capabilities across the
-core library, server, and ngn clients.
-
 ## Channels and Connectors
 
 - One persistent Agent identity can be fed by multiple attached connectors through
@@ -69,8 +62,8 @@ the [ngn usage guide](docs/guide/ngn.md).
   and explicit follow-ups with inherited permission ceilings. This is not a
   distributed orchestration system or A2A protocol implementation.
 - API-key providers and separate ChatGPT/Codex subscription authentication.
-- A local React/Vite web client launched by `ngn serve`, backed by the same
-  harness rather than the legacy API server. It adds workspace session navigation,
+- A React/Vite web client and HTTP API launched by `ngn serve`, backed by the same
+  harness. It adds workspace session navigation,
   web-side settings and channel management, and read-only context inspection. This
   is a source-checkout feature, **not included in `v0.5.0`**. See the
   [web client guide](docs/guide/ngn-web.md) for its current scope and limitations;

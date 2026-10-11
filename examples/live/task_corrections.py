@@ -11,6 +11,7 @@ from _support import voice
 from nagents import Agent
 from nagents import Event
 from nagents import InputTranscriptDeltaEvent
+from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 
 
@@ -18,10 +19,10 @@ async def main() -> None:
     args = parser(__doc__ or "Corrections").parse_args()
     selected = "Thursday"
 
-    async def lookup(context: str) -> str:
+    async def lookup(request: ClientDelegationRequest) -> str:
         date = selected
         await asyncio.sleep(5)
-        return f"The application checked {date}. No booking was made."
+        return f"The application checked {date} for {request.transcript}. No booking was made."
 
     async def correct(agent: Agent, event: Event) -> None:
         nonlocal selected
@@ -34,7 +35,7 @@ async def main() -> None:
         elif started(event):
             await agent.add_thinking("This correction demo starts with Thursday selected. Say Friday during a lookup.")
 
-    await drive(voice(LiveConfig(delegation="client", client_handler=lookup)), correct, duration=args.duration)
+    await drive(voice(LiveConfig(delegation="client", client_request_handler=lookup)), correct, duration=args.duration)
 
 
 if __name__ == "__main__":

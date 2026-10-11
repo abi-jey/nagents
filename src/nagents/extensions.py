@@ -93,6 +93,7 @@ class CompactionRequest:
     provider: Provider
     estimated_tokens: int
     force: bool = False
+    actual_input_tokens: int = 0
 
 
 @dataclass

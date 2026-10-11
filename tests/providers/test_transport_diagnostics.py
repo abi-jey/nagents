@@ -311,7 +311,7 @@ def test_real_agent_calls_keep_distinct_existing_correlation_and_fatal_completio
     monkeypatch.setattr(Provider, "verify_model", AsyncMock(return_value=True))
 
     async def run_one(route: str) -> str:
-        agent = Agent(provider(route), SessionManager(tmp_path / f"{route}.db"), compactor=None)
+        agent = Agent(provider(route), SessionManager(tmp_path / f"{route}.db"), compaction_strategy=None)
         try:
             events = [event async for event in agent.run("test", session_id=route)]
             errors = [event for event in events if isinstance(event, ErrorEvent)]

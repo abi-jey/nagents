@@ -5,8 +5,7 @@ import { validTrashItem, type TrashItem } from "./trash.js";
 
 export type DeletedSnapshot = Snapshot & { deleted_session_id: string; trash?: TrashItem };
 export async function deleteSession(token: string, id: string, permanent = false): Promise<DeletedSnapshot> {
-  // Explicit false makes older strict servers reject soft deletion rather than
-  // interpreting their legacy empty-body route as permanent deletion.
+  // Send the operator's deletion choice explicitly and verify the acknowledgement.
   const reply: unknown = await (await request(`sessions/${encodeURIComponent(id)}`, token, { permanent }, undefined, "DELETE")).json();
   const trash = object(reply) ? reply.trash : undefined;
   if (!object(reply) || reply.deleted_session_id !== id || !validSnapshot(reply) ||

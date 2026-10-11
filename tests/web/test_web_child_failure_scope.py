@@ -15,13 +15,16 @@ from nagents.harness import Harness
 from nagents.harness.config import HarnessConfig
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.service import WebState
 from tests.harness.test_harness import ScriptedProvider
 from tests.support.child_failures import ChildFailureScenario
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
+from tests.support.web import LiveStream
 from tests.support.web import client_app
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,7 +66,7 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
     monkeypatch.setattr(WebState, "send", capture)
     config = fixture_config(tmp_path, monkeypatch)
     config.max_tool_rounds = 6
-    async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, harnesses):
+    async with client_app(tmp_path, config=config, controlled=False) as (app, _, headers, harnesses):
         harness = harnesses[0]
         state = cast("WebState", app.state.web)
         expected = "failed" if wrong_parent else "completed"
@@ -71,18 +74,23 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
             if voice:
                 reports: list[dict[str, object]] = []
                 bridge = MainAgentBridge(state, harness.session_id, report=reports.append)
-                result = await bridge.handle(json.dumps([{"speaker": "user", "text": "ROOT"}]))
-                assert reports[-1]["status"] == expected
-                if wrong_parent:
-                    assert "could not complete" in result and "result_text" not in reports[-1]
-                else:
-                    assert result == reports[-1]["result_text"] == "ROOT_RECOVERED"
+
+                async def append(kind: str, content: str, identifier: str) -> str:
+                    return f"session.{kind}.append"
+
+                bridge.attach(append)
+                await bridge.handle_request(ClientDelegationRequest("root", "ROOT"))
+                async with asyncio.timeout(HANG_GUARD):
+                    while not any(report.get("status") == expected for report in reports):
+                        await asyncio.sleep(0.001)
+                await state.channels.join_claim_cleanup(harness.session_id)
+                terminal = next(report for report in reversed(reports) if report.get("status") == expected)
+                assert terminal["status"] == expected
+                assert "PRIVATE_UPSTREAM_DETAIL" not in str(terminal)
+                if not wrong_parent:
+                    assert terminal["result_text"] == "ROOT_RECOVERED"
             else:
-                response = await client.post(
-                    "/api/run", headers=headers, json={"session_id": harness.session_id, "prompt": "ROOT"}
-                )
-                assert response.status_code == 200, response.text
-                wire = [json.loads(line) for line in response.text.splitlines() if line]
+                wire = await submit_and_wait(app, headers, harness.session_id, "ROOT")
                 assert next(record for record in wire if record["event"] == "run_finished")["status"] == expected
         scenario.assert_recovered()
         completions = [record for record in records if record["event"] == "task_completed"]
@@ -126,7 +134,7 @@ async def test_upstream_error_code_cannot_spoof_task_scope_or_hide_a_root_failur
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
 ) -> None:
     config = fixture_config(tmp_path, monkeypatch)
-    async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
+    async with client_app(tmp_path, config=config) as (app, _, headers, harnesses):
         harness = harnesses[0]
         harness.run = Harness.run.__get__(harness)  # type: ignore[method-assign]
         harness.agent.provider = ScriptedProvider(
@@ -142,11 +150,8 @@ async def test_upstream_error_code_cannot_spoof_task_scope_or_hide_a_root_failur
             ]
         )
         async with asyncio.timeout(HANG_GUARD):
-            response = await client.post(
-                "/api/run", headers=headers, json={"session_id": harness.session_id, "prompt": "ROOT"}
-            )
-        assert response.status_code == 200 and "PRIVATE_UPSTREAM_DETAIL" not in response.text
-        records = [json.loads(line) for line in response.text.splitlines() if line]
+            records = await submit_and_wait(app, headers, harness.session_id, "ROOT")
+        assert "PRIVATE_UPSTREAM_DETAIL" not in json.dumps(records)
         error = next(record for record in records if record["event"] == "error")
         assert error["recoverable"] is False
         assert not {"extra", "task_id", "activation", "password", "code"} & error.keys()
@@ -168,28 +173,30 @@ async def test_stop_still_cancels_chat_and_voice_trees(
         async with asyncio.timeout(HANG_GUARD):
             if voice:
                 bridge = MainAgentBridge(state, harness.session_id, report=reports.append)
-                speech = asyncio.create_task(bridge.handle(json.dumps([{"speaker": "user", "text": "ROOT"}])))
+
+                async def append(kind: str, content: str, identifier: str) -> str:
+                    return f"session.{kind}.append"
+
+                bridge.attach(append)
+                speech = asyncio.create_task(bridge.handle_request(ClientDelegationRequest("root", "ROOT")))
             else:
-                chat = asyncio.create_task(
-                    client.post("/api/run", headers=headers, json={"session_id": harness.session_id, "prompt": "ROOT"})
-                )
+                stream = LiveStream(app, headers, harness.session_id, "ROOT")
             await scenario.grandchild_started.wait()
             await scenario.root_preview.wait()
             assert state.active is not None
             response = await client.post("/api/cancel", headers=headers, json={"run_id": state.active.id})
             assert response.status_code == 200, response.text
             if voice:
-                assert "stopped" in await speech
+                await speech
+                async with asyncio.timeout(HANG_GUARD):
+                    while not any(report.get("status") == "cancelled" for report in reports):
+                        await asyncio.sleep(0.001)
                 assert reports[-1]["status"] == "cancelled" and "result_text" not in reports[-1]
             else:
-                response = await chat
-                records = [json.loads(line) for line in response.text.splitlines() if line]
-                assert (
-                    next(record for record in records if record["event"] == "run_finished")["status"] == "cancelled"
-                ), {
-                    "events": [
-                        record for record in records if record["event"] in {"error", "task_completed", "run_finished"}
-                    ],
+                finished = await stream.event("run_finished")
+                records = [finished]
+                assert finished["status"] == "cancelled", {
+                    "events": records,
                     "provider_requests": [len(provider.requests) for provider in scenario.providers],
                     "tasks": [(info.status, info.error) for info in harness.tasks.list()],
                 }

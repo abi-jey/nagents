@@ -22,7 +22,7 @@ from .private_store import ProtectedStoreError
 if TYPE_CHECKING:
     from pathlib import Path
 
-_API_NAMES = ("auto", "chat_completions", "responses", "messages", "completions")
+_API_NAMES = ("auto", "chat_completions", "responses", "messages")
 _AUTH_NAMES = ("auto", "api-key", "chatgpt")
 _FIELDS = {"version", "provider", "model", "base_url", "api", "auth", "api_key_env", "api_key"}
 _UNREADABLE = "Saved provider login is unreadable; run ngn login again."

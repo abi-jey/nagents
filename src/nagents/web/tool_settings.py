@@ -60,7 +60,6 @@ def snapshot(state: WebState) -> dict[str, object]:
                 "category": category,
                 "builtin": builtin,
                 "reviewer_allowed": builtin and tool.name not in MODIFYING_TOOLS,
-                "alias_of": "schedule_wakeup" if tool.name == "wake_up_in" else "",
             }
         )
     return {

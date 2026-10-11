@@ -24,6 +24,7 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.provider_setup import provider_error
 from tests.support.web import client_app
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -124,15 +125,18 @@ def test_web_starts_without_key_and_explains_failed_run(
 
     async def check() -> None:
         config = load_config(tmp_path)
-        async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, _):
+        async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, _):
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["provider_setup"]["configured"] is False
             assert key_name in bootstrap["provider_setup"]["message"]
             session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-            response = await client.post("/api/run", json={"session_id": session, "prompt": "hello"}, headers=headers)
-            events = [json.loads(line) for line in response.text.splitlines()]
+            events = await submit_and_wait(app, headers, session, "hello")
             assert events[-1]["status"] == "failed"
-            assert any(f"Set ${key_name}" in event.get("message", "") for event in events)
+            assert any(
+                isinstance(message, str) and f"Set ${key_name}" in message
+                for event in events
+                if (message := event.get("message")) is not None
+            )
             assert all(event.get("event") not in {"tool_call", "text_chunk"} for event in events)
 
     asyncio.run(check())
@@ -193,15 +197,16 @@ def test_setup_uses_selected_connection_key_not_unrelated_default(
     )
 
     async def check() -> None:
-        async with client_app(tmp_path, config=load_config(tmp_path), controlled=False) as (_, client, headers, _):
+        async with client_app(tmp_path, config=load_config(tmp_path), controlled=False) as (app, client, headers, _):
             missing = (await client.get("/api/bootstrap")).json()["provider_setup"]
             assert missing["configured"] is False
             assert "$TEAM_PROVIDER_KEY" in missing["message"]
             assert "UNRELATED-KEY" not in missing["message"]
             session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-            response = await client.post("/api/run", json={"session_id": session, "prompt": "hello"}, headers=headers)
-            assert '"status": "failed"' in response.text
-            assert "$TEAM_PROVIDER_KEY" in response.text
+            events = await submit_and_wait(app, headers, session, "hello")
+            text = json.dumps(events)
+            assert events[-1]["status"] == "failed"
+            assert "$TEAM_PROVIDER_KEY" in text
             monkeypatch.setenv("TEAM_PROVIDER_KEY", "PRIVATE-SELECTED-KEY")
             ready = (await client.get("/api/bootstrap")).json()["provider_setup"]
             assert ready == {"configured": True, "message": ""}
@@ -238,15 +243,14 @@ def test_missing_selected_key_does_not_block_scripted_provider(tmp_path: Path, m
         yield TextDoneEvent(text="Scripted reply")
 
     async def check() -> None:
-        async with client_app(tmp_path, config=load_config(tmp_path), controlled=False) as (_, client, headers, _):
+        async with client_app(tmp_path, config=load_config(tmp_path), controlled=False) as (app, client, headers, _):
             setup = (await client.get("/api/bootstrap")).json()["provider_setup"]
             assert setup["configured"] is False and "$TEAM_PROVIDER_KEY" in setup["message"]
             session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-            response = await client.post("/api/run", json={"session_id": session, "prompt": "hello"}, headers=headers)
-            events = [json.loads(line) for line in response.text.splitlines()]
+            events = await submit_and_wait(app, headers, session, "hello")
             assert events[-1]["status"] == "completed"
             assert any(event.get("event") == "done" and event.get("final_text") == "Scripted reply" for event in events)
-            assert "UNRELATED-PRIVATE-KEY" not in response.text
+            assert "UNRELATED-PRIVATE-KEY" not in json.dumps(events)
 
     with (
         patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
@@ -269,27 +273,27 @@ def test_chatgpt_missing_login_or_unusable_credential_is_actionable_and_safe(
 
     async def check() -> None:
         config = load_config(tmp_path)
-        async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, _):
+        async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, _):
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["provider_setup"]["configured"] is False
             session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-            response = await client.post("/api/run", json={"session_id": session, "prompt": "hello"}, headers=headers)
-            assert "ngn login chatgpt" in response.text and '"status": "failed"' in response.text
-            assert "PRIVATE-API-KEY-IS-NOT-CODEX-AUTH" not in response.text
+            events = await submit_and_wait(app, headers, session, "hello")
+            text = json.dumps(events)
+            assert "ngn login chatgpt" in text and events[-1]["status"] == "failed"
+            assert "PRIVATE-API-KEY-IS-NOT-CODEX-AUTH" not in text
 
         with (
             patch.object(OpenAIAuth, "logged_in", return_value=True),
             patch.object(OpenAIAuth, "credentials", AsyncMock(side_effect=OpenAIAuthError("PRIVATE-UPSTREAM"))),
         ):
-            async with client_app(tmp_path, config=config, controlled=False) as (_, client, headers, _):
+            async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, _):
                 assert (await client.get("/api/bootstrap")).json()["provider_setup"]["configured"] is True
                 session = (await client.get("/api/sessions", headers=headers)).json()["session_id"]
-                response = await client.post(
-                    "/api/run", json={"session_id": session, "prompt": "hello"}, headers=headers
-                )
-                assert "login is unavailable, expired, or rejected" in response.text
-                assert '"status": "failed"' in response.text
-                assert "PRIVATE-UPSTREAM" not in response.text
+                events = await submit_and_wait(app, headers, session, "hello")
+                text = json.dumps(events)
+                assert "login is unavailable, expired, or rejected" in text
+                assert events[-1]["status"] == "failed"
+                assert "PRIVATE-UPSTREAM" not in text
                 assert "PRIVATE-UPSTREAM" not in caplog.text
                 assert "reason=chatgpt_auth" in caplog.text
 

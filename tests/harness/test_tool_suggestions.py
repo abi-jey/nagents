@@ -61,7 +61,8 @@ async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_ch
         suggestions = failure.error.partition("Available tools: ")[2].split(", ")
         assert suggestions == providers[0].schemas[0]
         assert not {"read_file", "schedule_wakeup", "wake_up_in"}.intersection(suggestions)
-        assert {"read_file", "schedule_wakeup", "wake_up_in"}.issubset(inventory)
+        assert {"read_file", "schedule_wakeup"}.issubset(inventory)
+        assert "wake_up_in" not in inventory
         assert harness.agent.tool_registry.names() == inventory
 
         denied = await harness.agent.tool_executor.execute(ToolCall("disabled", "read_file", {"path": "missing"}))
@@ -77,12 +78,7 @@ async def test_unknown_hint_matches_model_exposure_and_refreshes_after_policy_ch
             assert suggestions == providers[0].schemas[first_request]
             assert "read_file" in suggestions
             assert ("schedule_wakeup" in suggestions) == (callback is not None)
-            assert "wake_up_in" not in suggestions
-            assert suggestions == [
-                name
-                for name in inventory
-                if name != "wake_up_in" and (callback is not None or name != "schedule_wakeup")
-            ]
+            assert suggestions == [name for name in inventory if callback is not None or name != "schedule_wakeup"]
             assert harness.agent.tool_registry.names() == inventory
             assert all(harness.agent.tool_registry.get(tool.name) is tool for tool in definitions)
     finally:

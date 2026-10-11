@@ -95,7 +95,7 @@ def setup_harness(
         profiles=profiles,
     )
     harness = Harness(config)
-    harness.agent.compactor = None
+    harness.agent.compaction_strategy = None
     return harness, providers
 
 

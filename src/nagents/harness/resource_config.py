@@ -160,9 +160,3 @@ def read_resource_configuration(config: HarnessConfig) -> ResourceConfiguration:
         except (OSError, ValueError, TypeError, RuntimeError) as error:
             raise ResourceConfigError(path, type(error).__name__, revision) from None
     return ResourceConfiguration((*plugins, *config.cli_plugins), servers, tuple(sources), plugin_source, mcp_source)
-
-
-def resource_settings(config: HarnessConfig) -> tuple[tuple[str, ...], tuple[MCPServerConfig, ...]]:
-    """Compatibility projection for callers that only need declarations."""
-    configured = read_resource_configuration(config)
-    return configured.plugins, configured.servers

@@ -29,9 +29,6 @@ from ..adapters._validation import load_object
 from ..adapters._validation import object_data
 from ..adapters._validation import string_data
 from ..adapters._validation import token_usage
-from ..compaction import get_model_context_limit
-from ..compactor import Messages
-from ..compactor import Tokens
 from ..events import ErrorEvent
 from ..events import Event
 from ..events import FinishReason
@@ -130,8 +127,8 @@ class Provider:
             realtime_config: Optional :class:`~nagents.realtime.RealtimeConfig`
                 for Realtime speech-to-speech sessions. When set, voice sessions
                 reuse the provider's model and this configuration.
-            api: HTTP contract: auto, chat_completions, responses, messages,
-                or completions. Auto preserves native providers and selects
+            api: HTTP contract: auto, chat_completions, responses, or messages.
+                Auto preserves native providers and selects
                 chat_completions for LiteLLM and OpenRouter. base_url is an API
                  prefix, not a full generation endpoint.
             live_config: GPT-Live voice/delegation settings for Agent.run() with audio.
@@ -164,8 +161,8 @@ class Provider:
             ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
         }:
             raise ValueError("GPT-Live requires an OpenAI-compatible v1 provider")
-        if api not in {"auto", "chat_completions", "responses", "messages", "completions"}:
-            raise ValueError("api must be auto, chat_completions, responses, messages, or completions")
+        if api not in {"auto", "chat_completions", "responses", "messages"}:
+            raise ValueError("api must be auto, chat_completions, responses, or messages")
         if provider_type == ProviderType.LITELLM and not base_url:
             raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
         default_api = "messages" if provider_type == ProviderType.ANTHROPIC else "chat_completions"
@@ -461,8 +458,6 @@ class Provider:
         Returns:
             MediaCapabilities describing supported audio, image, and document formats.
         """
-        if self.api == "completions":
-            return MediaCapabilities()
         if self.api == "responses":
             # The Responses adapter supports user images, not audio or files.
             return get_media_capabilities("openai_compatible", "")
@@ -470,25 +465,6 @@ class Provider:
             return get_media_capabilities("anthropic", self.model)
         provider = "openai_compatible" if self.provider_type == ProviderType.LITELLM else self.provider_type.value
         return get_media_capabilities(provider, self.model)
-
-    def get_default_compact_on(self) -> Tokens | Messages | None:
-        """Get the default compaction trigger for this model.
-
-        Returns model-specific compaction triggers based on known context limits.
-        Subclasses can override this for provider-specific defaults.
-
-        Returns:
-            Tokens or Messages trigger configuration, or None to use fallback.
-        """
-        context_limit = get_model_context_limit(self)
-        if context_limit == 0:
-            return None
-
-        # Default: compact at 80% of context limit, reserve 10% for output
-        return Tokens(
-            input=int(context_limit * 0.8),
-            output=int(context_limit * 0.1),
-        )
 
     async def generate(
         self,
@@ -557,9 +533,6 @@ class Provider:
         """Dispatch to the appropriate provider-specific generator."""
         if self.api == "responses":
             async for event in self._generate_responses(messages, tools, config, stream):
-                yield event
-        elif self.api == "completions":
-            async for event in self._generate_completions(messages, tools, config, stream):
                 yield event
         elif self.api == "messages":
             async for event in self._generate_anthropic(messages, tools, config, stream):
@@ -850,7 +823,6 @@ class Provider:
         url: str,
         body: dict[str, Any],
         headers: dict[str, str],
-        text_only: bool = False,
     ) -> AsyncIterator[Event]:
         """Handle streaming OpenAI response."""
         full_text = ""
@@ -895,10 +867,6 @@ class Provider:
             if type(index) is not int or index != 0:
                 raise ProtocolError("Provider returned an unexpected choice index; no tools were released.")
             delta = object_data(choice.get("delta") or {})
-            if text_only:
-                if delta or choice.get("tool_calls") or choice.get("message"):
-                    raise ProtocolError("The completions endpoint returned non-text output.")
-                delta = {"content": choice.get("text", "")}
             if terminal_reason and any(
                 delta.get(key)
                 for key in ("content", "refusal", "tool_calls", "reasoning", "reasoning_content", "reasoning_details")
@@ -988,7 +956,6 @@ class Provider:
         url: str,
         body: dict[str, Any],
         headers: dict[str, str],
-        text_only: bool = False,
     ) -> AsyncIterator[Event]:
         """Handle non-streaming OpenAI response."""
         response = await self._http.post_json(url, body, headers)
@@ -1007,10 +974,6 @@ class Provider:
         index = choice.get("index", 0)
         if type(index) is not int or index != 0:
             raise ProtocolError("Provider returned an unexpected choice index; no tools were released.")
-        if text_only:
-            if message or choice.get("tool_calls"):
-                raise ProtocolError("The completions endpoint returned non-text output.")
-            message = {"content": string_data(choice.get("text"))}
 
         # Parse finish_reason
         finish_reason = FinishReason.UNKNOWN
@@ -1044,7 +1007,7 @@ class Provider:
             yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage, extra=extra)
 
         # Handle tool calls
-        tool_calls = [] if text_only else openai_adapter.parse_tool_calls(choice)
+        tool_calls = openai_adapter.parse_tool_calls(choice)
         if tool_calls and finish_reason not in {FinishReason.STOP, FinishReason.TOOL_CALLS}:
             raise ProtocolError("Provider returned incomplete tool calls; no tools were released.")
         if finish_reason == FinishReason.TOOL_CALLS and not tool_calls:
@@ -1496,54 +1459,6 @@ class Provider:
         for event in events:
             yield event
 
-    async def _generate_completions(
-        self,
-        messages: list[Message],
-        tools: list[ToolDefinition] | None,
-        config: GenerationConfig | None,
-        stream: bool,
-    ) -> AsyncIterator[Event]:
-        from ..types import TextContent
-
-        if tools or any(message.tool_calls or message.tool_call_id for message in messages):
-            raise ProtocolError(
-                "The legacy completions API is text-only and does not support tools; use chat_completions, responses, or messages."
-            )
-        if len(messages) != 1 or messages[0].role != "user":
-            raise ProtocolError(
-                "The legacy completions API requires exactly one user prompt; system instructions and conversation history cannot be flattened safely."
-            )
-        content = messages[0].content
-        if isinstance(content, str):
-            prompt = content
-        elif isinstance(content, list) and all(isinstance(part, TextContent) for part in content):
-            prompt = "".join(part.text for part in content if isinstance(part, TextContent))
-        else:
-            raise ProtocolError("The legacy completions API accepts text only; multimodal input is unsupported.")
-        body: dict[str, object] = {"model": self.model, "prompt": prompt, "stream": stream}
-        # LiteLLM 1.100.0 fails to serialize usage-only legacy stream chunks
-        # (MockValSer). Omit the optional opt-in, but still parse supplied usage.
-        if stream and self.provider_type != ProviderType.LITELLM:
-            body["stream_options"] = {"include_usage": True}
-        if config:
-            if config.reasoning or config.thinking_config:
-                raise ProtocolError("The legacy completions API does not support reasoning configuration.")
-            for name in ("temperature", "max_tokens", "top_p", "stop"):
-                value = getattr(config, name)
-                if value is not None:
-                    body[name] = value
-        # Text completions share the chat stream envelope but never chat roles.
-        url = f"{self.base_url}/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        if self.provider_type == ProviderType.OPENROUTER:
-            headers["HTTP-Referer"] = "https://github.com/nagents"
-        if stream:
-            async for event in self._stream_openai(url, body, headers, text_only=True):
-                yield event
-        else:
-            async for event in self._non_stream_openai(url, body, headers, text_only=True):
-                yield event
-
     async def close(self) -> None:
         """Close the provider and release resources."""
         await self._http.close()
@@ -1553,76 +1468,3 @@ class Provider:
 
     async def __aexit__(self, *args: object) -> None:
         await self.close()
-
-
-class PlaceholderProvider(Provider):
-    """Placeholder provider that raises errors when used.
-
-    Used by Compactor when provider is not yet set. The main agent
-    will inject its provider before calling run().
-    """
-
-    def __init__(self) -> None:
-        # Don't call super().__init__ - we don't have real values
-        self._is_placeholder = True
-        self._http = None  # type: ignore[assignment]
-
-    def __repr__(self) -> str:
-        return "<PlaceholderProvider>"
-
-    def _raise_placeholder_error(self) -> None:
-        raise RuntimeError(
-            "PlaceholderProvider has not been replaced. The main agent must inject its provider before calling run()."
-        )
-
-    @property
-    def provider_type(self) -> ProviderType:  # type: ignore[override]
-        self._raise_placeholder_error()
-        raise AssertionError("unreachable")
-
-    @property
-    def api_key(self) -> str:  # type: ignore[override]
-        self._raise_placeholder_error()
-        raise AssertionError("unreachable")
-
-    @property
-    def model(self) -> str:  # type: ignore[override]
-        self._raise_placeholder_error()
-        raise AssertionError("unreachable")
-
-    @property
-    def base_url(self) -> str:  # type: ignore[override]
-        self._raise_placeholder_error()
-        raise AssertionError("unreachable")
-
-    def set_http_logger(self, http_logger: "HTTPLogger | None") -> None:
-        self._raise_placeholder_error()
-
-    def set_session_id(self, session_id: str | None) -> None:
-        self._raise_placeholder_error()
-
-    async def verify_model(self, force: bool = False) -> bool:
-        self._raise_placeholder_error()
-        raise AssertionError("unreachable")
-
-    async def get_model_list(self) -> list[str]:
-        raise NotImplementedError("Model discovery is unavailable until PlaceholderProvider is replaced.")
-
-    async def generate(
-        self,
-        messages: list[Message],
-        tools: list[ToolDefinition] | None = None,
-        config: GenerationConfig | None = None,
-        stream: bool = True,
-        verify_model: bool = False,
-    ) -> AsyncIterator[Event]:
-        self._raise_placeholder_error()
-        if False:  # pragma: no cover
-            yield
-
-    async def close(self) -> None:
-        pass
-
-
-# Placeholder instance for DEFAULT_COMPACTOR
-PLACEHOLDER_PROVIDER = PlaceholderProvider()

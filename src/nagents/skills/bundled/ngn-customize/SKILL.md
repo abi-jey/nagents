@@ -26,7 +26,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Tool authorization/execution | `ToolExecutor.execute`, `HarnessExecutor` | `tools/executor.py`, `harness/tools.py` |
 | Ordered lifecycle transformations | `AgentPlugin`, `RunContext`, `ModelRequest` | `extensions.py` |
 | Replace the context algorithm | `CompactionStrategy`, `CompactionRequest`, `CompactionResult` | `extensions.py`, `agent.py` |
-| Configure model-based compaction | `Compactor`, `Tokens`, `Messages`, `compact_prompt` | `compactor.py`, `compaction.py` |
+| Configure model-based compaction | `ModelCompaction` | `compaction.py` |
 | Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
 | Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |
@@ -224,10 +224,11 @@ reviewers and children. Python setup/hooks themselves retain full process access
 `CompactionStrategy` is a structural async protocol:
 `should_compact(request) -> bool`, `compact(request) -> CompactionResult`.
 Assign `harness.agent.compaction_strategy` in setup to replace the algorithm.
-It takes precedence over the legacy compactor. `CompactionRequest` carries
-detached active messages, session, provider, estimated token count, and `force`;
-it excludes the configured system prompt. Manual compaction bypasses
-`should_compact`.
+The built-in `ModelCompaction` is the default strategy. Set
+`harness.agent.compaction_strategy = None` to disable it. `CompactionRequest`
+carries detached active messages, session, provider, estimated and observed
+input token counts, and `force`; it excludes the configured system prompt.
+Manual compaction bypasses `should_compact`.
 
 This deliberately lossy example retains complete recent user turns:
 
@@ -258,12 +259,13 @@ rows remain. Do not confuse `before_model` transformations with persisted
 context replacement. Skill tool results remain subject to ordinary compaction;
 load a skill again when its detailed guidance is needed.
 
-For prompt/trigger customization, keep the legacy layer: `compactor="self"`
-uses the main provider, a `Compactor` uses a separate agent, `compactor=None`
-disables that compactor, and an omitted value uses an agent-local default.
-`compact_on=Tokens(input=..., output=...)` or `Messages(length=...)` controls the
-trigger; `compact_prompt` customizes self-compaction. `trigger_compaction()`
-requests it during a run; `await agent.compact(session_id)` invokes it manually.
+Configure the built-in strategy with `ModelCompaction(token_threshold=...)` or
+`ModelCompaction(message_threshold=...)`; thresholds must be positive and
+mutually exclusive. With neither set, it triggers at 70% of the provider's
+estimated context limit. Its `prompt` can be customized and its `provider`
+can select a separate summarization provider. `trigger_compaction()` requests
+compaction before the next model call; `await agent.compact(session_id)` invokes
+it manually.
 
 ## Providers, sessions, and owned execution
 

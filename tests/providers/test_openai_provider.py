@@ -952,7 +952,10 @@ def test_agent_tool_loop_and_history_never_store_oauth(monkeypatch: pytest.Monke
 
         async with endpoint(monkeypatch, handle):
             agent = Agent(
-                OpenAIProvider(credentials), SessionManager(tmp_path / "sessions.db"), tools=[work], compactor=None
+                OpenAIProvider(credentials),
+                SessionManager(tmp_path / "sessions.db"),
+                tools=[work],
+                compaction_strategy=None,
             )
             events = [event async for event in agent.run("Use work", session_id="s")]
             assert requests == 2

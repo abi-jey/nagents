@@ -270,7 +270,7 @@ def site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Site]:
 
     def harness(config: HarnessConfig) -> Harness:
         instance = Harness(config)
-        instance.agent.compactor = None
+        instance.agent.compaction_strategy = None
         return instance
 
     app = create_app(config, assets=assets, harness_factory=harness)

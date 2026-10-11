@@ -54,7 +54,7 @@ def test_inherited_mode_depth_and_root_scheduler_are_resolved_for_each_request(t
             root.wakeup_handler = scheduler
             assert "schedule_wakeup" in names(child)
             assert "wake_up_in" not in names(child)
-            assert child.agent.tool_registry.get("wake_up_in") is original["wake_up_in"]
+            assert child.agent.tool_registry.get("wake_up_in") is None
             child.wakeup_handler = None  # Scheduling is owned by the root client, not this child.
             assert "schedule_wakeup" in names(child)
             root.config.max_subagent_depth = 1
@@ -112,15 +112,14 @@ def test_visibility_never_approves_custom_tools_or_weakens_alias_and_reviewer_de
             assert "read_file" not in names(harness)
             denied = await harness.agent.tool_executor.execute(ToolCall("reviewer", "read_file", {}))
             assert denied.error and "Read-only" in denied.error and approvals == ["read_file"]
-            for alias in ("schedule_wakeup", "wake_up_in"):
-                assert alias not in names(harness)
-                unavailable = await harness.agent.tool_executor.execute(
-                    ToolCall(alias, alias, {"seconds": 1, "reason": "test"})
-                )
-                assert unavailable.error and "unavailable" in unavailable.error
+            assert "schedule_wakeup" not in names(harness)
+            unavailable = await harness.agent.tool_executor.execute(
+                ToolCall("schedule_wakeup", "schedule_wakeup", {"seconds": 1, "reason": "test"})
+            )
+            assert unavailable.error and "unavailable" in unavailable.error
             harness.tool_settings.save({"reviewer": {"schedule_wakeup": False}}, "")
             denied = await harness.agent.tool_executor.execute(
-                ToolCall("alias", "wake_up_in", {"seconds": 1, "reason": "test"})
+                ToolCall("alias", "schedule_wakeup", {"seconds": 1, "reason": "test"})
             )
             assert denied.error and "disabled" in denied.error
             assert not effects and approvals == ["read_file"]
@@ -135,13 +134,42 @@ def test_demo_catalog_keeps_unavailable_definitions(tmp_path: Path) -> None:
         harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True, max_subagent_depth=0))
         try:
             raw = {tool.name for tool in ToolRegistry.get_all(harness.agent.tool_registry)}
-            assert {"edit", "write", "shell", "delegate", "schedule_wakeup", "wake_up_in"} <= raw
-            assert not {"edit", "write", "shell", "delegate", "schedule_wakeup", "wake_up_in"} & names(harness)
+            assert {"edit", "write", "shell", "delegate", "schedule_wakeup"} <= raw
+            assert "wake_up_in" not in raw
+            assert not {"edit", "write", "shell", "delegate", "schedule_wakeup"} & names(harness)
             assert {"read_file", "list_files", "demo_preview"} <= names(harness)
             harness.config.max_subagent_depth = 2
             harness.refresh_instructions()
             assert "delegate" in names(harness)
             assert "end this model turn" in str(harness.agent.system_prompt)
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+def test_wake_up_in_remains_available_for_custom_plugin_registration(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "data"))
+        approvals: list[str] = []
+
+        def custom_scheduler(reason: str) -> str:
+            return f"custom:{reason}"
+
+        async def approve(request: ApprovalRequest) -> bool:
+            approvals.append(request.tool)
+            return True
+
+        harness.approval_handler = approve
+        harness.agent.register_tool(custom_scheduler, name="wake_up_in")
+        try:
+            assert "wake_up_in" in names(harness)
+            assert "schedule_wakeup" not in names(harness)
+            result = await harness.agent.tool_executor.execute(
+                ToolCall("custom-wakeup", "wake_up_in", {"reason": "check"})
+            )
+            assert not result.error and result.result == "custom:check"
+            assert approvals == ["wake_up_in"]
         finally:
             await harness.close()
 

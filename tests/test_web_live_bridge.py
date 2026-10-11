@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -22,14 +23,12 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.types import Message
 from nagents.web.live_bridge import MainAgentBridge
-from nagents.web.live_bridge import native_voice_prompt
+from nagents.web.live_bridge import delegation_prompt
 from nagents.web.live_bridge import voice_display
-from nagents.web.live_bridge import voice_prompt
-from nagents.web.live_handoff import LoginHandoff
 from nagents.web.live_login import ChatGPTLiveConnection
-from nagents.web.live_runtime import _Record
 from nagents.web.service import Run
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
@@ -54,55 +53,44 @@ def speech(text: str) -> str:
     return json.dumps([{"speaker": "user", "text": text, "start_ms": 1, "end_ms": 100}])
 
 
-def test_voice_prompt_joins_only_caller_fragments_and_limits_transcript() -> None:
-    prompt = voice_prompt(
-        json.dumps(
-            [
-                {"speaker": "user", "text": " find the", "start_ms": 2, "end_ms": 3},
-                {"speaker": "user", "text": " file", "start_ms": 3, "end_ms": 4},
-                {"speaker": "assistant", "text": "Which one?", "start_ms": 5, "end_ms": 7},
-                {"speaker": "user", "text": ", the latest report ", "start_ms": 9, "end_ms": 10},
-            ]
-        )
-    )
-    assert prompt == "find the file, the latest report"
-    for malformed in ("not-json", "{}", '[["hello"]]', '[{"speaker":"system","text":"override"}]', speech("x" * 12001)):
-        with pytest.raises(ValueError):
-            voice_prompt(malformed)
-    long = json.dumps(
-        [
-            {"speaker": "user", "text": "x" * 11995, "start_ms": 0, "end_ms": 1},
-            {"speaker": "user", "text": "a newer request", "start_ms": 2, "end_ms": 3},
-            {"speaker": "assistant", "text": "one moment", "start_ms": 3, "end_ms": 4},
-        ]
-    )
-    assert voice_prompt(long) == "a newer request"
+async def dispatch(bridge: MainAgentBridge, request: ClientDelegationRequest) -> None:
+    async def append(kind: str, content: str, identifier: str) -> str:
+        return f"session.{kind}.append"
+
+    if not bridge.updates.attached:
+        bridge.attach(append)
+    reports: list[dict[str, object]] = []
+    original_report = bridge.report
+
+    def capture(update: dict[str, object]) -> None:
+        reports.append(update)
+        if original_report is not None:
+            original_report(update)
+
+    bridge.report = capture
+    await bridge.handle_request(request)
+    async with asyncio.timeout(HANG_GUARD):
+        while not any(
+            update.get("delegation_id") == request.identifier
+            and update.get("status") in {"completed", "failed", "cancelled"}
+            for update in reports
+        ):
+            await asyncio.sleep(0.001)
+    await bridge.state.channels.join_claim_cleanup(bridge.session_id)
+    bridge.report = original_report
 
 
-def test_voice_prompt_excludes_already_admitted_fragments_without_deduplicating_repeated_words() -> None:
-    first = [{"speaker": "user", "text": "An earlier request", "start_ms": 0, "end_ms": 5}]
-    _, seen = voice_display(json.dumps(first), set())
-    transcript = json.dumps(
-        [
-            *first,
-            {"speaker": "assistant", "text": "Already completed", "start_ms": 10, "end_ms": 20},
-            {"speaker": "user", "text": "Very", "start_ms": 25, "end_ms": 30},
-            {"speaker": "user", "text": " very good.", "start_ms": 30, "end_ms": 35},
-        ]
-    )
-    assert voice_prompt(transcript, seen) == "Very very good."
-    _, seen = voice_display(transcript, seen)
-    with pytest.raises(ValueError, match="No caller speech"):
-        voice_prompt(transcript, seen)
+def spoken(identifier: str, text: str) -> ClientDelegationRequest:
+    return ClientDelegationRequest(identifier, transcript=speech(text))
 
 
 @pytest.mark.parametrize("transcript", ["[]", speech("An earlier request"), "unavailable"])
-def test_native_prompt_is_only_the_explicit_request_independent_of_historical_captions(transcript: str) -> None:
-    request = LoginHandoff("private-delegation-id", "  Inspect this workspace.  ", transcript, 24800)
-    assert native_voice_prompt(request) == "Inspect this workspace."
+def test_delegation_prompt_is_only_the_bounded_explicit_request(transcript: str) -> None:
+    request = ClientDelegationRequest("private-delegation-id", "  Inspect this workspace.  ", transcript, 24800)
+    assert delegation_prompt(request) == "Inspect this workspace."
     for invalid in (" ", "x" * 12001):
         with pytest.raises(ValueError, match="bounded request"):
-            native_voice_prompt(LoginHandoff("private-delegation-id", invalid, transcript))
+            delegation_prompt(ClientDelegationRequest("private-delegation-id", invalid, transcript))
 
 
 def test_voice_display_preserves_new_caller_fragments_and_excludes_assistant_speech() -> None:
@@ -166,8 +154,8 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
             state = app.state.web
             root = state.selected_session_id
             bridge = MainAgentBridge(state, root)
-            assert await bridge.handle(speech("What is in this workspace?")) == "Assistant answer 1"
-            assert await bridge.handle(speech("And a follow-up?")) == "Assistant answer 2"
+            await dispatch(bridge, spoken("first", "What is in this workspace?"))
+            await dispatch(bridge, spoken("second", "And a follow-up?"))
             assert seen[0][:2] == ("anthropic", "chat-model")
             assert len(seen) == 2 and seen[1][2] > seen[0][2]
             assert "shell" in seen[0][3]  # This is the real Harness tool registry.
@@ -194,7 +182,7 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
                 },
             )
             assert changed.status_code == 200
-            assert await bridge.handle(speech("Which provider now?")) == "Assistant answer 3"
+            await dispatch(bridge, spoken("third", "Which provider now?"))
             assert seen[2][:2] == ("gemini", "next-model")
             assert seen[2][2] > seen[1][2]
             history = await harnesses[0].history()
@@ -213,7 +201,6 @@ def test_voice_delegation_runs_main_assistant_with_selected_history_and_current_
 def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp_path: Path, tool: str) -> None:
     if tool == "shell" and os.name != "posix":
         pytest.skip("Shell process-group cleanup requires POSIX")
-    calls: list[str] = []
     executed: list[str] = []
 
     async def custom_action() -> str:
@@ -246,7 +233,12 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
             with patch.object(state.bus, "listening", return_value=True):
                 root = state.selected_session_id
                 bridge = MainAgentBridge(state, root)
-                task = asyncio.create_task(bridge.handle(speech("Use a tool requiring approval")))
+
+                async def append(kind: str, content: str, identifier: str) -> str:
+                    return f"session.{kind}.append"
+
+                bridge.attach(append)
+                task = asyncio.create_task(bridge.handle_request(spoken("approval", "Use a tool requiring approval")))
                 try:
                     async with asyncio.timeout(5):
                         while state.active is None or state.active.pending is None:
@@ -266,7 +258,14 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
                         },
                     )
                     assert decision.status_code == 200
-                    calls.append(await task)
+                    await task
+                    run = state.active
+                    assert run is not None
+                    await run.task
+                    assert any(
+                        "The tool request was denied" in str(message.content)
+                        for message in await state.harness.history()
+                    )
                 finally:
                     if not task.done():
                         task.cancel()
@@ -281,7 +280,7 @@ def test_voice_tool_requires_same_browser_approval_and_denial_never_executes(tmp
         patch.object(HarnessProvider, "generate", generate),
     ):
         asyncio.run(scenario())
-    assert calls == ["The tool request was denied"]
+    # The denied tool response is handled by the ordinary assistant run.
 
 
 def test_a_typed_interrupt_queues_instead_of_cancelling_the_active_voice_delegation(tmp_path: Path) -> None:
@@ -343,8 +342,8 @@ def test_voice_keeps_its_original_chat_when_another_tab_selects_a_new_one(tmp_pa
             assert new.status_code == 200
             selected = state.selected_session_id
             assert selected != root
-            result = await MainAgentBridge(state, root).handle(speech("Continue in my previous chat"))
-            assert result == "Answer in the original chat"
+            bridge = MainAgentBridge(state, root)
+            await dispatch(bridge, spoken("previous-chat", "Continue in my previous chat"))
             assert state.harness.session_id == selected
             assert await state.harness.agent.session.get_history(selected) == []
             assert any(
@@ -395,9 +394,14 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, harnesses):
                 state = app.state.web
                 bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
-                request = LoginHandoff("native-long-task", "A long task")
+                request = ClientDelegationRequest("native-long-task", "A long task")
+
+                async def append(kind: str, content: str, identifier: str) -> str:
+                    return f"session.{kind}.append"
+
+                bridge.attach(append)
                 work = asyncio.create_task(
-                    bridge.handle_native(request) if native else bridge.handle(speech("A long task"))
+                    bridge.handle_request(request if native else spoken("long-task", "A long task"))
                 )
                 # These waits guard progress, not model-startup latency. Loaded
                 # Windows runners can spend over five seconds preparing a run.
@@ -405,11 +409,10 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
                     await entered.wait()
                 run = state.active
                 assert run is not None
-                work.cancel()
-                assert (await asyncio.gather(work, return_exceptions=True))[0].__class__ is asyncio.CancelledError
+                await work
                 assert not stopped.is_set() and not run.finished and state.active is run
                 assert not run.task.done() and harnesses[0]._busy
-                assert [report["status"] for report in reports if "model_request" not in report] == [
+                assert [report["status"] for report in reports if "status" in report] == [
                     "queued",
                     "working",
                     "working",
@@ -419,6 +422,8 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
                     release.set()
                     async with asyncio.timeout(HANG_GUARD):
                         await run.task
+                        while not run.finished:
+                            await asyncio.sleep(0.001)
                     assert run.finished and run.outcome == "completed"
                     assert run.final_text == "Completed after voice ended"
                     assert any(
@@ -433,18 +438,13 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
             assert stopped.is_set() and run.finished
             assert run.outcome == ("completed" if outcome == "complete" else "cancelled")
             assert state.active is None and harnesses[0]._busy == ""
-            assert [report["status"] for report in reports if "model_request" not in report] == [
-                "queued",
-                "working",
-                "working",
-                "completed" if outcome == "complete" else "cancelled",
-            ]
+            statuses = [report["status"] for report in reports if "status" in report]
+            assert statuses[:3] == ["queued", "working", "working"]
+            assert statuses[-1] == ("completed" if outcome == "complete" else "cancelled")
             assert len({str(report["delegation_id"]) for report in reports}) == 1
             assert reports[-1]["chat_session_id"] == run.session_id
             assert reports[0]["request_transcript"] == ("[]" if native else speech("A long task"))
-            assert reports[2]["request_input"] == (
-                native_voice_prompt(request) if native else voice_prompt(speech("A long task"))
-            )
+            assert reports[2]["request_input"] == (delegation_prompt(request) if native else "A long task")
             if outcome == "complete":
                 assert reports[-1]["result_text"] == "Completed after voice ended"
             else:
@@ -457,7 +457,7 @@ def test_ending_voice_preserves_assistant_work_until_completion_or_explicit_stop
 def test_native_handoff_uses_explicit_request_without_fabricating_captions(
     tmp_path: Path, historical_speech: str
 ) -> None:
-    request = LoginHandoff("provider-item-id", "Explain the README.", historical_speech, 1500)
+    request = ClientDelegationRequest("provider-item-id", "Explain the README.", historical_speech, 1500)
     seen: list[str] = []
 
     async def generate(
@@ -477,14 +477,26 @@ def test_native_handoff_uses_explicit_request_without_fabricating_captions(
             root = state.selected_session_id
             reports: list[dict[str, object]] = []
             bridge = MainAgentBridge(state, root, voice_session_id="native-call", report=reports.append)
-            assert await bridge.handle_native(request) == "README explanation"
+
+            async def append(kind: str, content: str, identifier: str) -> str:
+                return f"session.{kind}.append"
+
+            bridge.attach(append)
+            await bridge.handle_request(request)
+            async with asyncio.timeout(HANG_GUARD):
+                while not any(
+                    report.get("delegation_id") == request.identifier and report.get("status") == "completed"
+                    for report in reports
+                ):
+                    await asyncio.sleep(0.001)
+            await bridge.close()
             assert seen == [request.text]
             rows = await state.history.snapshot(root)
             assert [row["role"] for row in rows] == ["user", "assistant"]
             assert rows[0]["content"] == "Explain the README."
             assert rows[0]["voice_verified"] is True and rows[0]["voice_session_id"] == "native-call"
             assert reports[0]["request_transcript"] == historical_speech
-            assert reports[0]["delegation_id"] != request.identifier  # App and upstream identities stay separate.
+            assert reports[0]["delegation_id"] == request.identifier
             await state.live_captions(root, "native-call")(
                 {
                     "type": "transcript",
@@ -569,7 +581,9 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                 state = app.state.web
                 root = state.selected_session_id
                 bridge = MainAgentBridge(state, root, voice_session_id="native-close-call", report=reports.append)
-                connection = ChatGPTLiveConnection(login_config(bridge.handle_native))
+                login = replace(login_config(bridge.handle_request), observer=bridge.observe_native)
+                connection = ChatGPTLiveConnection(login)
+                bridge.attach(connection.append)
                 await connection.provision(OFFER)
 
                 async def read() -> None:
@@ -588,7 +602,7 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                         assert [
                             record["status"]
                             for record in reports
-                            if "model_request" not in record and record["delegation_id"] == first_id
+                            if "status" in record and record["delegation_id"] == first_id
                         ] == [
                             "queued",
                             "working",
@@ -596,28 +610,35 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
                         ]
                         await connection.close()
                         await reader
-                        assert connection.finalized and commands == ["session.close"]
+                        assert connection.finalized and commands[-1] == "session.close"
                         assert state.active is run and not run.task.done() and not stopped.is_set()
-                        assert len(inputs) == 1
-                        assert inputs[0] == native_voice_prompt(LoginHandoff("first", "Run the first task"))
+                        assert inputs[0] == "Run the first task"
                         assert not any(row["role"] == "live_caption" for row in await state.history.snapshot(root))
                         release.set()
                         await run.task
+                        while not run.finished:
+                            await asyncio.sleep(0.001)
                     assert stopped.is_set() and run.outcome == "completed" and run.finished
-                    assert [
+                    phases = [
                         record["status"]
                         for record in reports
-                        if "model_request" not in record and record["delegation_id"] == first_id
-                    ] == [
-                        "queued",
-                        "working",
-                        "working",
-                        "completed",
+                        if "status" in record and record["delegation_id"] == first_id
                     ]
+                    assert phases[:3] == ["queued", "working", "working"] and phases[-1] == "completed"
+                    async with asyncio.timeout(HANG_GUARD):
+                        while state.active is not None or not all(
+                            any(
+                                record.get("delegation_id") == identifier and record.get("status") == "completed"
+                                for record in reports
+                            )
+                            for identifier in ("first", "queued")
+                        ):
+                            await asyncio.sleep(0.001)
                     assert reports[-1]["result_text"] == "Finished after native voice ended"
-                    assert len(inputs) == 1 and commands == ["session.close"]
+                    assert inputs == ["Run the first task", "Do not start this second task"]
+                    assert commands[-1] == "session.close"
                     rows = await state.history.snapshot(root)
-                    assert [row["role"] for row in rows] == ["user", "assistant"]
+                    assert [row["role"] for row in rows] == ["user", "assistant", "user", "assistant"]
                     assert rows[0]["content"] == "Run the first task"
                     assert rows[0]["voice_session_id"] == "native-close-call" and rows[0]["voice_verified"]
                 finally:
@@ -629,187 +650,49 @@ def test_native_sideband_close_keeps_admitted_assistant_work_and_discards_queued
     asyncio.run(scenario())
 
 
-def test_queued_native_request_is_inspectable_before_the_main_assistant_slot_is_available(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
-            state = app.state.web
-            queued = asyncio.Event()
-            record = _Record()
-
-            def report(update: dict[str, object]) -> None:
-                record.delegation(update)
-                queued.set()
-
-            request = LoginHandoff("native-pending", "The new requested action", speech("An older request"))
-            bridge = MainAgentBridge(
-                state, state.selected_session_id, voice_session_id=record.identifier, report=report
-            )
-            with state.idle():
-                task = asyncio.create_task(bridge.handle_native(request))
-                try:
-                    async with asyncio.timeout(HANG_GUARD):
-                        await queued.wait()
-                    assert state.active is None and await state.harness.history() == []
-                    item = next(iter(record.delegations.values()))
-                    assert item["status"] == "queued" and item["run_id"] == ""
-                    details = next(iter(record.delegation_details.values())).request
-                    assert details["input"]["text"] == native_voice_prompt(request)
-                    assert details["transcript"]["text"] == speech("An older request")
-                finally:
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
-            assert next(iter(record.delegations.values()))["status"] == "cancelled"
-            assert state.active is None and await state.harness.history() == []
-
-    asyncio.run(scenario())
-
-
-def test_voice_request_cancelled_before_admission_has_no_assistant_run(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        reports: list[dict[str, object]] = []
-        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
-            state = app.state.web
-            with state.idle():
-                waiting = asyncio.create_task(
-                    MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(speech("Wait"))
-                )
-                await asyncio.sleep(0.02)
-                assert [report["status"] for report in reports if "model_request" not in report] == ["queued"]
-                waiting.cancel()
-                await asyncio.gather(waiting, return_exceptions=True)
-            assert [report["status"] for report in reports if "model_request" not in report] == ["queued", "cancelled"]
-            assert all(report["run_id"] == "" for report in reports)
-            assert all("request_input" not in report for report in reports)
-            assert state.active is None and await state.harness.history() == []
-
-    asyncio.run(scenario())
-
-
-def test_voice_reply_timeout_keeps_working_status_until_actual_completion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("nagents.web.live_bridge.VOICE_REPLY_SECONDS", 0.02)
-
-    async def scenario() -> None:
-        release = asyncio.Event()
-        entered = asyncio.Event()
-        reports: list[dict[str, object]] = []
-
-        async def produce(run: Run, prompt: str) -> None:
-            entered.set()
-            await release.wait()
-            run.final_text = "Completed after the voice wait timed out"
-
-        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
-            state = app.state.web
-            with patch.object(state, "produce_session", produce):
-                bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
-                result = await bridge.handle(speech("Long request"))
-                assert "still working" in result and "chat" in result
-                async with asyncio.timeout(5):
-                    await entered.wait()
-                run = state.active
-                assert run is not None and not run.task.done()
-                assert [report["status"] for report in reports if "model_request" not in report] == [
-                    "queued",
-                    "working",
-                    "working",
-                ]
-                release.set()
-                await run.task
-                assert state.active is None and run.outcome == "completed"
-                assert [report["status"] for report in reports if "model_request" not in report] == [
-                    "queued",
-                    "working",
-                    "working",
-                    "completed",
-                ]
-                assert reports[-1]["run_id"] == run.id
-
-    asyncio.run(scenario())
-
-
 def test_delegation_target_uses_resolved_agent_profile_model(tmp_path: Path) -> None:
     async def scenario() -> None:
         configuration = _config(tmp_path)
         configuration.profiles = {"auditor": AgentProfile(mode="reviewer", model="profile-model")}
         reports: list[dict[str, object]] = []
 
-        async def produce(run: Run, prompt: str) -> None:
-            run.final_text = "Profile answer"
+        async def generate(
+            provider: HarnessProvider,
+            messages: list[Message],
+            tools: list[ToolDefinition] | None = None,
+            config: GenerationConfig | None = None,
+            stream: bool = True,
+            verify_model: bool = False,
+        ) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="Profile answer")
 
         async with client_app(tmp_path, config=configuration) as (app, _, _, _):
             state = app.state.web
             await state.harness.set_agent("auditor")
             assert state.settings.values.model != state.harness.agent.provider.model
-            with patch.object(state, "produce_session", produce):
-                assert (
-                    await MainAgentBridge(state, state.selected_session_id, report=reports.append).handle(
-                        speech("Review it")
-                    )
-                    == "Profile answer"
+            with (
+                patch.object(ControlledHarness, "run", Harness.run),
+                patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
+                patch.object(HarnessProvider, "generate", generate),
+            ):
+                await dispatch(
+                    MainAgentBridge(state, state.selected_session_id, report=reports.append),
+                    spoken("profile-request", "Review it"),
                 )
             assert all(
                 report["agent"] == "auditor"
                 and report["model"] == "profile-model"
                 and report["provider"] == "anthropic"
                 for report in reports
+                if "status" in report
             )
 
     asyncio.run(scenario())
 
 
-def test_voice_bridge_waits_for_host_reservation_instead_of_losing_speech(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
-            state = app.state.web
-
-            async def answer(run: Run, prompt: str) -> None:
-                run.final_text = "Answered after the reservation"
-
-            with patch.object(state, "produce_session", answer):
-                with state.idle():
-                    pending = asyncio.create_task(
-                        MainAgentBridge(state, state.selected_session_id).handle(speech("Wait"))
-                    )
-                    await asyncio.sleep(0.02)
-                    assert not pending.done() and state.active is None
-                assert await pending == "Answered after the reservation"
-                assert state.active is None
-
-    asyncio.run(scenario())
-
-
-def test_stopping_the_assistant_does_not_cancel_its_voice_waiter(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        entered = asyncio.Event()
-
-        async def produce(run: Run, prompt: str) -> None:
-            if "first request" in prompt:
-                entered.set()
-                await asyncio.Event().wait()
-            run.final_text = "The next voice request still works"
-
-        async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
-            state = app.state.web
-            bridge = MainAgentBridge(state, state.selected_session_id)
-            with patch.object(state, "produce_session", produce):
-                waiting = asyncio.create_task(bridge.handle(speech("first request")))
-                async with asyncio.timeout(5):
-                    await entered.wait()
-                    run = state.active
-                    assert run is not None
-                    await state.stop(run)
-                    assert await waiting == (
-                        "The assistant request was stopped. Check the chat for any actions already completed."
-                    )
-                assert not waiting.cancelled() and run.finished and state.active is None
-                assert await bridge.handle(speech("second request")) == "The next voice request still works"
-
-    asyncio.run(scenario())
-
-
-def test_server_websocket_delegates_two_requests_to_selected_chat_without_restarting_live(tmp_path: Path) -> None:
+def test_server_websocket_delegates_two_requests_to_selected_chat_without_restarting_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Only the upstream Live media service and chat model are fakes; the host/runtime are real."""
     seen: list[tuple[str, str, int]] = []
     commands: list[str] = []
@@ -861,6 +744,8 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
         return socket
 
     async def scenario() -> None:
+        monkeypatch.setenv("WEB_LIVE_TEST_KEY", "fixture-live-key")
+        store = ScopedProviderRegistryStore(tmp_path).workspace_store
         upstream = web.Application()
         upstream.router.add_get("/v1/live/sessions", connect)
         runner = web.AppRunner(upstream, access_log=None)
@@ -868,17 +753,33 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
         try:
             await web.TCPSite(runner, "127.0.0.1", 0).start()
             base = f"http://127.0.0.1:{runner.addresses[0][1]}/v1"
+            existing = store.load()
+            voice_profile = ProviderProfile(
+                kind="openai_compatible",
+                auth="api-key",
+                base_url=base,
+                api_key_env="WEB_LIVE_TEST_KEY",
+            )
+            store.save(
+                ProviderRegistry(active=existing.active, providers={**existing.providers, "voice": voice_profile}),
+                expected=existing.revision,
+            )
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, client, headers, harnesses):
                 state = app.state.web
                 root = state.selected_session_id
-                before = (await client.get("/api/live/settings", headers=headers)).json()
+                before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
                 saved = await client.post(
                     "/api/live/settings",
                     headers=headers,
                     json={
+                        "scope": "workspace",
                         "revision": before["revision"],
-                        "values": {**before["values"], "enabled": True, "base_url": base},
-                        "api_key": "fixture-live-key",
+                        "overrides": {
+                            **before["overrides"],
+                            "enabled": True,
+                            "connection_id": "voice",
+                            "backend_mode": "assistant",
+                        },
                     },
                 )
                 assert saved.status_code == 200

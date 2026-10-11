@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -22,6 +21,7 @@ from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
+from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -64,7 +64,7 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
         )
         async with (
             endpoint(monkeypatch, handle),
-            client_app(tmp_path, config=config) as (_, client, headers, harnesses),
+            client_app(tmp_path, config=config) as (app, client, headers, harnesses),
         ):
             harness = harnesses[0]
             harness.run = Harness.run.__get__(harness)  # type: ignore[method-assign]
@@ -74,13 +74,7 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
             async def capture() -> dict[str, dict[str, object]]:
                 count = len(requests)
                 async with asyncio.timeout(HANG_GUARD):
-                    response = await client.post(
-                        "/api/run",
-                        headers=headers,
-                        json={"session_id": harness.session_id, "prompt": "Return fixture text only"},
-                    )
-                assert response.status_code == 200, response.text
-                events = [json.loads(line) for line in response.text.splitlines() if line]
+                    events = await submit_and_wait(app, headers, harness.session_id, "Return fixture text only")
                 assert not any(event["event"] == "error" for event in events), events
                 assert len(requests) == count + 1
                 return tool_map(requests[-1])
@@ -88,8 +82,7 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
             catalog = (await client.get("/api/tools", headers=headers)).json()
             ui = tool_map(catalog)
             wire = await capture()
-            assert set(wire) == set(ui) - {"wake_up_in"}
-            assert harness.agent.tool_registry.get("wake_up_in") is not None
+            assert set(wire) == set(ui)
             for name, definition in wire.items():
                 assert definition["description"] == ui[name]["description"]
                 assert definition["parameters"] == ui[name]["parameters"]
@@ -112,11 +105,10 @@ def test_catalog_and_native_http_request_preserve_descriptions_and_saved_tool_se
             assert saved.status_code == 200
             assert harness.config.agent == "assistant"
             selected = await capture()
-            assert set(selected) == set(wire) - {"shell", "schedule_wakeup", "wake_up_in"}
+            assert set(selected) == set(wire) - {"shell", "schedule_wakeup"}
             assert selected["described"]["description"] == DESCRIPTION
             # The editable catalog retains disabled tools and their full metadata.
             assert set(tool_map(saved.json())) == set(ui)
-            assert tool_map(saved.json())["wake_up_in"]["alias_of"] == "schedule_wakeup"
 
             enabled = await client.post(
                 "/api/tools", headers=headers, json={"revision": saved.json()["revision"], "agents": {}}

@@ -37,7 +37,9 @@ def test_real_agent_invocations_assign_fresh_identity_to_legacy_reused_ids(tmp_p
                 [TextDoneEvent(text="finished")],
             ]
         )
-        agent = Agent(provider, SessionManager(tmp_path / "sessions.db"), tools=[inspect_scope], compactor=None)
+        agent = Agent(
+            provider, SessionManager(tmp_path / "sessions.db"), tools=[inspect_scope], compaction_strategy=None
+        )
         try:
             async with asyncio.timeout(HANG_GUARD):
                 events = [event async for event in agent.run("Inspect both calls")]

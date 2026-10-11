@@ -648,14 +648,6 @@ class HarnessResources(AgentPlugin):
                 if original is not None and original.func is tool.func and original.parameters == tool.parameters
                 else tool
             )
-        # Legacy history may still call the hidden native scheduling alias.
-        canonical, alias = self.pinned.get("schedule_wakeup"), registry.get("wake_up_in")
-        if (
-            canonical is not None
-            and alias is not None
-            and canonical.func == alias.func == self.harness.tools.schedule_wakeup
-        ):
-            self.pinned[alias.name] = alias
         return request
 
     async def after_model(self, context: RunContext) -> None:

@@ -26,8 +26,8 @@ function browser() {
 
 const connection = { token: "workspace-token", agent: "assistant", provider: "openai", model: "gpt-6.1-sol", connected: true };
 const tools = {
-  agents: { assistant: { schedule_wakeup: false } }, profiles: [{ id: "assistant", mode: "build" }],
-  tools: [{ name: "read_file", alias_of: "" }, { name: "schedule_wakeup", alias_of: "" }, { name: "wake_up_in", alias_of: "schedule_wakeup" }],
+  agents: { assistant: { schedule_wakeup: false, shell: false } }, profiles: [{ id: "assistant", mode: "build" }],
+  tools: [{ name: "read_file" }, { name: "schedule_wakeup" }, { name: "shell" }],
   mcp_diagnostics: { status: "retained", configured_servers: 2, connected_servers: 1, error: "private diagnostic details" },
 };
 const props = {
@@ -51,7 +51,7 @@ test("workspace overview uses authenticated tool selections and explains a retai
     for (const value of ["Connected to ngn", "/state/workspace", "assistant", "openai", "gpt-6.1-sol", "1 running", "1 of 2 MCP servers connected", "Previous configuration; reload failed"])
       assert.ok(view.container.textContent?.includes(value), value);
     const count = view.container.querySelectorAll(".workspace-resources strong");
-    assert.equal(count[0].textContent, "3"); assert.equal(count[1].textContent, "1 / 3", "Disabled canonical tools also disable their aliases");
+    assert.equal(count[0].textContent, "3"); assert.equal(count[1].textContent, "1 / 3", "Counts use the current agent's tool selections");
     assert.doesNotMatch(view.container.textContent!, /Live provider|private diagnostic|workspace-token/);
     assert.deepEqual(calls, ["/api/tools"]);
   } finally { await view.cleanup(); }

@@ -7,6 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
+from unittest.mock import patch
 
 import pytest
 from aiohttp import web
@@ -30,8 +31,6 @@ from nagents.http import HTTPLogger
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.provider import gateway
-from nagents.types import AudioContent
-from nagents.types import DocumentContent
 from nagents.types import GenerationConfig
 from nagents.types import ImageContent
 from nagents.types import Message
@@ -52,7 +51,7 @@ if TYPE_CHECKING:
 
 KEY = "fake-gateway-key-not-a-credential"
 LEAK = "fake-upstream-secret-must-not-escape"
-APIS = ["chat_completions", "responses", "messages", "completions"]
+APIS = ["chat_completions", "responses", "messages"]
 TOOL = ToolDefinition(
     "work", "Uppercase text", {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}
 )
@@ -119,21 +118,18 @@ def payload(api: str, text: str = "Hello", calls: tuple[ToolCall, ...] = ()) -> 
             "usage": {"input_tokens": 9, "cache_read_input_tokens": 3, "output_tokens": 4},
         }
     choice: dict[str, object] = {"index": 0, "finish_reason": "tool_calls" if calls else "stop"}
-    if api == "completions":
-        choice["text"] = text
-    else:
-        choice["message"] = {
-            "role": "assistant",
-            "content": text,
-            "tool_calls": [
-                {
-                    "id": call.id,
-                    "type": "function",
-                    "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
-                }
-                for call in calls
-            ],
-        }
+    choice["message"] = {
+        "role": "assistant",
+        "content": text,
+        "tool_calls": [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+            }
+            for call in calls
+        ],
+    }
     return {
         "id": "chat-1",
         "choices": [choice],
@@ -242,28 +238,25 @@ def frames(api: str, result: dict[str, object]) -> list[dict[str, object] | str]
         )
         return events
     choice = object_data(list_data(result["choices"])[0])
-    if api == "completions":
-        events = [{"choices": [{"index": 0, "text": choice["text"], "finish_reason": None}]}]
-    else:
-        message = object_data(choice["message"])
-        events = [{"choices": [{"index": 0, "delta": {"content": message["content"]}, "finish_reason": None}]}]
-        # Interleave argument fragments for concurrent calls.
-        for half in (0, 1):
-            for index, raw in enumerate(list_data(message["tool_calls"])):
-                call = object_data(raw)
-                function = object_data(call["function"])
-                args = str(function["arguments"])
-                call_delta: dict[str, object] = {
-                    "index": index,
-                    "function": {"arguments": args[:5] if half == 0 else args[5:]},
-                }
-                if half == 0:
-                    call_delta.update(id=call["id"], function={"name": function["name"], "arguments": args[:5]})
-                events.append({"choices": [{"index": 0, "delta": {"tool_calls": [call_delta]}, "finish_reason": None}]})
+    message = object_data(choice["message"])
+    events = [{"choices": [{"index": 0, "delta": {"content": message["content"]}, "finish_reason": None}]}]
+    # Interleave argument fragments for concurrent calls.
+    for half in (0, 1):
+        for index, raw in enumerate(list_data(message["tool_calls"])):
+            call = object_data(raw)
+            function = object_data(call["function"])
+            args = str(function["arguments"])
+            call_delta: dict[str, object] = {
+                "index": index,
+                "function": {"arguments": args[:5] if half == 0 else args[5:]},
+            }
+            if half == 0:
+                call_delta.update(id=call["id"], function={"name": function["name"], "arguments": args[:5]})
+            events.append({"choices": [{"index": 0, "delta": {"tool_calls": [call_delta]}, "finish_reason": None}]})
     terminal = {
         "index": 0,
         "finish_reason": choice["finish_reason"],
-        "text" if api == "completions" else "delta": "" if api == "completions" else {"content": ""},
+        "delta": {"content": ""},
     }
     # OpenRouter repeats the terminal finish_reason on its usage-only chunk.
     events.extend([{"choices": [terminal]}, {"choices": [terminal], "usage": result["usage"]}, "[DONE]"])
@@ -318,8 +311,6 @@ def test_litellm_routes_real_http(api: str, stream: bool, prefix: str) -> None:
             assert body["stream"] is stream and body["model"] == "fixture-model"
             if stream and api == "chat_completions":
                 assert body["stream_options"] == {"include_usage": True}
-            if api == "completions":
-                assert "stream_options" not in body
             assert body["temperature"] == 0.2 and body["top_p"] == 0.9
             token_key = {"chat_completions": "max_completion_tokens", "responses": "max_output_tokens"}.get(
                 api, "max_tokens"
@@ -352,58 +343,11 @@ def test_litellm_routes_real_http(api: str, stream: bool, prefix: str) -> None:
             ) == (12, 4, 16, 3)
             assert bool([event for event in events if isinstance(event, TextChunkEvent)]) is stream
             body = seen[0]
-            if api == "completions":
-                assert body["prompt"] == "Hello" and "messages" not in body and "tools" not in body
-            elif api == "responses":
+            if api == "responses":
                 assert body["store"] is False and "previous_response_id" not in body
                 assert object_data(list_data(body["input"])[0])["role"] == "user"
             else:
                 assert object_data(list_data(body["messages"])[0])["role"] == "user"
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize(
-    "provider_type", [ProviderType.LITELLM, ProviderType.OPENAI_COMPATIBLE, ProviderType.OPENROUTER]
-)
-@pytest.mark.parametrize("stream", [False, True])
-def test_legacy_usage_opt_in_excludes_only_litellm(provider_type: ProviderType, stream: bool) -> None:
-    """LiteLLM 1.100.0 raises MockValSer on an upstream legacy usage-only chunk.
-
-    Do not request that optional chunk from LiteLLM. Other providers retain the
-    opt-in, and absence of optional usage must not prevent a completed response.
-    Error envelopes and missing terminals remain errors in the stream tests.
-    """
-
-    async def scenario() -> None:
-        requests: list[dict[str, object]] = []
-
-        async def handle(request: web.Request) -> web.StreamResponse:
-            assert request.path == "/v1/completions"
-            body = object_data(await request.json())
-            requests.append(body)
-            result = payload("completions")
-            if stream and provider_type == ProviderType.LITELLM:
-                chunks = [
-                    chunk for chunk in frames("completions", result) if isinstance(chunk, str) or "usage" not in chunk
-                ]
-                return web.Response(body=sse(chunks), content_type="text/event-stream")
-            return await reply(request, "completions", result, stream)
-
-        async with endpoint(handle) as url:
-            async with Provider(provider_type, KEY, "fixture", base_url=url + "/v1", api="completions") as provider:
-                events = [
-                    event async for event in provider.generate([Message(role="user", content="Hello")], stream=stream)
-                ]
-            assert len(requests) == 1
-            if stream and provider_type != ProviderType.LITELLM:
-                assert requests[0]["stream_options"] == {"include_usage": True}
-            else:
-                assert "stream_options" not in requests[0]
-            assert not any(isinstance(event, ErrorEvent) for event in events)
-            done = events[-1]
-            assert isinstance(done, TextDoneEvent) and done.text == "Hello" and done.finish_reason == FinishReason.STOP
-            assert done.usage.total_tokens == (0 if stream and provider_type == ProviderType.LITELLM else 16)
 
     asyncio.run(scenario())
 
@@ -452,7 +396,11 @@ def test_agent_tool_loop_and_persisted_continuation(
         async with endpoint(handle) as url:
             provider = Provider(provider_type, KEY, "fixture-model", base_url=url + "/v1", api=api)
             agent = Agent(
-                provider, SessionManager(tmp_path / "fixture.db"), tools=[work], compactor=None, streaming=stream
+                provider,
+                SessionManager(tmp_path / "fixture.db"),
+                tools=[work],
+                compaction_strategy=None,
+                streaming=stream,
             )
             try:
                 events = [event async for event in agent.run("Use work", session_id="fixture")]
@@ -530,7 +478,7 @@ def test_http_errors_never_expose_body_headers_or_credentials(
 @pytest.mark.parametrize("failure", ["truncated", "malformed", "error", "bad-frame", "wrong-content-type"])
 def test_stream_failures_release_no_tools(api: str, failure: str) -> None:
     async def scenario() -> None:
-        calls = () if api == "completions" else (ToolCall("call-a", "work", {"value": "hello"}),)
+        calls = (ToolCall("call-a", "work", {"value": "hello"}),)
         events = frames(api, payload(api, "partial", calls))
         data = sse(events[:-1])
         if failure == "malformed":
@@ -591,46 +539,18 @@ def test_invalid_second_tool_never_releases_first(api: str, stream: bool) -> Non
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    "messages,tools",
-    [
-        ([Message(role="user", content="Hello")], [TOOL]),
-        ([Message(role="system", content="Instructions"), Message(role="user", content="Hello")], []),
-        (
-            [
-                Message(role="user", content="One"),
-                Message(role="assistant", content="Two"),
-                Message(role="user", content="Three"),
-            ],
-            [],
-        ),
-        ([Message(role="assistant", content="Prefix")], []),
-        ([Message(role="user", content=[ImageContent("fake", "image/png")])], []),
-        ([Message(role="user", content=[AudioContent("fake")])], []),
-        ([Message(role="user", content=[DocumentContent("fake")])], []),
-        ([Message(role="user", content="Hello", tool_calls=[ToolCall("a", "work", {})])], []),
-    ],
-)
-def test_legacy_rejects_unsupported_input_without_http(messages: list[Message], tools: list[ToolDefinition]) -> None:
-    async def scenario() -> None:
-        async with Provider(
-            ProviderType.LITELLM, KEY, "fixture", base_url="http://127.0.0.1:1", api="completions"
-        ) as provider:
-            http = Mock(spec=gateway.GatewayHTTPClient)
-            provider._http = http
-            events = [event async for event in provider.generate(messages, tools)]
-            assert len(events) == 1 and isinstance(events[0], ErrorEvent)
-            assert "completions API" in events[0].message
-            http.post_json.assert_not_called()
-            http.post_stream.assert_not_called()
-
-    asyncio.run(scenario())
+@pytest.mark.parametrize("provider_type", [ProviderType.OPENAI_COMPATIBLE, ProviderType.LITELLM])
+def test_removed_text_completions_rejected_before_http(provider_type: ProviderType) -> None:
+    with patch("nagents.provider.base.HTTPClient") as http:
+        with pytest.raises(ValueError, match="api must"):
+            Provider(provider_type, KEY, "fixture", base_url="https://gateway.example/v1", api="completions")
+        http.assert_not_called()
 
 
 def test_constructor_and_harness_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="explicit base_url"):
         Provider(ProviderType.LITELLM, KEY, "fixture")
-    for api in ["unknown", "RESPONSES"]:
+    for api in ["unknown", "RESPONSES", "completions"]:
         with pytest.raises(ValueError, match="api must"):
             Provider(ProviderType.OPENAI_COMPATIBLE, KEY, "fixture", api=api)
     for url in [
@@ -654,7 +574,7 @@ def test_constructor_and_harness_contract(tmp_path: Path, monkeypatch: pytest.Mo
     provider.credentials()
     assert provider.api_key == KEY
     config.providers = connection("litellm", base_url="https://gateway.example/v1", api="completions")
-    with pytest.raises(ValueError, match=r"coding harness.*text-only"):
+    with pytest.raises(ValueError, match="api must"):
         HarnessProvider(config)
     assert Provider(ProviderType.LITELLM, KEY, "fixture", base_url="http://127.0.0.1:1").api == "chat_completions"
     assert Provider(ProviderType.OPENROUTER, KEY, "fixture").base_url == "https://openrouter.ai/api/v1"
@@ -664,7 +584,7 @@ def test_constructor_and_harness_contract(tmp_path: Path, monkeypatch: pytest.Mo
 def test_media_capabilities_match_wire_contract(api: str) -> None:
     provider = Provider(ProviderType.LITELLM, KEY, "gpt-4o-audio-preview", base_url="http://127.0.0.1:1", api=api)
     capabilities = provider.supported_media_formats
-    assert bool(capabilities.image_formats) is (api != "completions")
+    assert bool(capabilities.image_formats)
     assert bool(capabilities.document_formats) is (api == "messages")
     assert bool(capabilities.audio_formats) is (api == "chat_completions")
 
@@ -946,7 +866,7 @@ def test_openrouter_reasoning_details_survive_tool_continuation(stream: bool) ->
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("api", ["chat_completions", "completions"])
+@pytest.mark.parametrize("api", ["chat_completions"])
 def test_chat_rejects_generation_after_finish(api: str) -> None:
     async def scenario() -> None:
         chunks = frames(api, payload(api))

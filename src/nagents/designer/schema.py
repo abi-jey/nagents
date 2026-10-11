@@ -39,7 +39,7 @@ class ProviderDefinition(Definition):
 
     @model_validator(mode="after")
     def supported(self) -> ProviderDefinition:
-        if self.type not in PROVIDERS or self.api not in API_NAMES or self.api == "completions":
+        if self.type not in PROVIDERS or self.api not in API_NAMES:
             raise ValueError("Unsupported conversational provider/API")
         if self.auth == "chatgpt" and (
             self.type not in {"openai", "openai_compatible"} or self.base_url or self.api != "auto"

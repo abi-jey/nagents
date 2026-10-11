@@ -26,6 +26,7 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import InputTranscriptDeltaEvent
 from nagents.events import TextChunkEvent
+from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 from nagents.live import LiveEvent
 from nagents.live.controls import LiveControls
@@ -247,14 +248,14 @@ def test_create_attaches_fresh_hosted_agent_and_close_is_confirmed_and_idempoten
 
 
 def test_client_backend_runs_on_owned_sideband_without_server_media(rig: Rig) -> None:
-    async def handle(transcript: str) -> str:
-        return transcript
+    async def handle(request: ClientDelegationRequest) -> str:
+        return request.transcript
 
     async def scenario() -> None:
         rig.configure = lambda agent: setattr(
             agent.provider,
             "live_config",
-            LiveConfig(delegation="client", client_handler=handle, voice="cedar"),
+            LiveConfig(delegation="client", client_request_handler=handle, voice="cedar"),
         )
         identifier = await create(rig.service)
         assert rig.requests[0][1]["delegation"] == {"type": "client"}
@@ -262,7 +263,7 @@ def test_client_backend_runs_on_owned_sideband_without_server_media(rig: Rig) ->
         assert agent.provider.live_config is not None
         assert agent.provider.live_config.attach_to == "native-1"
         assert agent.provider.live_config.handle_delegations is True
-        assert agent.provider.live_config.client_handler is handle
+        assert agent.provider.live_config.client_request_handler is handle
         assert agent.audio is None and not agent.sent
         await rig.service.close(identifier)
 
@@ -900,7 +901,7 @@ def test_real_agent_and_live_api_attach_without_second_start_or_server_audio(mon
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("protocol", ["ngn.live.v1", "ngn.live.v2"])
+@pytest.mark.parametrize("protocol", ["ngn.live.v2"])
 def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(
     monkeypatch: pytest.MonkeyPatch, protocol: str
 ) -> None:
@@ -968,8 +969,8 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(
         url = f"http://127.0.0.1:{runner.addresses[0][1]}/v1/live/sessions"
         monkeypatch.setattr(Provider, "live_endpoint", lambda self, **kwargs: url)
 
-        async def handle(transcript: str) -> str:
-            return transcript
+        async def handle(request: ClientDelegationRequest) -> str:
+            return request.transcript
 
         def factory(voice: str) -> Agent:
             return Agent(
@@ -977,7 +978,7 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(
                     ProviderType.OPENAI_COMPATIBLE,
                     model="gpt-live-1",
                     api_key=SECRET,
-                    live_config=LiveConfig(delegation="client", client_handler=handle, voice=voice or "marin"),
+                    live_config=LiveConfig(delegation="client", client_request_handler=handle, voice=voice or "marin"),
                 ),
                 session_manager=SessionManager(Path(":memory:")),
             )
@@ -1006,7 +1007,7 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(
             await sink.write(input_audio)
             async with asyncio.timeout(WAIT):
                 assert await browser.outgoing.get() == input_audio
-            assert browser.controls == ([{"type": "interrupt"}] if protocol == "ngn.live.v2" else [])
+            assert browser.controls == [{"type": "interrupt"}]
             browser.incoming.put_nowait({"type": "websocket.disconnect"})
             await asyncio.wait_for(relay, WAIT)
             result = await service.snapshot(identifier)

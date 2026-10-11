@@ -208,7 +208,6 @@ class Harness:
             session_manager=_HarnessSession(config.data_dir / scope / "sessions.db"),
             streaming=True,
             max_tool_rounds=config.max_tool_rounds,
-            compactor="self",
             save_tool_outputs=False,
             compaction_strategy=DemoCompaction() if config.demo else None,
             skill_discoverer=HarnessSkillDiscoverer(self.tools),

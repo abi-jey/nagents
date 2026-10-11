@@ -35,13 +35,13 @@ from nagents import TextDoneEvent
 from nagents import ToolCallEvent
 from nagents import ToolResultEvent
 from nagents import Usage
+from nagents.audio import AudioFormat
+from nagents.audio import BytesAudioInput
+from nagents.audio import BytesAudioOutput
 from nagents.live import LiveCommandError
 from nagents.live import LiveEvent
 from nagents.live import _LiveUpdates
 from nagents.live import runtime as live
-from nagents.realtime import AudioFormat
-from nagents.realtime import BytesAudioInput
-from nagents.realtime import BytesAudioOutput
 from nagents.types import TextContent
 from tests.support.hang_guard import HANG_GUARD
 
@@ -904,7 +904,7 @@ def test_agent_run_streams_typed_live_events_and_log(tmp_path: Path, monkeypatch
             provider,
             SessionManager(tmp_path / "main.db"),
             system_prompt="Be brief.",
-            compactor=None,
+            compaction_strategy=None,
             audio=AudioDuplex(input=BytesAudioInput(b""), output=BytesAudioOutput()),
         )
         async with live_server(monkeypatch, handle):
@@ -1001,7 +1001,7 @@ def test_client_backend_runs_while_audio_continues(tmp_path: Path, monkeypatch: 
         backend = Agent(
             Provider(ProviderType.OPENAI_COMPATIBLE, "offline-key", "offline-model"),
             SessionManager(tmp_path / "backend.db"),
-            compactor=None,
+            compaction_strategy=None,
         )
         speaker = CollectingSpeaker()
         async with live_server(monkeypatch, handle):
@@ -1059,7 +1059,7 @@ def test_early_iterator_close_finalizes_connection(tmp_path: Path, monkeypatch: 
         agent = Agent(
             provider,
             SessionManager(tmp_path / "main.db"),
-            compactor=None,
+            compaction_strategy=None,
             audio=AudioDuplex(input=BytesAudioInput(b""), output=speaker),
         )
         async with live_server(monkeypatch, handle):
@@ -1086,17 +1086,17 @@ def test_live_voice_configuration_errors(tmp_path: Path) -> None:
     hostless = Agent(
         voice_provider(LiveConfig(delegation="responses")),
         SessionManager(tmp_path / "no-audio.db"),
-        compactor=None,
+        compaction_strategy=None,
     )
     with pytest.raises(ValueError, match="Voice mode requires"):
         asyncio.run(drain(hostless.run()))
 
     # Client mode without a delegation agent is allowed: hosted tools and a null-ID
-    # application update path remain available (see runtime client_handler).
+    # application update path remain available (see the typed runtime request handler).
     clientless = Agent(
         voice_provider(LiveConfig(delegation="client")),
         SessionManager(tmp_path / "no-delegate.db"),
-        compactor=None,
+        compaction_strategy=None,
         audio=AudioDuplex(input=BytesAudioInput(b""), output=BytesAudioOutput()),
     )
     with pytest.raises(ValueError, match="continuous audio"):
@@ -1105,12 +1105,12 @@ def test_live_voice_configuration_errors(tmp_path: Path) -> None:
     delegate = Agent(
         voice_provider(LiveConfig(delegation="client")),
         SessionManager(tmp_path / "delegate.db"),
-        compactor=None,
+        compaction_strategy=None,
     )
     hosted_with_delegate = Agent(
         voice_provider(LiveConfig(delegation="responses")),
         SessionManager(tmp_path / "hosted.db"),
-        compactor=None,
+        compaction_strategy=None,
         delegation_agent=delegate,
         audio=AudioDuplex(input=BytesAudioInput(b""), output=BytesAudioOutput()),
     )
@@ -1199,12 +1199,12 @@ def test_append_update_scope_and_cross_connection(tmp_path: Path) -> None:
         backend = Agent(
             Provider(ProviderType.OPENAI_COMPATIBLE, "offline-key", "offline-model"),
             SessionManager(tmp_path / "backend.db"),
-            compactor=None,
+            compaction_strategy=None,
         )
         other = Agent(
             Provider(ProviderType.OPENAI_COMPATIBLE, "offline-key", "offline-model"),
             SessionManager(tmp_path / "other.db"),
-            compactor=None,
+            compaction_strategy=None,
         )
 
         with pytest.raises(RuntimeError, match="No active GPT-Live connection for this agent"):
@@ -1324,7 +1324,7 @@ def test_live_update_methods_are_not_auto_registered_tools(tmp_path: Path) -> No
     agent = Agent(
         Provider(ProviderType.OPENAI_COMPATIBLE, "test-key", "gpt-live-1", live_config=LiveConfig(delegation="client")),
         SessionManager(tmp_path / "voice.db"),
-        compactor=None,
+        compaction_strategy=None,
     )
     registered = set(agent.tool_registry.names())
     assert {"add_comment", "add_thinking", "add_instructions"}.isdisjoint(registered)
@@ -1336,7 +1336,7 @@ def test_overlapping_live_runs_rejected(tmp_path: Path) -> None:
             ProviderType.OPENAI_COMPATIBLE, "test-key", "gpt-live-1", live_config=LiveConfig(delegation="responses")
         ),
         SessionManager(tmp_path / "voice.db"),
-        compactor=None,
+        compaction_strategy=None,
         audio=AudioDuplex(input=BytesAudioInput(b""), output=BytesAudioOutput()),
     )
     agent._live_updates = _LiveUpdates()
@@ -1415,7 +1415,7 @@ def test_registered_tool_application_update_and_ack(tmp_path: Path, monkeypatch:
             ),
             SessionManager(tmp_path / "voice.db"),
             system_prompt="Be concise.",
-            compactor=None,
+            compaction_strategy=None,
             audio=AudioDuplex(input=BlockingMic([b"\x01\x02"]), output=CollectingSpeaker()),
         )
 
@@ -1443,7 +1443,7 @@ def test_registered_tool_application_update_and_ack(tmp_path: Path, monkeypatch:
             ),
             SessionManager(tmp_path / "backend.db"),
             tools=[voice.add_comment, get_utc_time],
-            compactor=None,
+            compaction_strategy=None,
         )
         voice.delegation_agent = backend
 

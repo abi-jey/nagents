@@ -94,7 +94,7 @@ async def test_codex_previews_arrive_before_completion_and_never_execute(
             OpenAIProvider(credentials),
             SessionManager(tmp_path / "events.db"),
             tools=[work],
-            compactor=None,
+            compaction_strategy=None,
             streaming=True,
         )
         try:
@@ -193,7 +193,7 @@ async def test_execution_start_marks_each_invocation_separately_and_previews_are
         order.append("effect:" + value)
         return value
 
-    agent = Agent(provider, SessionManager(tmp_path / "order.db"), tools=[work], compactor=None)
+    agent = Agent(provider, SessionManager(tmp_path / "order.db"), tools=[work], compaction_strategy=None)
     try:
         async for event in agent.run("work", session_id="s"):
             if isinstance(event, ToolCallEvent):

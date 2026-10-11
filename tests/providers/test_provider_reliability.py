@@ -116,7 +116,7 @@ def test_gemini_stream_validates_all_frames_before_tool_release(payloads: list[o
                 SessionManager(tmp_path / "invalid.db"),
                 tools=[work],
                 streaming=True,
-                compactor=None,
+                compaction_strategy=None,
                 max_tool_rounds=1,
             )
             try:

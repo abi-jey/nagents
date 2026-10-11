@@ -273,31 +273,14 @@ loading configuration does not read its secret value.
 
 `api: auto` retains provider-specific routing: Chat Completions for
 OpenAI-compatible, OpenRouter, LiteLLM, and Azure; Messages for Anthropic; native
-Gemini for `gemini_native`. The four explicit API choices
-refer to `/chat/completions`, `/responses`, `/messages`, and `/completions`
-respectively under the configured API base, where that provider/endpoint supports
-the route. Native Gemini routing is not one of those four OpenAI/Anthropic-style
-paths. OpenAI-compatible, OpenRouter, and LiteLLM support selecting the four
-explicit contracts, subject to server/model support. Anthropic accepts only
-`auto` or `messages`; Azure accepts only `auto` or `chat_completions`; native
-Gemini requires `auto`. OpenAI-compatible `messages` requires an explicit
-compatible `base_url` rather than the default OpenAI endpoint.
-
-`base_url` is a prefix such as `https://api.openai.com/v1`, not the full URL ending
-in `/chat/completions`, `/responses`, `/messages`, or `/completions`. Those
-generation suffixes are rejected during provider setup to avoid double-appending
-a route. Provider setup also validates requirements beyond JSON parsing, such as
-Azure's endpoint/version and whether a provider accepts the selected API.
-
-**Legacy `completions` is text-only.** A server accepting `/completions` does not
-make agent tools available. Coding, delegation, or another tool-dependent loop
-requires an endpoint/model/protocol combination that actually supports tool
-calling; a route selector cannot add that capability. The library's legacy route
-accepts one text-only user prompt, not tools, multimodal input, or a flattened
-system/conversation history. Consequently the ngn coding harness rejects
-`api: completions` during setup, including in demo mode, because it requires
-instructions and tools. Use the library's `Provider` directly for the restricted
-text-only route. This caveat applies to LiteLLM and other compatible services too.
+Gemini for `gemini_native`. The three explicit API choices refer to `/chat/completions`, `/responses`, and
+`/messages` respectively under the configured API base, where that provider/endpoint
+supports the route. Native Gemini routing is not one of those OpenAI/Anthropic-style
+paths. OpenAI-compatible, OpenRouter, and LiteLLM support selecting the explicit
+contracts, subject to server/model support. Anthropic accepts only `auto` or
+`messages`; Azure accepts only `auto` or `chat_completions`; native Gemini requires
+`auto`. OpenAI-compatible `messages` requires an explicit compatible `base_url`
+rather than the default OpenAI endpoint.
 
 `auth: auto` prefers a saved ChatGPT login for the default OpenAI provider
 endpoint only when `api: auto`; otherwise it uses `api_key_env`. `"api-key"` forces API-key selection.
@@ -409,9 +392,9 @@ explicitly in `profiles`:
 
 Use `read_only: true` (or `NGN_READ_ONLY=true`) to constrain the assistant and its
 children to read-only operation. This startup restriction cannot be relaxed by
-switching profiles or saving web preferences. Legacy agent selections in loaded
-JSON/environment configuration migrate to `assistant`; legacy read-only selections
-also enable this restriction. Explicitly configured custom profiles are preserved.
+switching profiles or saving web preferences. Select `assistant` in JSON and
+`NGN_AGENT`; use `read_only` for its read-only mode. Other names must refer to
+explicitly configured custom profiles.
 
 | Profile | Mode | Purpose |
 | --- | --- | --- |

@@ -41,7 +41,7 @@ async def generate(api: str, wire: dict[str, object] | list[dict[str, object] | 
                 event
                 async for event in provider.generate(
                     [Message(role="user", content="Run work")],
-                    tools=None if api == "completions" else [TOOL],
+                    tools=[TOOL],
                     stream=streamed,
                 )
             ]
@@ -83,11 +83,11 @@ async def test_fragments_from_different_chat_choices_cannot_combine_into_one_too
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("api", ["chat_completions", "completions"])
+@pytest.mark.parametrize("api", ["chat_completions"])
 @pytest.mark.parametrize("streamed", [False, True])
 @pytest.mark.parametrize("index", [1, -1, True, None])
 async def test_a_single_choice_still_requires_the_requested_zero_index(api: str, streamed: bool, index: object) -> None:
-    result = payload(api, "fixture", (ToolCall("one", "work", {"value": "fixture"}),) if api != "completions" else ())
+    result = payload(api, "fixture", (ToolCall("one", "work", {"value": "fixture"}),))
     wire: dict[str, object] | list[dict[str, object] | str]
     if streamed:
         wire = frames(api, result)

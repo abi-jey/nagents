@@ -29,11 +29,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN npm install -g playwright @playwright/mcp && \
     playwright-mcp install-browser chrome-for-testing
 
-# Install nagents + server dependencies (this directory will be the build context from the repo)
+# Install ngn and its web dependencies from the repository build context.
 COPY pyproject.toml README.md ./
 COPY src/ src/
 COPY --from=web-build /build/src/nagents/web/static/ src/nagents/web/static/
-RUN pip install hatchling && pip install --no-build-isolation ".[server,web]" && pip uninstall -y hatchling
+RUN pip install hatchling && pip install --no-build-isolation ".[web]" && pip uninstall -y hatchling
 
 RUN groupadd -g ${DOCKER_GID} docker-host && \
     useradd -m -u 1000 -G docker-host agent && \
@@ -47,13 +47,6 @@ WORKDIR /home/agent/workspace
 
 ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-ENV NAGENTS_SERVER_IMAGE=python:3.12-slim
-ENV NAGENTS_SERVER_NETWORK=bridge
-ENV NAGENTS_SERVER_MEMORY=512m
-
-# Pre-pull the sandbox image so it's available without internet at runtime
-RUN docker pull python:3.12-slim || true
-
 EXPOSE 8765
 CMD ["ngn", "serve", "--host", "0.0.0.0"]
 

@@ -95,7 +95,7 @@ def test_plugin_discovery_rejects_missing_or_ambiguous(monkeypatch: pytest.Monke
 
 def test_fluent_attachment_and_listener_exclusive_ownership(tmp_path: Path) -> None:
     async def scenario() -> None:
-        agent = Agent(OfflineProvider(), SessionManager(tmp_path / "identity.db"), compactor=None)
+        agent = Agent(OfflineProvider(), SessionManager(tmp_path / "identity.db"), compaction_strategy=None)
         channel = IdleChannel()
         assert agent.add_channel(channel) is agent
         with pytest.raises(ValueError, match="already attached"):
@@ -140,7 +140,7 @@ def test_listener_rejects_inflight_generation_and_early_close_releases_ownership
                 yield TextDoneEvent(text="first")
                 await asyncio.Event().wait()
 
-        agent = Agent(GatedProvider(), SessionManager(tmp_path / "active.db"), compactor=None)
+        agent = Agent(GatedProvider(), SessionManager(tmp_path / "active.db"), compaction_strategy=None)
         agent.add_channel(IdleChannel())
         events = agent.run_simple([Message(role="user", content="go")]) if simple else agent.run("go")
         await anext(events)
@@ -159,7 +159,7 @@ def test_close_rejects_new_work_through_provider_cleanup_and_allows_reuse(tmp_pa
     async def scenario() -> None:
         provider = ClosingProvider()
         channel = IdleChannel()
-        agent = Agent(provider, SessionManager(tmp_path / "reuse.db"), compactor=None).add_channel(channel)
+        agent = Agent(provider, SessionManager(tmp_path / "reuse.db"), compaction_strategy=None).add_channel(channel)
         await agent.initialize()
         listener = asyncio.create_task(agent.listen("identity"))
         await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
@@ -222,7 +222,7 @@ def test_replaced_provider_gets_its_own_close_without_reinitialization(tmp_path:
         original.release_close.set()
         replacement = ClosingProvider()
         replacement.release_close.set()
-        agent = Agent(original, SessionManager(tmp_path / "provider-replacement.db"), compactor=None)
+        agent = Agent(original, SessionManager(tmp_path / "provider-replacement.db"), compaction_strategy=None)
         if original_fails:
             with pytest.raises(RuntimeError, match="original cleanup failed"):
                 await agent.close()
@@ -258,7 +258,9 @@ def test_concurrent_close_callers_join_cleanup_despite_repeated_cancellation(tmp
 
         provider = ClosingProvider()
         channel = ClosingChannel()
-        agent = Agent(provider, SessionManager(tmp_path / "cancel-close.db"), compactor=None).add_channel(channel)
+        agent = Agent(provider, SessionManager(tmp_path / "cancel-close.db"), compaction_strategy=None).add_channel(
+            channel
+        )
         listener = asyncio.create_task(agent.listen("identity"))
         await asyncio.wait_for(channel.started.wait(), HANG_GUARD)
         first = asyncio.create_task(agent.close())
@@ -309,7 +311,7 @@ def test_close_preserves_failures_and_attempts_all_resources(tmp_path: Path, mon
             raise ValueError("batch cleanup failed")
 
         provider = FailingProvider()
-        agent = Agent(provider, SessionManager(tmp_path / "close-errors.db"), batch=True, compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "close-errors.db"), batch=True, compaction_strategy=None)
         assert agent._batch_client is not None
         monkeypatch.setattr(agent._batch_client, "close", close_batch)
         first = asyncio.create_task(agent.close())
@@ -349,7 +351,7 @@ def test_nested_after_run_cleanup_retains_channel_ownership(tmp_path: Path) -> N
 
         provider = OfflineProvider([[TextDoneEvent(text="outer")], [TextDoneEvent(text="inner")]])
         agent = Agent(
-            provider, SessionManager(tmp_path / "nested.db"), compactor=None, plugins=[Cleanup()]
+            provider, SessionManager(tmp_path / "nested.db"), compaction_strategy=None, plugins=[Cleanup()]
         ).add_channel(FiniteChannel())
         try:
             await asyncio.wait_for(agent.listen("identity"), HANG_GUARD)
@@ -389,7 +391,7 @@ def test_after_run_rejects_self_close_but_can_clear_during_shutdown(tmp_path: Pa
                 cleaned.set()
 
         agent = Agent(
-            OfflineProvider(), SessionManager(tmp_path / "hook-close.db"), compactor=None, plugins=[Cleanup()]
+            OfflineProvider(), SessionManager(tmp_path / "hook-close.db"), compaction_strategy=None, plugins=[Cleanup()]
         ).add_channel(FiniteChannel())
         listener = asyncio.create_task(agent.listen("identity"))
         await asyncio.wait_for(started.wait(), HANG_GUARD)
@@ -451,7 +453,7 @@ def test_early_close_waits_for_retained_provider_generator_before_handoff(tmp_pa
         agent = Agent(
             provider,
             SessionManager(tmp_path / "stream-close.db"),
-            compactor=None,
+            compaction_strategy=None,
             plugins=[] if simple else [Cleanup()],
         ).add_channel(channel)
         events = agent.run_simple([Message(role="user", content="go")]) if simple else agent.run("go")
@@ -506,7 +508,7 @@ def test_provider_iterator_without_aclose_remains_supported(tmp_path: Path, simp
             ) -> AsyncIterator[Event]:
                 return Events()
 
-        agent = Agent(IteratorProvider(), SessionManager(tmp_path / "iterator.db"), compactor=None)
+        agent = Agent(IteratorProvider(), SessionManager(tmp_path / "iterator.db"), compaction_strategy=None)
         try:
             stream = agent.run_simple([Message(role="user", content="go")]) if simple else agent.run("go")
             events = [event async for event in stream]

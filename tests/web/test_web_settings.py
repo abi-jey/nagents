@@ -13,8 +13,7 @@ import aiosqlite
 import httpx
 import pytest
 
-from nagents.compactor import Messages
-from nagents.compactor import Tokens
+from nagents.compaction import ModelCompaction
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
@@ -457,36 +456,38 @@ def test_compaction_criteria_apply_to_the_live_agent(tmp_path: Path) -> None:
             harness = harnesses[0]
             before = (await client.get("/api/settings", headers=headers)).json()
             assert before["values"]["compact_trigger"] == "auto"
-            assert harness.agent.compactor == "self" and harness.agent.compact_on is None
+            assert isinstance(harness.agent.compaction_strategy, ModelCompaction)
+            assert harness.agent.compaction_strategy.token_threshold is None
             tokens = {**before["values"], "compact_trigger": "tokens", "compact_tokens": 50000}
             saved = await client.post(
                 "/api/settings", json={"revision": before["revision"], "values": tokens}, headers=headers
             )
             assert saved.status_code == 200
-            assert harness.agent.compactor == "self"
-            assert isinstance(harness.agent.compact_on, Tokens) and harness.agent.compact_on.total == 50000
-            assert harness.agent.compact_on.input == 40000 and harness.agent.compact_on.output == 5000
+            assert isinstance(harness.agent.compaction_strategy, ModelCompaction)
+            assert harness.agent.compaction_strategy.token_threshold == 35000
             assert SettingsValues.current(harness).compact_trigger == "tokens"
             messages = {**saved.json()["values"], "compact_trigger": "messages", "compact_messages": 7}
             saved = await client.post(
                 "/api/settings", json={"revision": saved.json()["revision"], "values": messages}, headers=headers
             )
             assert saved.status_code == 200
-            assert isinstance(harness.agent.compact_on, Messages) and harness.agent.compact_on.length == 7
+            assert isinstance(harness.agent.compaction_strategy, ModelCompaction)
+            assert harness.agent.compaction_strategy.message_threshold == 7
             assert SettingsValues.current(harness).compact_messages == 7
             off = {**saved.json()["values"], "compact_trigger": "off"}
             saved = await client.post(
                 "/api/settings", json={"revision": saved.json()["revision"], "values": off}, headers=headers
             )
             assert saved.status_code == 200
-            assert harness.agent.compactor is None and harness.agent.compact_on is None
+            assert harness.agent.compaction_strategy is None
             assert SettingsValues.current(harness).compact_trigger == "off"
             reset = await client.post(
                 "/api/settings/reset", json={"revision": saved.json()["revision"]}, headers=headers
             )
             assert reset.status_code == 200
             assert reset.json()["values"]["compact_trigger"] == "auto"
-            assert harness.agent.compactor == "self" and harness.agent.compact_on is None
+            assert isinstance(harness.agent.compaction_strategy, ModelCompaction)
+            assert harness.agent.compaction_strategy.token_threshold is None
 
     asyncio.run(check())
 
@@ -1026,7 +1027,6 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
                         ("/api/settings", {"revision": before["revision"], "values": values}),
                         ("/api/settings/reset", {"revision": before["revision"]}),
                         ("/api/sessions/new", {}),
-                        ("/api/run", {"session_id": harness.session_id, "prompt": "wait"}),
                     ):
                         assert (await client.post(path, json=body, headers=headers)).status_code == 409
                     request.cancel()

@@ -14,7 +14,7 @@ from nagents import Agent
 from nagents import Provider
 from nagents import ProviderType
 from nagents import SessionManager
-from nagents.compactor import Messages
+from nagents.compaction import ModelCompaction
 from nagents.events import CompactionDoneEvent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
@@ -94,7 +94,7 @@ async def collect(agent: Agent, message: str = "go", session_id: str = "s") -> l
 def test_legacy_import_flow_and_default_hooks(tmp_path: Path) -> None:
     async def drive() -> None:
         provider = OfflineProvider()
-        agent = Agent(provider, SessionManager(tmp_path / "legacy.db"), compactor=None)
+        agent = Agent(provider, SessionManager(tmp_path / "legacy.db"), compaction_strategy=None)
         assert agent.plugins == []
         assert agent.save_tool_outputs is True
         context = RunContext(agent, "s", "u")
@@ -148,9 +148,7 @@ def test_custom_compaction_reopen_preserves_raw_history_and_serialization(tmp_pa
         ]
         provider = OfflineProvider()
         strategy = ReplacementStrategy(replacements)
-        agent = Agent(
-            provider, session, system_prompt="configured system", compactor=None, compaction_strategy=strategy
-        )
+        agent = Agent(provider, session, system_prompt="configured system", compaction_strategy=strategy)
         result = await agent.compact("s")
         assert result.summary_text == "Python replacement"
         assert result.new_message_count == len(replacements)
@@ -184,11 +182,11 @@ def test_custom_compaction_reopen_preserves_raw_history_and_serialization(tmp_pa
 
 
 @pytest.mark.parametrize("manual", [False, True])
-def test_legacy_self_compaction_still_works(tmp_path: Path, manual: bool) -> None:
+def test_model_compaction_works_automatically_and_manually(tmp_path: Path, manual: bool) -> None:
     async def drive() -> None:
         provider = OfflineProvider([[TextDoneEvent(text="legacy summary")], [TextDoneEvent(text="answer")]])
         session = SessionManager(tmp_path / "legacy_compaction.db")
-        agent = Agent(provider, session, compactor="self", compact_on=Messages(length=1))
+        agent = Agent(provider, session, compaction_strategy=ModelCompaction(message_threshold=1))
         if manual:
             await session.get_or_create_session("s", "u")
             await session.add_message("s", Message(role="user", content="old context"))
@@ -245,7 +243,7 @@ def test_stateful_tool_callable_is_not_deep_copied(tmp_path: Path) -> None:
             SessionManager(tmp_path / "stateful.db"),
             tools=[owner.work],
             plugins=[AgentPlugin()],
-            compactor=None,
+            compaction_strategy=None,
         )
         await collect(agent)
         assert owner.executed is True
@@ -265,8 +263,6 @@ def test_strategy_precedence_each_generation_and_trigger(tmp_path: Path, forced:
             provider,
             SessionManager(tmp_path / "auto.db"),
             system_prompt="configured",
-            compactor="self",
-            compact_on=Messages(length=1),  # Would force an extra LLM call if legacy won.
             compaction_strategy=strategy,
         )
 
@@ -399,7 +395,7 @@ def test_before_model_detaches_messages_tools_and_config(tmp_path: Path, monkeyp
             return value
 
         provider = OfflineProvider()
-        agent = Agent(provider, session, tools=[work], plugins=[Transform()], compactor=None)
+        agent = Agent(provider, session, tools=[work], plugins=[Transform()], compaction_strategy=None)
         definition = deepcopy(agent.tool_registry.get_all()[0])
         config = GenerationConfig(temperature=0.7, stop=["original stop"])
         _ = [event async for event in agent.run("new", "s", config=config)]
@@ -473,7 +469,6 @@ def test_ordered_hooks_transform_before_executor_and_persist(tmp_path: Path) -> 
             SessionManager(tmp_path / "hooks.db"),
             tools=[work],
             plugins=[Plugin("A"), Plugin("B")],
-            compactor=None,
         )
         message = Message(role="user", content="go")
         events = [event async for event in agent.run(message, "s", "u")]
@@ -546,7 +541,7 @@ def test_injected_executor_denies_transformed_tool(tmp_path: Path, constructor_i
             tools=[work],
             plugins=[Transform()],
             tool_executor=executor if constructor_injection else None,
-            compactor=None,
+            compaction_strategy=None,
         )
         if not constructor_injection:
             agent.tool_executor = DenyingExecutor(agent.tool_registry)
@@ -601,7 +596,11 @@ def test_hook_errors_fail_closed_and_cleanup(tmp_path: Path, hook: str) -> None:
 
         provider = OfflineProvider([[ToolCallEvent(id="a", name="work"), ToolCallEvent(id="b", name="work")]])
         agent = Agent(
-            provider, SessionManager(tmp_path / "failure.db"), tools=[work], plugins=[Failing()], compactor=None
+            provider,
+            SessionManager(tmp_path / "failure.db"),
+            tools=[work],
+            plugins=[Failing()],
+            compaction_strategy=None,
         )
         with pytest.raises(RuntimeError, match=f"failed {hook}"):
             await collect(agent)
@@ -632,7 +631,10 @@ def test_all_cleanup_hooks_run_even_if_one_fails(tmp_path: Path) -> None:
                 cleaned.append("second")
 
         agent = Agent(
-            OfflineProvider(), SessionManager(tmp_path / "cleanup.db"), plugins=[Cleanup(), Later()], compactor=None
+            OfflineProvider(),
+            SessionManager(tmp_path / "cleanup.db"),
+            plugins=[Cleanup(), Later()],
+            compaction_strategy=None,
         )
         with pytest.raises(ExceptionGroup, match="cleanup failed") as errors:
             await collect(agent)
@@ -669,7 +671,9 @@ def test_call_identity_changes_rejected(tmp_path: Path, hook: str, field: str) -
                 return result
 
         provider = OfflineProvider([[ToolCallEvent(id="a", name="work")]])
-        agent = Agent(provider, SessionManager(tmp_path / "identity.db"), plugins=[ChangeIdentity()], compactor=None)
+        agent = Agent(
+            provider, SessionManager(tmp_path / "identity.db"), plugins=[ChangeIdentity()], compaction_strategy=None
+        )
         agent.tool_executor = Executor(agent.tool_registry)
         with pytest.raises(ValueError, match="preserve tool call id/name"):
             await collect(agent)
@@ -706,7 +710,11 @@ def test_aclose_persists_result_before_ui_and_repairs_pending_calls(tmp_path: Pa
             ]
         )
         agent = Agent(
-            provider, SessionManager(tmp_path / "aclose.db"), tools=[work], plugins=[Cleanup()], compactor=None
+            provider,
+            SessionManager(tmp_path / "aclose.db"),
+            tools=[work],
+            plugins=[Cleanup()],
+            compaction_strategy=None,
         )
         stream = agent.run("go", "s")
         async for event in stream:
@@ -757,7 +765,11 @@ def test_cancel_pending_multi_call_block_repairs_before_return(tmp_path: Path, c
             ]
         )
         agent = Agent(
-            provider, SessionManager(tmp_path / "cancel.db"), tools=[work], plugins=[Cleanup()], compactor=None
+            provider,
+            SessionManager(tmp_path / "cancel.db"),
+            tools=[work],
+            plugins=[Cleanup()],
+            compaction_strategy=None,
         )
         task = asyncio.create_task(collect(agent))
         await asyncio.wait_for(started.wait(), HANG_GUARD)
@@ -798,7 +810,7 @@ def test_crash_resume_repairs_without_replaying_before_new_user(tmp_path: Path) 
             return "bad"
 
         provider = OfflineProvider([[TextDoneEvent(text="resumed")], [TextDoneEvent(text="again")]])
-        agent = Agent(provider, SessionManager(db_path), tools=[work], compactor=None)
+        agent = Agent(provider, SessionManager(db_path), tools=[work], compaction_strategy=None)
         await collect(agent)
         request = provider.requests[0]
         assert [message.role for message in request.messages] == ["assistant", "tool", "tool", "user"]
@@ -833,7 +845,7 @@ def test_cancellation_racing_committed_message_does_not_duplicate_results(tmp_pa
             return "completed"
 
         provider = OfflineProvider([[ToolCallEvent(id="a", name="work"), ToolCallEvent(id="b", name="work")]])
-        agent = Agent(provider, PausingSession(tmp_path / "commit_race.db"), tools=[work], compactor=None)
+        agent = Agent(provider, PausingSession(tmp_path / "commit_race.db"), tools=[work], compaction_strategy=None)
         task = asyncio.create_task(collect(agent))
         await asyncio.wait_for(committed.wait(), HANG_GUARD)
         task.cancel()
@@ -870,7 +882,7 @@ def test_result_notification_failure_keeps_result_and_repairs_rest(tmp_path: Pat
             SessionManager(tmp_path / "notify_failure.db"),
             tools=[work],
             plugins=[FailingObserver()],
-            compactor=None,
+            compaction_strategy=None,
         )
         with pytest.raises(RuntimeError, match="notification failed"):
             await collect(agent)
@@ -887,7 +899,7 @@ def test_hallucination_error_persisted_and_remaining_calls_repaired(tmp_path: Pa
     async def drive() -> None:
         provider = OfflineProvider([[ToolCallEvent(id="a", name="missing"), ToolCallEvent(id="b", name="missing")]])
         agent = Agent(
-            provider, SessionManager(tmp_path / "hallucination.db"), fail_on_invalid_tool=True, compactor=None
+            provider, SessionManager(tmp_path / "hallucination.db"), fail_on_invalid_tool=True, compaction_strategy=None
         )
         with pytest.raises(ToolHallucinationError):
             await collect(agent)
@@ -922,7 +934,11 @@ def test_save_to_switch_controls_schema_extraction_and_filesystem(
             [[ToolCallEvent(id="a", name="work", arguments={"_save_to": str(output)})], [TextDoneEvent(text="done")]]
         )
         agent = Agent(
-            provider, SessionManager(tmp_path / "save.db"), tools=[work], save_tool_outputs=enabled, compactor=None
+            provider,
+            SessionManager(tmp_path / "save.db"),
+            tools=[work],
+            save_tool_outputs=enabled,
+            compaction_strategy=None,
         )
         events = await collect(agent)
         assert ("_save_to" in provider.requests[0].tools[0].parameters.get("properties", {})) is enabled
@@ -989,7 +1005,7 @@ def test_provider_error_still_notifies_and_cleans_up(tmp_path: Path) -> None:
             OfflineProvider([[ErrorEvent(message="offline failure")]]),
             SessionManager(tmp_path / "error.db"),
             plugins=[Observe()],
-            compactor=None,
+            compaction_strategy=None,
         )
         await collect(agent)
         assert observed == [ErrorEvent, DoneEvent]
@@ -1024,7 +1040,7 @@ def test_after_model_runs_on_every_completed_response_before_calls(tmp_path: Pat
             SessionManager(tmp_path / "boundaries.db"),
             tools=[tool],
             plugins=[Boundary()],
-            compactor=None,
+            compaction_strategy=None,
         )
         try:
             await collect(agent)

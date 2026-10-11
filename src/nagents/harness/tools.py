@@ -52,7 +52,7 @@ from .execution import _mask_delivery_authority
 from .types import ToolOutput
 
 READ_ONLY_TOOLS = frozenset(
-    {"read_file", "list_files", "find", "search", "skill", "schedule_wakeup", "wake_up_in", "compact_history"}
+    {"read_file", "list_files", "find", "search", "skill", "schedule_wakeup", "compact_history"}
 )
 MODIFYING_TOOLS = frozenset({"edit", "write", "shell"})
 
@@ -269,7 +269,6 @@ class CodingTools:
         self.call_id: ContextVar[str] = ContextVar("harness_tool_call_id", default="")
         self.builtins: dict[str, Callable[..., object]] = {}
         self._limit_definitions: dict[str, ToolDefinition] = {}
-        self._wakeup_definitions: dict[str, ToolDefinition] = {}
         self.skills: dict[str, tuple[str, str]] = {}
         self.workspace_skills: dict[str, tuple[str, str]] = {}
         self.skill_diagnostics: tuple[str, ...] = ()
@@ -289,7 +288,6 @@ class CodingTools:
             self.compact_history,
         ):
             self.register_builtin(function)
-        self.register_builtin(self.schedule_wakeup, name="wake_up_in")
         if self.harness.config.demo:
             self.register_builtin(self.demo_preview)
 
@@ -297,9 +295,8 @@ class CodingTools:
         name = name or function.__name__
         definition = self.harness.agent.register_tool(function, name=name)
         self.builtins[name] = function
-        if function == self.schedule_wakeup and name in {"schedule_wakeup", "wake_up_in"}:
+        if function == self.schedule_wakeup and name == "schedule_wakeup":
             definition.parameters["required"] = ["reason"]
-            self._wakeup_definitions[name] = definition
         if name in {"read_file", "shell"}:
             self._limit_definitions[name] = definition
         return definition
@@ -348,8 +345,8 @@ class CodingTools:
         agent = self.harness.agent
         if self.harness._busy != "run" or not agent._active_runs:
             raise RuntimeError("History compaction requests require an active conversation")
-        if agent.compactor is None and agent.compaction_strategy is None:
-            raise ValueError("No compactor is configured for this agent")
+        if agent.compaction_strategy is None:
+            raise ValueError("No compaction strategy is configured for this agent")
         agent.trigger_compaction(self.harness.session_id)
         return {
             "status": "requested",

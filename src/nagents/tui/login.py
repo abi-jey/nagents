@@ -44,7 +44,7 @@ class LoginMethodModal(ModalScreen[str]):
                     "OpenRouter\nConfigure an OpenRouter API key environment variable in /provider.\n\n"
                     "API key / other provider\nUsage-based provider billing, separate from ChatGPT. "
                     "Use named provider connections in /provider with environment variable references; no new key is stored. "
-                    "The legacy ngn login CLI stores keys in ngn's private credential store. "
+                    "The ngn login CLI stores keys in ngn's private credential store. "
                     "Keys are never shown in the conversation.",
                     markup=False,
                 )

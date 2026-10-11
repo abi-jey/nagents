@@ -142,7 +142,7 @@ class Message:
     A message in a conversation.
 
     Content can be:
-    - str: Simple text content (for backward compatibility)
+    - str: Plain text content
     - list[ContentPart]: Multimodal content (text, images, audio, documents)
     - None: For assistant messages with only tool calls
     """

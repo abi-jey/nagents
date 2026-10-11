@@ -113,7 +113,6 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
             patch.object(ControlledHarness, "run", Harness.run),
             patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),
             patch.object(HarnessProvider, "generate", generate),
-            patch("nagents.web.live_bridge.VOICE_REPLY_SECONDS", 0.001),
         ):
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
                 state = app.state.web

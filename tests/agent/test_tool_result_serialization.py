@@ -90,7 +90,7 @@ def test_compound_tools_preserve_events_and_session_context(tmp_path: Path, stre
             SessionManager(tmp_path / "results.db"),
             tools=[read_rows, custom, fail],
             streaming=streaming,
-            compactor=None,
+            compaction_strategy=None,
         )
         try:
             events = [event async for event in agent.run("go", session_id="s")]

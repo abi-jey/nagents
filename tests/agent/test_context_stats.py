@@ -131,7 +131,7 @@ def test_agent_reports_persisted_history_without_running_the_provider(tmp_path: 
             SessionManager(tmp_path / "context.db"),
             tools=[lambda city: f"sunny in {city}"],
             system_prompt="You are concise.",
-            compactor=None,
+            compaction_strategy=None,
         )
         assert [event async for event in agent.run("what is the weather", session_id="s")]
         calls_before = len(provider.requests)
@@ -153,7 +153,7 @@ def test_agent_reports_persisted_history_without_running_the_provider(tmp_path: 
 
 def test_agent_context_stats_rejects_unknown_session(tmp_path: Path) -> None:
     async def drive() -> None:
-        agent = Agent(OfflineProvider(), SessionManager(tmp_path / "missing.db"), compactor=None)
+        agent = Agent(OfflineProvider(), SessionManager(tmp_path / "missing.db"), compaction_strategy=None)
         try:
             await agent.context_stats("absent")
         except ValueError as error:

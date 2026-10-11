@@ -6,7 +6,7 @@ import "./tools.css";
 
 interface ToolInfo {
   name: string; description: string; parameters: Record<string, unknown>;
-  category: string; builtin: boolean; reviewer_allowed: boolean; alias_of: string;
+  category: string; builtin: boolean; reviewer_allowed: boolean;
 }
 interface SavedToolApproval { tool: string; revision: string; persistent: boolean; }
 interface ToolSettings {
@@ -84,7 +84,7 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   }
   const profile = catalog?.profiles.find((item) => item.id === agent);
   const selected = agents[agent] || {};
-  const enabled = (tool: ToolInfo) => selected[tool.name] !== false && (!tool.alias_of || selected[tool.alias_of] !== false);
+  const enabled = (tool: ToolInfo) => selected[tool.name] !== false;
   const visible = (catalog?.tools || []).filter((tool) => (!category || tool.category === category) && `${tool.name} ${tool.description}`.toLowerCase().includes(search.toLowerCase()));
   return <dialog ref={dialog} className="tools-dialog" aria-labelledby="tools-title" onCancel={(event) => { event.preventDefault(); if (!pending) close(); }}>
     <header><div><h2 id="tools-title" ref={heading} tabIndex={-1}><Icon name="tools" />Tools</h2><p>Choose which tools each agent can use in this workspace.</p></div>
@@ -113,8 +113,8 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
         </li>)}</ul> : <p>{catalog ? "No saved tool approvals. Choose Always allow this tool when a call asks for permission." : "Loading saved permissions…"}</p>}
       </section>
       {visible.map((tool) => <article className={`tool-setting${enabled(tool) ? " enabled" : ""}`} key={tool.name}>
-      <div className="tool-setting-heading"><div><h3>{tool.name}</h3><span className="tool-category">{tool.category}</span>{tool.alias_of && <span className="tool-category">Alias of {tool.alias_of}</span>}</div>
-        <label className="tool-switch"><span>{enabled(tool) ? "Enabled" : "Disabled"}</span><input type="checkbox" role="switch" aria-label={`Enable ${tool.name} for ${agent}`} checked={enabled(tool)} disabled={disabled || conflict || (!!tool.alias_of && selected[tool.alias_of] === false)} onChange={(event) => choose([tool.name], event.target.checked)} /></label></div>
+      <div className="tool-setting-heading"><div><h3>{tool.name}</h3><span className="tool-category">{tool.category}</span></div>
+        <label className="tool-switch"><span>{enabled(tool) ? "Enabled" : "Disabled"}</span><input type="checkbox" role="switch" aria-label={`Enable ${tool.name} for ${agent}`} checked={enabled(tool)} disabled={disabled || conflict} onChange={(event) => choose([tool.name], event.target.checked)} /></label></div>
       <p>{tool.description}</p>
       {profile?.mode === "reviewer" && !tool.reviewer_allowed && <p className="tool-restriction">This agent's read-only mode blocks execution of this tool.</p>}
       <details><summary>Tool schema · read-only</summary><pre>{JSON.stringify(tool.parameters, null, 2)}</pre></details>

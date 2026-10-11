@@ -26,7 +26,6 @@ from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import FileResponse
 from starlette.responses import JSONResponse
-from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from nagents.agent import Agent
@@ -60,11 +59,8 @@ from .live_settings import LiveSettings
 from .live_summary import VoiceContextSummarizer
 from .provider_login import ProviderLogin
 from .provider_setup import provider_setup
-from .routing import RoutingStore
 from .security import SECURITY_HEADERS
 from .security import LocalOnly
-from .service import Run as Run
-from .service import RunResponse
 from .service import WebState as WebState
 from .session_actions import register_session_actions
 from .session_groups import SessionGroups
@@ -104,10 +100,6 @@ class TrashGenerationInput(Input):
 class TrashSettingsInput(Input):
     revision: str = Field(min_length=1, max_length=128)
     retention_days: int = Field(ge=1, le=365)
-
-
-class PromptInput(SessionInput):
-    prompt: str = Field(min_length=1, max_length=32000)
 
 
 class MessageInput(SessionInput):
@@ -312,7 +304,7 @@ def create_app(
                 [str(path) for path in harness.config.config_paths],
                 harness.provider_store.path,
                 harness.provider_store.workspace_store.path,
-                registry.active or "(legacy configuration)",
+                registry.active or "(no named connection)",
                 {name: profile.kind for name, profile in registry.providers.items()},
             )
             logger.info(
@@ -673,12 +665,7 @@ def create_app(
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:
         with state.idle():
-            await state.settings.change(
-                body.revision,
-                body.values,
-                api_key=body.api_key,
-                clear_api_key=body.clear_api_key,
-            )
+            await state.settings.change(body.revision, body.values)
             logger.info(
                 "Workspace settings saved: provider=%s agent=%s model=%s",
                 state.harness.config.provider or state.harness.config.provider_profile().kind,
@@ -702,10 +689,6 @@ def create_app(
 
     @app.post("/api/settings/global")
     async def save_global_settings(body: SettingsInput) -> dict[str, object]:
-        if body.api_key or body.clear_api_key:
-            raise HTTPException(
-                422, "Global settings use credential references. Store key values in workspace settings."
-            )
         with state.idle():
             try:
                 await finish_on_cancel(state.settings.change_global(body.revision, body.values))
@@ -782,24 +765,6 @@ def create_app(
             state.selected_session_id = body.session_id
             await empty_sessions.prune(state, live.active_session_id)
             return await state.snapshot()
-
-    @app.post("/api/run")
-    async def run(body: PromptInput) -> StreamingResponse:
-        if not config.demo and not state.harness.config.provider:
-            raise HTTPException(409, "Select a named provider connection before starting a run.")
-        with state.idle(allow_running=True):
-            await state.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
-            if body.session_id != state.selected_session_id:
-                raise HTTPException(409, "The selected session changed. Reconnect before submitting.")
-            if not body.prompt.strip():
-                raise HTTPException(422, "Prompt must not be blank.")
-            active = Run(body.session_id)
-            state.active = active
-            state.publish(active, {"event": "run_started"})
-            state.status()
-            active.task = asyncio.create_task(state.produce_session(active, body.prompt), name=f"ngn-web-{active.id}")
-            logger.info("Run started: session=%s run=%s chars=%d", body.session_id, active.id, len(body.prompt))
-        return RunResponse(state, active)
 
     @app.post("/api/cancel")
     async def cancel(body: RunInput) -> dict[str, str]:

@@ -25,7 +25,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 from typing import Any
-from typing import Literal
 from typing import Protocol
 from typing import Self
 from typing import runtime_checkable
@@ -38,20 +37,13 @@ from .batch import BatchStatus
 from .channels.types import Channel
 from .channels.types import ChannelEventHandler
 from .channels.types import discard_event
+from .compaction import ModelCompaction
 from .compaction import estimate_messages_tokens
-from .compaction import format_messages_as_text
 from .compaction import get_model_context_limit
-from .compaction import truncate_tool_results
-from .compactor import DEFAULT_COMPACTOR
-from .compactor import DEFAULT_COMPACT_PROMPT
-from .compactor import CompactionDoneEvent
-from .compactor import CompactionStartedEvent
-from .compactor import Compactor
-from .compactor import Messages
-from .compactor import Tokens
-from .compactor import generate_compaction_session_id
 from .context_stats import ContextStats
 from .context_stats import estimate_context_stats
+from .events import CompactionDoneEvent
+from .events import CompactionStartedEvent
 from .events import DoneEvent
 from .events import ErrorEvent
 from .events import Event
@@ -102,20 +94,19 @@ from .types import ToolDefinition
 
 if TYPE_CHECKING:
     from ._delivery_execution import _DeliveryExecution
+    from .audio import AudioDuplex
     from .live import _LiveUpdates
-    from .realtime import AudioDuplex
     from .realtime import RealtimeConfig
     from .realtime import RealtimeSession
     from .stt import STTService
 
 
-class _CompactorNotSet:
-    """Sentinel value to distinguish 'not set' from 'explicitly set to None'."""
-
+class _DefaultCompactionStrategy:
     pass
 
 
-_COMPACTOR_NOT_SET = _CompactorNotSet()
+_DEFAULT_COMPACTION_STRATEGY = _DefaultCompactionStrategy()
+
 
 logger = logging.getLogger(__name__)
 
@@ -251,11 +242,8 @@ class Agent:
         unsupported_audio: UnsupportedAudioBehavior = UnsupportedAudioBehavior.RAISE,
         audio: "AudioDuplex | None" = None,
         retry_config: RetryConfig | None = None,
-        compactor: Compactor | Literal["self"] | object | None = _COMPACTOR_NOT_SET,
-        compact_on: Tokens | Messages | None = None,
-        compact_prompt: str | None = None,
         plugins: Iterable[AgentPlugin] = (),
-        compaction_strategy: CompactionStrategy | None = None,
+        compaction_strategy: CompactionStrategy | _DefaultCompactionStrategy | None = _DEFAULT_COMPACTION_STRATEGY,
         tool_executor: ToolExecutor | None = None,
         save_tool_outputs: bool = True,
         skill_discoverer: SkillDiscoverer | None = None,
@@ -267,8 +255,7 @@ class Agent:
 
         Args:
             provider: The LLM provider to use
-            session_manager: Session manager for conversation history. Required for
-                           normal agents. Can be None for Compactor (will be injected).
+            session_manager: Session manager for conversation history.
             tools: Optional list of tool functions to register
             system_prompt: Optional system prompt to prepend to conversations
             max_tool_rounds: Maximum number of tool execution rounds
@@ -291,9 +278,9 @@ class Agent:
                                - DROP: Replace audio with a text warning
                                - TRANSCRIBE: Auto-transcribe using stt_service
                                  (requires stt_service to be set)
-            audio: Optional :class:`~nagents.realtime.AudioDuplex` pairing an
-                   :class:`~nagents.realtime.AudioInput` and
-                   :class:`~nagents.realtime.AudioOutput`. When set, calling
+            audio: Optional :class:`~nagents.audio.AudioDuplex` pairing an
+                   :class:`~nagents.audio.AudioInput` and
+                   :class:`~nagents.audio.AudioOutput`. When set, calling
                    :meth:`run` with no message runs a Realtime speech-to-speech
                    conversation. Either end may be ``None`` to disable it.
             retry_config: Optional retry configuration for rate limit (HTTP 429)
@@ -301,20 +288,9 @@ class Agent:
                           the provider's retry config. Retries are enabled by
                           default (3 retries with exponential backoff). Set
                           RetryConfig(max_retries=0) to disable.
-            compactor: Context compaction configuration. Options:
-                      - Omitted (default): Use an agent-local copy of DEFAULT_COMPACTOR
-                      - None: Disable compaction
-                      - "self": Use the main agent for compaction (same provider/model)
-                      - Compactor: Use a separate agent for compaction
-            compact_on: When to trigger compaction. Options:
-                       - Tokens(input=N, output=M): Compact when tokens >= N-M
-                       - Messages(length=N): Compact when message count >= N
-                       - None: Use resolution order (agent -> compactor -> provider default)
-            compact_prompt: Custom prompt for "self" compaction. If None, uses
-                           DEFAULT_COMPACT_PROMPT.
+            compaction_strategy: Strategy for automatic and forced context replacement.
+                                 Omitted selects a fresh ModelCompaction; None disables it.
             plugins: Trusted, ordered hooks for the text run lifecycle.
-            compaction_strategy: Python context replacement strategy; takes
-                                 precedence over the legacy compactor.
             tool_executor: Optional authorization/execution boundary. The consumer
                            must ensure its registry matches this agent's tools;
                            assigning an executor after construction is supported.
@@ -342,21 +318,18 @@ class Agent:
         self._live_updates: _LiveUpdates | None = None
         self._last_live_updates: _LiveUpdates | None = None
         self.plugins: list[AgentPlugin] = list(plugins)
-        self.compaction_strategy = compaction_strategy
+        self._default_compaction_strategy: ModelCompaction | None = None
+        if isinstance(compaction_strategy, _DefaultCompactionStrategy):
+            self._default_compaction_strategy = ModelCompaction()
+            self.compaction_strategy: CompactionStrategy | None = self._default_compaction_strategy
+        else:
+            self.compaction_strategy = compaction_strategy
         self.save_tool_outputs = save_tool_outputs
         validate_skill_token_limit(skill_token_limit)
         self.skill_token_limit = skill_token_limit
         self._skill_discoverer = skill_discoverer
         self._skills: Mapping[str, Skill] = MappingProxyType({})
         self._skill_lock = asyncio.Lock()
-
-        # Compaction configuration
-        # Omitted -> use an agent-local DEFAULT_COMPACTOR; None -> disabled
-        # "self" -> use main agent for compaction
-        # Compactor -> use separate agent for compaction
-        self.compactor = compactor
-        self.compact_on = compact_on
-        self.compact_prompt = compact_prompt or DEFAULT_COMPACT_PROMPT
 
         # Forward retry config to provider if provided
         if retry_config is not None:
@@ -378,7 +351,7 @@ class Agent:
         # Track actual prompt_tokens from API responses per session
         # Maps session_id -> last known prompt_tokens
         self._session_tokens: dict[str, int] = {}
-        # Main-generation usage observed by this agent, not persisted history or compactor billing.
+        # Main-generation usage observed by this agent, not persisted history or compaction billing.
         self._session_usage: dict[str, TokenUsage] = {}
         # Last single generation's real usage per session, for context-stat comparison.
         self._last_usage: dict[str, TokenUsage] = {}
@@ -444,7 +417,10 @@ class Agent:
     def _check_extension_mode(self, mode: str) -> None:
         if (
             self.plugins
-            or self.compaction_strategy is not None
+            or (
+                self.compaction_strategy is not None
+                and self.compaction_strategy is not self._default_compaction_strategy
+            )
             or self.tool_executor is not self._default_tool_executor
             or not self.save_tool_outputs
             or self.skill_discoverer is not None
@@ -777,7 +753,7 @@ class Agent:
             config: Optional :class:`~nagents.realtime.RealtimeConfig` override
                 (defaults to ``provider.realtime_config``). Empty instructions
                 inherit the agent's system prompt; the supplied config is not mutated.
-            audio: Optional :class:`~nagents.realtime.AudioDuplex` (defaults to
+            audio: Optional :class:`~nagents.audio.AudioDuplex` (defaults to
                 the agent's ``audio``).
             base_url: WebSocket endpoint (defaults to OpenAI).
             heartbeat: Optional WebSocket heartbeat interval in seconds.
@@ -875,7 +851,7 @@ class Agent:
         """
         Run a full-duplex speech-to-speech conversation through this agent.
 
-        Uses the agent's ``audio`` :class:`~nagents.realtime.AudioDuplex` (set
+        Uses the agent's ``audio`` :class:`~nagents.audio.AudioDuplex` (set
         at construction) and the provider's Realtime model/config. Audio flows
         in through the duplex input and out through its output, while
         transcripts and tool events are yielded — the same event stream as
@@ -1072,293 +1048,16 @@ class Agent:
             )
         return filtered
 
-    def _resolve_compactor(self) -> Compactor | Literal["self"] | None:
-        """Resolve which compactor to use.
-
-        Returns:
-            - None: No compaction (user explicitly set compactor=None)
-            - "self": Use main agent for compaction
-            - Compactor: Use configured compactor or an agent-local DEFAULT_COMPACTOR
-        """
-        if self.compactor is None:
-            return None
-        if self.compactor == "self":
-            return "self"
-
-        if not isinstance(self.compactor, Compactor) or self.compactor is DEFAULT_COMPACTOR:
-            # Copy configuration, never the cached agent or its live provider/session state.
-            self.compactor = Compactor(
-                provider=DEFAULT_COMPACTOR.provider or self.provider,
-                system_prompt=DEFAULT_COMPACTOR.system_prompt,
-                compact_on=deepcopy(DEFAULT_COMPACTOR.compact_on),
-                model=DEFAULT_COMPACTOR.model,
-            )
-        return self.compactor
-
-    def _resolve_compact_on(self) -> Tokens | Messages | None:
-        """Resolve the compaction trigger configuration.
-
-        Resolution order:
-        1. Main agent's compact_on
-        2. Compactor's compact_on (if separate)
-        3. Provider's default
-        4. Fallback based on model context limit
-        """
-        # 1. Main agent's compact_on
-        if self.compact_on is not None:
-            return self.compact_on
-
-        # 2. Compactor's compact_on (if separate and configured)
-        compactor = self._resolve_compactor()
-        if isinstance(compactor, Compactor) and compactor.compact_on is not None:
-            return compactor.compact_on
-
-        # 3. Provider's default
-        default = self.provider.get_default_compact_on()
-        if default is not None:
-            return default
-
-        # 4. Fallback based on model context limit
-        context_limit = get_model_context_limit(self.provider)
-        if context_limit == 0:
-            return None  # Unknown model, no compaction
-
-        return Tokens(total=context_limit)
-
-    def _should_compact(self, messages: list[Message], trigger: Tokens | Messages, session_id: str = "") -> bool:
-        """Check if compaction should trigger based on the trigger config.
-
-        Args:
-            messages: List of messages to check
-            trigger: Trigger configuration (Tokens or Messages)
-            session_id: Session ID for looking up actual token counts
-
-        Returns:
-            True if compaction should trigger, False if not
-        """
-        if isinstance(trigger, Tokens):
-            # Prefer actual token count from last API response (includes tools + system prompt)
-            actual = self._session_tokens.get(session_id, 0) if session_id else 0
-            if actual > 0:
-                logger.debug(f"Compaction using actual tokens: {actual}")
-                return actual >= (trigger.input - trigger.output)  # type: ignore[operator]
-            estimated = estimate_messages_tokens(messages)
-            # After __post_init__, input and output are guaranteed to be int
-            assert trigger.input is not None and trigger.output is not None
-            return estimated >= (trigger.input - trigger.output)
-        else:  # Messages
-            return len(messages) >= trigger.length
-
     async def _maybe_compact(self, messages: list[Message], session_id: str) -> AsyncIterator[Event]:
-        """Run compaction if threshold is met (automatic trigger).
-
-        Args:
-            messages: Current message list
-            session_id: Session ID
-
-        Yields:
-            CompactionStartedEvent, CompactionDoneEvent if compaction occurs
-        """
         if self.compaction_strategy is not None:
             async for event in self._compact_with_strategy(session_id):
                 yield event
-            return
-
-        compactor = self._resolve_compactor()
-
-        # Log compactor resolution
-        if isinstance(compactor, _CompactorNotSet):
-            logger.debug("Compactor: DEFAULT_COMPACTOR (not set)")
-        elif compactor is None:
-            logger.debug("Compactor: None (disabled)")
-            return
-        elif compactor == "self":
-            logger.debug("Compactor: self (using main agent)")
-        else:
-            logger.debug(f"Compactor: {type(compactor).__name__} (model={compactor.get_model_name()})")
-
-        # No compaction if compactor is None
-        if compactor is None:
-            return
-
-        # Resolve trigger config
-        trigger = self._resolve_compact_on()
-        if trigger is None:
-            logger.debug("Compaction trigger: None (disabled)")
-            return
-
-        # Log trigger config
-        if isinstance(trigger, Tokens):
-            logger.debug(f"Compaction trigger: Tokens(input={trigger.input}, output={trigger.output})")
-        else:
-            logger.debug(f"Compaction trigger: Messages(length={trigger.length})")
-
-        # Check if compaction needed
-        estimated_tokens = estimate_messages_tokens(messages)
-        actual_tokens = self._session_tokens.get(session_id, 0)
-        used_tokens = actual_tokens if actual_tokens > 0 else estimated_tokens
-        logger.debug(
-            f"Compaction check: {len(messages)} messages, {used_tokens} tokens ({'actual' if actual_tokens > 0 else 'estimated'})"
-        )
-
-        if not self._should_compact(messages, trigger, session_id):
-            if isinstance(trigger, Tokens):
-                assert trigger.input is not None and trigger.output is not None
-                threshold = trigger.input - trigger.output
-                logger.debug(f"Compaction skipped: {used_tokens} tokens < {threshold} threshold")
-            else:
-                logger.debug(f"Compaction skipped: {len(messages)} messages < {trigger.length} threshold")
-            return
-
-        # Delegate to _do_compact
-        async for event in self._do_compact(messages, session_id):
-            yield event
 
     async def _do_compact(self, messages: list[Message], session_id: str) -> AsyncIterator[Event]:
-        """Execute compaction regardless of threshold.
-
-        Core compaction logic used by both automatic and manual triggers.
-
-        Args:
-            messages: Current message list (should include system prompt)
-            session_id: Session ID
-
-        Yields:
-            CompactionStartedEvent, intermediate events, CompactionDoneEvent
-        """
-        if self.compaction_strategy is not None:
-            async for event in self._compact_with_strategy(session_id, force=True):
-                yield event
-            return
-
-        compactor = self._resolve_compactor()
-
-        if compactor is None:
-            raise ValueError("No compactor configured. Set compactor=DEFAULT_COMPACTOR or compactor='self'")
-
-        # Get trigger for event (use resolved trigger or None for manual)
-        trigger = self._resolve_compact_on()
-
-        # Get info before compaction
-        observe("context_before_compaction", messages=messages, session_id=session_id)
-        original_count = len(messages)
-        original_tokens = estimate_messages_tokens(messages)
-        compaction_session_id = generate_compaction_session_id(session_id)
-
-        # Log compaction starting
-        logger.info(
-            f"Compaction started: {original_count} messages, ~{original_tokens} tokens, "
-            f"session={session_id}, compaction_session={compaction_session_id}"
-        )
-
-        # Yield start event
-        yield CompactionStartedEvent(
-            trigger=trigger,
-            message_count=original_count,
-            estimated_tokens=original_tokens,
-            session_id=session_id,
-            compaction_session_id=compaction_session_id,
-        )
-
-        # Build compaction prompt
-        if compactor == "self":
-            compaction_prompt = self.compact_prompt
-            compactor_used = self.provider.model
-            logger.info(f"Compaction using: self (model={compactor_used})")
-        else:
-            compaction_prompt = compactor.system_prompt
-            compactor_used = compactor.get_model_name()
-            logger.info(f"Compaction using: {compactor_used}")
-
-        # Truncate large tool results before compaction
-        truncated_messages = [
-            bounded
-            for message in messages
-            for bounded in (
-                [message]
-                if self.skill_discoverer is not None and message.role == "tool" and message.name == "skill"
-                else truncate_tool_results([message], max_chars=10000)
-            )
-        ]
-
-        # Format conversation history as text
-        conversation_text = format_messages_as_text(truncated_messages)
-
-        logger.debug(
-            f"Compaction context: {len(truncated_messages)} messages formatted to {len(conversation_text)} chars"
-        )
-
-        # Inject provider into compactor if needed
-        if compactor == "self":
-            compactor = Compactor(
-                provider=self.provider,
-                system_prompt=compaction_prompt,
-            )
-        elif not compactor.provider:
-            compactor.provider = self.provider
-
-        # Inject session into compactor
-        compactor.session = self.session
-
-        # Run compaction
-        try:
-            summary_text = ""
-            async for event in compactor.run(
-                user_message=conversation_text,
-                session_id=compaction_session_id,
-            ):
-                yield event
-                if isinstance(event, TextDoneEvent):
-                    summary_text = event.text
-
-            if not summary_text:
-                raise ValueError("Compaction returned empty summary")
-
-            logger.debug(f"Compaction summary received: {len(summary_text)} chars")
-
-        except Exception as e:
-            logger.error(f"Compaction failed: {e}")
-            # Still yield done event with error info
-            yield CompactionDoneEvent(
-                original_message_count=original_count,
-                original_token_count=original_tokens,
-                new_message_count=original_count,
-                summary_tokens=0,
-                summary_text=f"[Compaction failed: {e}]",
-                trigger=trigger,
-                compactor_used=compactor_used,
-                session_id=session_id,
-                compaction_session_id=compaction_session_id,
-            )
-            return
-
-        # Store summary in session and set compaction boundary
-        summary_msg = Message(
-            role="compaction_summary",
-            content=summary_text,
-        )
-        await self.session.replace_context(session_id, [summary_msg])
-
-        # Yield done event
-        new_count = 1  # Just the summary
-        summary_tokens = estimate_messages_tokens([summary_msg])
-
-        yield CompactionDoneEvent(
-            original_message_count=original_count,
-            original_token_count=original_tokens,
-            new_message_count=new_count,
-            summary_tokens=summary_tokens,
-            summary_text=summary_text,
-            trigger=trigger,
-            compactor_used=compactor_used,
-            session_id=session_id,
-            compaction_session_id=compaction_session_id,
-        )
-
-        logger.info(
-            f"Compaction complete: {original_count} -> {new_count} messages, "
-            f"{original_tokens} -> {summary_tokens} tokens"
-        )
+        if self.compaction_strategy is None:
+            raise ValueError("No compaction strategy configured")
+        async for event in self._compact_with_strategy(session_id, force=True):
+            yield event
 
     async def _compact_with_strategy(self, session_id: str, force: bool = False) -> AsyncIterator[Event]:
         strategy = self.compaction_strategy
@@ -1366,7 +1065,14 @@ class Agent:
         history = await self.session.get_history(session_id)
         original_count = len(history)
         original_tokens = estimate_messages_tokens(history)
-        request = CompactionRequest(deepcopy(history), session_id, self.provider, original_tokens, force)
+        request = CompactionRequest(
+            messages=deepcopy(history),
+            session_id=session_id,
+            provider=self.provider,
+            estimated_tokens=original_tokens,
+            force=force,
+            actual_input_tokens=self._session_tokens.get(session_id, 0),
+        )
         if not force and not await strategy.should_compact(request):
             return
         yield CompactionStartedEvent(
@@ -1377,6 +1083,8 @@ class Agent:
         result = await strategy.compact(request)
         if not isinstance(result, CompactionResult):
             raise TypeError("CompactionStrategy.compact must return CompactionResult")
+        if not result.messages:
+            raise ValueError("Compaction strategy returned empty history")
         await self.session.replace_context(session_id, result.messages)
         new_tokens = estimate_messages_tokens(result.messages)
         self._session_tokens[session_id] = new_tokens
@@ -1423,7 +1131,7 @@ class Agent:
             CompactionDoneEvent with summary and stats
 
         Raises:
-            ValueError: If no compactor configured or session not found
+            ValueError: If no compaction strategy is configured or session not found
 
         Example:
             # Compact a session before continuing
@@ -1579,7 +1287,14 @@ class Agent:
         if user_message is None:
             if self.provider.live_config is None:
                 self._check_extension_mode("voice")
-            elif self.plugins or self.compaction_strategy or self.skill_discoverer:
+            elif (
+                self.plugins
+                or (
+                    self.compaction_strategy is not None
+                    and self.compaction_strategy is not self._default_compaction_strategy
+                )
+                or self.skill_discoverer
+            ):
                 raise ValueError("Configure text lifecycle extensions on the Live backend agent")
             async with aclosing(self._run_voice(auto_commit=auto_commit, log_file=log_file)) as events:
                 async for event in events:
@@ -1739,16 +1454,8 @@ class Agent:
                 context_tokens = estimate_messages_tokens(messages)
                 tokens_source = "estimated"
 
-            # Get the context limit for display (priority: configured compact_on -> provider default)
+            # Get the model context limit for display.
             display_limit = get_model_context_limit(self.provider)
-            trigger = self._resolve_compact_on()
-            if isinstance(trigger, Tokens):
-                assert trigger.input is not None and trigger.output is not None
-                # Show the threshold where compaction triggers (input - output)
-                display_limit = trigger.input - trigger.output
-                # Or show the original total if that's what was configured
-                if trigger.total is not None:
-                    display_limit = trigger.total
 
             usage_percent = (context_tokens / display_limit * 100) if display_limit > 0 else 0
             logger.info(

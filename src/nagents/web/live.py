@@ -21,16 +21,11 @@ from nagents.harness.connection import build_live_provider
 from nagents.live import LiveConfig
 from nagents.live.delegation import ClientDelegationHandler
 from nagents.live.delegation import ClientDelegationObserver
-from nagents.provider import FoundryProvider
-from nagents.provider import Provider
-from nagents.provider import ProviderType
+from nagents.live.delegation import ClientDelegationRequest
 from nagents.session import SessionManager
-from nagents.types import RetryConfig
 
-from .live_handoff import LoginHandoff
 from .live_login import LoginVoiceConfig
 from .live_settings import GlobalVoiceInput
-from .live_settings import LiveSettingsInput
 from .live_settings import Revision
 from .live_settings import WorkspaceVoiceInput
 from .routing import RoutingStore
@@ -88,8 +83,10 @@ class SessionInput(BaseModel):
 def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
     """Local readiness only: never probe the provider, read a login, or create an agent."""
     values = connection.values
-    if values.connection_id and connection.profile is None:
-        return "The saved voice connection no longer exists. Choose a connection in Voice settings."
+    if demo:
+        return "GPT-Live is unavailable in offline demo mode. Restart ngn serve without --demo."
+    if connection.profile is None:
+        return "Choose a provider connection in Voice settings."
     if connection.profile is not None and connection.profile.kind not in {
         "openai",
         "openai_compatible",
@@ -97,8 +94,6 @@ def unavailable_reason(connection: "LiveConnection", *, demo: bool) -> str:
         "azure_openai_compatible_v1",
     }:
         return "The selected voice connection does not support GPT-Live. Choose OpenAI or Foundry in Voice settings."
-    if demo:
-        return "GPT-Live is unavailable in offline demo mode. Restart ngn serve without --demo."
     if not values.enabled:
         return "GPT-Live is disabled. Enable it in Voice settings."
     if connection.voice_auth == "chatgpt" and values.backend_mode != "assistant":
@@ -152,7 +147,6 @@ def create_agent(
     voice: str = "",
     *,
     demo: bool = False,
-    client_handler: Callable[[str], Awaitable[str]] | None = None,
     client_request_handler: ClientDelegationHandler | None = None,
     client_request_observer: ClientDelegationObserver | None = None,
 ) -> Agent:
@@ -163,7 +157,7 @@ def create_agent(
     if (voice or connection.values.voice) not in connection.voices:
         raise HTTPException(422, "Choose a supported Live voice.")
     values = connection.values
-    if values.backend_mode == "assistant" and client_handler is None and client_request_handler is None:
+    if values.backend_mode == "assistant" and client_request_handler is None:
         raise HTTPException(503, "Select an assistant conversation before connecting GPT-Live.")
     options = LiveConfig(
         delegation="client" if values.backend_mode == "assistant" else "responses",
@@ -171,32 +165,12 @@ def create_agent(
         voice=voice or values.voice,
         store=False,
         backend_timeout=420 if values.backend_mode == "assistant" else 120,
-        client_handler=client_handler if values.backend_mode == "assistant" else None,
         client_request_handler=client_request_handler if values.backend_mode == "assistant" else None,
         client_request_observer=client_request_observer if values.backend_mode == "assistant" else None,
     )
     key = connection.api_key.get_secret_value()
-    provider: Provider
-    if connection.profile is not None:
-        provider = build_live_provider(connection.profile, options, key, values.model)
-    elif values.provider in {"azure_openai_compatible_v1", "foundry"}:
-        provider = FoundryProvider(
-            base_url=values.base_url,
-            model=values.model,
-            api_key=key,
-            live_config=options,
-            retry_config=RetryConfig(max_retries=0),
-        )
-    else:
-        provider = Provider(
-            ProviderType.OPENAI_COMPATIBLE,
-            api_key=key,
-            model=values.model,
-            base_url=values.base_url or "https://api.openai.com/v1",
-            api="responses",
-            live_config=options,
-            retry_config=RetryConfig(max_retries=0),
-        )
+    assert connection.profile is not None
+    provider = build_live_provider(connection.profile, options, key, values.model)
     # Hosted Live never runs the text-session database. Even accidental use cannot
     # touch the Harness history or create a voice transcript on disk.
     return Agent(
@@ -204,7 +178,7 @@ def create_agent(
         SessionManager(Path(":memory:")),
         system_prompt=voice_instructions(connection),
         tools=[],
-        compactor=None,
+        compaction_strategy=None,
         save_tool_outputs=False,
     )
 
@@ -212,7 +186,7 @@ def create_agent(
 def create_login_config(
     connection: "LiveConnection",
     voice: str,
-    handler: Callable[[LoginHandoff], Awaitable[str]],
+    handler: Callable[[ClientDelegationRequest], Awaitable[str]],
     *,
     observer: ClientDelegationObserver | None = None,
 ) -> LoginVoiceConfig:
@@ -251,16 +225,16 @@ def register(
         )
 
     @app.get("/api/live/settings")
-    async def connection_settings(scope: Scope | None = None) -> dict[str, object]:
+    async def connection_settings(scope: Scope) -> dict[str, object]:
         return await settings().snapshot(scope)
 
     @app.post("/api/live/settings")
-    async def save_settings(body: GlobalVoiceInput | WorkspaceVoiceInput | LiveSettingsInput) -> dict[str, object]:
+    async def save_settings(body: GlobalVoiceInput | WorkspaceVoiceInput) -> dict[str, object]:
         result = await settings().change(body)
         logger.info(
             "Live settings saved: scope=%s source=%s",
-            result.get("scope", "legacy"),
-            result.get("source", "legacy"),
+            result["scope"],
+            result["source"],
         )
         return result
 
@@ -280,7 +254,7 @@ def register(
                 logger.info(
                     "Live connection requested: provider=%s profile=%s voice=%s",
                     connection.values.provider,
-                    connection.profile_name or "(legacy)",
+                    connection.profile_name or "(unconfigured)",
                     body.voice or connection.values.voice,
                 )
                 if connection.values.backend_mode == "assistant":
@@ -307,12 +281,6 @@ def register(
     @app.get("/api/live/sessions/{session_id}")
     async def snapshot(session_id: SessionId, after: Cursor = 0) -> dict[str, object]:
         return await service().snapshot(session_id, after)
-
-    @app.get("/api/live/sessions/{session_id}/delegations/{delegation_id:path}")
-    async def delegation_details(
-        session_id: SessionId, delegation_id: Annotated[str, PathParameter(min_length=1, max_length=256)]
-    ) -> dict[str, object]:
-        return await service().delegation_details(session_id, delegation_id)
 
     @app.get("/api/live/sessions/{session_id}/delegation-details")
     async def delegation_details_query(

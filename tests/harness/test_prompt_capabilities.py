@@ -100,8 +100,8 @@ async def test_custom_overrides_do_not_inherit_native_lifecycle_guidance(
         harness.wakeup_handler = scheduler
         harness.agent.register_tool(custom, name="schedule_wakeup")
         harness.refresh_instructions()
-        # The still-advertised native alias retains its lifecycle contract.
-        assert "Scheduling acknowledges immediately" in str(harness.agent.system_prompt)
+        # A user replacement owns its contract and receives no native lifecycle guidance.
+        assert "Scheduling acknowledges immediately" not in str(harness.agent.system_prompt)
         harness.agent.register_tool(custom, name="wake_up_in")
         harness.agent.register_tool(custom, name="delegate")
         harness.refresh_instructions()

@@ -97,9 +97,9 @@ server acknowledgment, rather than certifying speech playback.
 In hosted mode, register functions on the voice agent. The native runtime collects
 complete hosted function batches and uses its tool executor, submitting every
 result before continuing. A plain async service can instead be configured with
-`LiveConfig(delegation="client", client_handler=...)`.
+`LiveConfig(delegation="client", client_request_handler=...)`.
 
-For correlated application work, use `client_request_handler` instead. Its
+For correlated application work, `client_request_handler` receives a
 `ClientDelegationRequest` (from `nagents.live`) contains the original `identifier`,
 notice-time `transcript`, optional native `text`, and `offset_ms`. The immutable
 snapshot never absorbs later speech while waiting for a backend. A synchronous
@@ -109,9 +109,7 @@ workers are busy; keep this callback short and nonblocking.
 Independent callbacks run with `client_concurrency=4` (configurable from 1 to 32),
 with at most 32 queued requests. A supplied `Agent.delegation_agent` keeps one
 lane because it owns one conversation. Cancellation joins all workers before
-disconnecting. The legacy `client_handler(transcript)` interface remains valid;
-only this transcript-only interface waits for a first caller caption when a
-notice arrives before any caller speech.
+disconnecting.
 
 The typed handler accepts voice notices only. Route application text or images
 directly to your backend; `submit_text` and `submit_image` reject this handler
@@ -200,8 +198,7 @@ no cookies, and no raw HTTP logging. `ModelListError` messages do not include
 upstream response bodies, headers, URLs, or credentials. Unsupported discovery
 raises `NotImplementedError`; this currently includes native Gemini, Anthropic,
 and Azure provider types. This is a library implementation limit, not a claim
-that those services lack catalog APIs. `PlaceholderProvider` and offline Harness
-demo mode reject discovery without network requests.
+that those services lack catalog APIs. Offline Harness demo mode rejects discovery without network requests.
 
 `get_model_list()` is independent of `is_model_verified`. Existing
 `verify_model(force=False)` retains its cached boolean behavior and `models/`

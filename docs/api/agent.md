@@ -32,3 +32,9 @@ failure semantics are described in the [ngn guide](../guide/ngn.md).
 ::: nagents.AgentPlugin
 
 ::: nagents.CompactionStrategy
+
+::: nagents.CompactionRequest
+
+::: nagents.CompactionResult
+
+::: nagents.ModelCompaction

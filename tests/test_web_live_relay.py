@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from nagents.agent import Agent
     from nagents.audio import AudioInput
     from nagents.audio import AudioOutput
-    from nagents.web.live_handoff import LoginHandoff
+    from nagents.live.delegation import ClientDelegationRequest
 
 
 class Source:
@@ -383,7 +383,7 @@ def test_login_stream_owns_media_until_finalization_and_cleans_cancelled_setup(
         async def credentials() -> CodexCredentials:
             return CodexCredentials("fixture-token", "fixture-account")
 
-        async def backend(request: LoginHandoff) -> str:
+        async def backend(request: ClientDelegationRequest) -> str:
             return request.text
 
         def forbidden_factory(voice: str) -> Agent:

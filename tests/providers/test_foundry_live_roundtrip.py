@@ -129,7 +129,7 @@ def test_client_delegation_separate_credentials_endpoints_and_bubbled_result(
                 ),
                 session_manager=SessionManager(tmp_path / "backend.db"),
                 streaming=False,
-                compactor=None,
+                compaction_strategy=None,
             )
             voice = Agent(
                 provider=FoundryProvider(
@@ -143,7 +143,7 @@ def test_client_delegation_separate_credentials_endpoints_and_bubbled_result(
                 session_manager=SessionManager(tmp_path / "voice.db"),
                 delegation_agent=backend,
                 audio=AudioDuplex(input=BlockingMic([])),
-                compactor=None,
+                compaction_strategy=None,
             )
             try:
                 async with asyncio.timeout(HANG_GUARD):
@@ -250,7 +250,7 @@ def test_hosted_delegation_executes_tool_and_continues_response(tmp_path: Path, 
                 session_manager=SessionManager(tmp_path / "hosted.db"),
                 tools=[lookup],
                 audio=AudioDuplex(input=BlockingMic([])),
-                compactor=None,
+                compaction_strategy=None,
             )
             try:
                 async with asyncio.timeout(HANG_GUARD):

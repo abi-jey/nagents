@@ -15,7 +15,7 @@ export type WorkspaceConnection = {
 interface ToolSnapshot {
   agents: Record<string, Record<string, boolean>>;
   profiles: { id: string; mode: string }[];
-  tools: { name: string; alias_of: string }[];
+  tools: { name: string }[];
   mcp_diagnostics?: McpDiagnostics;
 }
 
@@ -55,7 +55,7 @@ export function WorkspaceInfoDialog({ workspace, name, demo, count, running, con
     return () => controller.abort();
   }, [token, agent, revision]);
   const selected = snapshot?.agents[agent] || {};
-  const enabled = snapshot?.tools.filter(tool => selected[tool.name] !== false && (!tool.alias_of || selected[tool.alias_of] !== false)).length;
+  const enabled = snapshot?.tools.filter(tool => selected[tool.name] !== false).length;
   const readOnly = snapshot?.profiles.some(profile => profile.id === agent && profile.mode === "reviewer");
   const mcp = snapshot?.mcp_diagnostics;
   function navigate(action: () => void) { close(); action(); }

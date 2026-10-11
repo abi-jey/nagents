@@ -16,9 +16,6 @@ from .media import AUDIO_MIME_TYPES
 
 logger = logging.getLogger(__name__)
 
-# Re-export for backward compatibility
-SUPPORTED_AUDIO_FORMATS = AUDIO_MIME_TYPES
-
 
 def detect_audio_format(file_path: Path | str) -> str:
     """
@@ -36,9 +33,9 @@ def detect_audio_format(file_path: Path | str) -> str:
     path = Path(file_path)
     ext = path.suffix.lower().lstrip(".")
 
-    if ext in SUPPORTED_AUDIO_FORMATS:
+    if ext in AUDIO_MIME_TYPES:
         return ext
-    raise ValueError(f"Unsupported audio format: {ext}. Supported: {list(SUPPORTED_AUDIO_FORMATS.keys())}")
+    raise ValueError(f"Unsupported audio format: {ext}. Supported: {list(AUDIO_MIME_TYPES.keys())}")
 
 
 def get_mime_type(format: str) -> str:

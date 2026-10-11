@@ -1,17 +1,24 @@
 """Context compaction utilities for managing conversation history.
 
 This module provides utility functions for token estimation and context limit detection.
-For agent-based compaction, see the Compactor class and related events in compactor.py.
+ModelCompaction is the built-in provider-backed CompactionStrategy.
 """
 
 import logging
+from contextlib import aclosing
 from typing import TYPE_CHECKING
+from typing import cast
 
 from .types import ContentPart
 from .types import Message
 from .types import TextContent
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from .events import Event
+    from .extensions import CompactionRequest
+    from .extensions import CompactionResult
     from .provider import Provider
 
 logger = logging.getLogger(__name__)
@@ -24,6 +31,76 @@ CHARS_PER_TOKEN = 4
 
 # Maximum tool result characters to keep in context before truncation
 MAX_TOOL_RESULT_CHARS = 10000
+DEFAULT_COMPACTION_PROMPT = (
+    "Summarize the conversation so far for continuity. Preserve user goals, decisions, "
+    "important facts, constraints, unresolved questions, and relevant tool results. "
+    "Be concise and do not invent details. Return only the summary."
+)
+
+
+class ModelCompaction:
+    """Summarize active history with a provider when its context budget is reached."""
+
+    def __init__(
+        self,
+        token_threshold: int | None = None,
+        message_threshold: int | None = None,
+        prompt: str | None = None,
+        provider: "Provider | None" = None,
+    ) -> None:
+        if token_threshold is not None and (type(token_threshold) is not int or token_threshold <= 0):
+            raise ValueError("token_threshold must be a positive integer")
+        if message_threshold is not None and (type(message_threshold) is not int or message_threshold <= 0):
+            raise ValueError("message_threshold must be a positive integer")
+        if token_threshold is not None and message_threshold is not None:
+            raise ValueError("token_threshold and message_threshold are mutually exclusive")
+        self.token_threshold = token_threshold
+        self.message_threshold = message_threshold
+        self.prompt = prompt if prompt is not None else DEFAULT_COMPACTION_PROMPT
+        if not isinstance(self.prompt, str) or not self.prompt.strip():
+            raise ValueError("prompt must be nonempty text")
+        self.provider = provider
+
+    async def should_compact(self, request: "CompactionRequest") -> bool:
+        if self.message_threshold is not None:
+            return len(request.messages) >= self.message_threshold
+        threshold = self.token_threshold
+        if threshold is None:
+            threshold = get_model_context_limit(request.provider) * 7 // 10
+        observed = request.actual_input_tokens or request.estimated_tokens
+        return observed >= threshold
+
+    async def compact(self, request: "CompactionRequest") -> "CompactionResult":
+        from .events import ErrorEvent
+        from .events import FinishReason
+        from .events import TextDoneEvent
+        from .events import ToolCallEvent
+        from .events import ToolCallProgressEvent
+        from .extensions import CompactionResult
+
+        active_provider = self.provider or request.provider
+        bounded = [
+            message if message.role == "tool" and message.name == "skill" else truncate_tool_results([message])[0]
+            for message in request.messages
+        ]
+        prompt_messages = [
+            Message(role="system", content=self.prompt),
+            Message(role="user", content=format_messages_as_text(bounded)),
+        ]
+        summary = ""
+        async with aclosing(
+            cast("AsyncGenerator[Event, None]", active_provider.generate(prompt_messages, tools=[], stream=False))
+        ) as events:
+            async for event in events:
+                if isinstance(event, (ErrorEvent, ToolCallEvent, ToolCallProgressEvent)):
+                    raise ValueError("Compaction provider returned an error or tool call")
+                if isinstance(event, TextDoneEvent):
+                    if summary or event.finish_reason != FinishReason.STOP:
+                        raise ValueError("Compaction provider did not complete a plain-text summary")
+                    summary = event.text.strip()
+        if not summary:
+            raise ValueError("Compaction provider returned an empty summary")
+        return CompactionResult(messages=[Message(role="compaction_summary", content=summary)], summary=summary)
 
 
 def estimate_tokens(content: str | list[ContentPart] | None) -> int:

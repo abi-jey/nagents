@@ -85,11 +85,11 @@ nav:
   - User Guide:
       - ngn Terminal Harness: guide/ngn.md
       - ngn Installation: guide/ngn-installation.md
+      - API Changes in 0.23: guide/api-changes.md
       - ngn Configuration: guide/ngn-configuration.md
       - ngn Local Web Client: guide/ngn-web.md
       - Agent Designer: guide/agent-designer.md
       - Private Web Deployment: guide/ngn-web-deployment.md
-      - Legacy API Server: guide/server.md
       - Providers: guide/providers.md
       - Foundry Authentication: guide/foundry-authentication.md
       - Tools: guide/tools.md

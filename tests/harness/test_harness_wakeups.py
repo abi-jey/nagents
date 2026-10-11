@@ -42,11 +42,10 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_posix
 
 
-@pytest.mark.parametrize("alias", ["schedule_wakeup", "wake_up_in"])
-@pytest.mark.parametrize("mode", ["build", "reviewer"])
+@pytest.mark.parametrize("mode", ["assistant", "reviewer"])
 @pytest.mark.parametrize("child", [False, True])
 def test_native_scheduler_callback_acknowledges_without_holding_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str, mode: str, child: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, child: bool
 ) -> None:
     async def scenario() -> None:
         calls: list[tuple[str, float, str]] = []
@@ -58,7 +57,7 @@ def test_native_scheduler_callback_acknowledges_without_holding_run(
                 else:
                     yield ToolCallEvent(
                         id="schedule",
-                        name=alias,
+                        name="schedule_wakeup",
                         arguments={"seconds": 0.5, "minutes": 2, "hours": 1, "days": 1, "reason": " Check progress "},
                     )
             else:
@@ -80,7 +79,7 @@ def test_native_scheduler_callback_acknowledges_without_holding_run(
             )
             history = await harness.task_history(calls[0][0]) if child else await harness.history()
             assert_balanced(history)
-            results = [message for message in history if message.role == "tool" and message.name == alias]
+            results = [message for message in history if message.role == "tool" and message.name == "schedule_wakeup"]
             assert len(results) == 1 and "accepted" in str(results[0].content)
             assert len([event for event in events if isinstance(event, DoneEvent)]) == 1
             assert not any(isinstance(event, TaskNotification) and event.cause == "wakeup" for event in events)
@@ -148,7 +147,7 @@ def test_scheduler_unavailable_failure_demo_and_active_run_guards(
 
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
         harness.config.demo = True
-        call = ToolCall("schedule", "wake_up_in", {"days": 7, "reason": "Check"})
+        call = ToolCall("schedule", "schedule_wakeup", {"days": 7, "reason": "Check"})
 
         async def schedule(owner: str, seconds: float, reason: str) -> dict[str, str]:
             calls.append(seconds)

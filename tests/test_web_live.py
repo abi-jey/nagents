@@ -23,8 +23,10 @@ from nagents.harness.config import load_config
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
+from nagents.live import ClientDelegationRequest
 from nagents.live import LiveConfig
 from nagents.provider import FoundryProvider
+from nagents.provider.base import Provider
 from nagents.provider.openai import CodexCredentials
 from nagents.web.live import create_agent
 from nagents.web.live import create_login_config
@@ -45,8 +47,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from nagents.agent import Agent
+    from nagents.live.delegation import ClientDelegationRequest
     from nagents.web.live_bridge import MainAgentBridge
-    from nagents.web.live_handoff import LoginHandoff
     from nagents.web.live_login import LoginVoiceConfig
 
 SECRET = "sk-fixture-live-private-key"
@@ -231,16 +233,25 @@ def test_factory_uses_only_committed_key_and_tool_free_hosted_agent(
     )
 
     async def check() -> None:
-        connection = LiveConnection(values, "1" * 64, SecretStr(SECRET))
+        profile = ProviderProfile(
+            kind=provider,
+            base_url=values.base_url if provider != "openai" else "",
+        )
+        connection = LiveConnection(values, "1" * 64, SecretStr(SECRET), profile=profile)
         agent, second = create_agent(connection), create_agent(connection, "marin")
         try:
             assert agent.provider is not second.provider and agent.session is not second.session
             assert agent.provider.api_key == SECRET and os.environ["OPENAI_API_KEY"] == "wrong-process-key"
-            assert agent.provider.live_endpoint() == "https://voice.example.invalid/openai/v1/live/sessions"
+            endpoint = (
+                "https://api.openai.com/v1/live/sessions"
+                if provider == "openai"
+                else "https://voice.example.invalid/openai/v1/live/sessions"
+            )
+            assert agent.provider.live_endpoint() == endpoint
             assert agent.provider.model == "voice-deployment" and agent.provider.retry_config.max_retries == 0
             assert agent.tool_registry.get_all() == [] and agent.plugins == []
             assert agent.workspace is None and agent.delegation_agent is None and agent.audio is None
-            assert agent.compactor is None and agent.skill_discoverer is None and not agent.save_tool_outputs
+            assert agent.compaction_strategy is None and agent.skill_discoverer is None and not agent.save_tool_outputs
             assert agent.session.db_path == Path(":memory:") and not agent.session._initialized
             payload = agent.live_configuration(media=True)
             assert payload["audio"] == {"output": {"voice": "cedar"}}
@@ -268,17 +279,20 @@ def test_factory_uses_only_committed_key_and_tool_free_hosted_agent(
 
 
 def test_factory_configures_voice_as_the_existing_assistants_frontend() -> None:
-    async def handle(transcript: str) -> str:
-        return "The existing assistant's verified result"
+    async def handle(request: ClientDelegationRequest) -> str:
+        return request.transcript
 
     async def check() -> None:
         values = LiveValues.model_validate(
             {**LiveValues.defaults().model_dump(), "enabled": True, "backend_mode": "assistant"}
         )
-        agent = create_agent(LiveConnection(values, "1" * 64, SecretStr(SECRET)), client_handler=handle)
+        agent = create_agent(
+            LiveConnection(values, "1" * 64, SecretStr(SECRET), profile=ProviderProfile(kind="openai")),
+            client_request_handler=handle,
+        )
         try:
             config = agent.provider.live_config
-            assert config is not None and config.client_handler is handle and config.delegation == "client"
+            assert config is not None and config.client_request_handler is handle and config.delegation == "client"
             payload = agent.live_configuration()
             assert payload["delegation"] == {"type": "client"}
             assert isinstance(payload["instructions"], str)
@@ -293,7 +307,7 @@ def test_factory_configures_voice_as_the_existing_assistants_frontend() -> None:
 
 
 def test_login_factory_binds_voice_to_existing_assistant_without_api_key() -> None:
-    async def handle(request: LoginHandoff) -> str:
+    async def handle(request: ClientDelegationRequest) -> str:
         return "The existing assistant's verified result"
 
     async def credentials() -> CodexCredentials:
@@ -301,7 +315,13 @@ def test_login_factory_binds_voice_to_existing_assistant_without_api_key() -> No
 
     values = LiveValues.model_validate({**LiveValues.defaults().model_dump(), "enabled": True})
     connection = LiveConnection(
-        values, "1" * 64, SecretStr(""), credential_available=True, voice_auth="chatgpt", login_credentials=credentials
+        values,
+        "1" * 64,
+        SecretStr(""),
+        profile=ProviderProfile(kind="openai", auth="chatgpt"),
+        credential_available=True,
+        voice_auth="chatgpt",
+        login_credentials=credentials,
     )
     config = create_login_config(connection, "ember", handle)
     assert config.handler is handle and config.credentials is credentials and config.voice == "ember"
@@ -369,7 +389,7 @@ def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
 ) -> None:
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
-            before = (await client.get("/api/live/settings", headers=headers)).json()
+            before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             assert before["values"]["backend_mode"] == "assistant"
             revision = await configure(client, headers)
             ready = (await client.get("/api/live", headers=headers)).json()
@@ -415,7 +435,9 @@ def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
 
 
 @pytest.mark.parametrize("provider", LIVE_PROVIDERS)
-def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: Path, provider: str) -> None:
+def test_settings_routes_create_real_provider_websockets_after_reload(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Only the remote provider is a fixture: app, settings, runtime, Agent and transports are real."""
 
     async def check() -> None:
@@ -471,6 +493,28 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
             host = f"http://127.0.0.1:{runner.addresses[0][1]}"
             # Foundry appends /v1; this exercises the configured prefix without patching endpoints.
             base_url = host + ("/openai" if provider == "azure_openai_compatible_v1" else "/v1")
+            registry = ScopedProviderRegistryStore(tmp_path)
+            profile = ProviderProfile(
+                kind=provider,
+                auth="api-key",
+                base_url="" if provider == "openai" else base_url,
+                api_key_env="TEST_LIVE_PROVIDER_KEY",
+            )
+            provider_state = registry.load_scope("global")
+            registry.save_scope(
+                ProviderRegistry(active="voice", providers={"voice": profile}),
+                expected=provider_state.revision,
+                scope="global",
+            )
+            monkeypatch.setenv("TEST_LIVE_PROVIDER_KEY", SECRET)
+            if provider == "openai":
+
+                def local_openai_endpoint(self: Provider, *, websocket: bool = False) -> str:
+                    del self
+                    endpoint = host + "/v1/live/sessions"
+                    return endpoint.replace("http://", "ws://", 1) if websocket else endpoint
+
+                monkeypatch.setattr(Provider, "live_endpoint", local_openai_endpoint)
             revision = ""
             session_ids: list[str] = []
             for restart in (False, True):
@@ -486,31 +530,31 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
                     assert not os.environ.get("OPENAI_API_KEY")
                     service: LiveService = app.state.live
                     assert isinstance(service, LiveService)
-                    saved = (await client.get("/api/live/settings", headers=headers)).json()
+                    saved = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
                     if not restart:
                         response = await client.post(
                             "/api/live/settings",
                             headers=headers,
                             json={
+                                "scope": "workspace",
                                 "revision": saved["revision"],
-                                "values": {
-                                    **saved["values"],
+                                "overrides": {
                                     "enabled": True,
-                                    "provider": provider,
-                                    "base_url": base_url,
+                                    "connection_id": "voice",
                                     "model": "voice-ui-model",
                                     "backend_model": "hosted-ui-model",
                                     "backend_mode": "hosted",
                                     "voice": "cedar",
+                                    "context_mode": "none",
                                 },
-                                "api_key": SECRET,
                             },
                         )
                         assert response.status_code == 200 and SECRET not in response.text
                         saved = response.json()
                         revision = saved["revision"]
                     assert saved["revision"] == revision and saved["key_configured"] is True
-                    assert saved["values"]["base_url"] == base_url and SECRET not in str(saved)
+                    assert saved["values"]["base_url"] == ("" if provider == "openai" else base_url)
+                    assert SECRET not in str(saved)
                     info = (await client.get("/api/live", headers=headers)).json()
                     assert info["available"] and info["provider"] == provider and info["active_session_id"] == ""
                     before_history = await harnesses[0].history()
@@ -544,7 +588,9 @@ def test_settings_routes_create_real_provider_websockets_after_reload(tmp_path: 
                         ("assistant", "Hi [redacted]"),
                     ]
                     blocked = await client.post(
-                        "/api/live/settings", headers=headers, json={"revision": revision, "values": saved["values"]}
+                        "/api/live/settings",
+                        headers=headers,
+                        json={"scope": "workspace", "revision": revision, "overrides": saved["overrides"]},
                     )
                     assert blocked.status_code == 409
                     if not restart:
@@ -632,7 +678,7 @@ def test_stale_revisions_and_active_or_provisioning_calls_reject_settings_change
                 response = await client.post(path, headers=headers, json=body)
                 assert response.status_code == 409 and SECRET not in response.text
             assert not services[0].creates
-            current = (await client.get("/api/live/settings", headers=headers)).json()
+            current = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             service = services[0]
             service.release.clear()
             creating = asyncio.create_task(
@@ -686,11 +732,11 @@ def test_all_live_routes_retain_auth_origin_and_fetch_guards(tmp_path: Path, ser
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
             for method, path in (
                 ("GET", "/api/live"),
-                ("GET", "/api/live/settings"),
+                ("GET", "/api/live/settings?scope=workspace"),
                 ("POST", "/api/live/settings"),
                 ("POST", "/api/live/sessions"),
                 ("GET", f"/api/live/sessions/{SESSION}?after=0"),
-                ("GET", f"/api/live/sessions/{SESSION}/delegations/task"),
+                ("GET", f"/api/live/sessions/{SESSION}/delegation-details?delegation_id=task"),
                 ("POST", f"/api/live/sessions/{SESSION}/close"),
             ):
                 for changed in (
@@ -721,28 +767,45 @@ def test_all_live_routes_retain_auth_origin_and_fetch_guards(tmp_path: Path, ser
         ("model", "x" * 129),
         ("backend_model", "has spaces"),
         ("voice", "unknown"),
-        ("base_url", "http://remote.invalid/v1"),
-        ("base_url", f"https://user:{SECRET}@voice.invalid/v1"),
+        ("connection_id", "missing"),
         ("base_url", f"https://voice.invalid/v1?key={SECRET}"),
-        ("base_url", "https://voice.invalid/v1/live/sessions"),
-        ("base_url", "https://voice.invalid:wrong/v1"),
     ],
 )
 def test_invalid_settings_never_echo_inputs(tmp_path: Path, field: str, value: object) -> None:
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
-            before = (await client.get("/api/live/settings", headers=headers)).json()
+            before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             response = await client.post(
                 "/api/live/settings",
                 headers=headers,
                 json={
+                    "scope": "workspace",
                     "revision": before["revision"],
-                    "values": {**before["values"], field: value},
-                    "api_key": SECRET,
+                    "overrides": {"enabled": True, "connection_id": "voice", field: value},
                 },
             )
             assert response.status_code == 422 and SECRET not in response.text
-            assert (await client.get("/api/live/settings", headers=headers)).json() == before
+            assert (await client.get("/api/live/settings?scope=workspace", headers=headers)).json() == before
+
+    asyncio.run(check())
+
+
+def test_removed_live_key_write_payload_is_rejected(tmp_path: Path) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
+            before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
+            rejected = await client.post(
+                "/api/live/settings",
+                headers=headers,
+                json={
+                    "revision": before["revision"],
+                    "values": {**before["values"], "enabled": True},
+                    "api_key": SECRET,
+                },
+            )
+            assert rejected.status_code == 422 and SECRET not in rejected.text
+            after = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
+            assert after == before
 
     asyncio.run(check())
 
@@ -764,21 +827,6 @@ def test_strict_bounded_session_settings_and_cursor_inputs(tmp_path: Path, servi
                 {**valid, "revision": SECRET},
             ):
                 response = await client.post("/api/live/sessions", json=body, headers=headers)
-                assert response.status_code == 422 and SECRET not in response.text
-            values = LiveValues.defaults().model_dump()
-            for changes in (
-                {"api_key": 123},
-                {"api_key": "\n" + SECRET},
-                {"api_key": "x" * 4097},
-                {"api_key": SECRET, "clear_api_key": True},
-                {"clear_api_key": "false"},
-                {"unknown": SECRET},
-                {"values": {**values, "secret": SECRET}},
-                {"values": {"enabled": True}},
-            ):
-                response = await client.post(
-                    "/api/live/settings", headers=headers, json={"revision": revision, "values": values, **changes}
-                )
                 assert response.status_code == 422 and SECRET not in response.text
             for path in ("/api/live/sessions", "/api/live/settings"):
                 for content, content_type, status in (

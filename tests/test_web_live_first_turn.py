@@ -13,6 +13,7 @@ from pydantic import SecretStr
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.provider import HarnessProvider
+from nagents.harness.providers import ProviderProfile
 from nagents.live.runtime import ClientDelegations
 from nagents.types import Message
 from nagents.web.live import create_agent
@@ -53,6 +54,7 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
             values,
             "1" * 64,
             SecretStr("" if native else "synthetic-api-key"),
+            profile=ProviderProfile(kind="openai", auth="chatgpt" if native else "api-key"),
             credential_available=native,
             voice_auth="chatgpt" if native else "api-key",
             login_credentials=credentials if native else None,

@@ -65,20 +65,16 @@ def test_submit_mode_defaults_validation_json_and_cli(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("legacy_agent", ["build", "agent", "reviewer"])
-def test_load_config_migrates_legacy_agent_from_json_and_env(
+def test_load_config_rejects_builtin_aliases_from_json_and_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_agent: str
 ) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"agent": legacy_agent}) + "\n")
-    config = load_config(tmp_path, path)
-    assert config.agent == "assistant"
-    assert config.read_only is (legacy_agent == "reviewer")
-    assert any("Migrated legacy agent selection" in note for note in config.diagnostics)
-    # The same migration applies to the NGN_AGENT environment default.
+    with pytest.raises(ValueError, match="Unknown agent profile"):
+        load_config(tmp_path, path)
     monkeypatch.setenv("NGN_AGENT", legacy_agent)
-    env_config = load_config(tmp_path)
-    assert env_config.agent == "assistant"
-    assert env_config.read_only is (legacy_agent == "reviewer")
+    with pytest.raises(ValueError, match="Unknown agent profile"):
+        load_config(tmp_path)
 
 
 def test_load_config_keeps_explicit_custom_reviewer_identity(tmp_path: Path) -> None:

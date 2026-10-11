@@ -46,7 +46,7 @@ PROVIDERS.update(
     azure=ProviderType.AZURE_OPENAI_COMPATIBLE,
     foundry=ProviderType.AZURE_OPENAI_COMPATIBLE_V1,
 )
-API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages", "completions")
+API_NAMES: tuple[str, ...] = ("auto", "chat_completions", "responses", "messages")
 
 
 class _WindowsLock(Protocol):

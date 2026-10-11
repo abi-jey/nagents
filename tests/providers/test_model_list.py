@@ -19,7 +19,6 @@ from nagents.harness.provider import HarnessProvider
 from nagents.http import HTTPClient
 from nagents.http import HTTPLogger
 from nagents.provider import FoundryProvider
-from nagents.provider import PlaceholderProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.provider import gateway
@@ -340,13 +339,6 @@ def test_unsupported_native_catalog_does_not_change_verification(provider_type: 
                 assert native.await_count == int(provider_type == ProviderType.GEMINI_NATIVE)
 
     asyncio.run(scenario())
-
-
-def test_placeholder_catalog_rejected_without_http() -> None:
-    with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
-        with pytest.raises(NotImplementedError, match="PlaceholderProvider"):
-            asyncio.run(PlaceholderProvider().get_model_list())
-        get.assert_not_called()
 
 
 def test_harness_explicit_discovery_resolves_current_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
