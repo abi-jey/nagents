@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { ComponentProps, ReactNode, Ref } from "react";
 import { Icon } from "../../components/Icon.js";
 import { commandMatches } from "./commands.js";
+import type { SkillItem } from "./skills.js";
 
 function ComposerInput({ inputRef, ...props }: ComponentProps<"textarea"> & { inputRef: Ref<HTMLTextAreaElement> }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -49,6 +50,10 @@ export function Composer({
   submitting = false,
   stopping = false,
   voiceControl,
+  skills = [],
+  skillsLoading = false,
+  skillsError = "",
+  refreshSkills,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -68,10 +73,15 @@ export function Composer({
   submitting?: boolean;
   stopping?: boolean;
   voiceControl?: ReactNode;
+  skills?: SkillItem[];
+  skillsLoading?: boolean;
+  skillsError?: string;
+  refreshSkills?: () => void;
 }) {
   const [dismissed, setDismissed] = useState("");
   const [selection, setSelection] = useState({ prompt: "", index: 0 });
-  const matches = !disabled && prompt !== dismissed ? commandMatches(prompt) : [];
+  const suggesting = !disabled && prompt !== dismissed && /^\/[A-Za-z0-9:_-]*$/.test(prompt);
+  const matches = suggesting ? commandMatches(prompt, skills) : [];
   const selected = selection.prompt === prompt ? Math.min(selection.index, matches.length - 1) : 0;
   useLayoutEffect(() => {
     const command = matches[selected];
@@ -96,13 +106,17 @@ export function Composer({
         if (canSubmit && (prompt.trim() || hasAttachments)) submit();
       }}
     >
-      {!!matches.length && <ul id="slash-commands" className="slash-menu" role="listbox" aria-label="Browser commands">
+      {suggesting && (!!matches.length || skillsLoading || skillsError) && <div className="slash-menu">
+      {!!matches.length && <ul id="slash-commands" role="listbox" aria-label="Commands and skills">
         {matches.map((command, index) => <li key={command.name} role="presentation"><button type="button"
           id={`slash-command-${command.name}`} role="option" aria-selected={index === selected} tabIndex={-1}
           onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}>
-          <code>/{command.name}</code><span>{command.description}</span>
+          <span className="slash-command-name"><code>/{command.name}</code>{command.skill && <span className="slash-kind">Skill</span>}</span><span>{command.description}</span>
         </button></li>)}
       </ul>}
+      {(skillsLoading || skillsError) && <div className="slash-catalog-status"><span role="status">{skillsError || "Loading skills…"}</span>
+        {!!skillsError && refreshSkills && <button type="button" onClick={refreshSkills}>Retry</button>}</div>}
+      </div>}
       <label htmlFor="composer" className="sr-only">
         Message ngn
       </label>
@@ -125,14 +139,14 @@ export function Composer({
         onChange={(event) => { setDismissed(""); setPrompt(event.target.value); }}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
-          if (matches.length && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+          if (suggesting && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
             if (event.key === "Escape") { event.preventDefault(); setDismissed(prompt); return; }
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            if (matches.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
               event.preventDefault();
               setSelection({ prompt, index: (selected + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length });
               return;
             }
-            if (event.key === "Tab" || (event.key === "Enter" && prompt !== `/${matches[selected]?.name}`)) { event.preventDefault(); choose(selected); return; }
+            if (matches.length && (event.key === "Tab" || (event.key === "Enter" && prompt !== `/${matches[selected]?.name}`))) { event.preventDefault(); choose(selected); return; }
           }
           if (
             event.key === "Enter" &&

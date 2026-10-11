@@ -38,6 +38,8 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
   return <>
     <SessionSidebar
       workspace={sessions.config?.workspace || ""} sessions={sessions.sessions} selected={sessions.sessionId}
+      connection={sessions.config && { token: sessions.config.token, agent: sessions.config.agent, provider: sessions.config.provider,
+        model: sessions.config.model, connected: client.chat.connected }}
       folders={folders}
       disabled={!available.navigate} newDisabled={!available.create} open={open} close={close}
       select={(id) => { setForkFailed(false); void select(id); }} remove={(session) => void moveToTrash(session)}

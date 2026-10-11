@@ -56,6 +56,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
     async def scenario() -> None:
         child_started, release_child, interim, second, final = (asyncio.Event() for _ in range(5))
         sent: list[tuple[str, str, str]] = []
+        reports: list[dict[str, object]] = []
         wake_model, wake_spoken = asyncio.Event(), asyncio.Event()
 
         async def generate(
@@ -83,6 +84,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                     else "I am waiting for the background task."
                 )
             elif "second request" in text:
+                assert text == "second request"
                 if schedule_followup:
                     yield ToolCallEvent(
                         id="second-wake",
@@ -92,6 +94,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                 else:
                     yield TextDoneEvent(text="Second answer.")
             else:
+                assert text == "first request"
                 yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "hold child"})
 
         async def append(kind: LiveAppendKind, content: str, identifier: str) -> str:
@@ -114,7 +117,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
         ):
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
                 state = app.state.web
-                bridge = MainAgentBridge(state, state.selected_session_id)
+                bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
                 bridge.attach(append)
                 try:
                     request = ClientDelegationRequest("first", transcript=speech("first request"))
@@ -128,7 +131,9 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                     transcript = json.dumps(
                         [
                             {"speaker": "user", "text": "first request", "start_ms": 1, "end_ms": 100},
-                            {"speaker": "user", "text": "second request", "start_ms": 101, "end_ms": 200},
+                            {"speaker": "assistant", "text": "I am working on it.", "start_ms": 100, "end_ms": 101},
+                            {"speaker": "user", "text": "second", "start_ms": 101, "end_ms": 150},
+                            {"speaker": "user", "text": " request", "start_ms": 150, "end_ms": 200},
                         ]
                     )
                     assert await bridge.handle_request(ClientDelegationRequest("second", transcript=transcript)) == ""
@@ -136,6 +141,9 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                         await second.wait()
                     assert state.active is run and not release_child.is_set()
                     assert ("commentary", "Second answer.", "second") in sent
+                    admitted = [report for report in reports if "request_input" in report]
+                    assert [report["request_input"] for report in admitted] == ["first request", "second request"]
+                    assert all(report["text"] == "Processing…" for report in admitted)
                     assert (
                         await bridge.handle_request(ClientDelegationRequest("duplicate", transcript=transcript)) == ""
                     )

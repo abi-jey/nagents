@@ -184,7 +184,15 @@ async def test_stop_still_cancels_chat_and_voice_trees(
             else:
                 response = await chat
                 records = [json.loads(line) for line in response.text.splitlines() if line]
-                assert next(record for record in records if record["event"] == "run_finished")["status"] == "cancelled"
+                assert (
+                    next(record for record in records if record["event"] == "run_finished")["status"] == "cancelled"
+                ), {
+                    "events": [
+                        record for record in records if record["event"] in {"error", "task_completed", "run_finished"}
+                    ],
+                    "provider_requests": [len(provider.requests) for provider in scenario.providers],
+                    "tasks": [(info.status, info.error) for info in harness.tasks.list()],
+                }
         assert {info.status for info in harness.tasks.list()} == {"cancelled"}
         assert len(scenario.providers) == 3 and all(provider.closed for provider in scenario.providers[1:])
         assert "DESCENDANT_PRIVATE" not in str(scenario.providers[0].requests)

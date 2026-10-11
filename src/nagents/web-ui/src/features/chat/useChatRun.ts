@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { request, RequestError } from "../../api/client";
 import { text } from "../../api/events";
-import { MessageQueue, queueMessage, queuedMessageFailure } from "../../api/messages";
+import { MessageQueue, queueMessage, queuedMessageFailure, type QueuedCommand } from "../../api/messages";
 import { subscribeEvents, type EventFrame } from "../../api/subscription";
 import { readBootstrap } from "../../api/bootstrap";
 import type { Bootstrap, Snapshot } from "../../types";
@@ -94,7 +94,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     if (discardDraft) drafts.forget(id);
     if (id === selected.current) { approval.close(); setActivityError(""); }
   }
-  async function submit(value: string, attachments: string[] = [], command?: "compact") {
+  async function submit(value: string, attachments: string[] = [], command?: QueuedCommand) {
     if (sending.current) return;
     const failure = queuedMessageFailure(value, sessionId, attachments);
     if (failure) throw new Error(failure);

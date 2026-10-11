@@ -66,8 +66,7 @@ def test_voice_history_is_readable_but_model_context_and_typed_lookalikes_stay_i
         assert app.client.portal is not None
         history: list[Message] = app.client.portal.call(app.state.history.get_history, app.main)
         raw = history[0].content
-        assert isinstance(raw, str) and raw.startswith("Live voice request for the selected chat.")
-        assert "Speech data:" in raw and text in raw
+        assert raw == text
         sessions = app.client.portal.call(app.state.list_sessions)
         assert next(session.title for session in sessions if session.id == app.main) == text
         app.submit(raw)
@@ -109,11 +108,11 @@ def test_voice_input_hooks_cannot_steal_provenance_and_existing_title_is_preserv
         rows = users(app, app.main)
         assert len(rows) == 3
         assert "voice_verified" not in rows[1]
-        assert str(rows[1]["content"]).startswith("Live voice request")
+        assert rows[1]["content"] == "A spoken follow-up"
         assert rows[2]["content"] == "A spoken follow-up" and rows[2]["voice_verified"] is True
         assert app.client.portal is not None
         raw: list[Message] = app.client.portal.call(app.state.history.get_history, app.main)
-        assert str([message.content for message in raw if message.role == "user"][-1]).startswith("wrapped: Live")
+        assert [message.content for message in raw if message.role == "user"][-1] == "wrapped: A spoken follow-up"
         sessions = app.client.portal.call(app.state.list_sessions)
         assert next(session.title for session in sessions if session.id == app.main) == "My existing conversation"
 

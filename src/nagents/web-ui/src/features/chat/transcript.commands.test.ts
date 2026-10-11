@@ -29,6 +29,7 @@ test("command parsing handles aliases, arguments, and ordinary text explicitly",
 
 test("slash picker handles arrows, completion, exact commands, Escape and composition without sending a prompt", async () => {
   const dom = new JSDOM("<div id='root'></div>");
+  Object.assign(dom.window.HTMLElement.prototype, { attachEvent() {}, detachEvent() {} });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true,
     ResizeObserver: class { observe() {} disconnect() {} } });

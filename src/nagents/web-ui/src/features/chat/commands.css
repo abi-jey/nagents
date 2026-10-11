@@ -1,10 +1,29 @@
 .composer-area form { position: relative; }
 .slash-menu { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; z-index: 12; margin: 0; padding: 6px; max-height: min(340px, 45dvh); overflow: auto; list-style: none; border: 1px solid var(--border-control); border-radius: 12px; background: var(--surface-navigation); box-shadow: 0 12px 36px #0005; }
 .slash-menu li { margin: 0; padding: 0; }
+.slash-menu ul { list-style: none; padding: 0; margin: 0; }
 .slash-menu button { display: flex; align-items: center; gap: 14px; width: 100%; padding: 10px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--text-reading); text-align: left; }
 .slash-menu button[aria-selected="true"], .slash-menu button:hover { background: var(--surface-hover, #ffffff12); }
 .slash-menu button code { min-width: 90px; font-size: 13px; }
 .slash-menu button span { color: var(--text-secondary); font-size: 12px; }
+.slash-command-name { display: flex; align-items: center; gap: 6px; flex: 0 1 42%; min-width: 90px; overflow-wrap: anywhere; }
+.slash-menu button .slash-command-name code { min-width: 0; color: var(--text-reading); }
+.slash-menu button > span:last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.slash-kind { flex: 0 0 auto; border: 1px solid var(--border-group); border-radius: 4px; padding: 1px 4px; font-size: 10px; font-family: inherit; color: var(--text-secondary); }
+.slash-catalog-status { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--text-secondary); font-size: 12px; }
+.slash-catalog-status button { width: auto; margin-left: auto; padding: 4px 8px; }
+.skills-dialog { width: min(620px, calc(100vw - 32px)); overflow: auto; }
+.skills-dialog > p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.skills-search { display: grid; gap: 6px; margin-top: 18px; font-size: 12px; color: var(--text-secondary); }
+.skills-search input { width: 100%; min-width: 0; }
+.skills-browser-status { display: flex; align-items: center; gap: 10px; margin: 14px 0; color: var(--text-secondary); font-size: 12px; }
+.skills-browser-status > span { flex: 1; }
+.skills-list { list-style: none; padding: 0; margin: 0; }
+.skills-list button { display: grid; gap: 7px; width: 100%; text-align: left; padding: 14px 10px; background: transparent; border: 0; border-top: 1px solid var(--border-group); border-radius: 0; }
+.skills-list button:hover, .skills-list button:focus-visible { background: var(--surface-hover); }
+.skill-command { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
+.skill-command code { min-width: 0; }
+.skill-description { color: var(--text-secondary); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .command-help { width: min(560px, calc(100vw - 32px)); }
 .command-help p { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
 .command-help dl { display: grid; gap: 12px; }

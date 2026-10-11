@@ -19,6 +19,7 @@ from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.commands import Command
 from nagents.harness.commands import CommandRegistry
 from nagents.harness.commands import CommandResult
+from nagents.harness.commands import split_command
 from nagents.harness.config import AgentProfile
 from tests.support.hang_guard import HANG_GUARD
 
@@ -60,6 +61,7 @@ def test_builtin_metadata_and_frozen_command(harness: Harness) -> None:
         "login",
         "logout",
         "plugins",
+        "skills",
         "context",
         "quit",
         "tasks",
@@ -514,9 +516,10 @@ def test_discovered_skill_loads_current_content_on_demand(harness: Harness) -> N
             result = await registry.execute("skill:audit", "Review src/app.py")
             assert not result.message
             assert "# Skill Context: audit" in result.prompt
-            assert "Current instructions with literal {braces} and $ARGUMENTS" in result.prompt
-            assert "# Task Arguments\nReview src/app.py" in result.prompt
+            assert "Current instructions with literal {braces} and Review src/app.py" in result.prompt
+            assert "$ARGUMENTS" not in result.prompt
             assert "did not execute any scripts" in result.prompt and not marker.exists()
+            skill_file.write_text("Use this skill without a placeholder.\n")
             assert "No additional task arguments" in (await registry.execute("skill:audit")).prompt
             assert await harness.history() == []
         finally:
@@ -571,3 +574,74 @@ def test_commands_source_has_no_ui_or_runtime_imports() -> None:
     names.extend(node.module or "" for node in imports if isinstance(node, ast.ImportFrom))
     assert not any(name.startswith(("textual", "rich", "nagents.tui", "importlib")) for name in names)
     assert not any(isinstance(node, ast.ImportFrom) and node.module == "runtime" for node in tree.body)
+
+
+@pytest.mark.parametrize(
+    ("invocation", "expected"),
+    [
+        ("/audit", ("audit", "")),
+        (" \t/audit  keep\n ", ("audit", " keep\n ")),
+        ("/Audit  keep\nthese  spaces \t", ("Audit", " keep\nthese  spaces \t")),
+        ("/skill:audit\n\t$() {braces}  ", ("skill:audit", "\t$() {braces}  ")),
+    ],
+)
+def test_skill_command_parser_preserves_argument_characters(invocation: str, expected: tuple[str, str]) -> None:
+    assert split_command(invocation) == expected
+
+
+@pytest.mark.parametrize("invocation", ["/", "/skill:../audit", "/audit/other", "/x:y", "/é"])
+def test_skill_command_parser_rejects_paths_and_invalid_tokens(invocation: str) -> None:
+    with pytest.raises(ValueError):
+        split_command(invocation)
+
+
+@pytest.mark.requires_posix
+def test_skill_aliases_preserve_plugin_precedence_and_live_permissions(harness: Harness) -> None:
+    folder = harness.workspace / ".agents/skills/audit"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("---\ndescription: Audit\n---\nAudit context\n")
+
+    async def scenario() -> None:
+        try:
+            await harness.initialize()
+            commands = harness.commands
+            assert commands.canonical_name("audit") == "skill:audit"
+            assert (await commands.execute("audit", "  exact\n ")).prompt.endswith("# Task Arguments\n  exact\n ")
+            commands.register("custom", "Custom prompt", prompt="Custom $ARGUMENTS")
+            commands.register_alias("audit", "custom")
+            assert commands.canonical_name("audit") == "custom"
+            assert (await commands.execute("audit", "task")).prompt == "Custom task"
+            assert "Audit context" in (await commands.execute("skill:audit")).prompt
+            with pytest.raises(ValueError, match="Unknown skill command"):
+                await commands.skill_prompt("audit", "Do not run a callback")
+            policy = harness.tool_settings
+            policy.save({"assistant": {"skill": False}}, policy.revision)
+            assert not commands.skills_enabled()
+            with pytest.raises(PermissionError, match="disabled"):
+                await commands.execute("skill:audit")
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
+def test_skill_argument_substitution_is_literal_and_bounded_before_utf8_expansion(harness: Harness) -> None:
+    folder = harness.workspace / ".agents/skills/audit"
+    folder.mkdir(parents=True)
+    path = folder / "SKILL.md"
+    path.write_text("---\ndescription: Audit\n---\nFirst $ARGUMENTS then $ARGUMENTS\n")
+
+    async def scenario() -> None:
+        try:
+            arguments = " 🌍 $() {literal}\n "
+            result = await harness.commands.execute("audit", arguments)
+            assert f"First {arguments} then {arguments}" in result.prompt
+            path.write_text("---\ndescription: Audit\n---\n" + "$ARGUMENTS" * 1000)
+            with pytest.raises(ValueError, match="text budget"):
+                await harness.commands.execute("audit", "🌍" * 16000)
+            assert not await harness.history()
+        finally:
+            await harness.close()
+
+    asyncio.run(scenario())

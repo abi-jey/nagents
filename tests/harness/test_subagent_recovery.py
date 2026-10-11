@@ -82,7 +82,15 @@ async def test_child_completion_reflects_recovery_and_routes_result_once(
         tasks = harness.tasks.list()
         assert len(tasks) == 1
         info = tasks[0]
-        assert info.status == expected_status
+        assert info.status == expected_status, {
+            "task_error": info.error,
+            "provider_requests": [len(provider.requests) for provider in providers],
+            "child_errors": [
+                {"code": event.code, "recoverable": event.recoverable, "message": event.message}
+                for event in child_events
+                if isinstance(event, ErrorEvent)
+            ],
+        }
         assert info.result == expected_result
         assert bool(info.error) is not recovered
         assert len(providers[1].requests) == (2 if recoverable else 1)

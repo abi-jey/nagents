@@ -15,6 +15,7 @@ import { request } from "../api/client.js";
 import { readSettings, saveSettings } from "../features/settings/transport.js";
 import { createDraft, parseDraft, selectProfile } from "../features/settings/draft.js";
 import { useVoicePresence } from "./useVoicePresence.js";
+import { useSkills } from "../features/chat/skills.js";
 
 export function useClient() {
   const sessions = useSessions();
@@ -47,6 +48,7 @@ export function useClient() {
   });
   const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
   const token = sessions.config?.token || "";
+  const skills = useSkills(token, sessions.sessionId, sessions.config?.agent || "", chat.prompt, chat.runId);
   const configuration = `${sessions.config?.provider}:${sessions.config?.model}:${sessions.config?.agent}:${settings.snapshot?.revision}`;
   const { uploads, uploadState } = useUploads(token, sessions.sessionId, configuration);
   const context = useContextStats(
@@ -56,7 +58,7 @@ export function useClient() {
       configuration },
   );
   const membership = useSessionActions({ sessions, chat, operations, busy,
-    blocked: channels.open || settings.open || panel !== "none" || !!chat.approval.pending });
+    blocked: channels.open || settings.open || skills.open || panel !== "none" || !!chat.approval.pending });
 
   function access() {
     return availability({
@@ -64,7 +66,7 @@ export function useClient() {
       operating: operations.occupied(),
       running: !!chat.runId || sessions.globalBusy,
       modal: channels.open || settings.open || !!membership.deletion.target ||
-        membership.trashController.getSnapshot().open || panel !== "none" || commandHelp || loginOpen,
+        membership.trashController.getSnapshot().open || panel !== "none" || commandHelp || loginOpen || skills.open,
       approval: !!chat.approval.pending,
       uploadsReady: uploadState.items.every((item) => item.status === "ready"),
     });
@@ -129,6 +131,7 @@ export function useClient() {
     if (["login", "settings", "model", "agent", "provider"].includes(name) && !access().settings)
       throw new Error("Finish the active run before changing settings or signing in. Your draft is kept.");
     if (name === "help") { setCommandHelp(true); return true; }
+    if (name === "skills") { skills.show(argument); return true; }
     if (name === "login") { voice.close(); setLoginOpen(true); return true; }
     if (name === "new") {
       if (!access().create) throw new Error("Finish the active run before starting a new conversation.");
@@ -181,9 +184,13 @@ export function useClient() {
       (!value.trim() && !uploadState.items.length)
     )
       return;
+    let skillInvocation = false;
     try {
-      const intent = commandIntent(value);
-      if (intent) {
+      const intent = commandIntent(value, true);
+      if (intent?.name === "skill") {
+        if (uploadState.items.length) throw new Error("Remove attachments before invoking a skill. Your draft is kept.");
+        skillInvocation = true;
+      } else if (intent) {
         setError("");
         const root = sessions.sessionId, draft = chat.drafts.get(root);
         if (await command(intent)) chat.drafts.submitted(root, draft, value);
@@ -203,7 +210,7 @@ export function useClient() {
     await operate(async () => {
       const ids = uploads.begin();
       let confirmed = false;
-      try { await chat.submit(value, ids); confirmed = true; }
+      try { await chat.submit(value, ids, skillInvocation ? "skill" : undefined); confirmed = true; }
       finally { uploads.finish(ids, confirmed); }
     });
   }
@@ -258,6 +265,7 @@ export function useClient() {
     uploads,
     uploadState,
     settings,
+    skills,
     channels,
     busy,
     operating,

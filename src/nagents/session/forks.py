@@ -100,16 +100,16 @@ def _web_annotations(db: sqlite3.Connection, source: str, target: str, ids: dict
         if "ngn_web_message_origins" not in tables:
             continue
         origin = db.execute(
-            "SELECT i.id, i.session_id, i.channel, i.prompt, i.attachments FROM ngn_web_message_origins o "
+            "SELECT i.id, i.session_id, i.channel, i.prompt, i.attachments, i.command FROM ngn_web_message_origins o "
             "JOIN ngn_web_inbox i ON i.id = o.inbox_id WHERE o.history_id = ?",
             (old,),
         ).fetchone()
         if origin is None:
             continue
-        inbox, owner, channel, prompt, attachments = origin
+        inbox, owner, channel, prompt, attachments, command = origin
         if owner != source:
             raise SessionForkError("Source history contains inconsistent message ownership.")
-        if not channel and attachments != "[]":
+        if not channel and (attachments != "[]" or command == "skill"):
             db.execute("INSERT OR REPLACE INTO ngn_fork_message_display VALUES (?, ?)", (new, prompt))
             for upload, position in db.execute(
                 "SELECT upload_id, position FROM ngn_web_uploads WHERE inbox_id = ? AND session_id = ? ORDER BY position",

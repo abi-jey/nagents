@@ -294,9 +294,17 @@ def test_delivery_arrival_and_compaction_preserve_inspected_card(
                     await pilot.pause(0.01)
             card = app.query_one(ToolCard)
             title = card.query_one("CollapsibleTitle")
-            await pilot.click(title)
+            # Pilot captures click coordinates before its own idle wait. Mount
+            # discovery alone does not guarantee the title has been laid out.
             await pilot.pause()
-            assert not card.collapsed and app.focused is title
+            clicked = await pilot.click(title)
+            await pilot.pause()
+            assert not card.collapsed and app.focused is title, {
+                "clicked": clicked,
+                "card_region": card.region,
+                "title_region": title.region,
+                "focused": app.focused,
+            }
             assert not app.query(DeliveryWidget)
             release.set()
             await idle(app, pilot)

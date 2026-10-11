@@ -49,6 +49,7 @@ from .live_inspection import model_requests
 from .provider_setup import provider_error
 from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
+from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
 from .subscriptions import EventBus
 from .tool_approvals import ToolApprovals
@@ -787,6 +788,18 @@ class WebState:
             self.wakeups.cancel(run.chain)
             raise
         except Exception:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                # An owned operation can finish with its own error while Stop
+                # is joining it. Keep the stop outcome, as with child workers.
+                run.outcome = "cancelled"
+                logger.warning(
+                    "Run producer failed during cancellation: session=%s run=%s reason=cleanup_failed",
+                    run.session_id,
+                    run.id,
+                )
+                self.wakeups.cancel(run.chain)
+                raise asyncio.CancelledError from None
             run.outcome = "failed"
             # Readiness is advisory: an injected/scripted provider can run without
             # the configured connection's key. When the real provider fails, give
@@ -841,6 +854,9 @@ class WebState:
             except asyncio.CancelledError:
                 run.outcome = "cancelled"
                 raise
+            except SkillInvocationError as error:
+                run.outcome = "failed"
+                self.publish(run, {"event": "error", "message": str(error), "message_id": work.message_id})
             except Exception:
                 run.outcome = "failed"
                 self.publish(
@@ -856,7 +872,7 @@ class WebState:
                     prompt: str | list[ContentPart] = (
                         await self.channels.inbound_content(work.channel, work.prompt)
                         if work.channel
-                        else await self.uploads.content(work, harness)
+                        else await self.queued_inputs.content(work, harness)
                     )
                     await self.produce(run, prompt)
 

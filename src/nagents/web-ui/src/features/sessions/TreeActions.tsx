@@ -1,9 +1,13 @@
-import { useId, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { Icon } from "../../components/Icon.js";
 
 export function menuPosition(anchor: { left: number; right: number; top: number; bottom: number }, width: number, height: number, menuHeight = 64) {
   return { left: Math.max(8, Math.min(anchor.right - 212, width - 220)),
     top: Math.max(8, anchor.bottom + menuHeight + 4 <= height ? anchor.bottom + 4 : anchor.top - menuHeight + 4) };
+}
+export function contextMenuPosition(point: { x: number; y: number }, width: number, height: number, menuWidth: number, menuHeight: number) {
+  return { left: Math.max(8, Math.min(point.x + 4, width - menuWidth - 8)),
+    top: Math.max(8, Math.min(point.y + 4, height - menuHeight - 8)) };
 }
 export function menuKey(key: string): "focus" | "close" | "tab" | "" {
   if (["ArrowDown", "ArrowUp", "Home", "End"].includes(key)) return "focus";
@@ -21,21 +25,53 @@ export function handleMenuKey(event: Pick<KeyboardEvent, "key" | "stopPropagatio
 }
 export type TreeAction = { label: string; icon: ComponentProps<typeof Icon>["name"]; disabled?: boolean; danger?: boolean; run(): void };
 
-export function TreeActions({ label, items, className = "session-more" }: { label: string; items: TreeAction[]; className?: string }) {
+export function TreeActions({ label, items, className = "session-more", contextTarget }: {
+  label: string; items: TreeAction[]; className?: string; contextTarget?: RefObject<HTMLElement | null>;
+}) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const returnFocus = useRef<HTMLElement>(null);
   const [open, setOpen] = useState(false);
   const disabled = items.every(item => item.disabled);
-  function show() {
+  const show = useCallback((point?: { x: number; y: number }, origin?: HTMLElement) => {
     if (!trigger.current || !menu.current || disabled) return;
+    returnFocus.current = origin || trigger.current;
     menu.current.showPopover();
-    const position = menuPosition(trigger.current.getBoundingClientRect(), innerWidth, innerHeight,
-      menu.current.getBoundingClientRect().height || 64);
+    const bounds = menu.current.getBoundingClientRect();
+    const position = point ? contextMenuPosition(point, innerWidth, innerHeight, bounds.width || 212, bounds.height || 64)
+      : menuPosition(trigger.current.getBoundingClientRect(), innerWidth, innerHeight, bounds.height || 64);
     menu.current.style.left = `${position.left}px`; menu.current.style.top = `${position.top}px`;
     setOpen(true); menu.current.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
-  }
-  function close() { menu.current?.hidePopover(); setOpen(false); trigger.current?.focus({ preventScroll: true }); }
+  }, [disabled]);
+  const close = useCallback(() => {
+    menu.current?.hidePopover(); setOpen(false); returnFocus.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    const target = contextTarget?.current;
+    if (!target || disabled) return;
+    function origin() { return target!.querySelector<HTMLButtonElement>("button:not(:disabled)") || target!; }
+    function context(event: MouseEvent) {
+      if (menu.current?.contains(event.target as Node)) return;
+      event.preventDefault(); event.stopPropagation();
+      const element = origin(), bounds = element.getBoundingClientRect();
+      show(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : { x: bounds.left, y: bounds.bottom }, element);
+    }
+    function keydown(event: KeyboardEvent) {
+      if (menu.current?.contains(event.target as Node) || !(event.key === "ContextMenu" || event.key === "F10" && event.shiftKey)) return;
+      event.preventDefault(); event.stopPropagation();
+      const element = origin(), bounds = element.getBoundingClientRect();
+      show({ x: bounds.left, y: bounds.bottom }, element);
+    }
+    target.addEventListener("contextmenu", context); target.addEventListener("keydown", keydown);
+    return () => { target.removeEventListener("contextmenu", context); target.removeEventListener("keydown", keydown); };
+  }, [contextTarget, disabled, show]);
+  useEffect(() => {
+    if (!open) return;
+    function scroll(event: Event) { if (!menu.current?.contains(event.target as Node)) close(); }
+    document.addEventListener("scroll", scroll, true); window.addEventListener("resize", close);
+    return () => { document.removeEventListener("scroll", scroll, true); window.removeEventListener("resize", close); };
+  }, [open, close]);
   return <>
     <button ref={trigger} className={className} aria-label={`More actions: ${label}`}
       title="More actions" aria-haspopup="menu" aria-controls={id} aria-expanded={open} disabled={disabled}

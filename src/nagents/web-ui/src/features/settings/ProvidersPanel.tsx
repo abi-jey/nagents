@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { request } from "../../api/client.js";
+import { ProviderLogo } from "../../components/ProviderLogo.js";
 import type { SettingsScope } from "./transport.js";
 
 type Profile = {
@@ -101,7 +102,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
     <ul className="settings-model-results" aria-label="Saved provider connections">
       {Object.entries(registry.providers).map(([id, profile]) => <li key={id}>
         <button type="button" disabled={busy || blocked} onClick={() => { setName(id); setEditing(true); setDraft(editable(profile)); setError(""); }}>
-          {id}{id === registry.active ? " (active)" : ""}{scope === "workspace" ? ` · ${registry.origins?.[id] === "workspace" ? "workspace" : "global"}` : ""} · {registry.kinds[profile.kind]?.label || profile.kind} · {profile.credential_source} · {profile.effective_endpoint}
+          <ProviderLogo provider={profile.kind} />{id}{id === registry.active ? " (active)" : ""}{scope === "workspace" ? ` · ${registry.origins?.[id] === "workspace" ? "workspace" : "global"}` : ""} · {registry.kinds[profile.kind]?.label || profile.kind} · {profile.credential_source} · {profile.effective_endpoint}
         </button>
       </li>)}
     </ul>

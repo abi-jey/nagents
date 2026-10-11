@@ -35,3 +35,29 @@ def test_security_policy_covers_success_and_rejected_responses(path: str) -> Non
         assert directives[resource] == ["'self'", "blob:", "data:"]
     assert directives["base-uri"] == ["'none'"]
     assert directives["frame-ancestors"] == ["'none'"]
+
+
+@pytest.mark.parametrize(
+    ("query", "authenticated", "status"),
+    [
+        ("session_id=ngn-example", True, 200),
+        ("session_id=ngn-example", False, 403),
+        ("session_id=ngn-example&token=secret", True, 400),
+        ("session_id=ngn-example&session_id=ngn-other", True, 400),
+        ("session_id=ngn-../other", True, 400),
+        ("session_id=ngn-" + "x" * 77, True, 400),
+    ],
+)
+def test_skill_catalog_allows_only_an_authenticated_bounded_root_selector(
+    query: str, authenticated: bool, status: int
+) -> None:
+    app = FastAPI()
+    app.add_middleware(LocalOnly, authority="testserver", token="secret")
+
+    @app.get("/api/skills")
+    async def skills() -> dict[str, bool]:
+        return {"ok": True}
+
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get("/api/skills?" + query, headers={"X-Ngn-Token": "secret"} if authenticated else {})
+    assert response.status_code == status

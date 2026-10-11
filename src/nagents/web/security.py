@@ -103,7 +103,7 @@ class LocalOnly:
         if "\\" in path or any(part in {".", ".."} for part in path.split("/")):
             await reject(404, "Not found.")
             return
-        # Only bounded, non-secret Live cursor, delegation and Voice scope selectors are accepted.
+        # Only bounded, non-secret cursor, delegation, settings and skill root selectors are accepted.
         # Other queries (including duplicate parameters and tokens) remain rejected.
         live_cursor = (
             scope["method"] == "GET"
@@ -114,6 +114,11 @@ class LocalOnly:
             scope["method"] == "GET"
             and path == "/api/live/settings"
             and scope["query_string"] in {b"scope=global", b"scope=workspace"}
+        )
+        skill_scope = (
+            scope["method"] == "GET"
+            and path == "/api/skills"
+            and re.fullmatch(rb"session_id=ngn-[A-Za-z0-9-]{1,76}", scope["query_string"]) is not None
         )
         delegation_query = False
         if (
@@ -134,7 +139,7 @@ class LocalOnly:
                 )
             except (ValueError, UnicodeError):
                 pass
-        if scope["query_string"] and not (live_cursor or voice_scope or delegation_query):
+        if scope["query_string"] and not (live_cursor or voice_scope or skill_scope or delegation_query):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return
         method = scope["method"]

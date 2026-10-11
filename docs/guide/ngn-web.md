@@ -225,7 +225,9 @@ Use **New folder** beside Sessions to group chats by project or topic. Folders
 form a tree: create subfolders or move a folder beneath another folder, up to 12
 levels deep. Names must be unique among siblings, so different projects can each
 have a Notes folder. Open a
-chat's actions menu and choose **Move to folder…** to move it, or choose
+chat's actions menu using its **More actions** button, right-click, or
+**Shift+F10** / the keyboard Menu key. Opening the menu does not switch chats.
+Choose **Move to folder…** to move it, or choose
 **Ungrouped** to remove its folder assignment. Moving a chat changes only its
 sidebar organization; its selected conversation, active work, approvals, and
 history are unaffected.
@@ -242,6 +244,11 @@ browser windows cannot silently overwrite each other's folder edits.
 An otherwise empty draft explicitly moved to a folder is kept as an organized
 chat; untouched, ungrouped drafts continue to use normal empty-session cleanup.
 
+Click the workspace name to see its server folder, current assistant/provider/model,
+chat activity, enabled tool selections, and MCP connection status. **Manage tools**
+and **Settings** open their corresponding controls. Provider logos are bundled
+with ngn and served locally; custom endpoints use a neutral connection icon.
+
 Choose **Fork chat** to immediately create a branch named `<chat title> · fork 1`,
 then `fork 2`, and so on. Numbers advance per parent chat for each successful fork,
 including forks given custom names with `/fork [title]`; renaming or deleting a
@@ -257,6 +264,8 @@ draft and display an error.
 | Command | Browser action |
 | --- | --- |
 | `/login` | Open server-side ChatGPT device sign-in. |
+| `/skills [search]` | Browse discovered skills and insert a selected skill into the draft. |
+| `/<skill-name> [task]`, `/skill:<skill-name> [task]` | Invoke a discovered skill through the conversation's normal input queue. |
 | `/new` | Start or reuse a blank conversation. |
 | `/fork [title]` | Copy the current idle conversation into an independent branch and select it. Title is optional: defaults to `<chat title> · fork 1`, `fork 2`, etc. Other chats may continue running. |
 | `/rename <title>` | Persist a name of 1–80 printable characters for the current conversation. |
@@ -275,6 +284,21 @@ no explicit command field, remains model input. Compaction preserves the selecte
 session when it runs against another submitted root, and reports normal
 compaction/error events. There is no browser endpoint for arbitrary Python command
 callbacks or terminal-only actions.
+
+Discovered skills appear alongside commands in the slash picker with a **Skill**
+label and description. Built-ins such as `/login` keep their normal behavior;
+use `/skill:login` to invoke a skill with that name. The picker refreshes when
+opened, when returning to the tab, and after runs; **Refresh** reloads its catalog
+on demand. Selecting a skill inserts its command without executing it.
+
+Skill submissions carry `command: "skill"` and the original slash text to
+`POST /api/messages`. The server resolves discovered skills and loads their
+instructions at the normal queued response boundary. The transcript shows the
+original command, and multiline task arguments are preserved. Unknown or disabled
+skills fail validation; the browser retains an unaccepted draft. Skill invocation
+does not enable disabled tools or execute scripts at load time. Attachments must
+be removed before submitting a skill command. See [Skills](skills.md) for discovery
+locations, argument substitution, and load budgets.
 
 ### Delete A Session
 
@@ -977,7 +1001,11 @@ provider connection.
 Speech captions appear in the same chat, marked **Live** with their speaker and
 call-relative time. Ordinary messages and assistant work retain their usual
 presentation. Captions remain visible after ending the call or reloading the page.
-A composer status line shows the handoff when the main assistant takes a request: waiting, working, completed, stopped, or failed.
+A composer status line shows the handoff when the main assistant takes a request: queued, processing, completed, stopped, or failed.
+**Processing…** is a lifecycle status, not an assistant response. The assistant
+receives the explicit delegated request as plain user text. For transcript-only
+requests, ngn joins fresh user speech fragments; assistant speech, timestamps, and
+delegation identifiers stay in the inspection data instead of the user message.
 **View in chat** opens the associated run's progress and result. Muting or ending
 voice does not imply that an admitted assistant task has stopped.
 **Request & events** expands inline with the received voice payload, the
@@ -1005,12 +1033,15 @@ entire model context, tool outputs, attachments, or private reasoning. Open
 - **Start without chat context** sends no saved history at startup. The main
   assistant can still consult its conversation when the caller requests help.
 
-The final seed contains at most 14 text items and 7,000 UTF-8 bytes, leaving
-headroom under GPT-Live's startup-input limit. The optional summary source uses
+The final seed contains at most 14 text items and 7,000 UTF-8 bytes. This is ngn's
+budget for starting chat text, not the model's context window; the main assistant
+retains the saved conversation. The optional summary source uses
 at most 128 messages plus a bounded window of saved caption fragments and
 96,000 UTF-8 bytes. It explicitly marks missing, compacted, or clipped material;
 a generated brief is never presented as the complete conversation. **Chat brief**
-or **Chat context** beside the voice timer explains what was included.
+or **Chat context** beside the voice timer opens a compact overview. Exact voice
+instructions and startup history remain expandable; **Seed details** contains the
+size, omissions, and budget explanation.
 
 GPT-Live can ask the main assistant for an earlier detail or a fuller recap through
 its existing client-delegation path. That assistant keeps the authoritative

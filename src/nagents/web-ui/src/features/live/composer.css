@@ -23,7 +23,6 @@
 .voice-context-details p { margin: 7px 0; }
 .voice-context-details dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 16px; margin: 12px 0; }
 .voice-context-details dd { margin: 0; color: var(--text-reading); }
-.voice-context-footnote { font-size: 11px; }
 .live-settings-form .live-voice-instructions { min-height: 88px; max-height: 200px; padding: 9px 10px; border: 1px solid #758f744d; border-radius: 9px; background: #29332b; color: #e5eee3; font: inherit; line-height: 1.55; resize: vertical; }
 .live-settings-form .live-voice-instructions:focus-visible { outline: 2px solid var(--voice-accent); outline-offset: 3px; }
 .voice-composer-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }

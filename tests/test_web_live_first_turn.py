@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -101,10 +100,7 @@ def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_
             if len(model_inputs) == 1:
                 entered.set()
                 await release.wait()
-                assert (
-                    json.loads(model_inputs[-1].split("Handoff data:\n", 1)[1].split("\nSpeech data:", 1)[0])["request"]
-                    == first_text
-                )
+                assert model_inputs[-1] == first_text
                 yield ToolCallEvent(id="load-context", name="read_file", arguments={"path": "AGENTS.md"})
                 return
             elif len(model_inputs) == 2:
@@ -196,7 +192,7 @@ def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_
                     assert first.outcome == "completed"
                     await spoken.wait()
                     drain()
-                    assert model_inputs[0].count('"request":') == 1 and not transport_results
+                    assert model_inputs[0] == first_text and not transport_results
                     assert voice_updates.count(("commentary", answer, "first")) == 1
                     await bridge.close()
                     worker.cancel()

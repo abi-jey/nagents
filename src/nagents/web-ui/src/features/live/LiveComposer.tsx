@@ -43,7 +43,7 @@ export function LiveComposer({ state, status, elapsed, disabled, unavailable, lo
   const unfinished = delegation?.status === "queued" || delegation?.status === "working";
   const pending = state.delegations.filter(item => item.status === "queued" || item.status === "working").length;
   const delegationLabel = delegation ? !connected && unfinished ? "Assistant still working in chat" : {
-    queued: "Request queued", working: "Assistant working", completed: "Request complete", failed: "Request failed", cancelled: "Request stopped",
+    queued: "Request queued", working: "Processing…", completed: "Request complete", failed: "Request failed", cancelled: "Request stopped",
   }[delegation.status] : "";
   const routineEnd = state.phase === "ended" && ["Live session closed. Finalization confirmed.", "Conversation ended. Your microphone is off."].includes(state.notice);
   const feedback = state.error || unavailable || (routineEnd ? "" : state.notice);

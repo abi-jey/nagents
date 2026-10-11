@@ -82,20 +82,21 @@ class ApprovalModal(ModalScreen[bool]):
 class ChoiceModal(ModalScreen[str]):
     BINDINGS: ClassVar[list[BindingType]] = [Binding("escape", "dismiss", show=False)]
 
-    def __init__(self, title: str, choices: list[tuple[str, str]]) -> None:
+    def __init__(self, title: str, choices: list[tuple[str, str]], *, initial_filter: str = "") -> None:
         super().__init__()
         self.heading = title
         self.choices = choices
+        self.initial_filter = initial_filter
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog choice-dialog"):
             yield Static(self.heading, classes="dialog-title", markup=False)
-            yield Input(placeholder="Type to filter", id="filter")
+            yield Input(value=self.initial_filter, placeholder="Type to filter", id="filter")
             yield SlashOptions(id="choices")
             yield Static("Up/down select   Enter open   Esc back", classes="dialog-hint", markup=False)
 
     def on_mount(self) -> None:
-        self.filter_choices("")
+        self.filter_choices(self.initial_filter)
         self.query_one(Input).focus()
 
     def filter_choices(self, value: str) -> None:

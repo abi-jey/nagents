@@ -56,18 +56,34 @@ skill(name="ngn-customize")
 This is a model tool, not a Python function to import. Python callers use
 `await agent.load_skill("ngn-customize")`.
 
-The terminal client also offers `/skill:<name> [task]`, for example:
+The web UI and terminal client also offer skill slash commands:
 
 ```text
+/skills
+/ngn-customize Explain custom compaction strategies
 /skill:ngn-customize Explain custom compaction strategies
 ```
 
-An owned TUI worker refreshes command suggestions, and command execution refreshes
-discovery again. A newly added `/skill:<name>` can therefore execute even before
-its name appears in the cached menu. Slash syntax is a
-client command convention, not a universal skill format or a promised web/Telegram
-slash-command interface. Ordinary web/Telegram text reaches the Agent's automatic
-refresh and dollar-mention boundaries; it needs no skill-specific Refresh button.
+`/skills [search]` opens a searchable picker. Choosing a skill prefills its command;
+add a task and send to invoke it. Typing `/` also shows discovered skills with
+their descriptions. Names are case-sensitive. Built-in and registered commands
+keep their names; `/skill:<name>` always provides an explicit skill form when a
+short name collides, such as a skill named `login`.
+
+Discovery refreshes when browsing and again when invoking a skill. A newly added
+skill can execute before its name appears in a cached menu. Disabled skill loading
+is respected by both clients. Skill commands use the normal input queue and
+permission rules; the web chat displays the original invocation while the server
+loads instructions for the model. Arguments retain their whitespace and newlines.
+Literal `$ARGUMENTS` placeholders in the skill receive the task text; if absent,
+the task is appended separately. Oversized expansions are rejected. Loading or
+substituting skill text does not execute scripts or shell expressions.
+
+The discovery-and-selection pattern is also used by
+[Codex's skill selector](https://learn.chatgpt.com/docs/build-skills), while
+[Claude Code documents direct `/name` invocation and task arguments](https://code.claude.com/docs/en/skills).
+Slash syntax remains a client convention, separate from the skill file format.
+Telegram messages continue to use ordinary text and `$skill-name` activation.
 The web Channels panel's **Refresh** discovers installed connector packages,
 which is a separate operation.
 
@@ -339,7 +355,7 @@ describes catalog disclosure followed by model-driven or explicit activation.
 | Optional `license`, `compatibility`, string-map `metadata`, and experimental `allowed-tools` | Extra keys are ignored consistently by the shared metadata parser. They do not grant permissions or imply full YAML support. |
 | Catalog first, selected instructions later | Dynamic manifest and `skill(name)` tool. |
 | Optional supporting resources loaded as needed | Separate permitted resource access; the two builtin bodies are self-contained. |
-| Client-defined discovery scopes and activation UI | Guarded workspace roots plus packaged builtins in Harness; `$skill-name` in text and `/skill:<name>` in the TUI. |
+| Client-defined discovery scopes and activation UI | Guarded workspace roots plus packaged builtins in Harness; `$skill-name` in text and `/skills`, `/name`, or `/skill:<name>` in the web UI and TUI. |
 | Recommended concise bodies (under 5,000 tokens and 500 lines) | A recommendation distinct from ngn's 10,000-token approximate load budget. |
 
 Neither `$skill-name`, `/skill-name`, `/skill:<name>`, a particular prompt role,

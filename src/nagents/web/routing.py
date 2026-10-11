@@ -342,14 +342,16 @@ class RoutingStore(InboxStore):
         attachments: tuple[str, ...] = (),
         supported_media_types: tuple[str, ...] = (),
         *,
-        command: Literal["", "compact"] = "",
+        command: Literal["", "compact", "skill"] = "",
         voice_session_id: str = "",
         voice_delegation_id: str = "",
         voice_display: str = "",
     ) -> tuple[str, bool]:
         """Return the root and whether this is newly admitted (not an HTTP retry)."""
-        if command not in {"", "compact"} or (command and (prompt != "/compact" or attachments)):
+        if command not in {"", "compact", "skill"} or (command == "compact" and (prompt != "/compact" or attachments)):
             raise HTTPException(422, "The compact command accepts no arguments or attachments.")
+        if command == "skill" and attachments:
+            raise HTTPException(422, "Skill commands do not accept attachments.")
         if any((voice_session_id, voice_delegation_id, voice_display)) and (
             not isinstance(voice_session_id, str)
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", voice_session_id)
@@ -400,6 +402,24 @@ class RoutingStore(InboxStore):
             return session_id, True
 
         return await self._transaction(admit)
+
+    async def skill_retry(self, session_id: str, message_id: str, prompt: str) -> bool:
+        """Existing immutable receipts precede mutable skill discovery or policy."""
+
+        def check(db: sqlite3.Connection) -> bool:
+            self.execution_root(db, session_id)
+            row = db.execute(
+                "SELECT session_id, prompt, attachments, command, voice_session_id, voice_delegation_id, voice_display "
+                "FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
+                (message_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row != (session_id, prompt, "[]", "skill", "", "", ""):
+                raise HTTPException(409, "Message ID already belongs to a different submission.")
+            return True
+
+        return await self._transaction(check)
 
     async def receive(self, channel: str, envelope: str, main: str, command: ChannelCommand | None) -> None:
         payload = json.loads(envelope)
@@ -584,7 +604,7 @@ class RoutingStore(InboxStore):
             ).fetchone()
             if row is None:
                 return None
-            if session_id and (row[8] or row[9]):
+            if session_id and (row[8] or row[9] not in {"", "skill"}):
                 return None  # Commands are a FIFO barrier until the current run is idle.
             db.execute("UPDATE ngn_web_inbox SET status = 'running' WHERE id = ?", (row[0],))
             return Work(
