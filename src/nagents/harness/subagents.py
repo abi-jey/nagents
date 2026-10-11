@@ -190,6 +190,8 @@ class SubagentManager:
             raise PermissionError("Delegation is disabled at the configured subagent depth limit")
         self._check_budget(prompt)
         profile = self.harness.config.profile(agent)
+        if agent not in self.harness.delegatable_profile_names:
+            raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
         if len(self._infos) >= MAX_RETAINED_TASKS:
             raise ValueError(
                 f"Task retention limit reached ({MAX_RETAINED_TASKS} identities per root harness lifetime)"
@@ -355,6 +357,14 @@ class SubagentManager:
         from .runtime import Harness
 
         parent = self._children[info.id] if continuing and info is not None else self.harness
+        if not parent.config.profile(agent).subagent_available:
+            raise PermissionError(f"Agent {agent!r} is no longer available for delegation")
+        if not continuing and agent not in parent.delegatable_profile_names:
+            raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
+        if continuing:
+            for owner in parent._permission_parents:
+                if agent not in owner.delegatable_profile_names:
+                    raise PermissionError(f"Agent {agent!r} is no longer allowed by an ancestor")
         defined = parent.create_defined_child(agent)
         if defined is not None:
             defined._is_subagent = True
@@ -363,6 +373,7 @@ class SubagentManager:
             defined._activation = info.activation if info else 0
             defined.subagent_depth = info.depth if info else self.harness.subagent_depth + 1
             defined._permission_ceiling = "reviewer" if parent.mode == "reviewer" else "build"
+            defined.inherit_tool_permissions(parent, continuing=continuing)
             if info:
                 defined.session_id = info.child_session_id
             defined.tasks = SubagentManager(defined, self.root)
@@ -374,8 +385,6 @@ class SubagentManager:
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
         profiles = {name: replace(profile) for name, profile in parent.config.profiles.items()}
-        if agent in profiles:
-            profiles[agent] = replace(profiles[agent], model="")
         config = replace(
             parent.config,
             agent=agent,
@@ -419,6 +428,7 @@ class SubagentManager:
         child._activation = info.activation if info else 0
         child.subagent_depth = info.depth if info else self.harness.subagent_depth + 1
         child._permission_ceiling = ceiling
+        child.inherit_tool_permissions(parent, continuing=continuing)
         if info:
             child.session_id = info.child_session_id
             info.mode = ceiling

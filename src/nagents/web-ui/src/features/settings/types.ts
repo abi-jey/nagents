@@ -24,6 +24,9 @@ export type SettingsProfile = {
   mode: "build" | "reviewer";
   model: string;
   provider?: string;
+  description?: string;
+  source?: string;
+  source_format?: string;
 };
 
 export type SettingsConnection = {
@@ -38,6 +41,7 @@ export type SettingsConnection = {
 };
 
 export type SettingsReply = {
+  agent_diagnostics?: string[];
   read_only_locked?: boolean;
   values: SettingsValues;
   defaults: SettingsValues;

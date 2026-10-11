@@ -299,11 +299,19 @@ export function SettingsDialog({
                     )}
                     {snapshot.profiles.map((profile) => (
                       <option key={profile.name} value={profile.name}>
-                        {profile.name}{profile.provider ? ` → ${profile.provider}` : ""}{profile.mode === "reviewer" ? " (read-only)" : ""}
+                        {profile.name}{profile.description ? ` · ${profile.description}` : ""}{profile.provider ? ` → ${profile.provider}` : ""}{profile.mode === "reviewer" ? " (read-only)" : ""}
                       </option>
                     ))}
                   </select>
                    <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Trusted agent profiles may set their own model or connection."}</p>
+                  {snapshot.profiles.find(profile => profile.name === draft.agent)?.source && (
+                    <p>Source: <code>{snapshot.profiles.find(profile => profile.name === draft.agent)?.source}</code></p>
+                  )}
+                  {!!snapshot.agent_diagnostics?.length && (
+                    <details className="settings-disclosure"><summary>Agent loading diagnostics ({snapshot.agent_diagnostics.length})</summary>
+                      <ul>{snapshot.agent_diagnostics.map((note, index) => <li key={index}>{note}</li>)}</ul>
+                    </details>
+                  )}
                   {errors.agent && (
                     <p id="settings-agent-error" className="error-text">
                       {errors.agent}

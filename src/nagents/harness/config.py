@@ -2,7 +2,7 @@
 
 Precedence: built-ins < NGN_* environment defaults < user JSON < trusted
 project JSON < explicit JSON. Unknown mapping keys are errors.
-Profiles accept ``mode`` (build/reviewer), ``instructions``, ``model`` and ``provider``.
+Profiles and imported manifests define instructions, routing, and permission limits.
 Python extensions are executable trusted code, not sandboxed plugins.
 """
 
@@ -18,6 +18,9 @@ from typing import Literal
 
 from nagents.mcp import MCPServerConfig
 
+from .agent_definitions import DefinitionBatch
+from .agent_definitions import discover_agents
+from .agent_definitions import import_agents
 from .providers import ProviderProfile
 from .providers import ScopedProviderRegistryStore
 from .providers import validate_provider
@@ -38,6 +41,38 @@ class AgentProfile:
     instructions: str = ""
     model: str = ""
     provider: str = ""
+    description: str = ""
+    tools: tuple[str, ...] | None = None
+    denied_tools: tuple[str, ...] = ()
+    allowed_agents: tuple[str, ...] | None = None
+    user_invocable: bool = True
+    subagent_available: bool = True
+    source: str = field(default="", compare=False)
+    source_format: str = field(default="", compare=False)
+
+    def validate(self) -> None:
+        if self.mode not in {"build", "reviewer"}:
+            raise ValueError("mode must be build or reviewer")
+        for name in ("instructions", "description", "model", "provider", "source", "source_format"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or len(value.encode("utf-8")) > 262144:
+                raise ValueError(f"{name} must be a bounded string")
+        if self.provider and not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", self.provider):
+            raise ValueError("Invalid provider connection")
+        for name in ("user_invocable", "subagent_available"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        for name in ("tools", "denied_tools", "allowed_agents"):
+            items = getattr(self, name)
+            if items is None and name != "denied_tools":
+                continue
+            pattern = r"[A-Za-z0-9_-]{1,128}" if name == "allowed_agents" else r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}"
+            if (
+                not isinstance(items, tuple)
+                or len(items) > 512
+                or any(not isinstance(item, str) or not re.fullmatch(pattern, item) for item in items)
+            ):
+                raise ValueError(f"{name} must contain valid names")
 
 
 @dataclass
@@ -62,6 +97,7 @@ class HarnessConfig:
     max_tool_rounds: int = 30
     profiles: dict[str, AgentProfile] = field(default_factory=dict)
     diagnostics: tuple[str, ...] = ()
+    agent_diagnostics: tuple[str, ...] = ()
     config_paths: tuple[Path, ...] = ()
     # Explicit symlink configs historically resolve relative references beside
     # their target. Keep the logical location so extension reloads can rotate it.
@@ -108,10 +144,9 @@ class HarnessConfig:
         for name, profile in self.profiles.items():
             if name == "assistant":
                 raise ValueError("The built-in assistant profile cannot be overridden")
-            if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or profile.mode not in {"build", "reviewer"}:
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) or profile.mode not in {"build", "reviewer"}:
                 raise ValueError(f"Invalid profile {name!r}: mode must be build or reviewer")
-            if profile.provider and not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", profile.provider):
-                raise ValueError(f"Invalid provider connection for profile {name!r}")
+            profile.validate()
         self.profile(self.agent)
         if not 0 < self.shell_timeout <= 600:
             raise ValueError("shell_timeout must be > 0 and <= 600 seconds")
@@ -142,6 +177,71 @@ class HarnessConfig:
     @property
     def profile_names(self) -> tuple[str, ...]:
         return ("assistant", *sorted(self.profiles))
+
+    @property
+    def selectable_profile_names(self) -> tuple[str, ...]:
+        return tuple(name for name in self.profile_names if self.profile(name).user_invocable)
+
+
+def _install_profile(config: HarnessConfig, name: str, profile: AgentProfile, diagnostics: list[str]) -> None:
+    profile.validate()
+    if name == "assistant":
+        raise ValueError("The built-in assistant profile cannot be overridden")
+    previous = config.profiles.get(name)
+    if previous is not None:
+        note = f"Agent {name!r}: {profile.source} overrides {previous.source or 'configured profile'}"
+        diagnostics.append(note)
+        config.agent_diagnostics += (note,)
+    config.profiles[name] = profile
+
+
+def _install_agents(config: HarnessConfig, batch: DefinitionBatch, diagnostics: list[str]) -> None:
+    diagnostics.extend(batch.diagnostics)
+    config.agent_diagnostics += batch.diagnostics
+    for definition in batch.profiles:
+        profile = AgentProfile(
+            mode=definition.mode,
+            instructions=definition.instructions,
+            model=definition.model,
+            provider=definition.provider,
+            description=definition.description,
+            tools=definition.tools,
+            denied_tools=definition.denied_tools,
+            allowed_agents=definition.allowed_agents,
+            user_invocable=definition.user_invocable,
+            subagent_available=definition.subagent_available,
+            source=definition.source,
+            source_format=definition.source_format,
+        )
+        try:
+            _install_profile(config, definition.name, profile, diagnostics)
+        except ValueError as error:
+            note = f"{definition.source}: {error}; agent was not loaded"
+            diagnostics.append(note)
+            config.agent_diagnostics += (note,)
+
+
+def _json_profile(value: object, source: Path) -> AgentProfile:
+    string_fields = {"mode", "instructions", "model", "provider", "description"}
+    bool_fields = {"user_invocable", "subagent_available"}
+    list_fields = {"tools", "denied_tools", "allowed_agents"}
+    if not isinstance(value, dict) or value.keys() - (string_fields | bool_fields | list_fields):
+        raise ValueError(f"{source}: invalid agent profile fields")
+    profile = AgentProfile(source=str(source), source_format="json")
+    for name, item in value.items():
+        if name in string_fields:
+            if not isinstance(item, str):
+                raise ValueError(f"{source}: profile {name} must be a string")
+        elif name in bool_fields:
+            if type(item) is not bool:
+                raise ValueError(f"{source}: profile {name} must be a boolean")
+        else:
+            if not isinstance(item, list) or not all(isinstance(entry, str) for entry in item):
+                raise ValueError(f"{source}: profile {name} must be an array of names (omit it to inherit)")
+            item = tuple(item)
+        setattr(profile, name, item)
+    profile.validate()
+    return profile
 
 
 def _provider_defaults(config: HarnessConfig, store: ScopedProviderRegistryStore) -> tuple[HarnessConfig, str]:
@@ -246,7 +346,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     }
     booleans = {"demo", "animations", "read_only"}
     allowed = (
-        strings | integers | booleans | {"plugins", "data_dir", "shell_timeout", "profiles", "providers", "mcp_servers"}
+        strings
+        | integers
+        | booleans
+        | {"plugins", "data_dir", "shell_timeout", "profiles", "providers", "mcp_servers", "agent_imports"}
     )
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
@@ -268,20 +371,27 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 global_model = env_value
 
     diagnostics: list[str] = [login_note] if login_note else []
+    _install_agents(config, discover_agents(Path.home(), personal=True), diagnostics)
+    project_agents_loaded = False
     if project.exists() and not trust_project and not explicit_project:
         diagnostics.append(
             f"Ignoring untrusted project config {project}; use trust_project=True to allow endpoints and Python code."
         )
     loaded: list[Path] = []
     for path, values in documents:
+        if (path != user or path == explicit) and trust_project and not project_agents_loaded:
+            _install_agents(config, discover_agents(defaults.workspace), diagnostics)
+            project_agents_loaded = True
         loaded.append(path)
         unknown = values.keys() - allowed
         if unknown:
             raise ValueError(
                 f"Unknown configuration fields in {path}: {', '.join(sorted(unknown))}; configure connections in providers.json"
             )
+        if "agent_imports" in values:
+            _install_agents(config, import_agents(values["agent_imports"], directories[path]), diagnostics)
         for key, value in values.items():
-            if key == "providers":
+            if key in {"providers", "agent_imports"}:
                 continue
             if key == "model" and isinstance(value, str):
                 global_model = value
@@ -327,11 +437,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 if not isinstance(value, dict):
                     raise ValueError(f"{path}: profiles must be a mapping")
                 for name, profile in value.items():
-                    if not isinstance(profile, dict) or profile.keys() - {"mode", "instructions", "model", "provider"}:
-                        raise ValueError(f"{path}: invalid profile {name!r}")
-                    if not all(isinstance(item, str) for item in profile.values()):
-                        raise ValueError(f"{path}: profile values must be strings")
-                    config.profiles[name] = AgentProfile(**profile)
+                    _install_profile(config, name, _json_profile(profile, path), diagnostics)
                 continue
             if key == "provider_id":
                 assert isinstance(value, str)
@@ -339,6 +445,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             else:
                 setattr(config, key, value)
         diagnostics.append(f"Loaded trusted configuration: {path}")
+    if trust_project and not project_agents_loaded:
+        _install_agents(config, discover_agents(defaults.workspace), diagnostics)
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
     config.explicit_config_paths = (explicit,) if explicit is not None else ()

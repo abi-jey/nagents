@@ -310,10 +310,17 @@ class WebSettings:
                     "name": name,
                     "mode": self.harness.mode_for_profile(name),
                     "model": config.profile(name).model,
+                    **({"description": config.profile(name).description} if config.profile(name).description else {}),
+                    **(
+                        {"source": config.profile(name).source, "source_format": config.profile(name).source_format}
+                        if config.profile(name).source
+                        else {}
+                    ),
                     **({"provider": config.profile(name).provider} if config.profile(name).provider else {}),
                 }
-                for name in config.profile_names
+                for name in config.selectable_profile_names
             ],
+            **({"agent_diagnostics": list(config.agent_diagnostics)} if config.agent_diagnostics else {}),
             "revision": self.revision,
             "persisted": self.persisted,
             "effective_mode": self.effective_mode,
@@ -336,7 +343,8 @@ class WebSettings:
         }
 
     def validate(self, values: SettingsValues) -> str:
-        self.harness.config.profile(values.agent)
+        if not self.harness.config.profile(values.agent).user_invocable:
+            raise ValueError(f"Agent {values.agent!r} is available only for delegation")
         self.provider_config(values)
         payload = values.model_dump_json()
         if len(payload.encode("utf-8")) > MAX_SETTINGS_BYTES:

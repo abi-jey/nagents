@@ -136,13 +136,18 @@ class HarnessToolRegistry(ToolRegistry):
         registry intact preserves tool identity and the editable settings catalog
         when a profile, depth limit, scheduler or workspace selection changes.
         """
-        policy = self.harness.tool_settings
-        policy.load()
-        tools = [
-            tool
-            for tool in super().get_all()
-            if policy.enabled(self.harness.config.agent, tool.name) and self._available(tool)
-        ]
+        self.harness.refresh_tool_policy()
+        tools = [tool for tool in super().get_all() if self.harness.tool_enabled(tool.name) and self._available(tool)]
+        for tool in tools:
+            if tool.func == self.harness.tasks.delegate:
+                parameter = tool.parameters.get("properties", {}).get("agent")
+                if parameter is not None:
+                    parameter["description"] = "Select an available agent. " + self.harness.delegation_catalog()
+                    parameter["enum"] = list(self.harness.delegatable_profile_names)
+                    required = [name for name in tool.parameters.get("required", []) if name != "agent"]
+                    if "assistant" not in self.harness.delegatable_profile_names:
+                        required.append("agent")
+                    tool.parameters["required"] = required
         return tools
 
     def _available(self, tool: ToolDefinition) -> bool:

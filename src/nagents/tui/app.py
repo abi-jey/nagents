@@ -454,8 +454,8 @@ class NagentsApp(App[None]):
         elif self.busy:
             self._status("Finish or stop the current run before switching agents. Your draft is kept.")
         else:
-            profiles = list(self.harness.config.profile_names)
-            current = profiles.index(self.harness.config.agent)
+            profiles = list(self.harness.config.selectable_profile_names)
+            current = profiles.index(self.harness.config.agent) if self.harness.config.agent in profiles else 0
             name = profiles[(current + (-1 if event.reverse else 1)) % len(profiles)]
             self._hide_completions()
             self._launch(lambda: self._change("/agent", name), f"Switching to {name}...")
@@ -1230,9 +1230,19 @@ class NagentsApp(App[None]):
                         f"  /  {self.harness.config.profile(name).provider}"
                         if self.harness.config.profile(name).provider
                         else ""
+                    )
+                    + (
+                        f"  /  {self.harness.config.profile(name).description}"
+                        if self.harness.config.profile(name).description
+                        else ""
+                    )
+                    + (
+                        f"  /  {self.harness.config.profile(name).source}"
+                        if self.harness.config.profile(name).source
+                        else ""
                     ),
                 )
-                for name in self.harness.config.profile_names
+                for name in self.harness.config.selectable_profile_names
             ]
             self.push_screen(
                 ChoiceModal("AGENT PROFILE", profiles),

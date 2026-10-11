@@ -387,8 +387,8 @@ environment-variable convention, and no `NGN_CONFIG`, `NGN_WORKSPACE`, or
 
 ## Agent profiles
 
-`assistant` is the only built-in agent and is reserved. Other agents are defined
-explicitly in `profiles`:
+`assistant` is the only built-in agent and is reserved. Other agents come from
+JSON `profiles` or [discovered Markdown and TOML definitions](agent-definitions.md).
 
 Use `read_only: true` (or `NGN_READ_ONLY=true`) to constrain the assistant and its
 children to read-only operation. This startup restriction cannot be relaxed by
@@ -400,8 +400,7 @@ explicitly configured custom profiles.
 | --- | --- | --- |
 | `assistant` | `build` | Default interactive agent and default delegation target. Guarded changes and shell require approval; child agents inherit their parent's permission ceiling. |
 
-Custom profile names match `[A-Za-z0-9_-]+`. Each profile accepts exactly these
-string fields:
+Custom profile names match `[A-Za-z0-9_-]{1,128}`. Each profile accepts these fields:
 
 | Profile field | Default | Meaning |
 | --- | --- | --- |
@@ -409,6 +408,12 @@ string fields:
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
 | `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
 | `provider` | `""` | Optional named connection ID in `providers.json`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
+| `description` | `""` | Description shown to the model and agent picker. |
+| `tools` | omitted | Tool-name array; omission inherits, `[]` permits no tools. |
+| `denied_tools` | `[]` | Additional tool-name denials. |
+| `allowed_agents` | omitted | Delegation target-name array; `[]` disables delegation. |
+| `user_invocable` | `true` | Boolean controlling user selection. |
+| `subagent_available` | `true` | Boolean controlling delegation eligibility. |
 
 ```json
 {

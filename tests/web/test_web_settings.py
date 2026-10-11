@@ -452,7 +452,12 @@ def test_settings_strict_invalid_values(tmp_path: Path, field: str, value: objec
 
 def test_compaction_criteria_apply_to_the_live_agent(tmp_path: Path) -> None:
     async def check() -> None:
-        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=replace(configuration(tmp_path), demo=False)) as (
+            _,
+            client,
+            headers,
+            harnesses,
+        ):
             harness = harnesses[0]
             before = (await client.get("/api/settings", headers=headers)).json()
             assert before["values"]["compact_trigger"] == "auto"
