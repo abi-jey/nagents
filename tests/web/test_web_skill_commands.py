@@ -13,7 +13,6 @@ import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.harness.commands import CommandResult
-from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
@@ -31,6 +30,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
+    from nagents.harness.config import HarnessConfig
     from nagents.web.service import WebState
 
 
@@ -42,6 +42,7 @@ def _config(path: Path) -> HarnessConfig:
         ProviderRegistry(active="fixture", providers={"fixture": profile}), expected="0" * 64
     )
     return config
+
 
 pytestmark = pytest.mark.requires_posix
 
@@ -270,7 +271,9 @@ def test_skill_followup_loads_at_next_response_boundary_in_its_own_root(tmp_path
                     assert "CURRENT_SKILL" in prompts[1] and "OLD_SKILL" not in prompts[1]
                 else:
                     assert any(
-                        record.get("event") == "error" and "Skill command could not run" in str(record.get("message"))
+                        isinstance(record, dict)
+                        and record.get("event") == "error"
+                        and "Skill command could not run" in str(record.get("message"))
                         for frame, _ in state.bus.ring
                         for record in [frame.get("record", {})]
                     )
