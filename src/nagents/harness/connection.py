@@ -77,6 +77,9 @@ class _EnvFoundryProvider(FoundryProvider):
             raise ValueError(f"Set ${self._env} before a Foundry request")
         self.api_key = key
 
+    def _prepare_context_usage(self) -> None:
+        self._key()
+
     async def auth_headers(self, url: str) -> dict[str, str]:
         self._key()
         return await super().auth_headers(url)

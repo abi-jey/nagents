@@ -17,10 +17,12 @@ from nagents.extensions import CompactionRequest
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ProviderRegistryStore
+from nagents.provider import OpenAIProvider
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.provider.context import ContextWindow
 from nagents.provider.gateway import GatewayHTTPClient
+from nagents.provider.openai import CodexCredentials
 from tests.providers.test_gateway_provider import endpoint
 
 if TYPE_CHECKING:
@@ -227,19 +229,42 @@ def test_changed_credential_cannot_reuse_same_endpoint_alias_metadata() -> None:
 
 def test_metadata_deadline_includes_deferred_credentials() -> None:
     async def scenario() -> None:
-        async def credentials() -> str:
+        async def credentials() -> CodexCredentials:
             await asyncio.Event().wait()
-            return "unreachable"
+            return CodexCredentials("unreachable")
 
-        async with Provider(
-            ProviderType.OPENAI_COMPATIBLE,
-            model="unknown",
-            bearer_token_provider=credentials,
-            timeout=0.02,
-        ) as provider:
-            with patch.object(provider, "_fetch_context_metadata", AsyncMock()) as fetch:
+        async with OpenAIProvider(credentials, model="unknown", timeout=0.02) as provider:
+            with patch.object(GatewayHTTPClient, "get_json", AsyncMock()) as get:
                 result = await asyncio.wait_for(provider.resolve_context_window(), timeout=0.5)
                 assert result.source == "heuristic"
-                fetch.assert_not_awaited()
+                get.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+def test_bearer_catalog_context_uses_only_the_actual_request_token() -> None:
+    async def scenario() -> None:
+        calls = 0
+
+        async def credentials() -> str:
+            nonlocal calls
+            calls += 1
+            return f"catalog-token-{calls}"
+
+        async def handle(request: web.Request) -> web.Response:
+            assert request.path == "/models"
+            assert request.headers["Authorization"] == "Bearer catalog-token-1"
+            return web.json_response({"data": [{"id": "alias", "max_input_tokens": 1_000_000}]})
+
+        async with (
+            endpoint(handle) as url,
+            Provider(
+                ProviderType.OPENAI_COMPATIBLE, model="alias", base_url=url, bearer_token_provider=credentials
+            ) as provider,
+        ):
+            assert await provider.get_model_list() == ["alias"]
+            for _ in range(3):
+                assert await provider.resolve_context_window() == ContextWindow(1_000_000, "provider")
+            assert calls == 1
 
     asyncio.run(scenario())

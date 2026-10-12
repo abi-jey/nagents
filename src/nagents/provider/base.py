@@ -262,10 +262,17 @@ class Provider:
         ).hexdigest()
         return self.provider_type.value, self.base_url, auth
 
+    def _context_usage_identity(self) -> str:
+        """Usage follows a credential source, not routine bearer token rotation."""
+        source = f"bearer:{id(self.bearer_token_provider)}" if self.bearer_token_provider is not None else self.api_key
+        return hashlib.sha256(source.encode()).hexdigest()
+
+    def _prepare_context_usage(self) -> None:
+        """Deferred API-key providers may resolve local credentials without HTTP calls."""
+
     async def _prepare_context_metadata(self) -> None:
-        """Deferred credential providers refresh their identity before cache lookup."""
-        if self.bearer_token_provider is not None:
-            await self.auth_headers(self.base_url)
+        """Resolve local keys only; remote token callbacks belong to actual HTTP requests."""
+        self._prepare_context_usage()
 
     def cached_context_window(self) -> ContextWindow:
         """Resolve precedence synchronously, without network I/O."""
@@ -343,17 +350,25 @@ class Provider:
             # can populate it during explicit discovery without another request.
             return
         validate_prefix(self.base_url)
-        identity = self._context_metadata_identity()
+        route = (self.provider_type, self.base_url)
         prefix = self._api_prefix()
         headers = await self.auth_headers(prefix)
+        if route != (self.provider_type, self.base_url):
+            return
+        # Bind the response to the credential actually accepted for this HTTP
+        # request, not the earlier cache state before a bearer refresh.
+        identity = self._context_metadata_identity()
+        self._context_metadata.select(identity)
+        model = self.model
+        self._context_metadata.backoff(model)
         key, nested = "id", False
         if kind == ProviderType.LITELLM:
             url, key, nested = prefix.removesuffix("/v1") + "/model/info", "model_name", True
         elif kind == ProviderType.ANTHROPIC:
-            url = prefix + "/models/" + quote(self.model, safe="")
+            url = prefix + "/models/" + quote(model, safe="")
             headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"}
         elif kind == ProviderType.GEMINI_NATIVE:
-            url = prefix + "/models/" + quote(self.model.removeprefix("models/"), safe="")
+            url = prefix + "/models/" + quote(model.removeprefix("models/"), safe="")
             headers = {"x-goog-api-key": self.api_key}
             key = "name"
         else:
@@ -364,9 +379,9 @@ class Provider:
         rows = response.get("data", []) if kind in {ProviderType.LITELLM, ProviderType.OPENROUTER} else [response]
         self._context_metadata.update(rows, id_key=key, nested=nested)
         if kind == ProviderType.GEMINI_NATIVE:
-            prefixed = "models/" + self.model.removeprefix("models/")
+            prefixed = "models/" + model.removeprefix("models/")
             if prefixed in self._context_metadata.limits:
-                self._context_metadata.limits[self.model] = self._context_metadata.limits[prefixed]
+                self._context_metadata.limits[model] = self._context_metadata.limits[prefixed]
 
     async def auth_headers(self, url: str) -> dict[str, str]:
         """Fresh authentication per attempt; caller owns the credential lifetime."""

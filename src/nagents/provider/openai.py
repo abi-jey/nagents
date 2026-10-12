@@ -609,14 +609,10 @@ class OpenAIProvider(Provider):
             self._context_metadata.update(response["models"], id_key="slug")
         return models
 
-    async def _prepare_context_metadata(self) -> None:
+    def _context_usage_identity(self) -> str:
         if self._local_api:
-            await super()._prepare_context_metadata()
-        else:
-            credentials = await self._credentials()
-            self._context_auth_identity = hashlib.sha256(
-                f"{credentials.account_id}:{credentials.access_token}:{credentials.residency}".encode()
-            ).hexdigest()
+            return super()._context_usage_identity()
+        return hashlib.sha256(f"chatgpt:{id(self._credentials)}".encode()).hexdigest()
 
     async def _fetch_context_metadata(self) -> None:
         if self._local_api:
@@ -660,6 +656,9 @@ class OpenAIProvider(Provider):
                 message="ChatGPT credentials are unavailable; sign in again with /login.", code="CODEX_AUTH"
             )
             return
+        self._context_auth_identity = hashlib.sha256(
+            f"{credentials.account_id}:{credentials.access_token}:{credentials.residency}".encode()
+        ).hexdigest()
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
             "Accept": "text/event-stream",

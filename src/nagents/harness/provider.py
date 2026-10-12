@@ -93,7 +93,7 @@ class HarnessProvider(Provider):
         self.credentials()
         return True
 
-    async def _prepare_context_metadata(self) -> None:
+    def _prepare_context_usage(self) -> None:
         if not self.harness_config.demo:
             self.credentials()
 

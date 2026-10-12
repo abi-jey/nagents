@@ -281,7 +281,7 @@ def test_native_delegate_accepts_model_and_compaction_overrides_without_mutating
             info = harness.tasks.list()[0]
             assert info.status == "completed", info.error
             assert info.model == "child-override"
-            assert info.compaction == {"trigger": "tokens", "token_threshold": 35000}
+            assert info.compaction == {"trigger": "tokens", "token_budget": 50000, "token_threshold": 35000}
             assert harness.agent.provider.model == "fake-model"
             assert harness.agent.compaction_strategy is None
             assert harness.config.profile("reviewer").model == ""

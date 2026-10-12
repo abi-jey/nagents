@@ -1197,7 +1197,7 @@ class Agent:
             provider.model,
             provider.base_url,
             provider.api,
-            provider._context_metadata_identity()[2],
+            provider._context_usage_identity(),
         )
 
     def _usage_setup_digest(self) -> str:
@@ -1618,11 +1618,11 @@ class Agent:
                 ],
                 config=request.config,
             )
-            # Resolve deferred auth before binding usage to this request. Failure
+            # Resolve local deferred API keys before binding usage; never fetch
+            # unused remote bearer/OAuth tokens. Failure
             # remains the generation transport's responsibility and error event.
             with suppress(Exception):
-                async with asyncio.timeout(3.0):
-                    await self.provider._prepare_context_metadata()
+                self.provider._prepare_context_usage()
             usage_origin = _UsageOrigin(
                 self._usage_provider_identity(),
                 await self.session.context_identity(session_id),

@@ -67,7 +67,7 @@ class DesignProvider(Provider):
     async def verify_model(self, force: bool = False) -> bool:
         return True
 
-    async def _prepare_context_metadata(self) -> None:
+    def _prepare_context_usage(self) -> None:
         if not self.demo:
             self.api_key = resolve_secret(
                 self.design,
