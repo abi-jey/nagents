@@ -371,9 +371,13 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             resumed = (
                 await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
             ).json()
-            assert resumed["retained_tasks"] == [
+            # Identity membership is stable; SQLite query order is not an API contract.
+            retained = resumed["retained_tasks"]
+            expected = [
                 {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
             ]
+            assert len(retained) == len(expected) == 2
+            assert sorted(retained, key=lambda task: task["id"]) == sorted(expected, key=lambda task: task["id"])
             assert all(info["activation"] == 1 for info in resumed["retained_tasks"])
             events = (await client.get(f"/api/activity/{session_id}/{cursor}", headers=headers)).json()["events"]
             assert events[-1]["status"] == "completed"
