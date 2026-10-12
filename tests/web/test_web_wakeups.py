@@ -301,7 +301,10 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             await submit_and_wait(app, headers, first, "start")
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             retained = snapshot["retained_tasks"]
-            assert retained == [asdict(info) for info in state.harness.tasks.list()]
+            expected = [
+                {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
+            ]
+            assert retained == expected
             assert len(retained) == 1 and retained[0]["session_id"] == first
             assert retained[0]["status"] == "completed" and retained[0]["result"] == "recorded result"
             assert retained[0]["activation"] == 0 and retained[0]["trigger"] == "delegation"
@@ -319,7 +322,16 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
         # Persisted history is unchanged, but a new process has no retained task handles.
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, _, providers, _):
             resumed = (await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)).json()
-            assert resumed["session_id"] == first and resumed["retained_tasks"] == []
+            restored = resumed["retained_tasks"]
+            assert resumed["session_id"] == first and len(restored) == 1
+            assert {
+                key: value for key, value in restored[0].items() if key not in {"can_message", "unavailable_reason"}
+            } == {key: value for key, value in retained[0].items() if key not in {"can_message", "unavailable_reason"}}
+            assert restored[0]["can_message"] is False
+            assert restored[0]["unavailable_reason"]
+            task_detail = (await client.get(f"/api/sessions/{first}/tasks/{restored[0]['id']}", headers=headers)).json()
+            assert task_detail["history"]
+            assert task_detail["history"][-1]["content"] == "recorded result"
             assert resumed["history"] == snapshot["history"]
             assert not providers[0].requests
 
@@ -359,7 +371,9 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             resumed = (
                 await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
             ).json()
-            assert resumed["retained_tasks"] == [asdict(info) for info in state.harness.tasks.list()]
+            assert resumed["retained_tasks"] == [
+                {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
+            ]
             assert all(info["activation"] == 1 for info in resumed["retained_tasks"])
             events = (await client.get(f"/api/activity/{session_id}/{cursor}", headers=headers)).json()["events"]
             assert events[-1]["status"] == "completed"

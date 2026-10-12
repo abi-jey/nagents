@@ -31,16 +31,19 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
+    from nagents.web.service import Run
     from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix
 
 
+@pytest.mark.parametrize("delay_history_marker", [False, True])
 def test_task_api_start_inspect_busy_fifo_and_retained_continuation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delay_history_marker: bool
 ) -> None:
     async def scenario() -> None:
         started, release = asyncio.Event(), asyncio.Event()
+        marker_blocked, release_marker = asyncio.Event(), asyncio.Event()
         seen: list[str] = []
         (tmp_path / "fixture.txt").write_text("PRIVATE TOOL EVIDENCE")
 
@@ -67,6 +70,25 @@ def test_task_api_start_inspect_busy_fifo_and_retained_continuation(
                 yield TextDoneEvent(text="Child result")
 
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+            original_record = state.tasks.record
+            marker_held = False
+
+            async def delayed_record(run: Run, record: dict[str, object]) -> None:
+                nonlocal marker_held
+                payload = record.get("payload")
+                if (
+                    delay_history_marker
+                    and not marker_held
+                    and record.get("event") == "task_activity"
+                    and isinstance(payload, dict)
+                    and payload.get("type") == "history_committed"
+                ):
+                    marker_held = True
+                    marker_blocked.set()
+                    await release_marker.wait()
+                await original_record(run, record)
+
+            monkeypatch.setattr(state.tasks, "record", delayed_record)
             root = state.selected_session_id
             prefix = f"/api/sessions/{root}/tasks"
             catalog = (await client.get(prefix, headers=headers)).json()
@@ -82,10 +104,35 @@ def test_task_api_start_inspect_busy_fifo_and_retained_continuation(
             task_id = response.json()["task"]["id"]
             async with asyncio.timeout(HANG_GUARD):
                 await started.wait()
-            detail = (await client.get(f"{prefix}/{task_id}", headers=headers)).json()
-            assert any(row["content"] == "PRIVATE CHILD ASSIGNMENT" for row in detail["history"])
+            try:
+                if delay_history_marker:
+                    async with asyncio.timeout(HANG_GUARD):
+                        await marker_blocked.wait()
+                detail = (await client.get(f"{prefix}/{task_id}", headers=headers)).json()
+                receipt = detail["receipts"][0]
+                # Provider entry follows the atomic user-row/receipt commit,
+                # independently of the root observer's presentation watermark.
+                assert receipt["status"] == "picked_up" and receipt["history_id"]
+                committed = await state.executions.owners[root].tasks.history(task_id)
+                assert sum(message.content == "PRIVATE CHILD ASSIGNMENT" for message in committed) == 1
+                if delay_history_marker:
+                    assert detail["history_boundary"] < receipt["history_id"]
+                    assert not any(row["history_id"] == str(receipt["history_id"]) for row in detail["history"])
+            finally:
+                release_marker.set()
+            # The public inspector deliberately exposes only a coherent prefix
+            # whose ordered history marker has reached the root observer.
+            async with asyncio.timeout(HANG_GUARD):
+                while True:
+                    response = await client.get(f"{prefix}/{task_id}", headers=headers)
+                    assert response.status_code == 200, response.text
+                    detail = response.json()
+                    visible = [row for row in detail["history"] if row["history_id"] == str(receipt["history_id"])]
+                    if visible:
+                        break
+                    await asyncio.sleep(0)
+            assert len(visible) == 1 and visible[0]["content"] == "PRIVATE CHILD ASSIGNMENT"
             assert detail["receipts"][0]["status"] == "picked_up"
-            assert detail["receipts"][0]["history_id"]
             notes = [{"message_id": str(uuid4()), "text": text} for text in ("PRIVATE NOTE ONE", "PRIVATE NOTE TWO")]
             for note in notes:
                 response = await client.post(f"{prefix}/{task_id}/messages", headers=headers, json=note)
