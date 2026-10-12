@@ -51,6 +51,7 @@ from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
+from .session_agents import SessionAgents
 from .subscriptions import EventBus
 from .tasks import Tasks
 from .tool_approvals import ToolApprovals
@@ -116,6 +117,8 @@ class Run:
     harness: Harness | None = field(default=None, repr=False)
     message_id: str = ""
     task_message_id: str = ""
+    agent: str = ""
+    read_only: bool = False
     source: dict[str, str] = field(default_factory=dict)
     chain: Chain = field(default_factory=Chain)
     drafts: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -288,6 +291,7 @@ class WebState:
         )
         self.channels = ChannelHost(self)
         self.designed_channels = DesignedChannels(self)
+        self.session_agents = SessionAgents(self)
         self.uploads = Uploads(self)
         self.trash = SessionTrash(self)
         harness.approval_handler = self.approve
@@ -443,6 +447,7 @@ class WebState:
             "retained_tasks": (await self.tasks.index(session_id))["tasks"],
             "sessions": [asdict(session) for session in sessions],
             "history": history,
+            "agent_selection": await self.session_agents.snapshot(session_id),
             "active_run": active.snapshot() if active is not None and active.session_id == session_id else None,
             "active_session_id": active.session_id if active else "",
             "active_run_id": active.id if active else "",

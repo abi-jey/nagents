@@ -117,7 +117,7 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     // history authoritative over unbound assistant stream copies. Never assign
     // those copies to a row by text, run order, or a stale history baseline.
     if (entry.kind === "assistant" && !entry.taskId && !entry.historyId && canonicalRuns.has(entry.runId || "")) return;
-    const freshCaption = entry.kind === "live_caption" && !knownHistory?.some((row) => row.history_id === entry.historyId);
+    const freshCaption = ["live_caption", "agent_change"].includes(entry.kind) && !knownHistory?.some((row) => row.history_id === entry.historyId);
     if (!entry.delivery && (freshCaption || entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
   }
   for (const [position, entry] of roots.entries()) {
@@ -247,10 +247,10 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
     // Socket snapshots are checkpointed against this ordered event cursor.
     // Every published caption was already committed, so an absent row was
     // cleared/compacted. Only unversioned HTTP reads need to keep newer speech.
-    const captions = new Set(frame.snapshot.history.filter(row => row.role === "live_caption").map(row => row.history_id));
+    const captions = new Set(frame.snapshot.history.filter(row => ["live_caption", "agent_changed"].includes(row.role)).map(row => row.history_id));
     const eligible = new Set((current.completedRuns || []).filter(run => run.epoch === frame.epoch && run.cursor <= frame.cursor).map(run => run.runId));
     next = applySnapshot({ ...current, entries: current.entries.filter(entry =>
-      entry.kind !== "live_caption" || captions.has(entry.historyId)) }, frame.snapshot, current.history !== undefined, eligible);
+      !["live_caption", "agent_change"].includes(entry.kind) || captions.has(entry.historyId)) }, frame.snapshot, current.history !== undefined, eligible);
     next.completedRuns = current.completedRuns?.filter(run => !eligible.has(run.runId));
   }
   else {

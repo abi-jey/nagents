@@ -6,5 +6,6 @@ import "./features/chat/toolResults.css";
 import "./features/sessions/folders.css";
 import "./features/tools/tools.css";
 import "./features/context/context.css";
+import "./features/sessions/sessionAgent.css";
 
 createRoot(document.getElementById("root")!).render(<App />);

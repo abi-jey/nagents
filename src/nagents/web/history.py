@@ -32,6 +32,8 @@ from . import live_captions
 from ._async import finish_on_cancel
 from .local_delivery import presentation
 from .routing import RoutingStore
+from .session_agents import initialize_markers
+from .session_agents import merge_markers
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -109,6 +111,7 @@ class WebHistory(_HarnessSession):
 
                     def create(db: sqlite3.Connection) -> None:
                         live_captions.initialize(db)
+                        initialize_markers(db)
                         db.execute(
                             "CREATE TABLE IF NOT EXISTS ngn_web_message_origins ("
                             "history_id INTEGER PRIMARY KEY REFERENCES v2_messages(id), "
@@ -439,7 +442,7 @@ class WebHistory(_HarnessSession):
                     }
                     for receipt in deliveries.earlier
                 ]
-                return [*earlier, *live_captions.merge(db, session_id, records)]
+                return [*earlier, *merge_markers(db, session_id, live_captions.merge(db, session_id, records))]
 
         return await finish_on_cancel(asyncio.to_thread(read))
 

@@ -14,6 +14,7 @@ import "../features/sessions/trash.css";
 import "../features/settings/settings.css";
 import "../features/channels/channels.css";
 import type { Client } from "./useClient";
+import { SessionAgentPicker } from "../features/sessions/SessionAgentPicker.js";
 
 export function WorkspaceDialogs({ client, select, closePanel }: {
   client: Client; select: (id?: string) => Promise<void>; closePanel: () => void;
@@ -31,6 +32,7 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
     {client.panel === "designer" && config && <Designer token={config.token} configureChannels={client.channels.show} close={closePanel} />}
     {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={false} close={closePanel} />}
     {client.settings.open && <SettingsDialog settings={client.settings} />}
+    {client.sessionAgent.open && <SessionAgentPicker {...client.sessionAgent} />}
     {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController}
       permanent={(item) => client.deletionController.showTrash(item)} openSession={openRestored}
        blocked={client.busy} openDisabled={false} />}

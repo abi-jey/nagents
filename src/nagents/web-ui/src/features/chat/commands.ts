@@ -11,7 +11,7 @@ export const webCommands = [
   { name: "sessions", description: "Browse or resume conversations", argument: "[session ID]" },
   { name: "compact", description: "Summarize the current conversation", argument: "" },
   { name: "model", description: "Choose the workspace model", argument: "[model ID]" },
-  { name: "agent", description: "Choose the agent profile", argument: "[name]" },
+  { name: "agent", description: "Choose this chat's agent; --workspace sets the default", argument: "[--workspace] [name]" },
   { name: "provider", description: "Choose a provider connection", argument: "[name]" },
   { name: "context", description: "Show the conversation context estimate", argument: "" },
   { name: "settings", description: "Open workspace settings", argument: "" },

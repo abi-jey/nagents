@@ -41,6 +41,7 @@ from . import built_assets
 from . import empty_sessions
 from . import is_loopback_host
 from . import local_authority
+from . import session_agents
 from . import skills
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
@@ -301,6 +302,7 @@ def create_app(
             harness.agent.plugins.append(state.history.identity)
             state.settings = WebSettings(harness)
             await state.settings.load()
+            await state.session_agents.initialize()
             registry = harness.provider_store.load()
             logger.info(
                 "ngn serve config: workspace=%s config_files=%s global_providers=%s workspace_providers=%s active=%s providers=%s",
@@ -397,6 +399,7 @@ def create_app(
     skills.register(app, lambda: state)
     register_session_groups(app, lambda: session_groups)
     register_session_actions(app, lambda: state, lambda: live)
+    session_agents.register(app, lambda: state)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 
@@ -667,6 +670,7 @@ def create_app(
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:
         async with state.configure():
+            await state.session_agents.initialize()
             await state.settings.change(body.revision, body.values)
             logger.info(
                 "Workspace settings saved: provider=%s agent=%s model=%s",
@@ -679,6 +683,7 @@ def create_app(
     @app.post("/api/settings/reset")
     async def reset_settings(body: SettingsRevision) -> dict[str, object]:
         async with state.configure():
+            await state.session_agents.initialize()
             await state.settings.load_global()
             await state.settings.change(body.revision, state.settings.defaults, reset=True)
             logger.info("Workspace settings reset to inherited defaults")

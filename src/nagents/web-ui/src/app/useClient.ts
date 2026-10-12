@@ -17,13 +17,16 @@ import { createDraft, parseDraft, selectProfile } from "../features/settings/dra
 import { useVoicePresence } from "./useVoicePresence.js";
 import { useSkills } from "../features/chat/skills.js";
 import { useTeam } from "../features/team/useTeam.js";
+import { useSessionAgent } from "../features/sessions/useSessionAgent.js";
+import { agentCommand } from "../features/sessions/sessionAgent.js";
 
 export function useClient() {
   const sessions = useSessions();
+  const sessionAgent = useSessionAgent(sessions.config?.token || "", sessions.sessionId);
   const chat = useChatRun(
     sessions.config?.token || "",
     sessions.sessionId,
-    sessions.receive,
+    frame => { sessions.receive(frame); sessionAgent.receive(frame); },
     sessions.acceptCredentials,
     () => void connect(),
   );
@@ -50,8 +53,9 @@ export function useClient() {
   });
   const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
   const token = sessions.config?.token || "";
-  const skills = useSkills(token, sessions.sessionId, sessions.config?.agent || "", chat.prompt, chat.runId);
-  const configuration = `${sessions.config?.provider}:${sessions.config?.model}:${sessions.config?.agent}:${settings.snapshot?.revision}`;
+  const skills = useSkills(token, sessions.sessionId, sessionAgent.selection?.effective.agent || "", chat.prompt, chat.runId);
+  const configuration = `${sessions.config?.provider}:${sessions.config?.model}:${sessions.config?.agent}:${settings.snapshot?.revision}:${sessionAgent.selection?.revision}:${sessionAgent.identity?.model}:${sessionAgent.identity?.provider}:${sessionAgent.identity?.mode}`;
+  useEffect(sessionAgent.refresh, [sessions.config?.provider, sessions.config?.model, sessions.config?.agent, settings.snapshot?.revision]);
   const { uploads, uploadState } = useUploads(token, sessions.sessionId, configuration);
   const context = useContextStats(
     token,
@@ -60,7 +64,7 @@ export function useClient() {
       configuration },
   );
   const membership = useSessionActions({ sessions, chat, operations, busy,
-    blocked: channels.open || settings.open || skills.open || panel !== "none" || !!chat.approval.pending });
+    blocked: channels.open || settings.open || skills.open || sessionAgent.open || panel !== "none" || !!chat.approval.pending });
 
   function access() {
     return availability({
@@ -68,7 +72,7 @@ export function useClient() {
       operating: operations.occupied(),
       running: !!chat.runId || sessions.globalBusy,
       modal: channels.open || settings.open || !!membership.deletion.target ||
-        membership.trashController.getSnapshot().open || panel !== "none" || commandHelp || loginOpen || skills.open,
+        membership.trashController.getSnapshot().open || panel !== "none" || commandHelp || loginOpen || skills.open || sessionAgent.open,
       approval: !!chat.approval.pending,
       uploadsReady: uploadState.items.every((item) => item.status === "ready"),
     });
@@ -154,6 +158,16 @@ export function useClient() {
     if (name === "tools") { setPanel("tools"); return true; }
     if (name === "channels") { channels.show(); return true; }
     if (name === "voice") { voice.show("settings", token, sessions.sessionId); return true; }
+    if (name === "agent") {
+      const scope = agentCommand(argument);
+      if (scope.scope === "conversation") {
+        if (!scope.name) { sessionAgent.show(); return true; }
+        const saved = await sessionAgent.choose(scope.name);
+        if (!saved) sessionAgent.show();
+        return saved;
+      }
+      argument = scope.name;
+    }
     if (!argument) { settings.show(); return true; }
     return operate(async () => {
       if (name === "provider") {
@@ -173,7 +187,7 @@ export function useClient() {
         if (!parsed.ok) throw new Error(Object.values(parsed.errors).filter(Boolean).join(" "));
         const saved = await saveSettings(token, snapshot.revision, parsed.values);
         sessions.acceptSettings(saved);
-        chat.setStatus(name === "agent" ? `Using agent ${saved.values.agent}` : `Using model ${saved.effective_model || saved.values.model}`);
+        chat.setStatus(name === "agent" ? `Workspace default agent: ${saved.values.agent}. Existing chats keep their selection.` : `Using model ${saved.effective_model || saved.values.model}`);
       }
       context.refresh();
     });
@@ -268,6 +282,7 @@ export function useClient() {
     uploads,
     uploadState,
     settings,
+    sessionAgent,
     skills,
     channels,
     busy,

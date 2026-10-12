@@ -63,7 +63,8 @@ class Uploads:
         if not source:
             if type(self.state.harness.agent.session) is not WebHistory:
                 return ()
-            return supported(self.state.harness)
+            async with self.state.session_agents.view(root, next_run=True) as current:
+                return supported(current)
         harness, _ = self.state.designed_channels.assemble(root, agent, source, Recorder())
         try:
             return supported(harness)

@@ -1,6 +1,7 @@
 import type { ActiveRun, Bootstrap, Session, Snapshot, WireEvent } from "../types.js";
 import { uploadedAttachments } from "../features/chat/uploads.js";
 import { serverSocketUrl } from "./origin.js";
+import { validSessionAgent } from "../features/sessions/sessionAgent.js";
 
 export type Position = { cursor: number; epoch: string };
 export type EventFrame = Position & (
@@ -53,6 +54,7 @@ function deliveries(value: unknown): boolean {
 }
 export function validSnapshot(value: unknown): value is Snapshot {
   return object(value) && typeof value.session_id === "string" && sessions(value.sessions) &&
+    (value.agent_selection === undefined || validSessionAgent(value.agent_selection) && value.agent_selection.session_id === value.session_id) &&
     (value.activity_cursor === undefined || integer(value.activity_cursor)) && activeRun(value.active_run) && activeRuns(value.active_runs) &&
     Array.isArray(value.history) && value.history.every((item: unknown) => object(item) &&
       ["role", "content", "name", "tool_call_id"].every((key) => typeof item[key] === "string") &&

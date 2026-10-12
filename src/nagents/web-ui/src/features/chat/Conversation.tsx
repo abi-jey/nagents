@@ -140,7 +140,7 @@ export function TranscriptItems({
         data-run-id={entry.runId}
         tabIndex={-1}
       >
-        {entry.liveCaption ? <>
+        {entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><Icon name="chat" size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
           <div className="entry-label chat-live-caption-label">
             <span>{entry.liveCaption.speaker === "user" ? "You" : "ngn"}</span>
             <span className="chat-live-badge"><Icon name="wave" size={12} />Live</span>

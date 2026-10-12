@@ -1,5 +1,6 @@
 import type { LocalDelivery } from "./features/chat/deliveries.js";
 import type { UploadMetadata } from "./features/chat/uploads.js";
+import type { SessionAgentSelection } from "./features/sessions/sessionAgent.js";
 
 export type Bootstrap = {
   token: string;
@@ -81,6 +82,7 @@ export type MessagePart =
 
 export type Snapshot = {
   session_id: string;
+  agent_selection?: SessionAgentSelection;
   activity_cursor?: number;
   retained_tasks: RetainedTask[];
   sessions: Session[];
@@ -93,6 +95,10 @@ export type Snapshot = {
     deliveries?: LocalDelivery[];
     uploads?: UploadMetadata[];
     history_id?: string;
+    agent?: string;
+    previous_agent?: string;
+    model?: string;
+    provider?: string;
     ingress_id?: string | number;
     // Missing on legacy replies; only explicit true authorizes channel source metadata.
     source_verified?: boolean;

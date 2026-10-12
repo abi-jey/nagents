@@ -45,6 +45,7 @@ const contextEvents = new Set([
   "run_started", "user_message", "tool_call", "tool_result", "tool_output",
   "text_chunk", "text_done", "reasoning_done", "done", "run_finished",
   "compaction_started", "compaction_done", "task_started", "task_completed", "task_notification",
+  "agent_selection_changed", "agent_changed",
 ]);
 
 export function changesContext(event: string): boolean { return contextEvents.has(event); }

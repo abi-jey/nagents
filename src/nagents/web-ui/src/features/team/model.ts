@@ -1,5 +1,6 @@
 import type { ContextStats, RetainedTask, Snapshot, WireEvent } from "../../types.js";
 import { validContextStats } from "../../api/context.js";
+import type { SessionAgentSelection } from "../sessions/sessionAgent.js";
 
 export const MAIN_AGENT = "";
 export function providerLabel(agent: Pick<TeamAgent, "provider" | "providerKind">): string {
@@ -30,6 +31,17 @@ export type TaskDetail = {
   before?: string;
 };
 export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string };
+
+export function conversationAgent(selection: SessionAgentSelection | undefined, context: ContextStats | undefined,
+  running: boolean, approval: boolean): TeamAgent {
+  const identity = selection?.active || selection?.effective;
+  return { id: MAIN_AGENT, parentId: MAIN_AGENT, name: identity?.agent || "Assistant", prompt: "",
+    reason: approval ? "Waiting for approval" : "", phase: approval ? "waiting" : running ? "running" : "ready",
+    provider: identity?.provider || "", providerKind: identity?.provider_kind || "", model: identity?.model || "",
+    context, compactTrigger: context?.compaction?.trigger, compactTokens: context?.compaction?.token_budget,
+    compactThreshold: context?.compaction?.token_threshold, compactMessages: context?.compaction?.message_threshold,
+    startedAt: 0, updatedAt: 0, canMessage: true, messageReason: "" };
+}
 
 export function taskAgent(task: RetainedTask): TeamAgent {
   const context = validContextStats(task.context) ? task.context : undefined;

@@ -40,7 +40,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const receiveFrame = useEffectEvent((frame: EventFrame) => {
     receive(frame);
     if ((frame.type !== "snapshot" && frame.type !== "event") || frame.session_id !== selected.current) return;
-    if (frame.type === "snapshot" || frame.record.event.startsWith("task_") || frame.record.event === "approval_closed") {
+    if (frame.type === "snapshot" || frame.record.event.startsWith("task_") || ["approval_closed", "agent_selection_changed", "agent_changed"].includes(frame.record.event)) {
       setTaskRevision(value => value + 1);
       const records = frame.type === "snapshot" ? frame.snapshot.active_run?.events || [] : [frame.record];
       const events = records.filter(validTaskActivity);
