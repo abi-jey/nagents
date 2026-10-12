@@ -7,6 +7,7 @@ Supports:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -19,6 +20,7 @@ from time import monotonic
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import cast
+from urllib.parse import quote
 from urllib.parse import urlsplit
 
 from ..adapters import openai as openai_adapter
@@ -54,6 +56,11 @@ from .auth import BearerTokenProvider
 from .auth import bearer_headers
 from .auth import validate_endpoint
 from .auth import validate_prefix
+from .context import ContextMetadata
+from .context import ContextWindow
+from .context import fetch_context_metadata
+from .context import validate_context_window
+from .context import validate_model_context_windows
 from .gateway import GatewayHTTPClient
 
 if TYPE_CHECKING:
@@ -109,6 +116,7 @@ class Provider:
         live_config: "LiveConfig | None" = None,
         *,
         bearer_token_provider: BearerTokenProvider | None = None,
+        context_window: int = 0,
     ):
         """
         Initialize the provider.
@@ -137,6 +145,12 @@ class Provider:
                 chat/Responses and GPT-Live. Called per request attempt/connection.
                 The caller owns the credential and its cache/refresh/close lifecycle.
         """
+        self.context_window = validate_context_window(context_window)
+        self.model_context_windows: dict[str, int] = {}
+        self._context_auth_identity = ""
+        self._context_metadata = ContextMetadata()
+        self._context_metadata_candidate = ContextMetadata()
+        self._context_metadata_lock = asyncio.Lock()
         self.provider_type = provider_type
         self.api_key = api_key
         self.bearer_token_provider = bearer_token_provider
@@ -237,12 +251,147 @@ class Provider:
         if not self.api_key and bearer_token_provider is None:
             raise ValueError("API key is required for provider initialization")
 
+    def configure_context_window(self, context_window: int, model_context_windows: dict[str, int]) -> None:
+        """Apply a trusted connection's defaults and exact-model overrides."""
+        self.context_window = validate_context_window(context_window)
+        self.model_context_windows = validate_model_context_windows(model_context_windows)
+
+    def _context_metadata_identity(self) -> tuple[str, str, str]:
+        auth = hashlib.sha256(
+            f"{self.api_key}:{id(self.bearer_token_provider)}:{self._context_auth_identity}".encode()
+        ).hexdigest()
+        return self.provider_type.value, self.base_url, auth
+
+    def _context_usage_identity(self) -> str:
+        """Usage follows a credential source, not routine bearer token rotation."""
+        source = f"bearer:{id(self.bearer_token_provider)}" if self.bearer_token_provider is not None else self.api_key
+        return hashlib.sha256(source.encode()).hexdigest()
+
+    def _prepare_context_usage(self) -> None:
+        """Deferred API-key providers may resolve local credentials without HTTP calls."""
+
+    async def _prepare_context_metadata(self) -> None:
+        """Resolve local keys only; remote token callbacks belong to actual HTTP requests."""
+        self._prepare_context_usage()
+
+    def cached_context_window(self) -> ContextWindow:
+        """Resolve precedence synchronously, without network I/O."""
+        from ..compaction import guess_model_context_limit
+
+        configured = self.model_context_windows.get(self.model, self.context_window)
+        if configured:
+            return ContextWindow(configured, "configured")
+        identity = self._context_metadata_identity()
+        if self._context_metadata_candidate.identity == identity:
+            self._context_metadata = self._context_metadata_candidate
+            self._context_metadata_candidate = ContextMetadata()
+        self._context_metadata.select(identity)
+        discovered = self._context_metadata.limits.get(self.model, 0)
+        if discovered:
+            return ContextWindow(discovered, "provider")
+        return ContextWindow(guess_model_context_limit(self.model), "heuristic")
+
+    def context_metadata_snapshot(self) -> ContextMetadata:
+        """Copy only limits and backoff state; no credentials or transport ownership."""
+        self._context_metadata.select(self._context_metadata_identity())
+        return self._context_metadata.copy()
+
+    def restore_context_metadata(self, snapshot: ContextMetadata) -> None:
+        """The caller must also match its trusted connection profile before reuse."""
+        self._context_metadata_candidate = snapshot.copy()
+        self.cached_context_window()
+
+    def copy_context_metadata(self, source: "Provider") -> None:
+        """Reuse discovery only after the caller verifies the same trusted connection."""
+        self.restore_context_metadata(source.context_metadata_snapshot())
+
+    async def resolve_context_window(self) -> ContextWindow:
+        """Bound credentials, coalesced waiting, and metadata to one three-second deadline."""
+        if self.cached_context_window().source == "configured":
+            return self.cached_context_window()
+        prepared = False
+        try:
+            async with asyncio.timeout(min(self._model_list_timeout, 3.0)):
+                await self._prepare_context_metadata()
+                prepared = True
+                return await self._resolve_prepared_context_window()
+        except Exception:
+            if not prepared:
+                self._context_metadata = ContextMetadata()
+                self._context_metadata_candidate = ContextMetadata()
+            # No upstream body, credential, or exception text enters diagnostics.
+            logger.debug("Model context metadata unavailable; using configured or estimated window")
+            return self.cached_context_window()
+
+    async def _resolve_prepared_context_window(self) -> ContextWindow:
+        self.cached_context_window()  # Apply only a matching metadata snapshot after auth resolution.
+        if not self._context_metadata_lock.locked() and monotonic() < self._context_metadata.retry_at.get(
+            self.model, 0.0
+        ):
+            return self.cached_context_window()
+        async with self._context_metadata_lock:
+            self.cached_context_window()
+            if monotonic() < self._context_metadata.retry_at.get(self.model, 0.0):
+                return self.cached_context_window()
+            self._context_metadata.backoff(self.model)
+            await self._fetch_context_metadata()
+        return self.cached_context_window()
+
+    async def _fetch_context_metadata(self) -> None:
+        """Only known metadata contracts; never guess extra hosts or follow redirects."""
+        kind = self.provider_type
+        if kind not in {
+            ProviderType.LITELLM,
+            ProviderType.OPENROUTER,
+            ProviderType.ANTHROPIC,
+            ProviderType.GEMINI_NATIVE,
+        }:
+            # OpenAI's public /models has no context field. Compatible catalogs
+            # can populate it during explicit discovery without another request.
+            return
+        validate_prefix(self.base_url)
+        route = (self.provider_type, self.base_url)
+        prefix = self._api_prefix()
+        headers = await self.auth_headers(prefix)
+        if route != (self.provider_type, self.base_url):
+            return
+        # Bind the response to the credential actually accepted for this HTTP
+        # request, not the earlier cache state before a bearer refresh.
+        identity = self._context_metadata_identity()
+        self._context_metadata.select(identity)
+        model = self.model
+        self._context_metadata.backoff(model)
+        key, nested = "id", False
+        if kind == ProviderType.LITELLM:
+            url, key, nested = prefix.removesuffix("/v1") + "/model/info", "model_name", True
+        elif kind == ProviderType.ANTHROPIC:
+            url = prefix + "/models/" + quote(model, safe="")
+            headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"}
+        elif kind == ProviderType.GEMINI_NATIVE:
+            url = prefix + "/models/" + quote(model.removeprefix("models/"), safe="")
+            headers = {"x-goog-api-key": self.api_key}
+            key = "name"
+        else:
+            url = prefix + "/models"
+        response = await fetch_context_metadata(url, headers, min(self._model_list_timeout, 3.0))
+        if identity != self._context_metadata_identity():
+            return
+        rows = response.get("data", []) if kind in {ProviderType.LITELLM, ProviderType.OPENROUTER} else [response]
+        self._context_metadata_candidate = ContextMetadata()
+        self._context_metadata.update(rows, id_key=key, nested=nested)
+        if kind == ProviderType.GEMINI_NATIVE:
+            prefixed = "models/" + model.removeprefix("models/")
+            if prefixed in self._context_metadata.limits:
+                self._context_metadata.limits[model] = self._context_metadata.limits[prefixed]
+
     async def auth_headers(self, url: str) -> dict[str, str]:
         """Fresh authentication per attempt; caller owns the credential lifetime."""
         validate_prefix(self.base_url)
         validate_endpoint(url, websocket=url.startswith(("ws:", "wss:")))
         if self.bearer_token_provider is not None:
-            return await bearer_headers(self.bearer_token_provider)
+            headers = await bearer_headers(self.bearer_token_provider)
+            self._context_auth_identity = hashlib.sha256(headers["Authorization"].encode()).hexdigest()
+            return headers
         return {"Authorization": f"Bearer {self.api_key}"}
 
     def live_endpoint(self, *, websocket: bool = False) -> str:
@@ -323,6 +472,7 @@ class Provider:
             )
             if self.provider_type == ProviderType.OPENROUTER:
                 headers["HTTP-Referer"] = "https://github.com/nagents"
+            catalog_identity = self._context_metadata_identity()
             # A short-lived secure transport also isolates catalogs from generation
             # cookies, loggers, and the ordinary HTTPClient's redirect behavior.
             client = GatewayHTTPClient(timeout=self._model_list_timeout)
@@ -347,6 +497,10 @@ class Provider:
             if model_id not in seen:
                 models.append(model_id)
                 seen.add(model_id)
+        if catalog_identity == self._context_metadata_identity():
+            self._context_metadata_candidate = ContextMetadata()
+            self._context_metadata.select(catalog_identity)
+            self._context_metadata.update(response["data"])
         return models
 
     async def verify_model(self, force: bool = False) -> bool:

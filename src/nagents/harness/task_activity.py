@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import aiosqlite
 
 from nagents.compaction import ModelCompaction
-from nagents.compaction import get_model_context_limit
+from nagents.compaction import describe_compaction
 from nagents.events import CompactionDoneEvent
 from nagents.events import CompactionStartedEvent
 from nagents.events import ErrorEvent
@@ -130,19 +130,7 @@ def _tool_identity(
 
 
 def compaction_snapshot(harness: Harness) -> dict[str, object]:
-    strategy = harness.agent.compaction_strategy
-    if strategy is None:
-        return {"trigger": "off"}
-    if not isinstance(strategy, ModelCompaction):
-        return {"trigger": "custom"}
-    if strategy.message_threshold is not None:
-        return {"trigger": "messages", "message_threshold": strategy.message_threshold}
-    return {
-        "trigger": "tokens" if strategy.token_threshold is not None else "auto",
-        "token_threshold": strategy.token_threshold
-        if strategy.token_threshold is not None
-        else get_model_context_limit(harness.agent.provider) * 7 // 10,
-    }
+    return dict(describe_compaction(harness.agent.compaction_strategy, harness.agent.provider))
 
 
 @dataclass(frozen=True)
@@ -177,7 +165,7 @@ class TaskOptions:
         elif self.compact_trigger == "off":
             child.agent.compaction_strategy = None
         elif self.compact_trigger == "tokens":
-            child.agent.compaction_strategy = ModelCompaction(token_threshold=self.compact_tokens * 7 // 10)
+            child.agent.compaction_strategy = ModelCompaction(token_budget=self.compact_tokens)
         elif self.compact_trigger == "messages":
             child.agent.compaction_strategy = ModelCompaction(message_threshold=self.compact_messages)
         else:
@@ -221,3 +209,14 @@ class ChildActivity(AgentPlugin):
         current = asyncio.current_task()
         if current is not None and not current.cancelling():
             await self._history_committed()
+            self.info.context = (await self.child.agent.context_stats(self.info.child_session_id)).as_dict()
+            self.info.compaction = compaction_snapshot(self.child)
+            await self.manager._emit_activity(
+                self.info,
+                {
+                    "type": "status",
+                    "phase": self.info.phase,
+                    "context": self.info.context,
+                    "compaction": self.info.compaction,
+                },
+            )

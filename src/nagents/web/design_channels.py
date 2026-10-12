@@ -6,6 +6,8 @@ import asyncio
 from contextlib import asynccontextmanager
 from contextlib import closing
 from contextlib import suppress
+from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
@@ -17,6 +19,7 @@ from nagents.designer.schema import serialize
 from nagents.designer.store import Recorder
 from nagents.designer.store import TraceStore
 from nagents.observation import observer
+from nagents.provider.context import ContextMetadata
 
 from ._async import join_owned as _join
 
@@ -32,10 +35,17 @@ if TYPE_CHECKING:
     from .service import WebState
 
 
+@dataclass
+class _ContextMetadataEntry:
+    metadata: ContextMetadata = field(default_factory=ContextMetadata)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
 class DesignedChannels:
     def __init__(self, state: WebState) -> None:
         self.state = state
         self.traces = TraceStore(state.harness.agent.session.db_path.parent / "designer.db")
+        self._context_metadata: dict[tuple[str, str, str], _ContextMetadataEntry] = {}
 
     async def initialize(self) -> None:
         def create(db: sqlite3.Connection) -> None:
@@ -155,8 +165,21 @@ class DesignedChannels:
             return await self.state.harness.agent.context_stats(session_id)
         harness, installed = self.assemble(session_id, agent, source, Recorder())
         try:
-            # Metadata/history only: no initialization, provider request or MCP startup.
-            return await harness.agent.context_stats(session_id)
+            # Pinned idle harnesses are ephemeral. Retain only bounded metadata,
+            # never their credentials, provider clients, tools, or request usage.
+            key = (session_id, source, repr(harness.config.provider_profile()))
+            entry = self._context_metadata.get(key)
+            if entry is None:
+                while len(self._context_metadata) >= 32:
+                    self._context_metadata.pop(next(iter(self._context_metadata)))
+                entry = _ContextMetadataEntry()
+                self._context_metadata[key] = entry
+            async with entry.lock:
+                provider = harness.agent.provider
+                provider.restore_context_metadata(entry.metadata)
+                stats = await harness.agent.context_stats(session_id)
+                entry.metadata = provider.context_metadata_snapshot()
+                return stats
         finally:
             try:
                 await _join(asyncio.create_task(harness.close()))

@@ -23,8 +23,9 @@ export function App() {
   const root: TeamAgent = { id: "", parentId: "", name: client.sessions.config?.agent || "Assistant", prompt: "", reason: client.chat.approval.pending ? "Waiting for approval" : "",
     phase: client.chat.approval.pending ? "waiting" : client.chat.runId ? "running" : "ready", provider: client.context.stats?.provider || client.sessions.config?.provider || "",
     providerKind: client.context.stats?.provider || client.sessions.config?.provider || "", model: client.context.stats?.model || client.sessions.config?.model || "",
-    context: client.context.stats, compactTrigger: client.settings.snapshot?.values.compact_trigger,
-    compactTokens: client.settings.snapshot?.values.compact_tokens, compactMessages: client.settings.snapshot?.values.compact_messages,
+    context: client.context.stats, compactTrigger: client.context.stats?.compaction?.trigger,
+    compactTokens: client.context.stats?.compaction?.token_budget, compactThreshold: client.context.stats?.compaction?.token_threshold,
+    compactMessages: client.context.stats?.compaction?.message_threshold,
     startedAt: 0, updatedAt: 0, canMessage: true, messageReason: "" };
   const agents = [root, ...client.team.tasks.map(task => {
     const agent = taskAgent(task);

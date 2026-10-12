@@ -7,9 +7,14 @@ type Profile = {
   kind: string; auth: string; base_url: string; api: string;
   api_key_env: string; api_version: string; scope: string;
   request_timeout?: number;
+  context_window?: number;
+  model_context_windows?: Record<string, number>;
   key_configured?: boolean; credential_source?: string; effective_endpoint?: string;
 };
-type ProfileDraft = Omit<Profile, "request_timeout"> & { request_timeout: string };
+type WindowDraft = { model: string; tokens: string };
+type ProfileDraft = Omit<Profile, "request_timeout" | "context_window" | "model_context_windows"> & {
+  request_timeout: string; context_window: string; model_context_windows: WindowDraft[];
+};
 type Kind = {
   label: string; auth: string[]; apis: string[]; env: string;
   endpoint_required: boolean; version_required: boolean; live: boolean;
@@ -25,13 +30,21 @@ function defaultProfile(kind: string, specs: Record<string, Kind>): ProfileDraft
     kind, auth: specs[kind].auth[0], base_url: "", api: specs[kind].apis[0],
     api_key_env: "", api_version: "", scope: "https://ai.azure.com/.default",
     request_timeout: "120",
+    context_window: "", model_context_windows: [],
   };
 }
 
 function editable(profile: Profile): ProfileDraft {
   return { kind: profile.kind, auth: profile.auth, base_url: profile.base_url,
     api: profile.api, api_key_env: profile.api_key_env, api_version: profile.api_version,
-    scope: profile.scope, request_timeout: String(profile.request_timeout ?? 120) };
+    scope: profile.scope, request_timeout: String(profile.request_timeout ?? 120),
+    context_window: profile.context_window ? String(profile.context_window) : "",
+    model_context_windows: Object.entries(profile.model_context_windows || {}).map(([model, tokens]) => ({ model, tokens: String(tokens) })) };
+}
+
+function validWindows(rows: WindowDraft[]): boolean {
+  const names = rows.map(row => row.model.trim());
+  return rows.length <= 1024 && new Set(names).size === rows.length && rows.every(row => row.model.trim().length > 0 && row.model.trim().length <= 200 && Number.isSafeInteger(Number(row.tokens)) && Number(row.tokens) > 0 && Number(row.tokens) <= 1_000_000_000);
 }
 
 export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onDraftChange, onBusyChange }: {
@@ -47,6 +60,7 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   const [notice, setNotice] = useState("");
   const timeoutHelpId = useId();
   const timeoutErrorId = useId();
+  const contextHelpId = useId();
 
   const endpoint = `provider-scopes/${scope}/providers`;
   async function refresh() {
@@ -84,6 +98,9 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   const edit = (change: Partial<ProfileDraft>) => setDraft(current => current && { ...current, ...change });
   const timeout = Number(draft?.request_timeout);
   const timeoutValid = Number.isFinite(timeout) && timeout > 0;
+  const contextWindow = Number(draft?.context_window || 0);
+  const connectionWindowValid = Number.isSafeInteger(contextWindow) && contextWindow >= 0 && contextWindow <= 1_000_000_000;
+  const contextValid = connectionWindowValid && validWindows(draft?.model_context_windows || []);
   const route = `${endpoint}/${encodeURIComponent(name)}`;
   const locallySaved = scope === "global" || registry.origins?.[name] === "workspace";
   return <section className="settings-group" aria-label="Provider connections">
@@ -133,9 +150,28 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
         <small id={timeoutHelpId}>Deadline for each model HTTP request, including ChatGPT/Codex. Default: 120 seconds. Shell commands use their own timeout.</small>
         {!timeoutValid && <small id={timeoutErrorId} className="error-text" role="alert">Enter a finite number of seconds greater than zero.</small>}
       </label>
+      <details className="provider-context-limits">
+        <summary>Context window overrides</summary>
+        <p id={contextHelpId}>Use the provider&apos;s advertised input limit. Exact model overrides take priority over the connection limit; leave both unset to use discovered metadata. Unknown limits fall back to a labelled guess.</p>
+        <label>Connection input limit (tokens)
+          <input type="text" inputMode="numeric" placeholder="Automatic" value={draft.context_window} aria-invalid={!connectionWindowValid} aria-describedby={contextHelpId}
+            onInput={event => edit({ context_window: event.currentTarget.value })} />
+          <small>Applies to every model on this connection unless overridden below. Empty or 0 means automatic.</small>
+        </label>
+        {draft.model_context_windows.map((row, index) => <div className="provider-model-limit" key={index}>
+          <label>Model ID<input value={row.model} maxLength={200} spellCheck={false} autoComplete="off" placeholder="Exact model ID"
+            onInput={event => edit({ model_context_windows: draft.model_context_windows.map((item, i) => i === index ? { ...item, model: event.currentTarget.value } : item) })} /></label>
+          <label>Input limit (tokens)<input type="number" min="1" max="1000000000" step="1" value={row.tokens}
+            onInput={event => edit({ model_context_windows: draft.model_context_windows.map((item, i) => i === index ? { ...item, tokens: event.currentTarget.value } : item) })} /></label>
+          <button type="button" aria-label={`Remove context limit for ${row.model || "model"}`} onClick={() => edit({ model_context_windows: draft.model_context_windows.filter((_, i) => i !== index) })}>Remove</button>
+        </div>)}
+        <button type="button" disabled={draft.model_context_windows.length >= 1024} onClick={() => edit({ model_context_windows: [...draft.model_context_windows, { model: "", tokens: "" }] })}>Add model limit</button>
+        {!contextValid && <p className="error-text" role="alert">Use whole tokens up to 1,000,000,000, and a unique model ID with a positive limit for each override. Only the connection limit may be empty or 0.</p>}
+      </details>
       </fieldset>
       <div className="settings-model-controls">
-        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} settings.`, true)}>Save connection</button>}
+        {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !contextValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout, context_window: contextWindow,
+          model_context_windows: Object.fromEntries(draft.model_context_windows.map(row => [row.model.trim(), Number(row.tokens)])) } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} settings.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
           <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active)} onClick={() => void action(async () => (await (await request(`${route}/activate`, token, { revision: registry.revision })).json()) as Registry, `Using ${name} ${scope === "global" ? "globally" : "in this workspace"}.`)}>Make active</button>
           {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as Registry, `Deleted ${name}.`)}>Delete</button>}

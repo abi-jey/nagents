@@ -377,13 +377,13 @@ export function SettingsDialog({
                       aria-invalid={!!errors.compact_trigger}
                       onChange={(event) => settings.update("compact_trigger", event.target.value)}
                     >
-                      <option value="auto">Automatic (provider default)</option>
-                      <option value="tokens">Token window</option>
+                      <option value="auto">Automatic (70% of model window)</option>
+                      <option value="tokens">Token budget</option>
                       <option value="messages">Message count</option>
                       <option value="off">Off</option>
                     </select>
                     <p id="settings-compact_trigger-help">
-                      Automatic compacts near the model&apos;s context limit.
+                      Automatic compacts at 70% of the model&apos;s context window.
                       Token and message thresholds apply before the next model
                       call; off disables automatic compaction. Manual compaction
                       stays available.

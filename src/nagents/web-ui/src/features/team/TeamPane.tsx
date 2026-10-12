@@ -4,6 +4,8 @@ import { TeamIcon, TeamTree, type ArrivalTimes } from "./TeamTree.js";
 import type { TeamAgent } from "./model.js";
 import type { TeamController } from "./useTeam.js";
 import { request } from "../../api/client.js";
+import { compactLabel, compactionWarning } from "./context.js";
+import { contextSummary, contextUsageLabel, contextWindowSource } from "../context/controller.js";
 
 export function TeamPane({ team, agents, arrivals, open, close, configure }: {
   team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; open: boolean; close: () => void; configure: (id: string) => void;
@@ -30,7 +32,7 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
   const [provider, setProvider] = useState(pending?.provider || agent.provider);
   const [model, setModel] = useState(pending?.model || agent.model);
   const [trigger, setTrigger] = useState(pending?.compact_trigger || "");
-  const [budget, setBudget] = useState(String(pending?.compact_tokens || agent.compactTokens || (agent.compactThreshold ? Math.ceil(agent.compactThreshold / .7) : 200000)));
+  const [budget, setBudget] = useState(String(pending?.compact_tokens || agent.compactTokens || 200000));
   const [messages, setMessages] = useState(String(pending?.compact_messages || agent.compactMessages || 100));
   const [providers, setProviders] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -56,8 +58,8 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
   return <dialog className="agent-configuration-dialog" ref={dialog} aria-labelledby="agent-config-title" onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2 id="agent-config-title">{agent.name}</h2><button type="button" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
     <p>Accepted configuration for this agent.</p><dl><dt>Provider</dt><dd>{agent.provider || (agent.providerKind ? `${agent.providerKind} · default connection` : "Unavailable")}</dd><dt>Model</dt><dd>{agent.model || "Unavailable"}</dd>
-      <dt>Compaction</dt><dd>{agent.compactTrigger || "Unavailable"}{agent.compactThreshold ? ` · at ${agent.compactThreshold.toLocaleString()} tokens` : agent.compactTokens ? ` · ${agent.compactTokens.toLocaleString()} token budget` : ""}{agent.compactTrigger === "messages" && agent.compactMessages ? ` · ${agent.compactMessages} messages` : ""}</dd>
-      <dt>Context</dt><dd>{agent.context ? `${agent.context.total_tokens.toLocaleString()} estimated tokens${agent.context.context_window ? ` / ${agent.context.context_window.toLocaleString()}` : ""}` : "Unavailable"}</dd>
+      <dt>Compaction</dt><dd>{compactLabel(agent) || "Unavailable"}{compactionWarning(agent) && <p className="team-context-warning">{compactionWarning(agent)}</p>}</dd>
+      <dt>Context</dt><dd>{agent.context ? <>{contextSummary(agent.context)}<small>{contextUsageLabel(agent.context)} · {contextWindowSource(agent.context)}</small></> : "Unavailable"}</dd>
       <dt>Status</dt><dd>{agent.phase === "waiting" ? agent.reason : agent.phase}</dd>
     </dl><form className="agent-next-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
       <h3>Next activation</h3><p>Saved changes apply when this agent next starts from idle. Messages queued during its current work use the settings above.</p>

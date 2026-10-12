@@ -3,14 +3,17 @@
 The context endpoint must stay read-only and safe while a run is active. It reads
 the running harness for the active session (no idle gate), folds in the bounded
 uncommitted root reply, and otherwise assembles a metadata-only pinned harness for
-designed sessions without starting MCP servers or issuing provider requests.
+designed sessions without starting MCP servers or generating model responses.
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from typing import cast
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +26,7 @@ from tests.support.web import LiveStream
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from tests.support.channels import Site
@@ -39,7 +43,8 @@ def _assert_sums(data: dict[str, object]) -> None:
     assert total == sum(cast("int", item["tokens"]) for item in components)
     window = data["context_window"]
     if isinstance(window, int):
-        assert data["remaining_tokens"] == window - total
+        observed = data.get("observed_prompt_tokens")
+        assert data["remaining_tokens"] == window - (observed if isinstance(observed, int) else total)
 
 
 def test_run_context_reply_tracks_root_chunks_and_clears_on_boundaries() -> None:
@@ -105,6 +110,15 @@ def test_active_run_context_reports_streaming_reply_before_completion(tmp_path: 
                 assert data["provider"] and data["model"]
                 # Read-only: the run is still active and unfinished.
                 assert not stream.task.done() and state.active is active
+                measured = await harness.agent.context_stats(session_id)
+                assert measured.context_window is not None
+                measured = replace(measured, observed_prompt_tokens=321, remaining_tokens=measured.context_window - 321)
+                with patch.object(harness.agent, "context_stats", AsyncMock(return_value=measured)):
+                    observed = (await client.get(f"/api/sessions/{session_id}/context", headers=headers)).json()
+                _assert_sums(observed)
+                assert observed["observed_prompt_tokens"] == 321
+                assert observed["remaining_tokens"] == measured.remaining_tokens
+                assert observed["total_tokens"] > measured.total_tokens
             finally:
                 active = app.state.web.active
                 if active is not None:
@@ -227,3 +241,98 @@ def test_idle_pinned_context_does_not_start_mcp_or_contact_provider(
             _assert_sums(response.json())
 
     asyncio.run(check())
+
+
+@pytest.mark.requires_posix
+def test_idle_pinned_context_reuses_metadata_without_retaining_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.designer.runtime import DesignProvider
+
+    calls = 0
+
+    async def metadata(provider: DesignProvider) -> None:
+        nonlocal calls
+        calls += 1
+        provider._context_metadata.update([{"id": provider.model, "max_input_tokens": 1_000_000}])
+
+    with site(tmp_path, monkeypatch) as app:
+        app.configure(auto_reply=True)
+        design = parse(STARTER)
+        design.channels = {"fixture": "assistant"}
+        _publish(app, serialize(design))
+        app.emit("hello")
+        app.idle()
+        session = app.bindings()["chat-a"]
+        monkeypatch.setattr(DesignProvider, "_fetch_context_metadata", metadata)
+        for _ in range(3):
+            response = app.client.get(f"/api/sessions/{session}/context", headers=app.headers)
+            assert response.status_code == 200, response.text
+            assert response.json()["context_window"] == 1_000_000
+            assert response.json()["context_window_source"] == "provider"
+        assert calls == 1
+
+
+@pytest.mark.requires_posix
+def test_pinned_oauth_context_cache_survives_idle_polls_but_not_account_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.designer.runtime import DesignedHarness
+    from nagents.events import Event
+    from nagents.events import TextDoneEvent
+    from nagents.provider import OpenAIProvider
+    from nagents.provider.gateway import GatewayHTTPClient
+    from nagents.provider.openai import CODEX_MODELS_ENDPOINT
+    from nagents.provider.openai import CodexCredentials
+
+    account = "first-account"
+    requests: list[str] = []
+    model = "pinned-codex-model"
+
+    async def credentials(self: DesignedHarness) -> CodexCredentials:
+        return CodexCredentials("fixture-token-" + account, account)
+
+    async def generate(self: OpenAIProvider, *args: object, **kwargs: object) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Fixture response")
+
+    async def catalog(self: GatewayHTTPClient, url: str, headers: dict[str, str] | None = None) -> dict[str, object]:
+        assert url.startswith(CODEX_MODELS_ENDPOINT + "?")
+        assert headers is not None
+        selected = headers["ChatGPT-Account-Id"]
+        requests.append(selected)
+        return {
+            "models": [
+                {
+                    "slug": model,
+                    "visibility": "list",
+                    "context_window": 1_000_000 if selected == "first-account" else 512_000,
+                }
+            ]
+        }
+
+    with site(tmp_path, monkeypatch) as app:
+        monkeypatch.setattr(DesignedHarness, "codex_credentials", credentials)
+        monkeypatch.setattr(OpenAIProvider, "generate", generate)
+        monkeypatch.setattr(GatewayHTTPClient, "get_json", catalog)
+        monkeypatch.setattr("nagents.provider.openai.catalog_version", AsyncMock(return_value="0.162.0"))
+        app.configure(auto_reply=True)
+        design = parse(STARTER)
+        design.channels = {"fixture": "assistant"}
+        design.providers["primary"].auth = "chatgpt"
+        design.providers["primary"].model = model
+        _publish(app, serialize(design))
+        app.emit("hello")
+        app.idle()
+        session = app.bindings()["chat-a"]
+        requests.clear()  # Count only the new ephemeral idle-context harnesses.
+        for _ in range(3):
+            response = app.client.get(f"/api/sessions/{session}/context", headers=app.headers)
+            assert response.status_code == 200, response.text
+            assert response.json()["context_window"] == 1_000_000
+            assert response.json()["context_window_source"] == "provider"
+        assert requests == ["first-account"]
+        account = "second-account"
+        response = app.client.get(f"/api/sessions/{session}/context", headers=app.headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["context_window"] == 512_000
+        assert requests == ["first-account", "second-account"]

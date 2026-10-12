@@ -135,6 +135,8 @@ class ProviderEditor(ModalScreen[tuple[str, ProviderProfile] | None]):
                 api_version=input_value("provider-version"),
                 scope=input_value("provider-scope"),
                 request_timeout=request_timeout,
+                context_window=self.profile.context_window,
+                model_context_windows=dict(self.profile.model_context_windows),
             )
             profile.validate()
         except ValueError as error:

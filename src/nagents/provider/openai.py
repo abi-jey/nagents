@@ -10,6 +10,7 @@ and token budgets are unsupported on that route.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -50,6 +51,7 @@ from ._diagnostics import FailurePhase
 from ._diagnostics import failure_extra
 from .base import Provider
 from .base import ProviderType
+from .context import ContextMetadata
 from .gateway import GatewayHTTPClient
 
 if TYPE_CHECKING:
@@ -529,6 +531,19 @@ class OpenAIProvider(Provider):
         self._model_verified = True
         return True
 
+    def _remember_context_auth(self, access_token: str, account_id: str, residency: str) -> None:
+        self._context_auth_identity = hashlib.sha256(f"{account_id}:{access_token}:{residency}".encode()).hexdigest()
+
+    async def _prepare_context_metadata(self) -> None:
+        if self._local_api:
+            await super()._prepare_context_metadata()
+            return
+        # Ephemeral pinned harnesses must identify the current OAuth account
+        # before adopting its metadata-only cache. The resolver bounds this
+        # callback; generation never calls this metadata preparation hook.
+        credentials = await self._credentials()
+        self._remember_context_auth(credentials.access_token, credentials.account_id, credentials.residency)
+
     async def get_model_list(self) -> list[str]:
         """Fetch model IDs from the API-key catalog or the subscription catalog.
 
@@ -560,6 +575,8 @@ class OpenAIProvider(Provider):
             raise ModelListError(str(error)) from None
         except Exception:
             raise ModelListError("ChatGPT credentials are unavailable; sign in again with /login.") from None
+        self._remember_context_auth(access_token, account_id, residency)
+        identity = self._context_metadata_identity()
         client_version = await catalog_version(self._model_list_timeout)
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -601,7 +618,22 @@ class OpenAIProvider(Provider):
             if visibility == "list" and model_id not in seen:
                 models.append(model_id)
                 seen.add(model_id)
+        if identity == self._context_metadata_identity():
+            self._context_metadata_candidate = ContextMetadata()
+            self._context_metadata.select(identity)
+            self._context_metadata.update(response["models"], id_key="slug")
         return models
+
+    def _context_usage_identity(self) -> str:
+        if self._local_api:
+            return super()._context_usage_identity()
+        return hashlib.sha256(f"chatgpt:{id(self._credentials)}".encode()).hexdigest()
+
+    async def _fetch_context_metadata(self) -> None:
+        if self._local_api:
+            await super()._fetch_context_metadata()
+        else:
+            await self.get_model_list()
 
     async def generate(
         self,
@@ -639,6 +671,7 @@ class OpenAIProvider(Provider):
                 message="ChatGPT credentials are unavailable; sign in again with /login.", code="CODEX_AUTH"
             )
             return
+        self._remember_context_auth(credentials.access_token, credentials.account_id, credentials.residency)
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
             "Accept": "text/event-stream",

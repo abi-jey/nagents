@@ -34,6 +34,8 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import validate_request_timeout
 from nagents.provider import OpenAIProvider
 from nagents.provider._codex_catalog import catalog_logging
+from nagents.provider.context import validate_context_window
+from nagents.provider.context import validate_model_context_windows
 
 from . import built_assets
 from . import empty_sessions
@@ -152,6 +154,8 @@ def _provider_profile(fields: dict[str, object]) -> ProviderProfile:
             api_version=text("api_version"),
             scope=text("scope", "https://ai.azure.com/.default"),
             request_timeout=validate_request_timeout(fields.get("request_timeout", 120.0)),
+            context_window=validate_context_window(fields.get("context_window", 0)),
+            model_context_windows=validate_model_context_windows(fields.get("model_context_windows", {})),
         )
         profile.validate()
         return profile

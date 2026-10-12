@@ -5,21 +5,40 @@ export function contextRows(stats: ContextStats): ContextComponent[] {
 }
 
 export function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k`;
   return String(tokens);
 }
 
-export function contextSummary(stats: ContextStats): string {
-  const total = `~${formatTokens(stats.total_tokens)}`;
+export function contextUsage(stats: ContextStats): number {
+  return stats.observed_prompt_tokens ?? stats.total_tokens;
+}
+
+export function contextUsageLabel(stats: ContextStats): string {
+  return stats.observed_prompt_tokens != null ? "Last provider-reported input" : "Estimated input";
+}
+
+export function contextWindowLabel(stats: ContextStats, concise = false): string {
+  if (!stats.context_window) return "Unknown";
+  return stats.context_window_source === "heuristic"
+    ? `~${formatTokens(stats.context_window)}${concise ? "" : " (guessed)"}` : formatTokens(stats.context_window);
+}
+
+export function contextWindowSource(stats: ContextStats): string {
+  return { configured: "configured limit", provider: "provider metadata", heuristic: "model-name guess" }[stats.context_window_source];
+}
+
+export function contextSummary(stats: ContextStats, concise = false): string {
+  const total = `${stats.observed_prompt_tokens == null ? "~" : ""}${formatTokens(contextUsage(stats))}`;
   if (stats.context_window && stats.context_window > 0) {
-    return `${total} / ${formatTokens(stats.context_window)}`;
+    return `${total} / ${contextWindowLabel(stats, concise)}`;
   }
   return total;
 }
 
 export function contextPercent(stats: ContextStats): number {
   if (!stats.context_window || stats.context_window <= 0) return 0;
-  return Math.min(100, Math.round((stats.total_tokens / stats.context_window) * 100));
+  return Math.min(100, Math.round((contextUsage(stats) / stats.context_window) * 100));
 }
 
 const contextEvents = new Set([

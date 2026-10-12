@@ -7,6 +7,9 @@ ModelCompaction is the built-in provider-backed CompactionStrategy.
 import logging
 from contextlib import aclosing
 from typing import TYPE_CHECKING
+from typing import Literal
+from typing import NotRequired
+from typing import TypedDict
 from typing import cast
 
 from .types import ContentPart
@@ -19,6 +22,7 @@ if TYPE_CHECKING:
     from .events import Event
     from .extensions import CompactionRequest
     from .extensions import CompactionResult
+    from .extensions import CompactionStrategy
     from .provider import Provider
 
 logger = logging.getLogger(__name__)
@@ -47,7 +51,16 @@ class ModelCompaction:
         message_threshold: int | None = None,
         prompt: str | None = None,
         provider: "Provider | None" = None,
+        *,
+        token_budget: int = 0,
     ) -> None:
+        if type(token_budget) is not int or token_budget < 0:
+            raise ValueError("token_budget must be a nonnegative integer")
+        if token_budget:
+            if token_threshold is not None or message_threshold is not None:
+                raise ValueError("token_budget and explicit thresholds are mutually exclusive")
+            token_threshold = max(1, token_budget * 7 // 10)
+        self.token_budget = token_budget
         if token_threshold is not None and (type(token_threshold) is not int or token_threshold <= 0):
             raise ValueError("token_threshold must be a positive integer")
         if message_threshold is not None and (type(message_threshold) is not int or message_threshold <= 0):
@@ -65,9 +78,12 @@ class ModelCompaction:
         if self.message_threshold is not None:
             return len(request.messages) >= self.message_threshold
         threshold = self.token_threshold
+        identity = (request.provider.model, request.provider.base_url, request.provider.api)
         if threshold is None:
-            threshold = get_model_context_limit(request.provider) * 7 // 10
+            threshold = (await request.provider.resolve_context_window()).tokens * 7 // 10
         observed = request.actual_input_tokens or request.estimated_tokens
+        if identity != (request.provider.model, request.provider.base_url, request.provider.api):
+            observed = request.estimated_tokens
         return observed >= threshold
 
     async def compact(self, request: "CompactionRequest") -> "CompactionResult":
@@ -101,6 +117,30 @@ class ModelCompaction:
         if not summary:
             raise ValueError("Compaction provider returned an empty summary")
         return CompactionResult(messages=[Message(role="compaction_summary", content=summary)], summary=summary)
+
+
+class CompactionSnapshot(TypedDict):
+    trigger: Literal["off", "custom", "messages", "tokens", "auto"]
+    token_threshold: NotRequired[int]
+    token_budget: NotRequired[int]
+    message_threshold: NotRequired[int]
+
+
+def describe_compaction(strategy: "CompactionStrategy | None", provider: "Provider") -> CompactionSnapshot:
+    """Describe the active strategy, including its unrounded configured budget."""
+    if strategy is None:
+        return {"trigger": "off"}
+    if not isinstance(strategy, ModelCompaction):
+        return {"trigger": "custom"}
+    if strategy.message_threshold is not None:
+        return {"trigger": "messages", "message_threshold": strategy.message_threshold}
+    if strategy.token_threshold is not None:
+        result: CompactionSnapshot = {"trigger": "tokens", "token_threshold": strategy.token_threshold}
+        if strategy.token_budget:
+            result["token_budget"] = strategy.token_budget
+        return result
+    budget = get_model_context_limit(provider)
+    return {"trigger": "auto", "token_budget": budget, "token_threshold": budget * 7 // 10}
 
 
 def estimate_tokens(content: str | list[ContentPart] | None) -> int:
@@ -211,18 +251,13 @@ def truncate_tool_results(messages: list[Message], max_chars: int = MAX_TOOL_RES
 
 
 def get_model_context_limit(provider: "Provider") -> int:
-    """Get the context window limit for a provider's model.
+    """Return the effective configured, discovered, or last-resort estimated limit."""
+    return provider.cached_context_window().tokens
 
-    This is a best-effort estimation based on known model limits.
-    For unknown models, returns a safe default of 200,000 tokens.
 
-    Args:
-        provider: The LLM provider
-
-    Returns:
-        Estimated context window limit in tokens
-    """
-    model = provider.model.lower() if provider.model else ""
+def guess_model_context_limit(model: str) -> int:
+    """Name-only fallback. Callers must label this value as a heuristic."""
+    model = model.lower()
 
     # Known model context limits (as of 2024)
     # Order matters: check more specific models first

@@ -264,6 +264,18 @@ class SessionManager:
             message.name,
         )
 
+    async def context_identity(self, session_id: str) -> int:
+        """Identify the active history origin across resets and compaction."""
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT MIN(m.id) FROM v2_messages m JOIN v2_sessions s ON s.id = m.session_id "
+                "WHERE s.id = ? AND m.id >= COALESCE(s.compacted_at_message_id, 0)",
+                (session_id,),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
     async def replace_context(self, session_id: str, messages: list[Message]) -> None:
         """Append a validated replacement and move the inclusive boundary atomically.
 

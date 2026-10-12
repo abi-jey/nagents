@@ -47,7 +47,13 @@
   border-radius: 10px;
   background: var(--surface-navigation);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  max-height: calc(100dvh - 100px);
+  overflow-y: auto;
 }
+
+.context-usage-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.context-usage-row strong { font-variant-numeric: tabular-nums; }
+.context-breakdown-label { margin: 12px 0 6px; font-size: 11px; color: var(--text-secondary); }
 
 .context-meter {
   height: 6px;
@@ -115,3 +121,6 @@
 .context-live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--state-active); flex-shrink: 0; }
 .context-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; font-size: 12px; }
 .context-panel-heading button { min-height: 24px; padding: 2px 6px; font-size: 11px; }
+@media (max-width: 600px) {
+  .context-panel { position: fixed; top: 60px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 76px); }
+}

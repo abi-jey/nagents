@@ -56,11 +56,11 @@ export const compactionTriggers = ["auto", "tokens", "messages", "off"] as const
 export const compactionLimits = [
   {
     key: "compact_tokens",
-    label: "Token window",
+    label: "Compaction token budget",
     unit: "tokens",
     min: 1024,
     max: 10000000,
-    help: "1,024 to 10,000,000 tokens of context. Compaction runs near 70% of this window.",
+    help: "1,024 to 10,000,000 tokens. Compaction starts at 70% of this budget; this does not change the model's input limit.",
   },
   {
     key: "compact_messages",

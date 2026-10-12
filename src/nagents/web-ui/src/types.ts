@@ -63,7 +63,7 @@ export type RetainedTask = {
   message_unavailable_reason?: string;
   unavailable_reason?: string;
   phase_detail?: string;
-  compaction?: { trigger?: string; token_threshold?: number; message_threshold?: number };
+  compaction?: CompactionStats;
   next_settings?: { provider?: string; model?: string; compact_trigger?: string; compact_tokens?: number; compact_messages?: number };
   origin_history_id?: string;
   origin_run_id?: string;
@@ -116,16 +116,25 @@ export type Snapshot = {
 
 export type ContextComponent = { key: string; label: string; tokens: number };
 
+export type CompactionStats = {
+  trigger: string;
+  token_threshold?: number;
+  token_budget?: number;
+  message_threshold?: number;
+};
+
 export type ContextStats = {
   components: ContextComponent[];
   total_tokens: number;
   context_window: number | null;
+  context_window_source: "configured" | "provider" | "heuristic";
   remaining_tokens: number | null;
   observed_prompt_tokens: number | null;
   observed_completion_tokens: number | null;
   provider: string;
   model: string;
   estimate_method: string;
+  compaction?: CompactionStats;
 };
 
 export type Approval = {

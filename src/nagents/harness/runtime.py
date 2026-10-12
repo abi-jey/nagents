@@ -1076,7 +1076,10 @@ class Harness:
         try:
             if isinstance(provider, HarnessProvider):
                 provider.credentials()
-            return await provider.get_model_list()
+            models = await provider.get_model_list()
+            if name == self._built_provider_name and profile == self._built_provider_profile:
+                self.agent.provider.copy_context_metadata(provider)
+            return models
         finally:
             await provider.close()
 
@@ -1087,6 +1090,8 @@ class Harness:
         replacement = OpenAIProvider(
             self.openai_auth.credentials, model=self.config.model, timeout=profile.request_timeout if profile else 120.0
         )
+        if profile is not None:
+            replacement.configure_context_window(profile.context_window, profile.model_context_windows)
         try:
             await self.agent.close()
         finally:
