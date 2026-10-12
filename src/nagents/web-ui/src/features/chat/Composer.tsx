@@ -95,11 +95,32 @@ export function Composer({
   commandsEnabled?: boolean;
   maxLength?: number;
 }) {
+  const form = useRef<HTMLFormElement>(null);
   const [dismissed, setDismissed] = useState("");
   const [selection, setSelection] = useState({ prompt: "", index: 0 });
   const suggesting = commandsEnabled && !disabled && prompt !== dismissed && /^\/[A-Za-z0-9:_-]*$/.test(prompt);
   const matches = suggesting ? commandMatches(prompt, skills) : [];
   const selected = selection.prompt === prompt ? Math.min(selection.index, matches.length - 1) : 0;
+  useLayoutEffect(() => {
+    const element = form.current;
+    if (!voiceLayout || !matches.length || !element) return;
+    // An open voice inspector can make the composer taller than the space
+    // below the keyboard. Keep the slash list within the visible area above it.
+    const update = () => {
+      const top = element.getBoundingClientRect().top - (window.visualViewport?.offsetTop || 0);
+      element.style.setProperty("--composer-menu-space", `${Math.max(44, Math.floor(top - 16))}px`);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    update();
+    return () => {
+      observer.disconnect(); window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+      element.style.removeProperty("--composer-menu-space");
+    };
+  }, [voiceLayout, matches.length]);
   useLayoutEffect(() => {
     const command = matches[selected];
     if (command) document.getElementById(`slash-command-${command.name}`)?.scrollIntoView?.({ block: "nearest" });
@@ -112,6 +133,7 @@ export function Composer({
   }
   return (
     <form
+      ref={form}
       className={`chat-composer${voiceLayout ? " has-live-voice" : ""}`}
       onPaste={(event) => {
         const files = [...event.clipboardData.files];

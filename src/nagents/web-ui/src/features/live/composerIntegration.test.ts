@@ -13,11 +13,12 @@ interface HarnessProps {
   live: Omit<LiveComposerProps, "targets">;
   open: boolean;
   child: boolean;
+  initialPrompt: string;
   input: RefObject<HTMLTextAreaElement | null>;
   submit(): void;
 }
 
-function Harness({ live, open, child, input, submit }: HarnessProps) {
+function Harness({ live, open, child, initialPrompt, input, submit }: HarnessProps) {
   const [targets, setTargets] = useState<LiveComposerTargets>({ presence: null, caption: null, controls: null, details: null });
   const refs = useMemo<ComposerVoiceRefs>(() => {
     const capture = (name: keyof LiveComposerTargets) => (element: HTMLDivElement | null) => {
@@ -25,7 +26,7 @@ function Harness({ live, open, child, input, submit }: HarnessProps) {
     };
     return { presence: capture("presence"), caption: capture("caption"), controls: capture("controls"), details: capture("details") };
   }, []);
-  const [prompt, setPrompt] = useState("Keep the original draft here");
+  const [prompt, setPrompt] = useState(initialPrompt);
   const [childPrompt, setChildPrompt] = useState("Separate note for Explorer");
   return createElement(Fragment, {},
     createElement(Composer, {
@@ -36,7 +37,7 @@ function Harness({ live, open, child, input, submit }: HarnessProps) {
     open && createElement(LiveComposer, { ...live, targets }));
 }
 
-function view() {
+function view(initialPrompt = "Keep the original draft here") {
   const dom = new JSDOM("<main id='root'></main>", { url: "https://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   const globals = {
@@ -63,7 +64,7 @@ function view() {
     dom, container, input, live, actions,
     submissions: () => submissions,
     render: async (open = true, child = false) => act(async () => root.render(createElement(Harness, {
-      live, open, child, input, submit: () => { submissions++; },
+      live, open, child, initialPrompt, input, submit: () => { submissions++; },
     }))),
     click: async (selector: string) => {
       if (container.querySelector(selector)?.closest("[inert]"))
@@ -183,5 +184,26 @@ test("inset voice controls never submit the text form, while Send still sends th
     assert.equal(ui.input.current?.value, "Keep the original draft here");
     await act(async () => ui.container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
     assert.equal(ui.submissions(), 1);
+  } finally { await ui.close(); }
+});
+
+test("slash suggestions fit above a tall voice composer and remeasure when the viewport changes", async () => {
+  const ui = view("/");
+  let top = 100;
+  const original = ui.dom.window.HTMLElement.prototype.getBoundingClientRect;
+  ui.dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.tagName === "FORM" ? new ui.dom.window.DOMRect(0, top, 390, 260) : original.call(this);
+  };
+  try {
+    await ui.render();
+    const form = ui.input.current!.form!;
+    assert.ok(ui.container.querySelector(".slash-menu"));
+    assert.equal(form.style.getPropertyValue("--composer-menu-space"), "84px");
+    top = 60;
+    await act(async () => ui.dom.window.dispatchEvent(new ui.dom.window.Event("resize")));
+    assert.equal(form.style.getPropertyValue("--composer-menu-space"), "44px");
+    await ui.render(false);
+    assert.equal(form.style.getPropertyValue("--composer-menu-space"), "");
+    assert.equal(ui.input.current?.value, "/");
   } finally { await ui.close(); }
 });

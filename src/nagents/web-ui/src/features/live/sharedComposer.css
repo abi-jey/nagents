@@ -5,6 +5,7 @@
 .composer-area > .chat-composer.has-live-voice { display: flex; flex-direction: column; max-height: calc(100dvh - 100px); border-radius: 16px; padding: 11px 12px 8px; }
 .chat-composer.has-live-voice .composer-exchange { flex: 0 1 auto; min-height: min(96px, 20dvh); max-height: min(38dvh, 280px); overflow-y: auto; overflow-x: clip; scrollbar-width: thin; }
 .chat-composer.has-live-voice > .composer-bottom { flex-shrink: 0; }
+.chat-composer.has-live-voice > .slash-menu { max-height: min(340px, 45dvh, var(--composer-menu-space, 45dvh)); }
 .chat-composer.has-live-voice > .upload-drafts { min-height: 0; max-height: 16dvh; overflow: auto; }
 .composer-voice-presence { display: grid; place-items: center; grid-column: 1; min-width: 0; }
 .composer-voice-presence .voice-presence { --sphere-size: 80px; display: grid; place-items: center; height: auto; animation: voice-enter 260ms ease-out both; }
