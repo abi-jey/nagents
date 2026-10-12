@@ -106,6 +106,7 @@ class Run:
     final_text: str = ""
     finished: bool = False
     executing: bool = False
+    draining: bool = False
     background: bool = False
     server_owned: bool = False
     voice: bool = False
@@ -113,6 +114,7 @@ class Run:
     wakeup_id: str = ""
     harness: Harness | None = field(default=None, repr=False)
     message_id: str = ""
+    task_message_id: str = ""
     source: dict[str, str] = field(default_factory=dict)
     chain: Chain = field(default_factory=Chain)
     drafts: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -823,6 +825,10 @@ class WebState:
                 },
             )
         finally:
+            # The core source has closed; remaining awaits only publish and
+            # settle this run. A child input may wait for this owner to release,
+            # but must not revive its inactive task group.
+            run.draining = True
             if run.pending is not None and not run.pending.answer.done():
                 run.pending.answer.set_result(False)
             run.pending = None

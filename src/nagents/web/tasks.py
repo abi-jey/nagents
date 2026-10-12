@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 RootId = Annotated[str, PathParameter(min_length=1, max_length=80, pattern=r"^ngn-[a-zA-Z0-9-]+$")]
 TaskId = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
+TASK_DRAIN_TIMEOUT = 5.0
 
 
 class TaskMessageInput(BaseModel):
@@ -165,14 +166,13 @@ class Tasks:
         task = self.task(asdict(info), owner)
         if kind != "task_activity":
             await self.store.save(run.session_id, task)
-        if (
-            kind == "task_started"
-            and run.message_id in self.created
-            and not self.created[run.message_id].is_set()
-            and not info.parent_task_id
-        ):
-            await self.store.bind(run.message_id, task)
-            self.created[run.message_id].set()
+        ready = self.created.get(run.task_message_id)
+        if kind == "task_started" and ready is not None and not ready.is_set() and not info.parent_task_id:
+            await self.store.bind(run.task_message_id, {**task, "receipt_run_id": run.id})
+            # The input context can finish binding first and release the HTTP
+            # waiter, which then removes this registry entry during our await.
+            # We own this exact Event, not a later lookup in that registry.
+            ready.set()
         key = (run.session_id, identifier)
         current_activation = record.get("activation", info.activation) == info.activation
         if kind == "task_started" and current_activation:
@@ -249,7 +249,7 @@ class Tasks:
         info, child = owner.tasks.input_child(identifier)
         task = self.task(asdict(info), owner)
         await self.store.save(info.session_id, task)
-        await self.store.bind(identifier, task)
+        await self.store.bind(identifier, self.receipt_target(info.session_id, task))
         if ready := self.created.get(identifier):
             ready.set()
         previous = child.agent.session
@@ -274,46 +274,126 @@ class Tasks:
             context=lambda: self.input_context(owner, body.message_id),
         )
 
+    def receipt_target(self, root: str, task: dict[str, object]) -> dict[str, object]:
+        run = self.state.run_for(root)
+        if run is None or run.finished:
+            raise RuntimeError("Task input has no active web execution owner")
+        return {**task, "receipt_run_id": run.id}
+
+    def draining(self, root: str, owner: Harness) -> Run | None:
+        run = self.state.run_for(root)
+        if run is None:
+            return None
+        if run.task.cancelling() or run.outcome == "cancelled":
+            raise HTTPException(409, "This chat is stopping. This message was not admitted.")
+        worker = owner._worker
+        if run.draining or (worker is not None and worker.done() and not owner.tasks._active):
+            return run
+        return None
+
+    async def wait_for_drain(self, run: Run, deadline: float) -> None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise HTTPException(409, "This chat is still finishing. Retry after it finishes.")
+        done, _ = await asyncio.wait({run.task}, timeout=remaining)
+        if not done:
+            raise HTTPException(409, "This chat is still finishing. Retry after it finishes.")
+        if run.outcome == "cancelled" or run.task.cancelled():
+            raise HTTPException(409, "This chat was stopped. This message was not admitted.")
+
+    def finishing_claim(self, root: str) -> asyncio.Task[None] | None:
+        if self.state.run_for(root) is not None:
+            return None
+        # Claim startup reserves a Run before publishing work_tasks. Its absence
+        # therefore identifies only post-run claim bookkeeping, not a future
+        # model run. Never join a work_tasks entry while it still owns a Run.
+        task = self.state.channels.work_cleanup.get(root) or self.state.channels.work_tasks.get(root)
+        if task is not None and (task.cancelling() or task.cancelled()):
+            raise HTTPException(409, "This chat is stopping. This message was not admitted.")
+        return task
+
+    async def wait_for_claim(self, task: asyncio.Task[None], deadline: float) -> None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, remaining))
+        if not done or task.cancelled():
+            raise HTTPException(409, "This chat is still finishing. Retry after it finishes.")
+
+    async def accept(self, root: str, task_id: str, body: TaskMessageInput, owner: Harness) -> dict[str, object]:
+        message = self.message(owner, body)
+        if owner.tasks.submit_message(task_id, message):
+            accepted = asdict(owner.tasks._lookup(task_id))
+        elif self.state.run_for(root) is not None:
+            accepted = asdict(owner.tasks.continue_task(task_id, body.text, message=message))
+        else:
+            # The scheduled worker has not accepted its new activation yet.
+            self.launch(root, body, task_id=task_id)
+            return await self.store.duplicate(root, task_id, body.message_id, body.text)
+        target = self.receipt_target(root, accepted)
+        receipt = await self.store.bind(body.message_id, target)
+        current = self.state.run_for(root)
+        info = owner.tasks._lookup(task_id)
+        if receipt["status"] == "queued" and (
+            current is None
+            or current.id != target["receipt_run_id"]
+            or info.status != "running"
+            or info.activation != receipt["activation"]
+        ):
+            receipt = await self.store.fail(body.message_id, "The agent ended before reading this message.")
+        return receipt
+
     async def send(self, root: str, task_id: str, body: TaskMessageInput) -> dict[str, object]:
-        async with self.admission:
-            duplicate = await self.store.duplicate(root, task_id, body.message_id, body.text)
-            if duplicate:
-                return duplicate
-            known = (await self.index(root))["tasks"]
-            assert isinstance(known, list)
-            if not any(task["id"] == task_id for task in known):
-                raise HTTPException(404, "Task not found in this session.")
-            owner = self.owner(root)
-            try:
-                owner.tasks._lookup(task_id)
-            except ValueError:
-                raise HTTPException(404, "Task not found in this session.") from None
-            receipt = await self.store.insert(root, task_id, body.message_id, body.text, task_id)
-            try:
-                if self.owner(root) is not owner:
-                    raise RuntimeError("Task owner changed")
-                message = self.message(owner, body)
-                if owner.tasks.submit_message(task_id, message):
-                    receipt = await self.store.bind(body.message_id, asdict(owner.tasks._lookup(task_id)))
-                elif self.state.run_for(root) is not None:
-                    accepted = owner.tasks.continue_task(task_id, body.text, message=message)
-                    receipt = await self.store.bind(body.message_id, asdict(accepted))
+        journaled = False
+        deadline = asyncio.get_running_loop().time() + TASK_DRAIN_TIMEOUT
+        try:
+            while True:
+                async with self.admission:
+                    duplicate = await self.store.duplicate(root, task_id, body.message_id, body.text)
+                    if duplicate and (not journaled or duplicate["status"] != "queued"):
+                        return duplicate
+                    known = (await self.index(root))["tasks"]
+                    assert isinstance(known, list)
+                    if not any(task["id"] == task_id for task in known):
+                        raise HTTPException(404, "Task not found in this session.")
+                    owner = self.owner(root)
+                    info = owner.tasks._lookup(task_id)
+                    if info.status == "cancelled":
+                        raise HTTPException(409, "This agent was cancelled. Start a new agent.")
+                    draining = self.draining(root, owner)
+                    claim = self.finishing_claim(root)
+                    if draining is None and claim is None:
+                        if self.state.run_for(root) is not None and not owner.tasks._active:
+                            raise HTTPException(409, "This chat is starting. Retry the message shortly.")
+                        if not journaled:
+                            await self.store.insert(root, task_id, body.message_id, body.text, task_id)
+                            journaled = True
+                        if self.owner(root) is not owner:
+                            raise RuntimeError("Task owner changed")
+                        # Core completion can race the journal transaction.
+                        # Unbound receipts belong to this pending admission,
+                        # never to the previous run's cleanup.
+                        draining = self.draining(root, owner)
+                        claim = self.finishing_claim(root)
+                        if draining is None and claim is None:
+                            receipt = await self.accept(root, task_id, body, owner)
+                            self.publish(receipt)
+                            return receipt
+                # Joining a completed producer's web cleanup never holds the
+                # workspace admission lock or cancels that prior execution.
+                if draining is not None:
+                    await self.wait_for_drain(draining, deadline)
                 else:
-                    # launch schedules ownership; its child activation has not
-                    # yet been accepted. Only that input's context may bind it.
-                    self.launch(root, body, task_id=task_id)
-                    receipt = await self.store.duplicate(root, task_id, body.message_id, body.text)
-            except (ValueError, RuntimeError, PermissionError, HTTPException) as error:
+                    assert claim is not None
+                    await self.wait_for_claim(claim, deadline)
+        except (ValueError, RuntimeError, PermissionError, HTTPException) as error:
+            if journaled:
                 receipt = await self.store.fail(
                     body.message_id,
                     "The agent could not accept this message. Start a new agent or retry with a new message ID.",
                 )
                 self.publish(receipt)
-                if isinstance(error, HTTPException):
-                    raise
-                raise HTTPException(409, str(receipt["reason"])) from None
-            self.publish(receipt)
-            return receipt
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(409, "The agent could not accept this message. Retry after it finishes.") from None
 
     async def start(self, root: str, body: TaskStartInput) -> dict[str, object]:
         async with self.admission:
@@ -341,7 +421,7 @@ class Tasks:
                     owner = self.owner(root)
                     info = await owner.tasks.start_task(body.text, body.agent, message=self.message(owner, body))
                     await self.store.save(root, self.task(asdict(info), owner))
-                    await self.store.bind(body.message_id, asdict(info))
+                    await self.store.bind(body.message_id, self.receipt_target(root, asdict(info)))
                     ready.set()
                 else:
                     self.launch(root, body, agent=body.agent)
@@ -392,7 +472,7 @@ class Tasks:
 
         if root in self.state.channels.work_tasks or root in self.state.channels.work_cleanup:
             raise HTTPException(409, "This chat is finishing another operation. Retry shortly.")
-        run = Run(root, server_owned=True, message_id=body.message_id)
+        run = Run(root, server_owned=True, message_id=body.message_id, task_message_id=body.message_id)
         self.state.executions.reserve(run)
 
         async def execute() -> None:
@@ -442,8 +522,9 @@ class Tasks:
             return [
                 str(row[0])
                 for row in db.execute(
-                    "SELECT message_id FROM ngn_web_task_inputs WHERE root = ? AND epoch = ? AND status = 'queued'",
-                    (run.session_id, self.store.epoch),
+                    "SELECT message_id FROM ngn_web_task_inputs WHERE root = ? AND epoch = ? AND status = 'queued' "
+                    "AND (owner_run_id = ? OR message_id = ?)",
+                    (run.session_id, self.store.epoch, run.id, run.task_message_id),
                 )
             ]
 

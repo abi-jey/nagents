@@ -56,7 +56,7 @@ class TaskStore:
                     "CREATE TABLE IF NOT EXISTS ngn_web_task_inputs ("
                     "message_id TEXT PRIMARY KEY, root TEXT NOT NULL, target TEXT NOT NULL, "
                     "text TEXT NOT NULL, text_hash TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL, child TEXT NOT NULL DEFAULT '', "
-                    "epoch TEXT NOT NULL, activation INTEGER NOT NULL DEFAULT -1, status TEXT NOT NULL DEFAULT 'queued', revision INTEGER NOT NULL DEFAULT 1, "
+                    "epoch TEXT NOT NULL, owner_run_id TEXT NOT NULL DEFAULT '', activation INTEGER NOT NULL DEFAULT -1, status TEXT NOT NULL DEFAULT 'queued', revision INTEGER NOT NULL DEFAULT 1, "
                     "queued_at TEXT NOT NULL, picked_up_at TEXT NOT NULL DEFAULT '', "
                     "history_id INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '')"
                 )
@@ -64,6 +64,8 @@ class TaskStore:
                     db.execute("ALTER TABLE ngn_web_task_inputs ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''")
                 if "activation" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_task_inputs)")}:
                     db.execute("ALTER TABLE ngn_web_task_inputs ADD COLUMN activation INTEGER NOT NULL DEFAULT -1")
+                if "owner_run_id" not in {str(row[1]) for row in db.execute("PRAGMA table_info(ngn_web_task_inputs)")}:
+                    db.execute("ALTER TABLE ngn_web_task_inputs ADD COLUMN owner_run_id TEXT NOT NULL DEFAULT ''")
                 for identifier, text in db.execute(
                     "SELECT message_id, text FROM ngn_web_task_inputs WHERE text_hash = ''"
                 ):
@@ -120,6 +122,7 @@ class TaskStore:
             "status": row["status"],
             "revision": row["revision"],
             "activation": row["activation"],
+            "owner_run_id": row["owner_run_id"],
             "queued_at": row["queued_at"],
             "picked_up_at": row["picked_up_at"],
             "history_id": row["history_id"],
@@ -187,9 +190,12 @@ class TaskStore:
             activation = task.get("activation", 0)
             if row["activation"] >= 0 and row["activation"] != activation:
                 raise RuntimeError("Task input cannot change activation")
+            owner_run_id = task.get("receipt_run_id", "")
+            if row["owner_run_id"] and row["owner_run_id"] != owner_run_id:
+                raise RuntimeError("Task input cannot change execution owner")
             db.execute(
-                "UPDATE ngn_web_task_inputs SET task_id = ?, child = ?, activation = ? WHERE message_id = ? AND epoch = ?",
-                (task["id"], task["child_session_id"], activation, identifier, self.epoch),
+                "UPDATE ngn_web_task_inputs SET task_id = ?, child = ?, activation = ?, owner_run_id = ? WHERE message_id = ? AND epoch = ?",
+                (task["id"], task["child_session_id"], activation, owner_run_id, identifier, self.epoch),
             )
             return self.receipt(self.row(db, identifier))
 

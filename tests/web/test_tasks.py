@@ -19,6 +19,8 @@ from nagents.harness.tools import CodingTools
 from nagents.types import JsonValue
 from nagents.types import Message
 from nagents.types import ToolCall
+from nagents.web import tasks as task_api
+from nagents.web.service import Run
 from nagents.web.task_store import TaskStore
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import assert_balanced
@@ -31,7 +33,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
-    from nagents.web.service import Run
+    from nagents.web.routing import Work
     from tests.support.providers import FakeProvider
 
 pytestmark = pytest.mark.requires_posix
@@ -601,9 +603,16 @@ def test_completion_transaction_racing_next_activation_only_fails_matching_recei
         completing, release_completion, completed_transaction, resumed, release_child = (
             asyncio.Event() for _ in range(5)
         )
+        parent_waiting, release_parent = asyncio.Event(), asyncio.Event()
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-            if provider.harness_config.agent == "reviewer" and messages[-1].content == "resume":
+            if provider.harness_config.agent != "reviewer":
+                # Hold a real parent model round, not merely the web event
+                # consumer. Once the core producer finishes, its task group
+                # correctly stops accepting same-run child continuations.
+                parent_waiting.set()
+                await release_parent.wait()
+            elif messages[-1].content == "resume":
                 resumed.set()
                 await release_child.wait()
             yield TextDoneEvent(text="done")
@@ -630,6 +639,7 @@ def test_completion_transaction_racing_next_activation_only_fails_matching_recei
             try:
                 async with asyncio.timeout(HANG_GUARD):
                     await completing.wait()
+                    await parent_waiting.wait()
                 await until(lambda: state.executions.owners[root].tasks._workers[task_id].done())
                 followup = await client.post(
                     f"{path}/{task_id}/messages", headers=headers, json={"message_id": str(uuid4()), "text": "resume"}
@@ -648,6 +658,7 @@ def test_completion_transaction_racing_next_activation_only_fails_matching_recei
             finally:
                 release_completion.set()
                 release_child.set()
+                release_parent.set()
             await until(lambda: state.run_for(root) is None)
             detail = (await client.get(f"{path}/{task_id}", headers=headers)).json()
             assert all(receipt["status"] == "picked_up" for receipt in detail["receipts"])
@@ -677,5 +688,276 @@ def test_profile_catalog_contains_unused_but_never_enables_main_only_profiles(
                 )
                 assert rejected.status_code == 403
             assert not state.executions.runs
+
+    asyncio.run(scenario())
+
+
+def test_profile_start_observer_survives_http_waiter_removing_its_ready_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        observer_binding, release_observer, observer_bound, child_running, release_child = (
+            asyncio.Event() for _ in range(5)
+        )
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if provider.harness_config.agent == "reviewer" and messages[-1].content == "initial":
+                child_running.set()
+                await release_child.wait()
+            yield TextDoneEvent(text="done")
+
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+            root = state.selected_session_id
+            path = f"/api/sessions/{root}/tasks"
+            message_id = str(uuid4())
+            bind = state.tasks.store.bind
+
+            async def ordered_bind(identifier: str, task: dict[str, object]) -> dict[str, object]:
+                run = state.run_for(root)
+                if identifier == message_id and run is not None:
+                    if asyncio.current_task() is run.task:
+                        observer_binding.set()
+                        await release_observer.wait()
+                        receipt = await bind(identifier, task)
+                        observer_bound.set()
+                        return receipt
+                    # The actual child input completes its binding first, after
+                    # the observer has captured the same HTTP readiness event.
+                    await observer_binding.wait()
+                return await bind(identifier, task)
+
+            monkeypatch.setattr(state.tasks.store, "bind", ordered_bind)
+            try:
+                response = await client.post(
+                    path, headers=headers, json={"message_id": message_id, "agent": "reviewer", "text": "initial"}
+                )
+                assert response.status_code == 200, response.text
+                task_id = response.json()["task"]["id"]
+                async with asyncio.timeout(HANG_GUARD):
+                    await child_running.wait()
+                assert message_id not in state.tasks.created
+                release_observer.set()
+                async with asyncio.timeout(HANG_GUARD):
+                    await observer_bound.wait()
+                    while True:
+                        detail = (await client.get(f"{path}/{task_id}", headers=headers)).json()
+                        if detail["activity_cursor"] > 0 or state.run_for(root) is None:
+                            break
+                        await asyncio.sleep(0)
+                assert state.run_for(root) is not None, "A completed HTTP waiter must not fail the owned run"
+                assert detail["receipts"][0]["status"] == "picked_up"
+            finally:
+                release_observer.set()
+                release_child.set()
+            await until(lambda: state.run_for(root) is None)
+            assert state.executions.owners[root].tasks._lookup(task_id).status == "completed"
+            continued = await client.post(
+                f"{path}/{task_id}/messages", headers=headers, json={"message_id": str(uuid4()), "text": "continue"}
+            )
+            assert continued.status_code == 200, continued.text
+            await until(lambda: state.run_for(root) is None)
+            detail = (await client.get(f"{path}/{task_id}", headers=headers)).json()
+            assert detail["receipts"][-1]["status"] == "picked_up"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["before_insert", "during_insert", "timeout"])
+def test_child_followup_waits_for_exact_draining_owner_without_blocking_other_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    async def scenario() -> None:
+        parent_waiting, release_parent, draining, release_cleanup, inserted, release_insert, waiting = (
+            asyncio.Event() for _ in range(7)
+        )
+        if stage == "before_insert":
+            release_parent.set()
+        old_runs: list[Run] = []
+        seen: list[str] = []
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            prompt = str(messages[-1].content)
+            if provider.index == 0:
+                parent_waiting.set()
+                await release_parent.wait()
+            if provider.harness_config.agent == "reviewer":
+                seen.append(prompt)
+                if prompt == "follow":
+                    assert old_runs[0].task.done(), "Continuation must start only after its previous web owner joined"
+            yield TextDoneEvent(text="done")
+
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+            root = state.selected_session_id
+            path = f"/api/sessions/{root}/tasks"
+            finish, insert, wait_for_drain = state.tasks.finish, state.tasks.store.insert, state.tasks.wait_for_drain
+            note = {"message_id": str(uuid4()), "text": "follow"}
+
+            async def held_finish(run: Run) -> None:
+                if run.session_id == root and not old_runs:
+                    old_runs.append(run)
+                    draining.set()
+                    await release_cleanup.wait()
+                await finish(run)
+
+            async def held_insert(
+                root: str, target: str, identifier: str, text: str, task_id: str = ""
+            ) -> dict[str, object]:
+                receipt = await insert(root, target, identifier, text, task_id)
+                if identifier == note["message_id"] and stage != "before_insert":
+                    inserted.set()
+                    await release_insert.wait()
+                return receipt
+
+            async def observed_wait(run: Run, deadline: float) -> None:
+                waiting.set()
+                await wait_for_drain(run, deadline)
+
+            monkeypatch.setattr(state.tasks, "finish", held_finish)
+            monkeypatch.setattr(state.tasks.store, "insert", held_insert)
+            monkeypatch.setattr(state.tasks, "wait_for_drain", observed_wait)
+            if stage == "timeout":
+                monkeypatch.setattr(task_api, "TASK_DRAIN_TIMEOUT", 0.0)
+            response = await client.post(
+                path, headers=headers, json={"message_id": str(uuid4()), "agent": "reviewer", "text": "first"}
+            )
+            assert response.status_code == 200, response.text
+            task_id = response.json()["task"]["id"]
+            async with asyncio.timeout(HANG_GUARD):
+                await parent_waiting.wait()
+                if stage == "before_insert":
+                    await draining.wait()
+            request = asyncio.create_task(client.post(f"{path}/{task_id}/messages", headers=headers, json=note))
+            try:
+                async with asyncio.timeout(HANG_GUARD):
+                    if stage != "before_insert":
+                        await inserted.wait()
+                        release_parent.set()
+                        await draining.wait()
+                        release_insert.set()
+                    await waiting.wait()
+                if stage == "timeout":
+                    failed = await request
+                    assert failed.status_code == 409
+                    receipt = await state.tasks.store.duplicate(root, task_id, note["message_id"], note["text"])
+                    assert receipt["status"] == "error"
+                    assert state.executions.owners[root].tasks._lookup(task_id).activation == 0
+                    assert seen.count("follow") == 0
+                    return
+                assert not request.done()
+                duplicate = await state.tasks.store.duplicate(root, task_id, note["message_id"], note["text"])
+                if stage == "before_insert":
+                    assert duplicate == {}, "Draining was known before admission; no receipt should be journaled yet"
+                else:
+                    assert duplicate["status"] == "queued" and duplicate["owner_run_id"] == ""
+                # A separate chat can start while this request joins old cleanup.
+                await state.harness.create_session("ngn-independent-root")
+                async with asyncio.timeout(HANG_GUARD):
+                    other = await client.post(
+                        "/api/sessions/ngn-independent-root/tasks",
+                        headers=headers,
+                        json={"message_id": str(uuid4()), "agent": "reviewer", "text": "other"},
+                    )
+                assert other.status_code == 200 and other.json()["task"]["id"]
+                used = state.executions.owners[root].tasks._used
+                retry = asyncio.create_task(client.post(f"{path}/{task_id}/messages", headers=headers, json=note))
+                release_cleanup.set()
+                async with asyncio.timeout(HANG_GUARD):
+                    accepted, repeated = await asyncio.gather(request, retry)
+                assert accepted.status_code == repeated.status_code == 200
+                assert accepted.json()["message_id"] == repeated.json()["message_id"] == note["message_id"]
+                await until(lambda: state.run_for(root) is None)
+                receipt = await state.tasks.store.duplicate(root, task_id, note["message_id"], note["text"])
+                assert receipt["status"] == "picked_up" and receipt["owner_run_id"] != old_runs[0].id
+                assert state.executions.owners[root].tasks._used == used + 1
+                assert seen.count("follow") == 1
+            finally:
+                release_parent.set()
+                release_insert.set()
+                release_cleanup.set()
+                await request
+
+    asyncio.run(scenario())
+
+
+def test_child_followup_joins_post_run_web_claim_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        finishing, release_claim, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            prompt = str(messages[-1].content)
+            if provider.index == 0 and messages[-1].role == "user" and prompt == "delegate":
+                yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "first", "agent": "reviewer"})
+            else:
+                if prompt == "follow":
+                    assert root not in state.channels.work_tasks
+                yield TextDoneEvent(text="done")
+
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+            root = state.selected_session_id
+            root_message_id = str(uuid4())
+            finish_work, wait_for_claim = state.channels.store.finish_work, state.tasks.wait_for_claim
+
+            async def held_finish(work: Work, status: str) -> None:
+                if work.message_id == root_message_id:
+                    assert state.run_for(root) is None
+                    finishing.set()
+                    await release_claim.wait()
+                await finish_work(work, status)
+
+            async def observed_wait(task: asyncio.Task[None], deadline: float) -> None:
+                assert task is state.channels.work_tasks[root]
+                waiting.set()
+                await wait_for_claim(task, deadline)
+
+            monkeypatch.setattr(state.channels.store, "finish_work", held_finish)
+            monkeypatch.setattr(state.tasks, "wait_for_claim", observed_wait)
+            response = await client.post(
+                "/api/messages",
+                headers=headers,
+                json={"session_id": root, "message_id": root_message_id, "prompt": "delegate"},
+            )
+            assert response.status_code == 200, response.text
+            async with asyncio.timeout(HANG_GUARD):
+                await finishing.wait()
+            task_id = state.executions.owners[root].tasks.list()[0].id
+            note = {"message_id": str(uuid4()), "text": "follow"}
+            request = asyncio.create_task(
+                client.post(f"/api/sessions/{root}/tasks/{task_id}/messages", headers=headers, json=note)
+            )
+            try:
+                async with asyncio.timeout(HANG_GUARD):
+                    await waiting.wait()
+                assert not request.done()
+                assert await state.tasks.store.duplicate(root, task_id, note["message_id"], note["text"]) == {}
+            finally:
+                release_claim.set()
+            response = await request
+            assert response.status_code == 200, response.text
+            await until(lambda: state.run_for(root) is None)
+            receipt = await state.tasks.store.duplicate(root, task_id, note["message_id"], note["text"])
+            assert receipt["status"] == "picked_up"
+
+    asyncio.run(scenario())
+
+
+def test_root_inbox_uuid_does_not_own_unbound_child_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="done")
+
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, _, _, state, _, _):
+            root = state.selected_session_id
+            ordinary_id, task_id = str(uuid4()), str(uuid4())
+            await state.tasks.store.validate(root)
+            await state.tasks.store.insert(root, "retained", ordinary_id, "waiting for admission", "retained")
+            await state.tasks.store.insert(root, "profile:reviewer", task_id, "initial task input")
+            await state.tasks.finish(Run(root, server_owned=True, message_id=ordinary_id))
+            unbound = await state.tasks.store.duplicate(root, "retained", ordinary_id, "waiting for admission")
+            assert unbound["status"] == "queued", "A normal root inbox UUID is not authority over a task receipt"
+            await state.tasks.finish(Run(root, server_owned=True, message_id=task_id, task_message_id=task_id))
+            owned = await state.tasks.store.duplicate(root, "profile:reviewer", task_id, "initial task input")
+            assert owned["status"] == "error"
+            unbound = await state.tasks.store.duplicate(root, "retained", ordinary_id, "waiting for admission")
+            assert unbound["status"] == "queued"
 
     asyncio.run(scenario())

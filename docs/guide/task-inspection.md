@@ -41,6 +41,13 @@ history row ID, and public reason. A running child's message waits until the
 entire model response and tool batch finish, including pending approvals. It
 does not approve a tool or interrupt a running tool. An idle retained child
 continues through the normal owned root execution and parent-result lifecycle.
+If the previous core producer has finished but its web journal is still closing,
+admission waits up to five seconds for that exact execution to release. The wait
+does not hold the workspace admission lock or join a newly starting model run.
+An input committed during that transition remains owned by its pending admission
+until the accepted execution binds it; the previous run cannot mark it unread.
+Timed-out admissions return an explicit error, and do not leave a background job
+to execute later.
 
 ## History and live activity
 
