@@ -6,6 +6,7 @@ import { browserMedia, liveSupport } from "./browser.js";
 import { currentLiveDelegation, LiveController } from "./controller.js";
 import { DelegationInspector } from "./DelegationInspector.js";
 import { LiveComposer } from "./LiveComposer.js";
+import type { LiveComposerTargets } from "./LiveComposer.js";
 import { VoiceSettingsDialog } from "./VoiceSettingsDialog.js";
 import { VoiceContextDetails } from "./VoiceContextDetails.js";
 import { OutputDeviceNotice } from "./OutputDeviceNotice.js";
@@ -23,9 +24,10 @@ function duration(seconds: number) {
 
 // Voice lives inside the composer. Captions use the same authenticated chat
 // event stream as typed messages; opening settings never remounts the call.
-export function LiveDialog({ token, sessionId, close, configureConnection, autoStart = true,
+export function LiveDialog({ token, sessionId, targets, visible = true, close, configureConnection, autoStart = true,
   openSettingsInitially = !autoStart, consumeStartIntent }: {
   token: string; sessionId: string; close: () => void; configureConnection?: () => void; autoStart?: boolean;
+  targets: LiveComposerTargets; visible?: boolean;
   openSettingsInitially?: boolean; consumeStartIntent?: () => void;
 }) {
   const loadingRequest = useRef<AbortController | undefined>(undefined);
@@ -80,7 +82,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     const next = await refresh();
     if (next?.available) {
       setSettingsOpen(false);
-      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>("#voice-session .voice-start")?.focus());
+      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".voice-controls .voice-start, .voice-controls-trigger")?.focus({ preventScroll: true }));
     }
   }
   function configure() {
@@ -145,7 +147,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     return () => clearInterval(timer);
   }, [connected]);
   useEffect(() => { if (state.phase === "ended" || state.phase === "error") void refresh(); }, [state.phase]);
-  return <><LiveComposer state={state} audio={controller.audio} status={status} elapsed={duration(elapsed)}
+  return <><LiveComposer targets={targets} state={state} audio={controller.audio} status={status} elapsed={duration(elapsed)}
     disabled={settingsOpen || settingsSaving || loading || !config?.available || !!unavailable}
     unavailable={unavailable} loading={loading} voice={voice}
     settingsOpen={settingsOpen} settingsSaving={settingsSaving} inspectionOpen={inspectionOpen} inspect={inspect}
@@ -158,7 +160,7 @@ export function LiveDialog({ token, sessionId, close, configureConnection, autoS
     end={() => { startIntent.current = false; void controller.end(); }} close={() => { if (!settingsSaving) { startIntent.current = false; close(); } }} configure={configure}
     muteInput={() => controller.muteInput()} muteOutput={() => controller.muteOutput()}
     play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat} />
-    {settingsVisited && <VoiceSettingsDialog open={settingsOpen} saving={settingsSaving} close={closeSettings}>
+    {settingsVisited && <VoiceSettingsDialog open={settingsOpen && visible} saving={settingsSaving} close={closeSettings}>
       <LiveSettings token={token} assistant={config?.assistant} transport={config?.transport}
         audioDisabled={["permission", "connecting", "ending"].includes(state.phase)} audioActive={connected} audioSelection={state.devices}
         applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined}

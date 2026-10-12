@@ -27,7 +27,7 @@ export function VoiceSettingsDialog({ open, saving, close, children }: {
         if (document.querySelector("dialog[open]")) return;
         if (previous instanceof HTMLElement && previous.isConnected && previous !== document.body)
           previous.focus({ preventScroll: true });
-        else document.querySelector<HTMLElement>("#voice-session .voice-settings-trigger, .voice-entry-settings")?.focus({ preventScroll: true });
+        else document.querySelector<HTMLElement>(".voice-controls .voice-settings-trigger, .voice-entry-settings")?.focus({ preventScroll: true });
       });
     };
   }, [open]);

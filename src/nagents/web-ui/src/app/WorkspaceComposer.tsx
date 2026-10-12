@@ -1,11 +1,14 @@
-import type { RefObject } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import { Icon } from "../components/Icon";
 import { Composer } from "../features/chat/Composer";
 import { UploadPreviews } from "../features/chat/UploadPreviews";
 import { DraftRecoveryNotice } from "../features/chat/DraftRecoveryNotice.js";
 import { LiveDialog } from "../features/live/LiveDialog.js";
+import type { LiveComposerTargets } from "../features/live/LiveComposer.js";
 import "../features/live/live.css";
 import "../features/live/composer.css";
+import "../features/live/voiceControls.css";
+import "../features/live/sharedComposer.css";
 import "../features/live/sphere.css";
 import "../features/live/settingsDialog.css";
 import "../features/live/inspection.css";
@@ -20,6 +23,13 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
   const { chat, sessions, busy } = client;
   const { config, sessionId, externalRun } = sessions;
   const { team } = client;
+  const [voiceTargets, setVoiceTargets] = useState<LiveComposerTargets>({ presence: null, caption: null, controls: null, details: null });
+  const voiceRefs = useMemo(() => {
+    const bind = (slot: keyof LiveComposerTargets) => (element: HTMLDivElement | null) => {
+      setVoiceTargets(current => current[slot] === element ? current : { ...current, [slot]: element });
+    };
+    return { presence: bind("presence"), caption: bind("caption"), controls: bind("controls"), details: bind("details") };
+  }, []);
   const child = !!team.selected;
   const recipient = team.task?.name || team.profile?.name || "agent";
   const activeTitle = sessions.sessions.find((session) => session.id === sessions.activeSessionId)?.title || "another session";
@@ -50,11 +60,13 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
     {child && !team.canMessage && <p className="activity-warning">{team.task?.unavailable_reason || team.profile?.unavailable_reason || team.task?.message_unavailable_reason || "This agent is not available for messages."}</p>}
     {child && client.liveOpen && <p className="team-voice-notice">Voice remains in the main conversation.</p>}
     <div hidden={child} className="workspace-live-slot">{client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
+      targets={voiceTargets} visible={!child}
       autoStart={client.liveAutoStart}
       openSettingsInitially={client.liveIntent === "settings"} consumeStartIntent={client.consumeLiveStart}
       close={() => { client.closeLive(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }}
       configureConnection={() => { client.closeLive(); client.settings.show(); }} />}</div>
     <Composer inputRef={composer} prompt={child ? team.prompt : chat.prompt} setPrompt={child ? team.setPrompt : chat.setPrompt} demo={!!config?.demo}
+      voiceLayout={client.liveOpen && !child} voiceRefs={voiceRefs}
       recipient={child ? recipient : "ngn"} commandsEnabled={!child} maxLength={child ? 16000 : 32000}
       disabled={!config || !sessionId} attachmentsDisabled={!config || client.operating}
       submitting={child ? team.submitting : chat.submitting} stopping={chat.stopping}
