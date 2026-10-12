@@ -52,6 +52,7 @@ from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
 from .subscriptions import EventBus
+from .tasks import Tasks
 from .tool_approvals import ToolApprovals
 from .tool_approvals import ToolBinding
 from .trash import SessionTrash
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
+    from nagents.harness.followups import RunInput
     from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import SessionInfo
@@ -258,6 +260,7 @@ class WebState:
         self.bus = EventBus()
         self.run_observers: set[Callable[[Run | None, dict[str, object]], None]] = set()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
+        self.tasks = Tasks(self)
         self.queued_inputs = QueuedInputs(self)
         self.tool_approvals = ToolApprovals(
             harness.agent.session.db_path.with_name("tool-approvals.db"), harness.workspace
@@ -409,11 +412,7 @@ class WebState:
         return {
             "session_id": session_id,
             "activity_cursor": self.wakeups.cursor,
-            "retained_tasks": [
-                asdict(info)
-                for info in self.harness_for(session_id).tasks._infos.values()
-                if info.session_id == session_id
-            ],
+            "retained_tasks": (await self.tasks.index(session_id))["tasks"],
             "sessions": [asdict(session) for session in sessions],
             "history": history,
             "active_run": active.snapshot() if active is not None and active.session_id == session_id else None,
@@ -487,6 +486,7 @@ class WebState:
         pass
 
     async def send(self, run: Run, record: dict[str, object]) -> None:
+        await self.tasks.record(run, record)
         self.publish(run, record)
 
     async def approve(self, request: ApprovalRequest) -> bool:
@@ -660,7 +660,15 @@ class WebState:
             }
         )
 
-    async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
+    async def produce(
+        self,
+        run: Run,
+        prompt: str | list[ContentPart],
+        *,
+        task_id: str = "",
+        task_agent: str = "",
+        task_input: RunInput | None = None,
+    ) -> None:
         notices = run.notices = ChannelNotices(self, run)
         transcript = DeliveryTranscript(
             capture=type(self.running_harness.agent.session) in {WebHistory, _HarnessSession}
@@ -668,7 +676,14 @@ class WebState:
         try:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
-            if run.background:
+            if task_input is not None:
+                assert isinstance(prompt, str)
+                source = (
+                    self.running_harness.start_task(prompt, task_agent, message=task_input)
+                    if task_agent
+                    else self.running_harness.continue_task(task_id, prompt, message=task_input)
+                )
+            elif run.background:
                 if not isinstance(prompt, str):
                     raise ValueError("Background wake prompts must be text")
                 source = self.running_harness.wake(prompt, task_id=task_id)
@@ -819,6 +834,7 @@ class WebState:
                 else:
                     await notices.finish("completed")
             finally:
+                await _join(asyncio.create_task(self.tasks.finish(run)))
                 await _join(asyncio.create_task(self.queued_inputs.finish(run)))
                 await _join(asyncio.create_task(self.channels.activity(run.session_id, False)))
 

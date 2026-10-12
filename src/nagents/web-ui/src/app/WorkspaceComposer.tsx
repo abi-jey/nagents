@@ -19,6 +19,9 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
 }) {
   const { chat, sessions, busy } = client;
   const { config, sessionId, externalRun } = sessions;
+  const { team } = client;
+  const child = !!team.selected;
+  const recipient = team.task?.name || team.profile?.name || "agent";
   const activeTitle = sessions.sessions.find((session) => session.id === sessions.activeSessionId)?.title || "another session";
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
@@ -42,22 +45,27 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
     <DraftRecoveryNotice drafts={client.orphanedDrafts} disabled={!client.available.create} recover={(id) => {
       void client.recoverDraft(id).then((recovered) => { if (recovered) requestAnimationFrame(() => composer.current?.focus()); });
     }} />
-    {client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
+    {child && <div className="composer-recipient"><span>To <strong>{recipient}</strong></span><button type="button" onClick={() => team.select("")}>Back to Assistant</button></div>}
+    {child && team.error && <p className="activity-warning" role="alert">{team.error}<button type="button" onClick={team.dismissError}>Dismiss</button></p>}
+    {child && !team.canMessage && <p className="activity-warning">{team.task?.unavailable_reason || team.profile?.unavailable_reason || team.task?.message_unavailable_reason || "This agent is not available for messages."}</p>}
+    {child && client.liveOpen && <p className="team-voice-notice">Voice remains in the main conversation.</p>}
+    <div hidden={child} className="workspace-live-slot">{client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
       autoStart={client.liveAutoStart}
       openSettingsInitially={client.liveIntent === "settings"} consumeStartIntent={client.consumeLiveStart}
       close={() => { client.closeLive(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }}
-      configureConnection={() => { client.closeLive(); client.settings.show(); }} />}
-    <Composer inputRef={composer} prompt={chat.prompt} setPrompt={chat.setPrompt} demo={!!config?.demo}
+      configureConnection={() => { client.closeLive(); client.settings.show(); }} />}</div>
+    <Composer inputRef={composer} prompt={child ? team.prompt : chat.prompt} setPrompt={child ? team.setPrompt : chat.setPrompt} demo={!!config?.demo}
+      recipient={child ? recipient : "ngn"} commandsEnabled={!child} maxLength={child ? 16000 : 32000}
       disabled={!config || !sessionId} attachmentsDisabled={!config || client.operating}
-      submitting={chat.submitting} stopping={chat.stopping}
-      attachmentTypes={client.uploadState.types} hasAttachments={!!client.uploadState.items.length}
-      addAttachments={(files) => void client.uploads.add(files)}
-      attachments={<UploadPreviews state={client.uploadState} disabled={client.operating} remove={(id) => client.uploads.remove(id)} />}
-      canSubmit={client.available.submit} running={busy && !!chat.runId} submit={submit} cancel={() => void client.cancel()}
+      submitting={child ? team.submitting : chat.submitting} stopping={chat.stopping}
+      attachmentTypes={child ? [] : client.uploadState.types} hasAttachments={!child && !!client.uploadState.items.length}
+      addAttachments={child ? undefined : (files) => void client.uploads.add(files)}
+      attachments={!child && <UploadPreviews state={client.uploadState} disabled={client.operating} remove={(id) => client.uploads.remove(id)} />}
+      canSubmit={child ? !!config && team.canMessage && !team.submitting : client.available.submit} running={!child && busy && !!chat.runId} submit={submit} cancel={() => void client.cancel()}
       skills={client.skills.items} skillsLoading={client.skills.loading} skillsError={client.skills.error}
       refreshSkills={() => void client.skills.refresh()}
-      voiceControl={!client.liveOpen && <div className="voice-entry"><button type="button" id="live-launch" className="live-launch" aria-label="Start voice" title="Talk in this chat" disabled={!client.available.live} onClick={() => client.showLive()}><Icon name="wave" size={17} /><span>Voice</span></button><button type="button" className="voice-entry-settings" aria-label="Voice settings" title="Voice settings" aria-haspopup="dialog" aria-controls="voice-settings-dialog" disabled={!client.available.live} onClick={() => client.showLive("settings")}><Icon name="settings" size={16} /></button></div>}
-      status={<span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>{runStatus}</span>}
+      voiceControl={!child && !client.liveOpen && <div className="voice-entry"><button type="button" id="live-launch" className="live-launch" aria-label="Start voice" title="Talk in this chat" disabled={!client.available.live} onClick={() => client.showLive()}><Icon name="wave" size={17} /><span>Voice</span></button><button type="button" className="voice-entry-settings" aria-label="Voice settings" title="Voice settings" aria-haspopup="dialog" aria-controls="voice-settings-dialog" disabled={!client.available.live} onClick={() => client.showLive("settings")}><Icon name="settings" size={16} /></button></div>}
+      status={child ? <span className="run-status" role="status">{team.submitting ? "Sending…" : team.profile ? "Starts this agent" : "Joins the next response"}</span> : <span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>{runStatus}</span>}
     />
   </footer>;
 }

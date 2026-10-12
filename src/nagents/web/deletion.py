@@ -96,6 +96,9 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
 
 def _remove_content(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
     cleanup_deliveries(db, session_id)
+    if "ngn_web_tasks" in tables:
+        for (child,) in db.execute("SELECT child FROM ngn_web_tasks WHERE root = ?", (session_id,)).fetchall():
+            cleanup_deliveries(db, str(child))
     if "ngn_web_group_members" in tables:
         db.execute("DELETE FROM ngn_web_group_members WHERE session_id = ?", (session_id,))
     db.execute("DELETE FROM ngn_web_uploads WHERE session_id = ?", (session_id,))

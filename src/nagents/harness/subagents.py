@@ -11,11 +11,13 @@ import asyncio
 import copy
 import json
 import secrets
+import time
 import uuid
 from collections import deque
 from contextlib import aclosing
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import replace
 from typing import TYPE_CHECKING
 from typing import Literal
@@ -23,10 +25,19 @@ from typing import Literal
 from nagents._async import join_owned as _await_cleanup
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
+from nagents.events import TextDoneEvent
 from nagents.provider.openai import OpenAIProvider
 
+from .execution import ExecutionBridge
+from .followups import RunInput
+from .followups import RunTurn
 from .provider import HarnessProvider
+from .task_activity import ChildActivity
+from .task_activity import TaskOptions
+from .task_activity import compaction_snapshot
+from .task_activity import public_payload
 from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
+from .types import TaskActivity
 from .types import TaskCompleted
 from .types import TaskDeliveryWarning
 from .types import TaskMessage
@@ -38,6 +49,7 @@ if TYPE_CHECKING:
 
     from nagents.types import Message
 
+    from .providers import ProviderProfile
     from .runtime import Harness
 
 MAX_CONCURRENT = 3
@@ -49,6 +61,7 @@ MAX_RESULT = 12_000
 CHILD_TIMEOUT = 300.0
 _ADJECTIVES = ("quiet", "bright", "calm", "gentle", "swift", "clear", "small", "warm")
 _NOUNS = ("maple", "cedar", "willow", "birch", "fern", "brook", "finch", "otter")
+DEFAULT_TASK_OPTIONS = TaskOptions()
 
 
 @dataclass
@@ -69,6 +82,19 @@ class TaskInfo:
     followups: int = 0
     activation: int = 0
     trigger: str = "delegation"
+    provider: str = ""
+    provider_kind: str = ""
+    model: str = ""
+    phase: str = "starting"
+    started_at: float = 0.0
+    updated_at: float = 0.0
+    completed_at: float = 0.0
+    activity_sequence: int = 0
+    context: dict[str, object] = field(default_factory=dict)
+    compaction: dict[str, object] = field(default_factory=dict)
+    next_settings: dict[str, object] = field(default_factory=dict)
+    origin_history_id: str = ""
+    origin_run_id: str = ""
 
 
 class SubagentManager:
@@ -85,8 +111,16 @@ class SubagentManager:
         self._infos: dict[str, TaskInfo] = {} if root is None else root._infos
         self._workers: dict[str, asyncio.Task[None]] = {} if root is None else root._workers
         self._children: dict[str, Harness] = {} if root is None else root._children
+        self._options: dict[str, TaskOptions] = {} if root is None else root._options
+        self._next_options: dict[str, TaskOptions] = {} if root is None else root._next_options
+        self._provider_overrides: dict[str, ProviderProfile] = {} if root is None else root._provider_overrides
+        self._next_providers: dict[str, ProviderProfile] = {} if root is None else root._next_providers
+        self._inputs: dict[str, deque[RunInput]] = {} if root is None else root._inputs
+        self._admitted: dict[str, dict[str, RunInput]] = {} if root is None else root._admitted
+        self._initial_inputs: dict[str, RunInput] = {} if root is None else root._initial_inputs
+        self._activity_gaps: set[str] = set() if root is None else root._activity_gaps
         self._ready: deque[TaskCompleted | TaskMessage] = deque()
-        self._observed: deque[TaskCompleted | ErrorEvent] = deque()
+        self._observed: deque[TaskCompleted | TaskMessage | ErrorEvent] = deque()
         self._pending: dict[str, list[TaskCompleted | TaskMessage]] = {}
         self._changed = asyncio.Event()
         self.notification_sources: tuple[str, ...] = ()
@@ -104,7 +138,7 @@ class SubagentManager:
     def list(self) -> list[TaskInfo]:
         """Detached snapshots of all descendants retained in this root session."""
         return [
-            replace(info)
+            copy.deepcopy(info)
             for info in self._infos.values()
             if info.session_id == self.root.harness.session_id and self._belongs(info)
         ]
@@ -156,7 +190,7 @@ class SubagentManager:
         ):
             raise RuntimeError("Delegation requires an active parent run in the same session")
 
-    def _check_budget(self, prompt: str) -> None:
+    def _check_budget(self, prompt: str, *, slot: bool = True) -> None:
         self._check_active()
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
             raise ValueError(f"Delegation prompt must contain 1 to {MAX_PROMPT} characters")
@@ -164,7 +198,7 @@ class SubagentManager:
             raise ValueError(
                 f"Subagent budget exhausted: at most {MAX_TASKS} executions per root run, including follow-ups"
             )
-        if (
+        if slot and (
             sum(
                 info.status == "running" or (info.id in self._workers and not self._workers[info.id].done())
                 for info in self._infos.values()
@@ -173,7 +207,16 @@ class SubagentManager:
         ):
             raise ValueError(f"At most {MAX_CONCURRENT} subagents may run concurrently; retry after a child finishes")
 
-    async def delegate(self, prompt: str, agent: str = "assistant") -> dict[str, str]:
+    async def delegate(
+        self,
+        prompt: str,
+        agent: str = "assistant",
+        model: str = "",
+        provider: str = "",
+        compact_trigger: str = "",
+        compact_tokens: int = 200000,
+        compact_messages: int = 100,
+    ) -> dict[str, str]:
         """Start a general-purpose child and immediately return task_id, name, status.
         Continue useful independent work. When only waiting, end the current model
         turn without tool calls; the harness waits and resumes you with untrusted
@@ -184,12 +227,19 @@ class SubagentManager:
 
         Args:
             prompt: A self-contained task; the child does not receive parent conversation history.
-            agent: Defaults to assistant. Omit this argument or use an explicitly configured profile; never pass an empty name.
+            agent: Defaults to assistant. Use an explicitly configured profile; never pass an empty name.
+            model: Optional model identifier; omission inherits the selected profile or parent model.
+            provider: Optional configured provider connection name; omission inherits profile or parent routing.
+            compact_trigger: Optional auto, tokens, messages, or off; omission inherits parent compaction.
+            compact_tokens: Context budget for tokens mode; compaction starts at seventy percent.
+            compact_messages: Message threshold for messages mode.
         """
         if not self.harness.can_delegate:
             raise PermissionError("Delegation is disabled at the configured subagent depth limit")
         self._check_budget(prompt)
         profile = self.harness.config.profile(agent)
+        options = TaskOptions(provider, model, compact_trigger, compact_tokens, compact_messages)
+        options.validate(self.harness)
         if agent not in self.harness.delegatable_profile_names:
             raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
         if len(self._infos) >= MAX_RETAINED_TASKS:
@@ -211,10 +261,41 @@ class SubagentManager:
             depth=self.harness.subagent_depth + 1,
             profile=agent,
             mode="reviewer" if self.harness.mode == "reviewer" else profile.mode,
+            provider=provider or profile.provider or self.harness.config.provider,
+            provider_kind=self.harness.config.provider_profile().kind,
+            model=model or profile.model or self.harness.agent.provider.model,
+            started_at=time.time(),
+            updated_at=time.time(),
         )
+        if info.parent_task_id:
+            parent_info = self._infos[info.parent_task_id]
+            info.origin_history_id = parent_info.origin_history_id
+            info.origin_run_id = parent_info.origin_run_id
+        else:
+            bridge = self.harness.agent._execution_bridge
+            if (
+                isinstance(bridge, ExecutionBridge)
+                and bridge.live()
+                and bridge.block is not None
+                and not bridge.block.writing
+                and bridge.block.row_id > 0
+                and bridge.call is not None
+                and bridge.call.name == "delegate"
+                and 0 <= bridge.position < len(bridge.block.calls)
+                and bridge.block.calls[bridge.position] == bridge.call
+            ):
+                # The exact committed assistant row executing delegate, never
+                # the latest row by time or a provider-supplied identity.
+                info.origin_history_id = str(bridge.block.row_id)
+                info.origin_run_id = bridge.run_id
         # Reserve both quotas before the first await, including concurrent callers.
         self.root._used += 1
+        if info.provider:
+            info.provider_kind = self.harness.providers.providers[info.provider].kind
         self._infos[info.id] = info
+        self._options[info.id] = options
+        self._inputs[info.id] = deque()
+        self._admitted[info.id] = {}
         try:
             await self.root.harness.emit(self._started(info, prompt))
             self._check_active()
@@ -224,6 +305,45 @@ class SubagentManager:
             info.error = "Delegation was interrupted before the child started."
             raise
         return {"task_id": info.id, "name": info.name, "status": "running"}
+
+    async def start_task(
+        self,
+        prompt: str,
+        agent: str = "assistant",
+        *,
+        message: RunInput | None = None,
+        options: TaskOptions = DEFAULT_TASK_OPTIONS,
+    ) -> TaskInfo:
+        """Host start with a receipt-bound initial input, using native delegation quotas."""
+        if message is not None and message.prompt != prompt:
+            raise ValueError("Initial task input must match the assigned prompt")
+        result = await self.delegate(
+            prompt,
+            agent,
+            options.model,
+            options.provider,
+            options.compact_trigger,
+            options.compact_tokens,
+            options.compact_messages,
+        )
+        info = self._lookup(result["task_id"])
+        # delegate schedules the worker only after its final await. Install this
+        # binding without an intervening yield before that worker can run.
+        if message is not None:
+            accepted = replace(message, identifier=message.identifier or uuid.uuid4().hex)
+            self._initial_inputs[info.id] = accepted
+            self._admitted[info.id][accepted.identifier] = accepted
+        return copy.deepcopy(info)
+
+    def input_child(self, message_id: str) -> tuple[TaskInfo, Harness]:
+        """Resolve an input context only from its exact child's producer task."""
+        current = asyncio.current_task()
+        if message_id and current is not None:
+            for info in self.list():
+                child = self._children.get(info.id)
+                if child is not None and child._worker is current and child.followups.current.message_id == message_id:
+                    return info, child
+        raise RuntimeError("Input context does not belong to an active child producer")
 
     def _lookup(self, task_id: str) -> TaskInfo:
         info = self._infos.get(task_id)
@@ -243,6 +363,169 @@ class SubagentManager:
         info = self._lookup(task_id)
         return copy.deepcopy(await self.root.harness.agent.session.get_history(info.child_session_id, limit))
 
+    def child(self, task_id: str) -> Harness:
+        """The exact authorized retained runtime; inspection must never initialize it."""
+        self._lookup(task_id)
+        child = self._children.get(task_id)
+        if child is None:
+            raise RuntimeError("Child is still starting or its setup failed")
+        return child
+
+    def configure_task(self, task_id: str, options: TaskOptions) -> TaskInfo:
+        """Save choices for the next activation without modifying an active child.
+
+        Empty provider/model/trigger retains the task's accepted setting. This
+        never applies to notes admitted into the current activation. Explicit
+        provider selection snapshots its configured connection at save time.
+        """
+        if self is not self.root:
+            raise PermissionError("Child settings must be submitted to the root harness")
+        info = self._lookup(task_id)
+        if info.status == "cancelled":
+            raise RuntimeError("Cancelled tasks cannot be configured for continuation")
+        options.validate(self.harness)
+        self._next_options[task_id] = options
+        if options.provider:
+            self._next_providers[task_id] = replace(self.harness.providers.providers[options.provider])
+        else:
+            self._next_providers.pop(task_id, None)
+        info.next_settings = asdict(options)
+        return copy.deepcopy(info)
+
+    async def context_stats(self, task_id: str) -> dict[str, object]:
+        info = self._lookup(task_id)
+        child = self.child(task_id)
+        context = (await child.agent.context_stats(info.child_session_id)).as_dict()
+        return {**context, "compaction": compaction_snapshot(child)}
+
+    def submit_message(self, task_id: str, message: RunInput) -> bool:
+        """Reserve a bounded note for a running child's next complete response boundary.
+
+        False means idle: the host can use ordinary retained-child continuation,
+        with no quota consumed here. Unavailable/stopping tasks raise. Acceptance
+        never satisfies approvals or interrupts a running tool batch. The host
+        owns durable receipts via RunInput.context; process-local queues do not
+        replay after restart. Pending notes remain unread if the child fails.
+        """
+        if self is not self.root:
+            raise PermissionError("Child messages must be submitted to the root harness")
+        info = self._lookup(task_id)
+        worker = self._workers.get(task_id)
+        if info.status != "running" and (worker is None or worker.done()):
+            if info.status == "cancelled":
+                raise RuntimeError("Cancelled children cannot accept messages")
+            return False
+        self._check_active()
+        if worker is None or worker.done() or worker.cancelling() or info.phase in {"stopping", "cancelled", "failed"}:
+            raise RuntimeError("Child is stopping; its message queue is closed")
+        child = self._children.get(task_id)
+        if child is not None and info.phase != "starting" and not child.followups.accepting:
+            raise RuntimeError("Child is finishing; retry after completion")
+        if not isinstance(message.prompt, str):
+            raise ValueError("Child messages require text")
+        self._check_budget(message.prompt, slot=False)
+        if info.followups >= MAX_FOLLOWUPS:
+            raise ValueError(f"At most {MAX_FOLLOWUPS} human follow-ups per task identity")
+        # Assign an identity without mutating the caller's receipt-owned input.
+        message = replace(message, identifier=message.identifier or uuid.uuid4().hex)
+        self._inputs.setdefault(task_id, deque()).append(message)
+        self._admitted.setdefault(task_id, {})[message.identifier] = message
+        self._used += 1
+        info.followups += 1
+        info.updated_at = time.time()
+        if child is not None:
+            child.followups.changed()
+            child.tasks._changed.set()
+        self._changed.set()
+        return True
+
+    async def _emit_activity(self, info: TaskInfo, payload: dict[str, object], *, turn_id: str = "") -> None:
+        if not payload:
+            return
+        info.activity_sequence += 1
+        info.updated_at = time.time()
+        phase = payload.get("phase")
+        if isinstance(phase, str):
+            info.phase = phase
+        if payload.get("type") == "status":
+            payload = {**payload, "provider": info.provider, "provider_kind": info.provider_kind, "model": info.model}
+        child = self._children.get(info.id)
+        event = TaskActivity(
+            info.id,
+            info.session_id,
+            info.parent_task_id,
+            info.child_session_id,
+            info.depth,
+            info.activation,
+            info.activity_sequence,
+            info.updated_at,
+            turn_id or (child.followups.current.id if child is not None else ""),
+            copy.deepcopy(payload),
+        )
+        if not self.root.harness.emit_activity(event):
+            self._activity_gaps.add(info.id)
+
+    def drain_activity(self) -> None:
+        """Coalesce dropped observation fragments to one bounded refresh per task.
+
+        A sequence gap plus this explicit marker tells consumers to rebuild from
+        retained task metadata and persisted history. It never asserts that an
+        unfinished streamed tool block was committed, or invents missing text.
+        """
+        if self is not self.root:
+            return
+        queue = self.harness._queue
+        for task_id in tuple(self._activity_gaps):
+            if queue is None or queue.full():
+                return
+            info = self._infos.get(task_id)
+            if info is None or info.session_id != self.harness.session_id:
+                self._activity_gaps.discard(task_id)
+                continue
+            info.activity_sequence += 1
+            child = self._children.get(task_id)
+            event = TaskActivity(
+                info.id,
+                info.session_id,
+                info.parent_task_id,
+                info.child_session_id,
+                info.depth,
+                info.activation,
+                info.activity_sequence,
+                info.updated_at,
+                child.followups.current.id if child is not None else "",
+                {"type": "resync_required", "phase": info.phase},
+            )
+            if self.harness.emit_activity(event):
+                self._activity_gaps.discard(task_id)
+
+    async def _input_started(self, info: TaskInfo, child: Harness, turn: RunTurn) -> None:
+        message = self._admitted.get(info.id, {}).pop(turn.identifier, None)
+        if message is not None:
+            event = TaskMessage(
+                info.id,
+                info.name,
+                "A human message was picked up by this agent.",
+                info.parent_task_id,
+                info.parent_session_id,
+                info.child_session_id,
+                info.depth,
+                info.profile,
+                info.followups,
+                message.message_id or message.identifier,
+                info.activation,
+            )
+            self._publish(info, event)
+            await self._emit_activity(
+                info,
+                {
+                    "type": "user_message",
+                    "text": str(message.prompt),
+                    "message_id": message.message_id or message.identifier,
+                    "status": "picked_up",
+                },
+            )
+
     def continue_task(
         self,
         task_id: str,
@@ -250,6 +533,7 @@ class SubagentManager:
         *,
         trigger: str = "human",
         notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
+        message: RunInput | None = None,
     ) -> TaskInfo:
         """Accept a retained-child activation atomically on the active root run.
 
@@ -260,6 +544,8 @@ class SubagentManager:
             raise PermissionError("Child activations must be submitted to the root harness")
         if trigger not in {"human", "wakeup", "notification"}:
             raise ValueError("Unknown child activation trigger")
+        if message is not None and message.prompt != prompt:
+            raise ValueError("Continuation input must match its prompt")
         info = self._lookup(task_id)
         worker = self._workers.get(task_id)
         if info.status == "running" or (worker is not None and not worker.done()):
@@ -314,26 +600,27 @@ class SubagentManager:
             raise ValueError(f"At most {MAX_FOLLOWUPS} human follow-ups per task identity")
         self._check_budget(prompt)
         self._used += 1
+        if info.id in self._next_options:
+            self._options[info.id] = self._next_options.pop(info.id)
+            selected_provider = self._next_providers.pop(info.id, None)
+            if selected_provider is not None:
+                self._provider_overrides[info.id] = selected_provider
+            else:
+                self._provider_overrides.pop(info.id, None)
+            info.next_settings = {}
         info.activation += 1
         info.trigger = trigger
         if trigger == "human":
             info.followups += 1
         info.status, info.result, info.error = "running", "", ""
-        event = TaskMessage(
-            info.id,
-            info.name,
-            prompt,
-            info.parent_task_id,
-            info.parent_session_id,
-            info.child_session_id,
-            info.depth,
-            info.profile,
-            info.followups,
-        )
-        if trigger == "human":
-            self._publish(info, event)
+        info.phase, info.completed_at = "starting", 0.0
+        info.updated_at = time.time()
+        accepted = message or RunInput(prompt)
+        accepted = replace(accepted, identifier=accepted.identifier or uuid.uuid4().hex)
+        self._inputs[info.id] = deque()
+        self._admitted[info.id] = {accepted.identifier: accepted} if trigger == "human" else {}
         self._workers[info.id] = asyncio.create_task(
-            self._run_child(info, prompt, followup=event if trigger == "human" else None, notifications=notifications),
+            self._run_child(info, prompt, message=accepted, notifications=notifications),
             name=f"ngn-subagent-{info.id}",
         )
         return replace(info)
@@ -351,12 +638,19 @@ class SubagentManager:
             info.followups,
             info.activation,
             info.trigger,
+            info.provider,
+            info.provider_kind,
+            info.model,
+            info.started_at,
+            info.origin_history_id,
+            info.origin_run_id,
         )
 
     def _create_child(self, agent: str, info: TaskInfo | None = None, *, continuing: bool = False) -> Harness:
         from .runtime import Harness
 
         parent = self._children[info.id] if continuing and info is not None else self.harness
+        options = self._options.get(info.id, TaskOptions()) if info else TaskOptions()
         if not parent.config.profile(agent).subagent_available:
             raise PermissionError(f"Agent {agent!r} is no longer available for delegation")
         if not continuing and agent not in parent.delegatable_profile_names:
@@ -367,6 +661,11 @@ class SubagentManager:
                     raise PermissionError(f"Agent {agent!r} is no longer allowed by an ancestor")
         defined = parent.create_defined_child(agent)
         if defined is not None:
+            if options.provider or options.model:
+                raise ValueError(
+                    "Designed agents use their saved provider/model definition; edit that definition to change routing"
+                )
+            options.apply_compaction(defined, parent)
             defined._is_subagent = True
             defined._task_id = info.id if info else str(uuid.uuid4())
             defined._task_name = info.name if info else agent
@@ -385,10 +684,18 @@ class SubagentManager:
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
         profiles = {name: replace(profile) for name, profile in parent.config.profiles.items()}
+        if agent in profiles:
+            profiles[agent] = replace(
+                profiles[agent],
+                model=options.model or profiles[agent].model,
+                provider=options.provider or profiles[agent].provider,
+            )
         config = replace(
             parent.config,
             agent=agent,
-            model=parent.agent.provider.model,
+            provider=options.provider or parent.config.provider,
+            model=options.model or parent.agent.provider.model,
+            model_explicit=bool(options.model) or parent.config.model_explicit,
             profiles=profiles,
             plugins=(),
             diagnostics=(),
@@ -402,6 +709,11 @@ class SubagentManager:
                     else "chatgpt"
                     if chatgpt
                     else "api-key",
+                ),
+                **(
+                    {options.provider: self._provider_overrides[info.id]}
+                    if info is not None and options.provider and info.id in self._provider_overrides
+                    else {}
                 ),
             },
             max_tool_rounds=min(parent.config.max_tool_rounds, 12),
@@ -430,6 +742,7 @@ class SubagentManager:
             ),
             shared_auth=self.root.harness.openai_auth,
         )
+        options.apply_compaction(child, parent)
         child._is_subagent = True
         child._task_id = info.id if info else str(uuid.uuid4())
         child._task_name = info.name if info else "subagent"
@@ -462,14 +775,13 @@ class SubagentManager:
         info: TaskInfo,
         prompt: str,
         *,
-        followup: TaskMessage | None = None,
+        message: RunInput | None = None,
         notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
     ) -> None:
         child: Harness | None = None
+        message = message or self._initial_inputs.pop(info.id, None)
         try:
             async with asyncio.timeout(CHILD_TIMEOUT):
-                if followup is not None:
-                    await self.root.harness.emit(replace(followup))
                 if info.activation:
                     await self.root.harness.emit(self._started(info, prompt))
                 child = self._create_child(info.profile, info, continuing=bool(info.activation))
@@ -477,17 +789,43 @@ class SubagentManager:
                 await _await_cleanup(asyncio.create_task(child.initialize(), name=f"ngn-subagent-initialize-{info.id}"))
                 child.refresh_instructions()
                 info.mode = child.mode
+                info.provider, info.provider_kind, info.model = (
+                    child.config.provider,
+                    child.config.provider_profile().kind,
+                    child.agent.provider.model,
+                )
+                info.compaction = compaction_snapshot(child)
+                child.agent.plugins.append(ChildActivity(self, info, child))
                 done: DoneEvent | None = None
-                async with aclosing(child._run(prompt, trigger=info.trigger, notifications=notifications)) as events:
-                    async for event in events:
-                        if isinstance(event, ErrorEvent) and not event.recoverable:
-                            info.error = (
-                                "Subagent reached its tool-round limit; its response is not a successful result."
-                                if event.code == "MAX_TOOL_ROUNDS"
-                                else "Subagent reported a provider or tool-loop error; its response is not a successful result."
-                            )
-                        elif isinstance(event, DoneEvent):
-                            done = event
+
+                async def read_input() -> RunInput | None:
+                    pending = self._inputs.get(info.id)
+                    return pending.popleft() if pending else None
+
+                consumed_turn = ""
+
+                def observe_turn(turn: RunTurn) -> None:
+                    nonlocal consumed_turn
+                    consumed_turn = turn.id
+
+                with child.followups.source(read_input), child.followups.observe(observe_turn):
+                    async with aclosing(
+                        child._run(prompt, trigger=info.trigger, notifications=notifications, initial_input=message)
+                    ) as events:
+                        async for event in events:
+                            await self._emit_activity(info, public_payload(event), turn_id=consumed_turn)
+                            if isinstance(event, TextDoneEvent) and child.tasks._running():
+                                await self._emit_activity(
+                                    info, {"type": "status", "phase": "waiting", "detail": "Waiting for delegated work"}
+                                )
+                            if isinstance(event, ErrorEvent) and not event.recoverable:
+                                info.error = (
+                                    "Subagent reached its tool-round limit; its response is not a successful result."
+                                    if event.code == "MAX_TOOL_ROUNDS"
+                                    else "Subagent reported a provider or tool-loop error; its response is not a successful result."
+                                )
+                            elif isinstance(event, DoneEvent):
+                                done = event
                 if done is None:
                     info.error = "Subagent ended without a completed response."
                 elif not info.error:
@@ -515,6 +853,7 @@ class SubagentManager:
                 else "Subagent failed during setup or execution; no successful result is available."
             )
         finally:
+            info.phase = "stopping"
             try:
                 if child is not None:
                     await _await_cleanup(asyncio.create_task(child.close(), name=f"ngn-subagent-close-{info.id}"))
@@ -534,6 +873,10 @@ class SubagentManager:
             finally:
                 if info.status == "running":
                     info.status = "failed" if info.error else "completed"
+                info.phase = info.status
+                info.updated_at = info.completed_at = time.time()
+                self._inputs.pop(info.id, None)
+                self._admitted.pop(info.id, None)
                 self._publish(
                     info,
                     TaskCompleted(
@@ -558,8 +901,7 @@ class SubagentManager:
         # Keep cleanup nonblocking, including when an inactive parent needs recreation.
         if not self.root._active or self.root.harness._closed:
             return
-        if isinstance(event, TaskCompleted):
-            self.root._observed.append(event)
+        self.root._observed.append(event)
         self.root._changed.set()
         parent_id = info.parent_task_id
         parent_info = self._infos.get(parent_id)
@@ -624,6 +966,7 @@ class SubagentManager:
         This does not wait for workers or consume their parent-routed inboxes.
         """
         if self is self.root:
+            self.drain_activity()
             while self._observed:
                 await self.harness.emit(replace(self._observed.popleft()))
 
@@ -659,7 +1002,7 @@ class SubagentManager:
                                 "Descendant result was not forwarded to Main."
                             )
                         )
-            if self is self.root and self.harness.followups.pending:
+            if self.harness.followups.pending:
                 return None
             if self._ready and not (wait_for_tasks and self._running()):
                 break
@@ -716,6 +1059,8 @@ class SubagentManager:
                 self._ready.clear()
                 self._observed.clear()
                 self._pending.clear()
+                if self is self.root:
+                    self._activity_gaps.clear()
                 self._changed.set()
 
             self._shutdown = asyncio.create_task(stop(), name="ngn-subagent-cleanup")

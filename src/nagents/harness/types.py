@@ -79,6 +79,12 @@ class TaskStarted:
     followup: int = 0
     activation: int = 0
     trigger: str = "delegation"
+    provider: str = ""
+    provider_kind: str = ""
+    model: str = ""
+    timestamp: float = 0.0
+    origin_history_id: str = ""
+    origin_run_id: str = ""
 
 
 @dataclass
@@ -136,6 +142,28 @@ class TaskMessage:
     depth: int = 1
     profile: str = "assistant"
     followup: int = 1
+    message_id: str = ""
+    activation: int = 0
+
+
+@dataclass(frozen=True)
+class TaskActivity:
+    """Public child evidence scoped by host identity, never root model output.
+
+    Payloads contain only published text/tool activity and lifecycle metadata.
+    Provider extras and reasoning events are deliberately not forwarded.
+    """
+
+    task_id: str
+    root_session_id: str
+    parent_task_id: str
+    child_session_id: str
+    depth: int
+    activation: int
+    sequence: int
+    timestamp: float
+    turn_id: str
+    payload: dict[str, object]
 
 
 @dataclass
@@ -159,6 +187,7 @@ HarnessEvent = (
     | TaskCompleted
     | TaskMessage
     | TaskNotification
+    | TaskActivity
     | TranscriptAnchor
     | TranscriptAbandoned
 )

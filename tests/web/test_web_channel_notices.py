@@ -155,6 +155,31 @@ def call(id: str = "call-1", **fields: object) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("kind", ["task_activity", "task_message_receipt"])
+def test_task_inspection_cannot_emit_channel_tool_events(tmp_path: Path, kind: str) -> None:
+    async def scenario() -> None:
+        async with fixture(tmp_path) as f:
+            observer = f.notices()
+            await observer.start(live=True)
+            before = list(f.channel.events)
+            await observer.observe(
+                {
+                    **call("child-call"),
+                    "event": kind,
+                    "task_id": "child-a",
+                    "payload": {**call("nested-call"), "type": "tool_call"},
+                    "text": "Directed child note",
+                },
+                live=True,
+            )
+            assert f.channel.events == before
+            await observer.observe(call("root-call"), live=True)
+            assert f.channel.events[-1].phase == "tool_requested"
+            assert f.channel.events[-1].call_id == "root-call"
+
+    asyncio.run(scenario())
+
+
 def test_unattributed_background_turn_does_not_reuse_previous_message_receipt(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with fixture(tmp_path) as f:

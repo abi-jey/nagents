@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from nagents.events import Event
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
+    from nagents.harness.followups import RunInput
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import HarnessEvent
 
@@ -1058,8 +1059,9 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
             assert len([event for event in events if isinstance(event, TaskMessage)]) == 1
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 1
             task_events = [event for event in events if isinstance(event, TaskMessage | TaskStarted | TaskCompleted)]
-            assert [type(event) for event in task_events] == [TaskMessage, TaskStarted, TaskCompleted]
-            assert "Human follow-up" in str(providers[0].requests[-1][-1].content)
+            assert [type(event) for event in task_events] == [TaskStarted, TaskMessage, TaskCompleted]
+            assert "A human message was picked up" in str(providers[0].requests[-1][-1].content)
+            assert "Human follow-up: inspect the result" not in str(providers[0].requests)
             assert "Response from worker 2" in str(providers[0].requests[-1][-1].content)
             assert isinstance(events[-1], DoneEvent) and events[-1].session_id == harness.session_id
             history = await harness.task_history(info.id)
@@ -1070,7 +1072,8 @@ def test_idle_followup_reuses_identity_history_model_and_notifies_parent(
             assert_balanced(history)
             notes = notifications(await harness.history())
             assert any(
-                "human_messages" in str(note.content) and "Human follow-up" in str(note.content) for note in notes
+                "human_messages" in str(note.content) and "A human message was picked up" in str(note.content)
+                for note in notes
             )
             assert any("Response from worker 2" in str(note.content) for note in notes)
             assert all("untrusted" in str(note.content) for note in notes)
@@ -1145,8 +1148,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             assert_balanced(child_history)
             assert not any("silently queue" in str(message.content) for message in child_history)
             assert any(
-                "Human message while parent busy" in str(note.content)
-                for note in notifications(await harness.history())
+                "A human message was picked up" in str(note.content) for note in notifications(await harness.history())
             )
             assert any("Follow-up result" in str(note.content) for note in notifications(await harness.history()))
         finally:
@@ -1190,12 +1192,25 @@ def test_manual_descendant_followup_reaches_immediate_parent_not_root_model(
             root_history = await harness.history()
             assert_balanced(parent_history)
             assert_balanced(root_history)
-            assert any("Human to grandchild" in str(note.content) for note in notifications(parent_history))
+            pickups = [event for event in events if isinstance(event, TaskMessage)]
+            assert len(pickups) == 1 and pickups[0].task_id == descendant.id
+            assert pickups[0].parent_task_id == ancestor.id and pickups[0].message_id
+            assert any(
+                "A human message was picked up by this agent." in str(note.content)
+                and pickups[0].message_id in str(note.content)
+                for note in notifications(parent_history)
+            )
+            assert "Human to grandchild" not in str(parent_history)
+            assert any(
+                item.role == "user" and item.content == "Human to grandchild"
+                for item in await harness.task_history(descendant.id)
+            )
             assert any("Result 3" in str(note.content) for note in notifications(parent_history))
             assert not any(
                 "Human to grandchild" in str(note.content) or "Result 3" in str(note.content)
                 for note in notifications(root_history)
             )
+            assert pickups[0].message_id not in str(root_history)
             assert any("Result 1" in str(note.content) for note in notifications(root_history))
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 3
         finally:
@@ -1362,7 +1377,7 @@ def test_child_timeout_cancels_descendants_but_not_independent_sibling(
             info: subagents.TaskInfo,
             prompt: str,
             *,
-            followup: TaskMessage | None = None,
+            message: RunInput | None = None,
             notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
         ) -> None:
             # Exercise the legal construction order that used to give the
@@ -1376,7 +1391,7 @@ def test_child_timeout_cancels_descendants_but_not_independent_sibling(
                 await sibling_constructing.wait()
             elif prompt == "Branch B":
                 sibling_constructing.set()
-            await original_run(manager, info, prompt, followup=followup, notifications=notifications)
+            await original_run(manager, info, prompt, message=message, notifications=notifications)
 
         def controlled_timeout(delay: float) -> asyncio.Timeout:
             assert delay == subagents.CHILD_TIMEOUT

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Snapshot, WireEvent } from "../../types.js";
-import { applySnapshot, LiveSessions, pendingApprovals } from "./liveTranscript.js";
+import { applyFrame, applySnapshot, LiveSessions, pendingApprovals } from "./liveTranscript.js";
 import { appendEvent, fromHistory } from "./transcript.js";
 
 const partial = "Processing the synthetic message. ";
@@ -122,7 +122,7 @@ test("a cold active turn containing completed repeated responses keeps its unfin
   assert.deepEqual(state.entries.filter((entry) => entry.kind === "tool").map((entry) => entry.result), ["Installed.", "current result"]);
 });
 
-test("an unlinked wakeup appends conservatively and reconciles only newly committed history when finished", () => {
+test("an unlinked wakeup prefers saved history only after an observed success and ordered checkpoint", () => {
   const snapshot = held(false);
   snapshot.history.pop();
   snapshot.active_run = { id: "wakeup-run", status: "running", records: [{ event: "text_chunk", run_id: "wakeup-run", chunk: partial }] };
@@ -131,8 +131,12 @@ test("an unlinked wakeup appends conservatively and reconciles only newly commit
   assert.deepEqual(state.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.text), [complete, complete, partial]);
   const saved = { ...snapshot, history: [...snapshot.history, row("wakeup-answer", "assistant", complete)] };
   state = applySnapshot(state, saved);
+  state = applyFrame(state, { type: "event", session_id: "root", epoch: "server", cursor: 1,
+    record: { event: "run_finished", run_id: "wakeup-run", status: "completed" } });
   state = applySnapshot(state, { ...saved, active_run: null });
-  state = applySnapshot(state, { ...saved, active_run: null });
+  assert.ok(state.entries.some(entry => entry.kind === "assistant" && entry.runId === "wakeup-run" && !entry.historyId), "Unversioned HTTP does not discard unbound evidence");
+  state = applyFrame(state, { type: "snapshot", session_id: "root", epoch: "server", cursor: 2,
+    snapshot: { ...saved, active_run: null } });
   assert.deepEqual(state.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.text), [complete, complete, complete]);
 });
 

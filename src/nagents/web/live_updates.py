@@ -147,6 +147,11 @@ class AssistantUpdates:
     def observe(self, run: Run | None, record: dict[str, object]) -> None:
         if record.get("session_id") != self.session_id:
             return
+        if record.get("event") in {"task_activity", "task_message_receipt"}:
+            # Inspection evidence and child input receipts belong to the task
+            # conversation. Voice receives the parent's synthesis, never an
+            # unwrapped child stream or a duplicate of a directed user note.
+            return
         if record.get("event") == "session_deleted":
             self.closed = self.detached = True
             self.state.run_observers.discard(self.observe)

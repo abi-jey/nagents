@@ -64,6 +64,7 @@ from .types import ApprovalRequest
 from .types import HarnessEvent
 from .types import Notice
 from .types import SessionInfo
+from .types import TaskActivity
 from .types import TaskCompleted
 from .types import TaskMessage
 from .types import ToolOutput
@@ -516,10 +517,18 @@ class Harness:
             self.subagent_depth,
             self._activation,
         )
+        task_info = self.tasks.root._infos.get(self._task_id) if self._is_subagent else None
+        if task_info is not None:
+            await self.tasks._emit_activity(
+                task_info,
+                {"type": "status", "phase": "waiting_approval", "detail": f"Waiting for approval: {tool}"},
+            )
         async with root._approval_lock:
             if self._closed or root._closed:
                 raise PermissionError("Harness closed before approval; no action was taken")
             approved = await root.approval_handler(request)
+            if task_info is not None:
+                await self.tasks._emit_activity(task_info, {"type": "status", "phase": "running"})
             task = asyncio.current_task()
             if task is not None and task.cancelling():
                 raise asyncio.CancelledError
@@ -549,6 +558,21 @@ class Harness:
                     event = replace(event, extra={**event.extra, "generation_id": generation, "index": index})
             observe_host_event(self, event)
             await self._queue.put(event)
+
+    def emit_activity(self, event: TaskActivity) -> bool:
+        """Try public inspection telemetry without delaying model/tool execution.
+
+        Mandatory lifecycle events still use emit(). The task manager coalesces
+        overflow into a history refresh marker once the consumer makes space.
+        """
+        if self._queue is None:
+            return False
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            return False
+        observe_host_event(self, event)
+        return True
 
     async def run(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
         async with aclosing(self._run(prompt)) as events:
@@ -587,7 +611,9 @@ class Harness:
             async for event in events:
                 yield event
 
-    async def continue_task(self, task_id: str, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
+    async def continue_task(
+        self, task_id: str, prompt: str, *, message: RunInput | None = None
+    ) -> AsyncGenerator[HarnessEvent, None]:
         """Explicitly continue a retained child conversation in this root session.
 
         Idle: stream task notices/results, then the parent's normal synthesis turn.
@@ -599,10 +625,31 @@ class Harness:
             raise PermissionError("Human follow-ups must be submitted to the root harness")
         self.tasks._lookup(task_id)
         if self._busy == "run":
-            info = self.tasks.continue_task(task_id, prompt)
+            info = self.tasks.continue_task(task_id, prompt, message=message)
             yield Notice(f"Human follow-up accepted for {info.name}; task events will arrive on the active run.")
             return
-        async with aclosing(self._run(prompt, task_id=task_id)) as events:
+        async with aclosing(self._run(prompt, task_id=task_id, initial_input=message)) as events:
+            async for event in events:
+                yield event
+
+    async def start_task(
+        self, prompt: str, agent: str = "assistant", *, message: RunInput | None = None
+    ) -> AsyncGenerator[HarnessEvent, None]:
+        """Start a configured profile directly, retaining ordinary root ownership.
+
+        No synthetic main user turn is inserted. Child completion returns to the
+        main assistant through its existing notification and synthesis boundary.
+        Starting work does not reset the shared execution budget.
+        """
+        if self._is_subagent:
+            raise PermissionError("Host profile starts must be submitted to the root harness")
+        if message is not None and message.prompt != prompt:
+            raise ValueError("Initial task input must match its prompt")
+        if self._busy == "run":
+            info = await self.tasks.start_task(prompt, agent, message=message)
+            yield Notice(f"Task accepted for {info.name}; task events will arrive on the active run.")
+            return
+        async with aclosing(self._run(prompt, initial_input=message, start_profile=agent)) as events:
             async for event in events:
                 yield event
 
@@ -617,6 +664,8 @@ class Harness:
         task_id: str = "",
         trigger: str = "human",
         notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
+        initial_input: RunInput | None = None,
+        start_profile: str = "",
     ) -> AsyncGenerator[HarnessEvent, None]:
         """Stream the same core Agent.run, merging bounded live tool output.
 
@@ -657,9 +706,12 @@ class Harness:
             run_id = host_run_id(self)
 
             async def produce() -> None:
-                self.tasks.begin(session_id, reset_budget=not self._is_subagent and not task_id and trigger == "human")
+                self.tasks.begin(
+                    session_id,
+                    reset_budget=not self._is_subagent and not task_id and not start_profile and trigger == "human",
+                )
                 self.followups.begin(session_id)
-                message: RunInput | None = self.followups.first(prompt)
+                message: RunInput | None = initial_input or self.followups.first(prompt)
                 final: DoneEvent | None = None
                 try:
                     if (
@@ -668,8 +720,11 @@ class Harness:
                         and _is_owned_adapter(self.agent.session)
                     ):
                         self.agent._execution_bridge = ExecutionBridge(self, self.agent.session, run_id)
-                    if task_id:
-                        self.tasks.continue_task(task_id, prompt_text, trigger=trigger)
+                    if start_profile:
+                        await self.tasks.start_task(prompt_text, start_profile, message=initial_input)
+                        message = await self.followups.next(self.tasks, wait_for_tasks=True)
+                    elif task_id:
+                        self.tasks.continue_task(task_id, prompt_text, trigger=trigger, message=initial_input)
                         message = await self.followups.next(self.tasks, wait_for_tasks=True)
                     elif notifications:
                         self.tasks._ready.extend(notifications)
@@ -737,6 +792,7 @@ class Harness:
                     await asyncio.wait((pending, worker), return_when=asyncio.FIRST_COMPLETED)
                     if pending.done():
                         event = pending.result()
+                        self.tasks.drain_activity()
                         if isinstance(event, RunTurn):
                             self.followups.notify(event)
                         else:

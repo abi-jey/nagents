@@ -1,9 +1,10 @@
 import { Icon } from "../components/Icon";
 import { ContextIndicator } from "../features/context/ContextIndicator";
 import type { Client } from "./useClient";
+import { TeamIcon } from "../features/team/TeamTree.js";
 
-export function WorkspaceHeader({ client, navOpen, toggleNavigation }: {
-  client: Client; navOpen: boolean; toggleNavigation: () => void;
+export function WorkspaceHeader({ client, navOpen, toggleNavigation, teamOpen = false, toggleTeam }: {
+  client: Client; navOpen: boolean; toggleNavigation: () => void; teamOpen?: boolean; toggleTeam?: () => void;
 }) {
   const { sessions, context } = client;
   const title = sessions.sessions.find((session) => session.id === sessions.sessionId)?.title || "New session";
@@ -17,6 +18,7 @@ export function WorkspaceHeader({ client, navOpen, toggleNavigation }: {
         <span title={model}>{model}</span>
       </div>
       <ContextIndicator {...context} />
+      {toggleTeam && <button type="button" className="team-toggle" aria-label="Team conversations" aria-expanded={teamOpen} onClick={toggleTeam}><TeamIcon size={18} /><span>Team</span></button>}
     </header>
   );
 }

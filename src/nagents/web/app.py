@@ -387,6 +387,9 @@ def create_app(
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
     register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
+    from .tasks import register as register_tasks
+
+    register_tasks(app, lambda: state)
     skills.register(app, lambda: state)
     register_session_groups(app, lambda: session_groups)
     register_session_actions(app, lambda: state, lambda: live)

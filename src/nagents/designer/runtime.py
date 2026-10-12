@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
     from nagents.extensions import ModelRequest
     from nagents.extensions import RunContext
+    from nagents.harness.followups import RunInput
     from nagents.harness.types import HarnessEvent
     from nagents.harness.types import TaskCompleted
     from nagents.harness.types import TaskMessage
@@ -273,6 +274,8 @@ class DesignedHarness(Harness):
         task_id: str = "",
         trigger: str = "human",
         notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
+        initial_input: RunInput | None = None,
+        start_profile: str = "",
     ) -> AsyncGenerator[HarnessEvent, None]:
         token = scope.set(
             {
@@ -290,7 +293,14 @@ class DesignedHarness(Harness):
                 model=self.agent.provider.model,
             )
             async with aclosing(
-                super()._run(prompt, task_id=task_id, trigger=trigger, notifications=notifications)
+                super()._run(
+                    prompt,
+                    task_id=task_id,
+                    trigger=trigger,
+                    notifications=notifications,
+                    initial_input=initial_input,
+                    start_profile=start_profile,
+                )
             ) as events:
                 async for event in events:
                     yield event

@@ -16,6 +16,7 @@ import { readSettings, saveSettings } from "../features/settings/transport.js";
 import { createDraft, parseDraft, selectProfile } from "../features/settings/draft.js";
 import { useVoicePresence } from "./useVoicePresence.js";
 import { useSkills } from "../features/chat/skills.js";
+import { useTeam } from "../features/team/useTeam.js";
 
 export function useClient() {
   const sessions = useSessions();
@@ -27,6 +28,7 @@ export function useClient() {
     () => void connect(),
   );
   const operations = useOperations();
+  const team = useTeam(sessions.config?.token || "", sessions.sessionId, chat.taskRevision, !!chat.runId, chat.taskActivity);
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
   const voice = useVoicePresence();
@@ -262,6 +264,7 @@ export function useClient() {
     sessions,
     context,
     chat,
+    team,
     uploads,
     uploadState,
     settings,

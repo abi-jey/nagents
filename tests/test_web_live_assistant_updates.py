@@ -58,6 +58,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
         child_started, release_child, interim, second, final = (asyncio.Event() for _ in range(5))
         sent: list[tuple[str, str, str]] = []
         reports: list[dict[str, object]] = []
+        child_activity: list[dict[str, object]] = []
         wake_model, wake_spoken = asyncio.Event(), asyncio.Event()
 
         async def generate(
@@ -117,6 +118,11 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
         ):
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
                 state = app.state.web
+                state.run_observers.add(
+                    lambda run, record: (
+                        child_activity.append(dict(record)) if record.get("event") == "task_activity" else None
+                    )
+                )
                 bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
                 bridge.attach(append)
                 try:
@@ -171,6 +177,8 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                             for kind, text, origin in sent
                         )
                     assert all("PRIVATE CHILD DETAILS" not in text for _, text, _ in sent)
+                    assert any("PRIVATE CHILD DETAILS" in json.dumps(record) for record in child_activity)
+                    assert all(record.get("task_id") for record in child_activity)
                 finally:
                     release_child.set()
                     await bridge.close()
