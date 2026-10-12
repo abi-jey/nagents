@@ -24,8 +24,17 @@ class MCPConfigSource:
 
 
 @dataclass(frozen=True)
+class MCPServerFailure:
+    name: str
+    stage: str
+    category: str
+    message: str
+    retry_pending: bool = False
+
+
+@dataclass(frozen=True)
 class MCPDiagnostics:
-    status: Literal["not_loaded", "loaded", "retained", "disabled"]
+    status: Literal["not_loaded", "loaded", "partial", "retained", "disabled"]
     configured_servers: int
     connected_servers: int
     registered_tools: int
@@ -34,6 +43,7 @@ class MCPDiagnostics:
     sources: tuple[MCPConfigSource, ...]
     ignored_configs: tuple[str, ...]
     error: str = ""
+    failed_servers: tuple[MCPServerFailure, ...] = ()
 
     def snapshot(self) -> dict[str, object]:
         return asdict(self)
@@ -61,6 +71,7 @@ class MCPDiagnostics:
             lines.append(
                 "MCP subprocess startup is disabled for this harness; configured declarations were not executed."
             )
+        lines.extend(f"MCP unavailable: {failure.message}" for failure in self.failed_servers)
         return lines
 
 

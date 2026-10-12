@@ -427,7 +427,7 @@ test("the settings overlay swaps an active microphone without restarting voice o
     assert.equal(dialog.open, true);
     const microphone = dialog.querySelector<HTMLSelectElement>('select[aria-label="Microphone"]')!;
     assert.equal(microphone.disabled, false);
-    assert.equal(dialog.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, true);
+    assert.equal(dialog.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, false, "Voice defaults remain editable during an active session");
     await act(async () => {
       microphone.value = "microphone";
       microphone.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true }));

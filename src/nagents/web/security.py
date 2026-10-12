@@ -120,6 +120,27 @@ class LocalOnly:
             and path == "/api/skills"
             and re.fullmatch(rb"session_id=ngn-[A-Za-z0-9-]{1,76}", scope["query_string"]) is not None
         )
+        task_history_query = False
+        if (
+            scope["method"] == "GET"
+            and re.fullmatch(r"/api/sessions/ngn-[A-Za-z0-9-]{1,76}/tasks/[A-Za-z0-9_-]{1,128}", path)
+            and len(scope["query_string"]) <= 80
+        ):
+            try:
+                pairs = parse_qsl(
+                    scope["query_string"].decode("ascii"), keep_blank_values=True, strict_parsing=True, max_num_fields=2
+                )
+                task_history_query = (
+                    bool(pairs)
+                    and len({key for key, _ in pairs}) == len(pairs)
+                    and all(
+                        (key == "limit" and value.isascii() and value.isdigit() and 1 <= int(value) <= 200)
+                        or (key == "before" and value.isascii() and value.isdigit() and 0 <= int(value) <= 2**63 - 1)
+                        for key, value in pairs
+                    )
+                )
+            except (ValueError, UnicodeError):
+                pass
         delegation_query = False
         if (
             scope["method"] == "GET"
@@ -139,7 +160,9 @@ class LocalOnly:
                 )
             except (ValueError, UnicodeError):
                 pass
-        if scope["query_string"] and not (live_cursor or voice_scope or skill_scope or delegation_query):
+        if scope["query_string"] and not (
+            live_cursor or voice_scope or skill_scope or delegation_query or task_history_query
+        ):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return
         method = scope["method"]

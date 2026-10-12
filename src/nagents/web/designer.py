@@ -1,4 +1,4 @@
-"""Designer routes, sharing the web host's single execution slot."""
+"""Designer routes, sharing the web host's bounded execution slots."""
 
 from __future__ import annotations
 
@@ -191,7 +191,7 @@ class Designer:
         }
 
     async def run(self, body: TestRun) -> dict[str, str]:
-        with self.state.idle():
+        with self.state.idle(allow_running=True):
             session_id = ""
             if body.previous_run:
                 previous = await self.traces.read(body.previous_run)
@@ -213,9 +213,61 @@ class Designer:
             if session_id:
                 harness.session_id = session_id
             run = Run(harness.session_id, harness=harness)
-            await self.traces.start(run.id, run.session_id, harness.agent_id, serialize(harness.design))
-            self.state.active = run
-            run.task = asyncio.create_task(self.execute(run, harness, recorder, body.prompt), name=f"designer-{run.id}")
+            ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            entered = False
+
+            async def abandon() -> None:
+                try:
+                    # Idempotent even when admission or trace insertion failed,
+                    # including cancellation after a DB commit.
+                    await self.traces.delete(run.id)
+                finally:
+                    try:
+                        await harness.close()
+                    finally:
+                        self.state.executions.release(run)
+                        self.state.changed()
+
+            async def start() -> None:
+                nonlocal entered
+                entered = True
+                try:
+                    await _await_cleanup(
+                        asyncio.create_task(
+                            self.traces.start(run.id, run.session_id, harness.agent_id, serialize(harness.design))
+                        )
+                    )
+                except BaseException as error:
+                    try:
+                        await _await_cleanup(asyncio.create_task(abandon()))
+                    finally:
+                        ready.set_exception(error)
+                    return
+                ready.set_result(None)
+                await self.execute(run, harness, recorder, body.prompt)
+
+            try:
+                self.state.executions.reserve(run)
+            except BaseException:
+                await _await_cleanup(asyncio.create_task(abandon()))
+                raise
+            # Publish the lifecycle task before the first await after reserve;
+            # shutdown/cancellation can now join even a pending trace commit.
+            run.task = asyncio.create_task(start(), name=f"designer-{run.id}")
+            run.task.add_done_callback(lambda task: ready.cancel() if task.cancelled() and not entered else None)
+            try:
+                await asyncio.shield(ready)
+            except BaseException:
+                run.task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await _await_cleanup(run.task)
+                if not entered:
+                    await _await_cleanup(asyncio.create_task(abandon()))
+                # Retrieve a startup exception even if cancellation won the
+                # race with the waiter, avoiding an orphan Future exception.
+                if ready.done() and not ready.cancelled():
+                    ready.exception()
+                raise
             self.state.status()
             return {"run_id": run.id, "session_id": run.session_id}
 
@@ -400,7 +452,7 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
     @app.post("/api/designer/channels")
     async def apply_channels(body: Source) -> dict[str, object]:
         designer = get()
-        with designer.state.idle():
+        with designer.state.idle(allow_running=True):
             try:
                 design = parse(body.source)
                 saved = designer.files.read(design.id)
@@ -445,7 +497,7 @@ def register(app: FastAPI, get: Callable[[], Designer]) -> None:
     @app.post("/api/designer/discover")
     async def discover(body: Discovery) -> dict[str, object]:
         designer = get()
-        with designer.state.idle():
+        with designer.state.idle(allow_running=True):
             manager = MCPManager([])
             try:
                 if designer.config.demo:

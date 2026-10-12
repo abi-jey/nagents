@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import contextmanager
 from contextlib import suppress
 from copy import deepcopy
 from functools import partial
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Awaitable
     from collections.abc import Callable
+    from collections.abc import Iterator
     from pathlib import Path
 
     from nagents.channels.types import Channel
@@ -104,6 +106,8 @@ class ChannelHost:
             harness.config.data_dir, harness.agent.session.db_path, allow_plugins=not harness.config.demo
         )
         self.channels: dict[str, Channel] = {}
+        self._channel_calls: dict[str, int] = {}
+        self._replacing_channels: set[str] = set()
         self.local = WebChannel(state)
         self.sources: dict[str, asyncio.Task[None]] = {}
         self.tasks: list[asyncio.Task[None]] = []
@@ -259,6 +263,18 @@ class ChannelHost:
         except Exception as error:
             raise self.failure(error, "list") from None
 
+    @contextmanager
+    def using_channel(self, channel: str) -> Iterator[None]:
+        if channel in self._replacing_channels:
+            raise ChannelError("This connector is being updated. Retry after its settings have been saved.")
+        self._channel_calls[channel] = self._channel_calls.get(channel, 0) + 1
+        try:
+            yield
+        finally:
+            self._channel_calls[channel] -= 1
+            if not self._channel_calls[channel]:
+                del self._channel_calls[channel]
+
     async def channel_send(
         self,
         channel: str,
@@ -269,46 +285,50 @@ class ChannelHost:
         attachments: list[str] | None = None,
     ) -> dict[str, ChannelValue]:
         """Send once to an explicit channel and destination. Never use an ingress ID as reply_to."""
-        try:
-            if self.dispatcher is None:
-                raise ChannelError("No connected channels")
-            owner = await self.execution_owner()
-            if owner is not None and (channel, destination) != (owner.channel, owner.conversation_id):
-                raise ChannelError("Channel destination is outside this session's chat ownership")
-            result = await self.dispatcher.channel_send(channel, destination, text, thread_id, reply_to, attachments)
-            self.check_result(result)
-            return result
-        except Exception as error:
-            raise self.failure(error, "send") from None
+        with self.using_channel(channel):
+            try:
+                if self.dispatcher is None:
+                    raise ChannelError("No connected channels")
+                owner = await self.execution_owner()
+                if owner is not None and (channel, destination) != (owner.channel, owner.conversation_id):
+                    raise ChannelError("Channel destination is outside this session's chat ownership")
+                result = await self.dispatcher.channel_send(
+                    channel, destination, text, thread_id, reply_to, attachments
+                )
+                self.check_result(result)
+                return result
+            except Exception as error:
+                raise self.failure(error, "send") from None
 
     async def channel_action(
         self, channel: str, action: str, arguments: dict[str, ChannelValue]
     ) -> dict[str, ChannelValue]:
         """Perform an explicit advertised channel action once, through the host approval policy."""
-        try:
-            if self.dispatcher is None:
-                raise ChannelError("No connected channels")
-            copied = deepcopy(arguments)
-            owner = await self.execution_owner()
-            if owner is not None:
-                if (channel, copied.get("destination")) != (owner.channel, owner.conversation_id):
-                    raise ChannelError("Channel action destination is outside this session's chat ownership")
-                schema = self.dispatcher.action_schema(channel, action)
-                properties = schema.get("properties")
-                destination = properties.get("destination") if isinstance(properties, dict) else None
-                required = schema.get("required")
-                if not (
-                    isinstance(destination, dict)
-                    and destination.get("type") == "string"
-                    and isinstance(required, list)
-                    and "destination" in required
-                ):
-                    raise ChannelError("Chat-owned sessions require destination-addressed channel actions")
-            result = await self.dispatcher.channel_action(channel, action, copied)
-            self.check_result(result)
-            return result
-        except Exception as error:
-            raise self.failure(error, "action") from None
+        with self.using_channel(channel):
+            try:
+                if self.dispatcher is None:
+                    raise ChannelError("No connected channels")
+                copied = deepcopy(arguments)
+                owner = await self.execution_owner()
+                if owner is not None:
+                    if (channel, copied.get("destination")) != (owner.channel, owner.conversation_id):
+                        raise ChannelError("Channel action destination is outside this session's chat ownership")
+                    schema = self.dispatcher.action_schema(channel, action)
+                    properties = schema.get("properties")
+                    destination = properties.get("destination") if isinstance(properties, dict) else None
+                    required = schema.get("required")
+                    if not (
+                        isinstance(destination, dict)
+                        and destination.get("type") == "string"
+                        and isinstance(required, list)
+                        and "destination" in required
+                    ):
+                        raise ChannelError("Chat-owned sessions require destination-addressed channel actions")
+                result = await self.dispatcher.channel_action(channel, action, copied)
+                self.check_result(result)
+                return result
+            except Exception as error:
+                raise self.failure(error, "action") from None
 
     async def execution_owner(self) -> ChatOwner | None:
         # Browser selection can change during a producer. Outbound authorization
@@ -507,7 +527,37 @@ class ChannelHost:
                     "Connector cleanup failed. Restart the server before enabling it again.",
                 )
 
+    def require_replaceable(self, id: str) -> None:
+        """Protect only a connector that an admitted run is currently using."""
+        if self._channel_calls.get(id) or id in self._replacing_channels:
+            raise HTTPException(409, "This connector has an active request. Save after that request finishes.")
+        for run in self.state.executions.runs.values():
+            if run.source.get("channel") == id:
+                raise HTTPException(409, "This connector is handling a conversation. Save after its reply finishes.")
+            for record in run.drafts.values():
+                arguments = record.get("arguments")
+                if (
+                    record.get("event") == "tool_call"
+                    and record.get("name") in {"channel_send", "channel_action"}
+                    and isinstance(arguments, dict)
+                    and arguments.get("channel") == id
+                ):
+                    raise HTTPException(409, "This connector has an active tool call. Save after that call finishes.")
+
+    @contextmanager
+    def replacing_channel(self, id: str) -> Iterator[None]:
+        self.require_replaceable(id)
+        self._replacing_channels.add(id)
+        try:
+            yield
+        finally:
+            self._replacing_channels.remove(id)
+
     async def save(self, id: str, body: ConnectionInput) -> dict[str, object]:
+        with self.replacing_channel(id):
+            return await self._save(id, body)
+
+    async def _save(self, id: str, body: ConnectionInput) -> dict[str, object]:
         if id == self.local.name:
             raise HTTPException(409, "builtin.web is managed by this host, not a configurable connector.")
         self.catalog.require_live()
@@ -542,6 +592,10 @@ class ChannelHost:
         return await self.snapshot()
 
     async def delete(self, id: str, revision: str) -> dict[str, object]:
+        with self.replacing_channel(id):
+            return await self._delete(id, revision)
+
+    async def _delete(self, id: str, revision: str) -> dict[str, object]:
         self.catalog.require_live()
         self.catalog.check_revision(revision)
         if id not in self.catalog.connections:
@@ -658,7 +712,7 @@ class ChannelHost:
                 if self.work_tasks.get(work.session_id) is task:
                     self.work_tasks.pop(work.session_id)
                 self.work_cleanup.pop(work.session_id, None)
-                self.changed.set()
+                self.state.changed()
 
         self.work_cleanup[work.session_id] = asyncio.create_task(cleanup(), name=f"ngn-claim-cleanup-{work.session_id}")
 
@@ -695,7 +749,10 @@ class ChannelHost:
                         run.outcome = "cancelled" if status in {"interrupted", "queued"} else status
                         self.state.finish(run)
                     self.work_tasks.pop(work.session_id, None)
-                    self.changed.set()
+                    # finish() may have woken the timer worker while this
+                    # durable claim still excluded its session. Notify both
+                    # schedulers after the lane is actually available.
+                    self.state.changed()
 
             # SQL alone joins its commit before propagating cancellation. Own
             # the entire finalizer so Stop/shutdown cannot skip lane cleanup

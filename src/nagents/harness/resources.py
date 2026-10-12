@@ -14,6 +14,7 @@ import inspect
 import json
 import logging
 import marshal
+import os
 from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
@@ -36,6 +37,7 @@ from nagents.types import ToolDefinition
 
 from .commands import CommandRegistry
 from .mcp_diagnostics import MCPDiagnostics
+from .mcp_diagnostics import MCPServerFailure
 from .mcp_diagnostics import configuration_sources
 from .mcp_diagnostics import ignored_foreign_configs
 from .plugin_loader import PluginModule
@@ -153,6 +155,7 @@ class _Generation:
     mcp_names: set[str] = field(default_factory=set)
     owned_names: set[str] = field(default_factory=set)
     approval_identities: dict[str, str] = field(default_factory=dict)
+    server_origins: dict[str, str] = field(default_factory=dict)
 
     async def close(self) -> None:
         if self.closed:
@@ -211,7 +214,31 @@ def _mcp_origin(server: MCPServerConfig) -> str:
             with path.open("rb") as source:
                 digest = hashlib.file_digest(source, "sha256").hexdigest()
             scripts[str(path)] = digest
-    return _fingerprint({"config": asdict(server), "scripts": scripts})
+    # stdio children inherit the host environment. Its values never leave this
+    # digest, but a rotated inherited credential must make a failed server
+    # eligible again. Explicit server values correctly shadow host values.
+    environment = dict(os.environ)
+    environment.update(server.env or {})
+    return _fingerprint({"config": asdict(server), "scripts": scripts, "environment": environment})
+
+
+@dataclass
+class _FailedServer:
+    origin: str
+    diagnostic: MCPServerFailure
+    notice_pending: bool = False
+
+
+_MCP_FAILURE_HELP = {
+    "missing_environment": "A required environment variable is missing. Set it in the trusted server configuration.",
+    "authorization": "The server rejected authorization. Check its configured credentials.",
+    "timeout": "The server timed out during initialization or discovery. Check that it can start and respond.",
+    "executable_not_found": "The executable or working directory was not found. Check its installation and paths.",
+    "permission_denied": "The process could not start with its current permissions. Check the executable and directory.",
+    "disconnected": "The server disconnected before discovery completed. Check its installation and configuration.",
+    "invalid_configuration": "The server configuration or tool schema was invalid. Check the trusted declaration.",
+    "server_error": "The server failed during initialization or discovery. Check its installation and configuration.",
+}
 
 
 class HarnessResources(AgentPlugin):
@@ -241,6 +268,7 @@ class HarnessResources(AgentPlugin):
         self.last_error = ""
         self.logger = logging.getLogger(__name__)
         self._failure_fingerprint = ""
+        self._failed_servers: dict[str, _FailedServer] = {}
         self._ignored_source = ""
         self._ignored_foreign: tuple[str, ...] = ()
         self._configuration = ResourceConfiguration(
@@ -250,7 +278,121 @@ class HarnessResources(AgentPlugin):
             if harness.config.resource_paths
             else "programmatic configuration",
         )
-        self._mcp_status: Literal["not_loaded", "loaded", "retained", "disabled"] = "not_loaded"
+        self._mcp_status: Literal["not_loaded", "loaded", "partial", "retained", "disabled"] = "not_loaded"
+
+    def request_mcp_retry(self, name: str) -> None:
+        """Retry one unavailable server at the next serialized reload boundary."""
+        if self._closed:
+            raise RuntimeError("Harness resources are closed")
+        failure = self._failed_servers.get(name)
+        if failure is None:
+            raise ValueError("MCP server is not unavailable")
+        failure.diagnostic = replace(failure.diagnostic, retry_pending=True)
+
+    def mcp_retry_matches(self, name: str, other: HarnessResources) -> bool:
+        """Compare accepted failed declarations without exposing private digests."""
+        local, remote = self._failed_servers.get(name), other._failed_servers.get(name)
+        return local is not None and remote is not None and local.origin == remote.origin
+
+    def inherit_mcp_failures(self, other: HarnessResources) -> None:
+        """Seed a new host-owned runtime with failures, never client ownership.
+
+        Its first trusted configuration read revalidates each private origin.
+        A new lane must not silently restart a known unavailable subprocess just
+        because settings detached its provider. Explicit retry admission stays
+        with the existing owner; it is not copied into this initialization.
+        """
+        if self._closed or self._reload_task is not None or self._mcp_status != "not_loaded":
+            raise RuntimeError("MCP failure state can only seed an uninitialized runtime")
+        for name, failure in other._failed_servers.items():
+            diagnostic = replace(failure.diagnostic, retry_pending=False)
+            self._failed_servers[name] = _FailedServer(failure.origin, diagnostic)
+            if diagnostic.message not in self.harness.diagnostics:
+                self.harness.diagnostics.append(diagnostic.message)
+
+    def _clear_mcp_failure(self, name: str) -> None:
+        previous = self._failed_servers.pop(name, None)
+        if previous is not None and previous.diagnostic.message in self.harness.diagnostics:
+            self.harness.diagnostics.remove(previous.diagnostic.message)
+
+    async def _mcp_failure(
+        self, name: str, origin: str, error: Exception, *, initial: bool, stage: str = "mcp_start"
+    ) -> None:
+        category = error.category if isinstance(error, MCPError) else "invalid_configuration"
+        if category not in _MCP_FAILURE_HELP:
+            category = "server_error"
+        if isinstance(error, MCPError) and error.stage in {"mcp_start", "mcp_discover"}:
+            stage = error.stage
+        message = (
+            f"MCP server {name} is unavailable ({category}). {_MCP_FAILURE_HELP[category]} "
+            "Other tools remain available. Skipped until its configuration changes or you select Retry in Tools."
+        )
+        diagnostic = MCPServerFailure(name, stage, category, message)
+        previous = self._failed_servers.get(name)
+        changed = previous is None or previous.origin != origin or previous.diagnostic.message != message
+        notice_pending = initial if changed else bool(previous and previous.notice_pending)
+        self._clear_mcp_failure(name)
+        self._failed_servers[name] = _FailedServer(origin, diagnostic, notice_pending)
+        self.harness.diagnostics.append(message)
+        if changed:
+            self.logger.warning(
+                "MCP server unavailable: server=%s stage=%s category=%s; retries paused", name, stage, category
+            )
+            if not initial:
+                await self.harness.emit(Notice(message, "warning"))
+
+    async def _load_mcp(self, fresh: _Generation, servers: tuple[MCPServerConfig, ...], *, initial: bool) -> None:
+        """Stage each server independently, retaining only unchanged healthy clients."""
+        names = {server.name for server in servers}
+        for removed in self._failed_servers.keys() - names:
+            self._clear_mcp_failure(removed)
+        for server in servers:
+            origin = _fingerprint(asdict(server))
+            stage = "mcp_start"
+            try:
+                origin = _mcp_origin(server)
+                failure = self._failed_servers.get(server.name)
+                if failure is not None and failure.origin == origin and not failure.diagnostic.retry_pending:
+                    if failure.notice_pending and not initial:
+                        failure.notice_pending = False
+                        await self.harness.emit(Notice(failure.diagnostic.message, "warning"))
+                    continue
+                old = self.current
+                client = old.manager._clients.get(server.name)
+                if old.server_origins.get(server.name) == origin and client is not None and client.is_connected:
+                    fresh.manager.retain_server(old.manager, server.name)
+                    if fresh.manager.server_tools_changed(server.name):
+                        await fresh.manager.refresh_server_tools(server.name)
+                else:
+                    await fresh.manager.add_server(server, strict=True)
+                    if _mcp_origin(server) != origin:
+                        raise ValueError("MCP source changed during startup")
+                stage = "mcp_discover"
+                definitions = await fresh.manager.get_tool_definitions(server_name=server.name)
+                client = fresh.manager._clients[server.name]
+                identities = {
+                    tool.name: _fingerprint(
+                        {
+                            "kind": "mcp",
+                            "config": asdict(client.config),
+                            "source": origin,
+                            "server": client.server_info,
+                            "tool": tool.name,
+                            "description": tool.description,
+                            "schema": tool.parameters,
+                        }
+                    )
+                    for tool in definitions
+                }
+                for tool in definitions:
+                    fresh.registry._tools[tool.name] = tool
+                    fresh.mcp_names.add(tool.name)
+                fresh.approval_identities.update(identities)
+                fresh.server_origins[server.name] = origin
+                self._clear_mcp_failure(server.name)
+            except Exception as error:
+                await finish_on_cancel(fresh.manager.remove_server(server.name))
+                await self._mcp_failure(server.name, origin, error, initial=initial, stage=stage)
 
     def definition(self, name: str) -> ToolDefinition | None:
         if self._running and self._snapshot_ready:
@@ -411,34 +553,8 @@ class HarnessResources(AgentPlugin):
                 raise ReloadContractError("Reloadable plugin setup cannot mutate its configuration snapshot")
             if servers and harness.mode == "reviewer":
                 raise PermissionError("Read-only agents cannot start MCP subprocesses")
-            # Sequential adds make ownership immediate; failure aborts this
-            # candidate and closes every already-started client.
-            server_origins: dict[str, str] = {}
-            for server in servers:
-                stage, source, server_name = "mcp_start", configured.mcp_source, server.name
-                origin = _mcp_origin(server)
-                await fresh.manager.add_server(server, strict=True)
-                if _mcp_origin(server) != origin:
-                    raise ValueError("MCP source changed during startup; retry discovery")
-                server_origins[server.name] = origin
-            stage, source = "mcp_discover", configured.mcp_source
-            for tool in await fresh.manager.get_tool_definitions():
-                if tool.func is not None:
-                    fresh.registry.register(tool.func, tool.name, tool.description, tool.parameters)
-                    fresh.mcp_names.add(tool.name)
-                    server_name = fresh.manager._tool_map[tool.name].server_name
-                    client = fresh.manager._clients[server_name]
-                    fresh.approval_identities[tool.name] = _fingerprint(
-                        {
-                            "kind": "mcp",
-                            "config": asdict(client.config),
-                            "source": server_origins[server_name],
-                            "server": client.server_info,
-                            "tool": tool.name,
-                            "description": tool.description,
-                            "schema": tool.parameters,
-                        }
-                    )
+            stage, source = "mcp_start", configured.mcp_source
+            await self._load_mcp(fresh, servers, initial=initial)
             stage, source, server_name = "validation", configured.plugin_source, ""
             if any(not isinstance(hook, AgentPlugin) for hook in fresh.hooks):
                 raise TypeError("Plugin hooks must be AgentPlugin instances")
@@ -551,7 +667,7 @@ class HarnessResources(AgentPlugin):
         if not authored and "system_prompt" not in fresh.settings:
             harness.refresh_instructions()
         self._configuration = configured
-        self._mcp_status = "loaded"
+        self._mcp_status = "partial" if self._failed_servers else "loaded"
         self._report_mcp(initial=initial)
 
     async def _report_project_trust(self) -> None:
@@ -568,7 +684,6 @@ class HarnessResources(AgentPlugin):
                 "--trust-project to explicitly trust this workspace. Project trust is unchanged."
             )
             self.logger.warning("%s", text)
-            await self.harness.emit(Notice(text, "warning"))
 
     async def _report_foreign_configs(self) -> None:
         ignored = ignored_foreign_configs(self.harness.config)
@@ -579,7 +694,6 @@ class HarnessResources(AgentPlugin):
                     "configure mcp_servers in an ngn configuration you explicitly trust."
                 )
                 self.logger.warning("%s", message)
-                await self.harness.emit(Notice(message, "warning"))
         self._ignored_foreign = ignored
 
     def mcp_diagnostics(self) -> MCPDiagnostics:
@@ -598,6 +712,7 @@ class HarnessResources(AgentPlugin):
             sources=configuration_sources(self.harness.config, self._configuration),
             ignored_configs=self._ignored_foreign,
             error=self.last_error,
+            failed_servers=tuple(failure.diagnostic for failure in self._failed_servers.values()),
         )
 
     def _report_mcp(self, *, initial: bool) -> None:

@@ -46,12 +46,12 @@ export function LiveSettings({ token, assistant, blocked, saved, back, hidden = 
     <header><div><Icon name="settings" size={17} /><h3 id="live-settings-title" ref={heading} tabIndex={-1}>Voice settings</h3></div><button type="button" disabled={saving} onClick={back} aria-label="Back to conversation" title="Back to conversation"><Icon name="close" size={16} /></button></header>
     <form className="live-settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <div className="live-settings-body">
-      <p id="live-settings-description" className="live-settings-description">Microphone, playback, and conversation preferences.</p>
+      <p id="live-settings-description" className="live-settings-description">Audio devices apply immediately. Voice, context, and connection changes apply to your next voice conversation.</p>
       {showDevices && <AudioDeviceSettings transport={transport || "websocket"} disabled={audioDisabled} active={audioActive} activeSelection={audioSelection} applyDevice={applyDevice} />}
       {loading && <p role="status">Loading Voice settings…</p>}
       <label className="live-settings-scope">Apply voice preferences to<select value={scope} disabled={disabled || dirty} onChange={event => controller.setScope(event.target.value as "global" | "workspace")}><option value="global">Global · all workspaces</option><option value="workspace">This workspace · customize defaults</option></select></label>
       {dirty && <small className="live-settings-draft-note" role="status">Save or reload these changes before switching scope.</small>}
-      {blocked && <p className="live-settings-feedback" role="status">Audio devices can change during voice. End the active conversation before changing voice behavior, starting context, connection, or model.</p>}
+      {blocked && <p className="live-settings-feedback" role="status">A settings request is in progress. Your current voice conversation continues.</p>}
       {values && snapshot && <fieldset className="live-voice-defaults" disabled={disabled}>
           <legend className="sr-only">Voice defaults</legend>
           <div className="live-settings-group-heading"><h4>Your voice</h4><span>Next conversation</span></div>

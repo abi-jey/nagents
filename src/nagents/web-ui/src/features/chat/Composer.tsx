@@ -54,6 +54,9 @@ export function Composer({
   skillsLoading = false,
   skillsError = "",
   refreshSkills,
+  recipient = "ngn",
+  commandsEnabled = true,
+  maxLength = 32000,
 }: {
   inputRef: Ref<HTMLTextAreaElement>;
   prompt: string;
@@ -77,10 +80,13 @@ export function Composer({
   skillsLoading?: boolean;
   skillsError?: string;
   refreshSkills?: () => void;
+  recipient?: string;
+  commandsEnabled?: boolean;
+  maxLength?: number;
 }) {
   const [dismissed, setDismissed] = useState("");
   const [selection, setSelection] = useState({ prompt: "", index: 0 });
-  const suggesting = !disabled && prompt !== dismissed && /^\/[A-Za-z0-9:_-]*$/.test(prompt);
+  const suggesting = commandsEnabled && !disabled && prompt !== dismissed && /^\/[A-Za-z0-9:_-]*$/.test(prompt);
   const matches = suggesting ? commandMatches(prompt, skills) : [];
   const selected = selection.prompt === prompt ? Math.min(selection.index, matches.length - 1) : 0;
   useLayoutEffect(() => {
@@ -118,7 +124,7 @@ export function Composer({
         {!!skillsError && refreshSkills && <button type="button" onClick={refreshSkills}>Retry</button>}</div>}
       </div>}
       <label htmlFor="composer" className="sr-only">
-        Message ngn
+        Message {recipient}
       </label>
       <ComposerInput
         inputRef={inputRef}
@@ -128,12 +134,12 @@ export function Composer({
         aria-controls={matches.length ? "slash-commands" : undefined}
         aria-activedescendant={matches[selected] ? `slash-command-${matches[selected].name}` : undefined}
         placeholder={
-          demo
+          !commandsEnabled ? `Message ${recipient}…` : demo
             ? "Ask about the workspace, or try 'demo approval'..."
             : "What should we work on? Type / for commands"
         }
         value={prompt}
-        maxLength={32000}
+        maxLength={maxLength}
         rows={1}
         disabled={disabled}
         onChange={(event) => { setDismissed(""); setPrompt(event.target.value); }}
@@ -168,7 +174,7 @@ export function Composer({
         {voiceControl}
         </div>
         {status}
-        <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line. Type / for commands; use arrows and Tab or Enter to choose, then Enter to run. Escape closes suggestions.</span>
+        <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.{commandsEnabled && " Type / for commands; use arrows and Tab or Enter to choose, then Enter to run. Escape closes suggestions."}</span>
         {running && (
           <button type="button" className="cancel" onClick={cancel} disabled={stopping}>
             {stopping ? "Stopping…" : "Stop run"}

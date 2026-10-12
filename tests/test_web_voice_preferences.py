@@ -68,6 +68,42 @@ def settings(path: Path) -> LiveSettings:
     return LiveSettings(path / "sessions.db", demo=False, active=lambda: "")
 
 
+def test_active_voice_can_save_next_conversation_preferences(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    named(tmp_path)
+    monkeypatch.setenv("TEST_VOICE_KEY", "private-voice-key")
+
+    async def check() -> None:
+        current = settings(tmp_path)
+        await current.load()
+        before = await current.connection()
+        async with current.admit(before.revision):
+            admitted = current.admitted()
+        current.active = lambda: "running-voice"
+        saved = voice(
+            await current.change(
+                WorkspaceVoiceInput(
+                    scope="workspace",
+                    revision=before.revision,
+                    overrides=VoiceOverrides(voice="marin", instructions="Keep replies brief."),
+                )
+            )
+        )
+        assert saved["values"]["voice"] == "marin"
+        assert admitted.values.voice == before.values.voice
+        assert admitted.values.instructions == before.values.instructions
+        assert admitted.revision == before.revision
+        with pytest.raises(HTTPException) as duplicate:
+            async with current.admit(str(saved["revision"])):
+                pytest.fail("A second voice session cannot replace the active session")
+        assert duplicate.value.status_code == 409
+        current.active = lambda: ""
+        async with current.admit(str(saved["revision"])):
+            assert current.admitted().values.voice == "marin"
+        await current.shutdown()
+
+    asyncio.run(check())
+
+
 def test_voice_behavior_and_context_inherit_independently_and_survive_restart(tmp_path: Path) -> None:
     named(tmp_path)
 

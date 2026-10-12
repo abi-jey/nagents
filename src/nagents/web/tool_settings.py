@@ -33,6 +33,11 @@ class ToolApprovalRevoke(BaseModel):
     revision: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class MCPRetryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    server: str = Field(min_length=1, max_length=200)
+
+
 def snapshot(state: WebState) -> dict[str, object]:
     harness = state.harness
     policy = harness.tool_settings
@@ -85,7 +90,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     @app.post("/api/tools")
     async def save(body: ToolSettingsInput) -> dict[str, object]:
         state = get()
-        with state.idle():
+        async with state.queued_mutation():
             try:
                 state.harness.tool_settings.save(body.agents, body.revision)
                 return snapshot(state)
@@ -99,10 +104,45 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     @app.post("/api/tools/approvals/revoke")
     async def revoke(body: ToolApprovalRevoke) -> dict[str, object]:
         state = get()
-        with state.idle():
+        async with state.queued_mutation():
             try:
                 if not state.tool_approvals.revoke(body.tool, body.revision):
                     raise HTTPException(409, "This saved permission changed. Refresh tools before trying again.")
                 return snapshot(state)
             except sqlite3.Error:
                 raise HTTPException(503, "Could not remove the saved permission. Refresh and retry.") from None
+
+    @app.post("/api/tools/mcp/retry")
+    async def retry_mcp(body: MCPRetryInput) -> dict[str, object]:
+        state = get()
+        # This changes only retry eligibility. Do not detach the settings
+        # runtime: doing so would initialize another copy of every server.
+        # The existing auxiliary lease also owns the accepted harness lifetime:
+        # settings may detach it, and shutdown cancels/joins this request.
+        async with state.executions.auxiliary_provider():
+            primary = state.harness
+            with state.idle(allow_running=True):
+                if not any(
+                    failure.name == body.server for failure in primary.resources.mcp_diagnostics().failed_servers
+                ):
+                    raise HTTPException(409, "This MCP server is no longer unavailable. Refresh tools before retrying.")
+                owners = {primary, *state.executions.owners.values()}
+                targets = [
+                    owner for owner in owners if primary.resources.mcp_retry_matches(body.server, owner.resources)
+                ]
+                try:
+                    for owner in targets:
+                        owner.resources.request_mcp_retry(body.server)
+                except (ValueError, RuntimeError):
+                    raise HTTPException(409, "MCP discovery changed. Refresh tools before retrying.") from None
+                # Retained lanes own their next response/tool boundary or run.
+                # In-flight tools keep the connection they were given.
+                apply_primary = not state.executions.in_use(primary) and not primary._busy
+                queued = len(targets) > 1 or not apply_primary
+            # No host mutation lock while a connection starts. New messages can
+            # be admitted and use the resource reload lock at their own boundary.
+            if apply_primary:
+                await primary.resources.reload()
+            result = snapshot(state)
+            result["mcp_retry"] = {"server": body.server, "status": "queued" if queued else "completed"}
+            return result

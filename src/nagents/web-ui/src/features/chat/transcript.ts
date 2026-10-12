@@ -66,6 +66,7 @@ export type Entry = {
   taskId?: string;
   taskName?: string;
   parentTaskId?: string;
+  originHistoryId?: string;
   depth?: number;
   followup?: number;
   activation?: number;
@@ -597,6 +598,8 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     entry.title = text(event, "name") || entry.title;
     if (typeof event.parent_task_id === "string")
       entry.parentTaskId = event.parent_task_id;
+    if (typeof event.origin_history_id === "string" && event.origin_history_id)
+      entry.originHistoryId = event.origin_history_id;
     if (typeof event.depth === "number") entry.depth = event.depth;
     if (typeof event.trigger === "string") entry.trigger = event.trigger;
     if (event.event === "task_completed") {
@@ -757,7 +760,7 @@ export type TranscriptItem =
   | { kind: "retained"; id: string; items: TranscriptItem[] };
 
 // Task identity survives runs; execution evidence remains scoped to its original run/activation.
-export function groupTranscript(entries: Entry[]): TranscriptItem[] {
+export function groupTranscript(entries: Entry[], options: { inlineTasks?: boolean } = {}): TranscriptItem[] {
   const tasks = new Map<string, TaskThread>();
   const latest = new Map<string, Entry>();
   entries.forEach((entry, index) => {
@@ -794,6 +797,16 @@ export function groupTranscript(entries: Entry[]): TranscriptItem[] {
       }
     }
   });
+  if (options.inlineTasks) for (const task of tasks.values()) {
+    task.retained = true;
+    const origin = entries.find(entry => entry.taskId === task.id && entry.originHistoryId)?.originHistoryId;
+    const anchor = origin ? entries.findLastIndex(entry => !entry.taskId && entry.historyId === origin) : -1;
+    const observed = entries.findIndex(entry => entry.taskId === task.id && entry.kind === "task" && entry.started && !entry.recorded && !entry.activation);
+    // A saved root-row identity is authoritative. Otherwise retain only the
+    // creation position actually observed in this connection, never a timestamp
+    // or an unrelated later activation. Unlinked tasks stay in the team pane.
+    if (anchor >= 0 || observed >= 0) { task.first = anchor >= 0 ? anchor + .5 : observed; task.retained = false; }
+  }
   for (const task of tasks.values()) {
     const seen = new Set([task.id]);
     let parent = task.parentId;
@@ -820,7 +833,7 @@ export function groupTranscript(entries: Entry[]): TranscriptItem[] {
       const parent = tasks.get(child.parentId);
       if (!parent) break;
       parent.first = Math.min(parent.first, child.first);
-      parent.retained ||= child.retained;
+      if (!options.inlineTasks) parent.retained ||= child.retained;
       child = parent;
     }
   }
@@ -844,6 +857,7 @@ export function groupTranscript(entries: Entry[]): TranscriptItem[] {
   for (const task of tasks.values()) {
     const parent =
       !task.issue && task.parentId ? tasks.get(task.parentId) : undefined;
+    if (options.inlineTasks && !parent && task.retained) continue;
     (parent
       ? parent.items
       : task.retained && marker
@@ -1040,6 +1054,7 @@ export function fromHistory({
       text: "",
       taskId: task.id,
       parentTaskId: task.parent_task_id,
+      originHistoryId: task.origin_history_id,
       depth: task.depth,
       activation: task.activation,
       followup: task.followups,

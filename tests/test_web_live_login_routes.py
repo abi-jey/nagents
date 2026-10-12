@@ -351,7 +351,7 @@ def test_voice_defaults_follow_auth_without_overwriting_saved_choices(
     asyncio.run(check())
 
 
-def test_login_voice_can_connect_during_assistant_work_without_unlocking_settings(
+def test_login_voice_and_assistant_keep_their_accepted_configuration_when_settings_change(
     tmp_path: Path, login: LoginState, services: list[RoutedLiveService]
 ) -> None:
     async def check() -> None:
@@ -368,25 +368,52 @@ def test_login_voice_can_connect_during_assistant_work_without_unlocking_setting
             active.task = asyncio.create_task(working())
             state.active = active
             try:
-                response = await client.post(
-                    "/api/live/sessions",
-                    headers=headers,
-                    json={"revision": revision, "session_id": active.session_id},
-                )
-                assert response.status_code == 201, response.text
-                assert state.active is active and not active.task.done() and not active.task.cancelling()
-                changed = await client.post(
-                    "/api/settings",
-                    headers=headers,
-                    json={"revision": settings["revision"], "values": settings["values"]},
-                )
-                assert changed.status_code == 409
-                assert services[0].relay_calls == [""] and login.reads == 1
-                assert state.active is active and not active.task.done()
+                async with state.executions.harness(active) as accepted:
+                    provider = accepted.agent.provider
+                    assert provider.model == "chat-model"
+                    response = await client.post(
+                        "/api/live/sessions",
+                        headers=headers,
+                        json={"revision": revision, "session_id": active.session_id},
+                    )
+                    assert response.status_code == 201, response.text
+                    assert state.active is active and not active.task.done() and not active.task.cancelling()
+                    voice = services[0].configs[0]
+                    changed = await client.post(
+                        "/api/settings",
+                        headers=headers,
+                        json={
+                            "revision": settings["revision"],
+                            "values": {**settings["values"], "model": "next-chat-model"},
+                        },
+                    )
+                    assert changed.status_code == 200, changed.text
+                    assert changed.json()["values"]["model"] == "next-chat-model"
+                    assert changed.json()["revision"] != settings["revision"]
+                    assert state.harness is not accepted
+                    assert state.harness.agent.provider.model == "next-chat-model"
+                    assert active.harness is accepted and accepted.agent.provider is provider
+                    assert provider.model == "chat-model"
+                    assert services[0].active_session_id == SESSION
+                    assert services[0].configs == [voice] and voice.voice == response.json()["voice"]
+                    assert services[0].relay_calls == [""] and login.reads == 1
+                    assert state.active is active and not active.task.done() and not active.task.cancelling()
             finally:
                 release.set()
                 await active.task
                 state.finish(active)
+            next_run = Run(active.session_id, server_owned=True)
+            next_run.task = asyncio.create_task(working())
+            state.active = next_run
+            try:
+                async with state.executions.harness(next_run) as next_harness:
+                    assert next_harness is accepted
+                    assert next_harness.agent.provider.model == "next-chat-model"
+                assert services[0].active_session_id == SESSION and services[0].configs == [voice]
+                assert login.reads == 1
+            finally:
+                await next_run.task
+                state.finish(next_run)
 
     asyncio.run(check())
 

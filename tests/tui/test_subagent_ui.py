@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -118,12 +119,22 @@ def test_agent_tree_continues_saved_child_and_notifies_parent(tmp_path: Path) ->
                 for message in history
             )
             parent = await harness.history()
-            assert any(
-                isinstance(message.content, str)
-                and '"human_messages"' in message.content
-                and "Follow-up marker" in message.content
+            notifications = [
+                str(message.content).split("\n", 1)[1]
                 for message in parent
+                if isinstance(message.content, str)
+                and message.content.startswith("BACKGROUND TASK NOTIFICATION:")
+                and '"human_messages"' in message.content
+            ]
+            pickup = next(
+                item
+                for notice in notifications
+                for item in json.loads(notice)["human_messages"]
+                if item["task_id"] == task_id
             )
+            assert pickup["prompt"] == "A human message was picked up by this agent."
+            assert pickup["message_id"]
+            assert all("Follow-up marker" not in str(message.content) for message in parent)
             assert any("Follow-up to" in str(turn.body.render()) for turn in app.query(Turn) if turn.role == "user")
             assert len([card for card in app.query(ToolCard) if card.call_id.startswith("task:")]) == 4
             assert task_id not in app._task_drafts

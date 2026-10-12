@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ExecutionRecord } from "./ExecutionRecord.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
@@ -16,6 +16,7 @@ import {
   groupTranscript,
   type Entry,
   type TranscriptItem,
+  type TaskThread,
 } from "./transcript.js";
 
 const usageTips = [
@@ -41,13 +42,18 @@ export function TranscriptItems({
   names,
   disclosures,
   toggle,
+  renderTask,
 }: {
   items: TranscriptItem[];
   names: Map<string, string>;
   disclosures: Map<string, boolean>;
   toggle: (key: string, open: boolean) => void;
+  renderTask?: (thread: TaskThread) => ReactNode;
 }) {
   return items.map((item) => {
+    // Registry-only tasks have no proven location in this transcript. The team
+    // tree still exposes them; do not attach them to its last user message.
+    if (item.kind === "retained" && renderTask) return null;
     if (item.kind === "retained")
       return (
         <section
@@ -70,12 +76,15 @@ export function TranscriptItems({
               names={names}
               disclosures={disclosures}
               toggle={toggle}
+              renderTask={renderTask}
             />
           </details>
         </section>
       );
     if (item.kind === "thread") {
       const task = item.thread;
+      const rendered = renderTask?.(task);
+      if (rendered) return <div key={`task:${task.id}`}>{rendered}</div>;
       return (
         <section
           key={`task:${task.id}`}
@@ -113,6 +122,7 @@ export function TranscriptItems({
                 names={names}
                 disclosures={disclosures}
                 toggle={toggle}
+                renderTask={renderTask}
               />
             </div>
           </details>
@@ -196,6 +206,8 @@ export function Conversation({
   canSubmit,
   submit,
   token = "",
+  renderTask,
+  active = true,
 }: {
   entries: Entry[];
   sessionId: string;
@@ -204,8 +216,12 @@ export function Conversation({
   canSubmit: boolean;
   submit: (prompt: string) => void;
   token?: string;
+  renderTask?: (thread: TaskThread) => ReactNode;
+  active?: boolean;
 }) {
   const feed = useRef<HTMLDivElement>(null);
+  const isActive = useRef(active);
+  isActive.current = active;
   const contents = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const anchor = useRef<{ key: string; offset: number } | undefined>(undefined);
@@ -259,7 +275,7 @@ export function Conversation({
   }
   function rememberPosition() {
     const element = feed.current;
-    if (!element) return;
+    if (!element || !isActive.current) return;
     const region = element.getBoundingClientRect();
     const top = region.top;
     const candidates = [
@@ -282,7 +298,7 @@ export function Conversation({
   }
   function restorePosition() {
     const element = feed.current;
-    if (!element) return;
+    if (!element || !isActive.current) return;
     if (stickToBottom.current && !inspectingTool()) element.scrollTop = element.scrollHeight;
     else if (anchor.current) {
       const previous = anchor.current;
@@ -308,6 +324,7 @@ export function Conversation({
     }
     restorePosition();
   }, [entries]);
+  useLayoutEffect(() => { if (active) restorePosition(); }, [active]);
   useLayoutEffect(() => {
     const element = feed.current, view = element?.ownerDocument.defaultView;
     if (!element || !view) return;
@@ -343,8 +360,8 @@ export function Conversation({
     if (!activityVisible()) setNewActivity(true);
   }, [activity, latestActivity]);
   const display = conversationEntries(entries);
-  const earlier = groupTranscript(display.filter((entry) => entry.delivery?.earlier));
-  const items = groupTranscript(display.filter((entry) => !entry.delivery?.earlier));
+  const earlier = groupTranscript(display.filter((entry) => entry.delivery?.earlier), { inlineTasks: !!renderTask });
+  const items = groupTranscript(display.filter((entry) => !entry.delivery?.earlier), { inlineTasks: !!renderTask });
   const names = new Map(
     entries
       .filter((entry) => entry.kind === "task" && entry.taskId)
@@ -354,6 +371,7 @@ export function Conversation({
   return (
     <div
       className="conversation"
+      hidden={!active}
       aria-label="Conversation"
       role="region"
       tabIndex={0}
@@ -373,7 +391,7 @@ export function Conversation({
       }}
       onScroll={() => {
         const element = feed.current;
-        if (!element) return;
+        if (!element || !isActive.current) return;
         const previous = layout.current;
         const resized = previous && (previous.width !== element.clientWidth || previous.height !== element.clientHeight || previous.contentHeight !== element.scrollHeight);
         const layoutScroll = resized && (element.scrollTop === previous.top ||
@@ -447,6 +465,7 @@ export function Conversation({
           names={names}
           disclosures={disclosures}
           toggle={toggle}
+          renderTask={renderTask}
         />
         </UploadSession.Provider>
         </MediaToken.Provider>

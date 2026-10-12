@@ -164,8 +164,7 @@ export function SettingsDialog({
             )}
             {settings.blocked && !pending && (
               <p className="settings-notice" role="status">
-                Settings are read-only while work is active. Wait for it to
-                finish before making changes.
+                A settings request is in progress. Your current conversation continues.
               </p>
             )}
             {settings.error && (

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition
+    from nagents.web.routing import Work
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +58,7 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
         child_started, release_child, interim, second, final = (asyncio.Event() for _ in range(5))
         sent: list[tuple[str, str, str]] = []
         reports: list[dict[str, object]] = []
+        child_activity: list[dict[str, object]] = []
         wake_model, wake_spoken = asyncio.Event(), asyncio.Event()
 
         async def generate(
@@ -116,6 +118,11 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
         ):
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
                 state = app.state.web
+                state.run_observers.add(
+                    lambda run, record: (
+                        child_activity.append(dict(record)) if record.get("event") == "task_activity" else None
+                    )
+                )
                 bridge = MainAgentBridge(state, state.selected_session_id, report=reports.append)
                 bridge.attach(append)
                 try:
@@ -170,6 +177,8 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
                             for kind, text, origin in sent
                         )
                     assert all("PRIVATE CHILD DETAILS" not in text for _, text, _ in sent)
+                    assert any("PRIVATE CHILD DETAILS" in json.dumps(record) for record in child_activity)
+                    assert all(record.get("task_id") for record in child_activity)
                 finally:
                     release_child.set()
                     await bridge.close()
@@ -177,7 +186,10 @@ def test_overlapping_followup_answers_before_child_and_late_result_remains_corre
     asyncio.run(scenario())
 
 
-def test_real_scheduled_wakeup_uses_attached_voice_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hold_claim_cleanup", [False, True])
+def test_real_scheduled_wakeup_uses_attached_voice_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hold_claim_cleanup: bool
+) -> None:
     async def scenario() -> None:
         delivered = asyncio.Event()
         sent: list[tuple[str, str, str]] = []
@@ -212,14 +224,61 @@ def test_real_scheduled_wakeup_uses_attached_voice_path(tmp_path: Path) -> None:
         ):
             async with client_app(tmp_path, config=_config(tmp_path)) as (app, _, _, _):
                 state = app.state.web
+                root = state.selected_session_id
+                held, release, parked, notified = (asyncio.Event() for _ in range(4))
+                clock = [0.0]
+                if hold_claim_cleanup:
+                    # The root can finish before the durable inbox claim is
+                    # released. Force the timer worker to observe that interval,
+                    # independently of platform clock and SQLite speed.
+                    monkeypatch.setattr(state.wakeups, "clock", lambda: clock[0])
+                    original_finish = state.channels.store.finish_work
+                    original_tick = state.wakeups.tick
+                    original_changed = state.wakeups.changed.set
+
+                    async def finish_work(work: Work, status: str) -> None:
+                        held.set()
+                        await release.wait()
+                        await original_finish(work, status)
+
+                    async def tick(*, dispatch: bool = False) -> None:
+                        await original_tick(dispatch=dispatch)
+                        if (
+                            clock[0] == 1.0
+                            and held.is_set()
+                            and state.run_for(root) is None
+                            and root in state.channels.work_tasks
+                        ):
+                            parked.set()
+
+                    def changed() -> None:
+                        if parked.is_set() and root not in state.channels.work_tasks:
+                            notified.set()
+                        original_changed()
+
+                    monkeypatch.setattr(state.channels.store, "finish_work", finish_work)
+                    monkeypatch.setattr(state.wakeups, "tick", tick)
+                    monkeypatch.setattr(state.wakeups.changed, "set", changed)
                 bridge = MainAgentBridge(state, state.selected_session_id)
                 bridge.attach(append)
                 try:
                     await bridge.handle_request(ClientDelegationRequest("scheduled", transcript=speech("Check soon")))
                     async with asyncio.timeout(HANG_GUARD):
+                        if hold_claim_cleanup:
+                            await held.wait()
+                            assert state.run_for(root) is None and state.wakeups.pending
+                            claim = state.channels.work_tasks[root]
+                            clock[0] = 1.0
+                            state.wakeups.changed.set()
+                            await parked.wait()
+                            assert not delivered.is_set()
+                            release.set()
+                            await claim
+                            assert notified.is_set(), "Releasing the inbox lane must notify the timer worker"
                         await delivered.wait()
                     assert sent.count(("commentary", "The scheduled result arrived.", "scheduled")) == 1
                 finally:
+                    release.set()
                     await bridge.close()
 
     asyncio.run(scenario())

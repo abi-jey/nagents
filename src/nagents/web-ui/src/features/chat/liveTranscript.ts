@@ -9,6 +9,7 @@ export type LiveTranscript = {
   activeRun?: ActiveRun;
   history?: Snapshot["history"];
   runHistory?: { runId: string; history: Snapshot["history"] };
+  completedRuns?: { runId: string; cursor: number; epoch: string }[];
 };
 const finished = (status: string) => ["completed", "cancelled", "failed", "interrupted"].includes(status);
 export function pendingApprovals(run?: ActiveRun): WireEvent[] {
@@ -77,7 +78,7 @@ function newRow(entry: Entry, history?: Snapshot["history"]): boolean {
 // never an identity; complete replay or a history baseline must establish a
 // still-streaming response's place before it can claim a committed row.
 export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announceNewUsers = false,
-  knownHistory?: Snapshot["history"], settledRun?: LiveTranscript["runHistory"]): Entry[] {
+  knownHistory?: Snapshot["history"], canonicalRuns: ReadonlySet<string> = new Set()): Entry[] {
   const saved = fromHistory(snapshot);
   const roots = saved.filter((item) => item.kind !== "task" && item.kind !== "retained_tasks");
   const oldOwners = turnOwners(previous), savedOwners = turnOwners(roots);
@@ -86,13 +87,6 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   const matches = roots.map((entry) => {
     const owner = savedOwners.get(entry);
     let index = previous.findIndex((item, index) => !matched.has(index) && sameSavedEntry(entry, item));
-    // Only after an unlinked run finishes may its output join rows added since
-    // that run's history baseline. Also consumes any provisional saved copy.
-    if (settledRun && entry.kind !== "user" && newRow(entry, settledRun.history)) {
-      const pending = previous.findIndex((item, i) => !matched.has(i) && compatible(entry, item) &&
-        item.runId === settledRun.runId && !item.historyId && !oldOwners.has(item));
-      if (pending >= 0) { if (index >= 0) matched.add(index); index = pending; }
-    }
     if (index < 0 && entry.kind !== "user" && owner) {
       index = previous.findIndex((item, i) => !matched.has(i) && i > (turnPositions.get(owner) ?? -1) &&
         compatible(entry, item) && !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item)) &&
@@ -119,6 +113,10 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   };
   function keep(entry: Entry) {
     if (used.has(entry.id) || matchedIds.has(entry.id)) return;
+    // Only a checkpoint ordered after a successful root finish makes saved
+    // history authoritative over unbound assistant stream copies. Never assign
+    // those copies to a row by text, run order, or a stale history baseline.
+    if (entry.kind === "assistant" && !entry.taskId && !entry.historyId && canonicalRuns.has(entry.runId || "")) return;
     const freshCaption = entry.kind === "live_caption" && !knownHistory?.some((row) => row.history_id === entry.historyId);
     if (!entry.delivery && (freshCaption || entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
   }
@@ -160,7 +158,8 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
   return next;
 }
 
-export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, announceUpdates = current.history !== undefined): LiveTranscript {
+export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, announceUpdates = current.history !== undefined,
+  canonicalRuns: ReadonlySet<string> = new Set()): LiveTranscript {
   let entries = current.entries;
   const supplied = snapshot.active_run;
   const run = supplied && !finished(supplied.status) && (!supplied.session_id || supplied.session_id === snapshot.session_id)
@@ -213,7 +212,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
   // A first/explicit history load establishes a baseline, even if React renders
   // it after the selected session mounts. Only later snapshot additions announce
   // source activity; matching saved rows retain their existing activity counter.
-  entries = reconcileHistory(entries, snapshot, announceUpdates, current.history, !run ? runHistory : undefined);
+  entries = reconcileHistory(entries, snapshot, announceUpdates, current.history, canonicalRuns);
   if (run) entries = appendEvent(entries, { event: "run_started", run_id: run.id,
     history_id: run.history_id, ingress_id: run.ingress_id, message_id: run.message_id,
   });
@@ -249,24 +248,32 @@ export function applyFrame(current: LiveTranscript, frame: SessionFrame): LiveTr
     // Every published caption was already committed, so an absent row was
     // cleared/compacted. Only unversioned HTTP reads need to keep newer speech.
     const captions = new Set(frame.snapshot.history.filter(row => row.role === "live_caption").map(row => row.history_id));
+    const eligible = new Set((current.completedRuns || []).filter(run => run.epoch === frame.epoch && run.cursor <= frame.cursor).map(run => run.runId));
     next = applySnapshot({ ...current, entries: current.entries.filter(entry =>
-      entry.kind !== "live_caption" || captions.has(entry.historyId)) }, frame.snapshot);
+      entry.kind !== "live_caption" || captions.has(entry.historyId)) }, frame.snapshot, current.history !== undefined, eligible);
+    next.completedRuns = current.completedRuns?.filter(run => !eligible.has(run.runId));
   }
   else {
     const event = frame.record;
     let activeRun = current.activeRun;
     let runHistory = current.runHistory;
+    let completedRuns = current.completedRuns;
     if (event.event === "run_started" && typeof event.run_id === "string") {
       activeRun = { id: event.run_id, status: "running" };
       runHistory = current.history ? { runId: event.run_id, history: current.history } : undefined;
     }
     if (event.event === "approval" && !activeRun && typeof event.run_id === "string") activeRun = { id: event.run_id, status: "approval" };
-    if (event.event === "run_finished" && event.run_id === activeRun?.id) activeRun = undefined;
+    if (event.event === "run_finished" && event.run_id === activeRun?.id) {
+      if (event.status === "completed" && typeof event.run_id === "string") completedRuns = [
+        ...(completedRuns || []).filter(run => run.runId !== event.run_id), { runId: event.run_id, cursor: frame.cursor, epoch: frame.epoch },
+      ].slice(-64);
+      activeRun = undefined;
+    }
     if (event.event === "approval" && activeRun) activeRun = { ...activeRun, pending_approvals: [...pendingApprovals(activeRun), event] };
     if (event.event === "approval_closed" && activeRun) activeRun = { ...activeRun, pending_approvals: pendingApprovals(activeRun).filter((item) => item.approval_id !== event.approval_id), events: undefined, approval: undefined };
     const scopedInput = event.event !== "input_admitted" ||
       ((!event.session_id || event.session_id === frame.session_id) && (!activeRun || event.run_id === activeRun.id));
-    next = { ...current, activeRun, runHistory, entries: scopedInput ? appendEvent(current.entries, event) : current.entries };
+    next = { ...current, activeRun, runHistory, completedRuns, entries: scopedInput ? appendEvent(current.entries, event) : current.entries };
   }
   return { ...next, position: { cursor: frame.cursor, epoch: frame.epoch } };
 }

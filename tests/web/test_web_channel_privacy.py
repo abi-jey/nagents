@@ -243,6 +243,28 @@ def test_retired_credentials_remain_protected_after_rotation_disable_and_delete(
         )
         try:
             app.client.portal.call(asyncio.wait_for, created[0].started.wait(), 5)
+            revision = app.state.channels.catalog.revision
+            rejected = app.client.put(
+                "/api/channels/fixture",
+                headers=app.headers,
+                json={
+                    "revision": revision,
+                    "plugin": "fixture",
+                    "enabled": False,
+                    "config": {"label": "public"},
+                    "secrets": {"token": ROTATED},
+                },
+            )
+            assert rejected.status_code == 409
+            assert app.state.channels.catalog.revision == revision
+            assert app.state.channels.catalog.connections["fixture"].secrets == {"token": TOKEN}
+            assert app.state.channels.channels["fixture"] is created[0] and not created[0].closed
+            # A connector cannot be closed in the middle of its own send. Join
+            # that exact call before rotating, rather than waiting for chat idle.
+            app.client.portal.call(created[0].release.set)
+            with pytest.raises(ChannelError) as error:
+                pending.result(timeout=HANG_GUARD)
+            assert TOKEN not in str(error.value) and error.value.outcome_unknown is True
             app.configure(enabled=False, secrets={"token": ROTATED})
             deleted = app.client.request(
                 "DELETE",
@@ -251,13 +273,15 @@ def test_retired_credentials_remain_protected_after_rotation_disable_and_delete(
                 json={"revision": app.state.channels.catalog.revision},
             )
             assert deleted.status_code == 200
-            app.client.portal.call(created[0].release.set)
-            with pytest.raises(ChannelError) as error:
-                pending.result(timeout=HANG_GUARD)
-            assert TOKEN not in str(error.value) and error.value.outcome_unknown is True
+            assert created[0].closed and not app.state.channels._channel_calls
             for credential in (TOKEN, ROTATED):
                 with pytest.raises(CredentialProtectionError):
                     app.state.channels.catalog.protection.check({"echo": credential})
+                # A stale connector result is still withheld after its
+                # connection and credentials have been removed from settings.
+                with pytest.raises(ChannelError) as stale:
+                    app.state.channels.check_result({"echo": credential})
+                assert credential not in str(stale.value) and stale.value.outcome_unknown is True
         finally:
             app.client.portal.call(created[0].release.set)
 

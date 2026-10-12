@@ -135,12 +135,12 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                 headers=headers,
                 json={"revision": catalog["revision"], "agents": {"assistant": {"schedule_wakeup": False}}},
             )
-            assert response.status_code == 200
+            assert response.status_code == 200, response.text
             assert not {"schedule_wakeup"} & await capture()
             response = await client.post(
                 "/api/tools", headers=headers, json={"revision": response.json()["revision"], "agents": {}}
             )
-            assert response.status_code == 200
+            assert response.status_code == 200, response.text
             assert "schedule_wakeup" in await capture()
 
             # Names never confer builtin authority on replacement plugin tools.

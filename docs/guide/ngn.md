@@ -288,11 +288,19 @@ untrusted background notification, and the parent automatically runs again to
 consider them. If children are still working, the harness waits for their results
 without holding a model request open. The UI shows each child's task and response;
 `/tasks` opens the current-session conversation inspector. Headless JSON includes
-`task_started`, `task_message`, `task_completed`, and `task_notification` events,
+`task_started`, `task_message`, `task_completed`, `task_notification`, and
+`task_activity` events,
 with a final `done` only after the group settles. Task lifecycle events include
 parent/child session IDs, parent task ID, depth, profile, follow-up number,
 activation number, and trigger. Notification records identify the actual source
 and recipient; they do not themselves assert that another execution completed.
+
+`task_activity` wraps a child's published messages and tool evidence in a separate
+payload with the task, parent, child session, activation, turn, sequence, and
+timestamp. It is inspection data, not a main-assistant answer or root tool call.
+Consumers must keep that scope when rendering concurrent children. Private
+reasoning and provider request metadata are not included. Live voice and channel
+output receive the parent's response rather than this inspection stream.
 
 Queued completion events reach the UI before the next core model or tool-result
 event, even while the parent keeps working. Waiting for a tool result or a model
@@ -341,9 +349,11 @@ a 16,000-character delegation prompt, and
 Children use separate sessions/providers and share the parent's credential
 manager for in-process refresh coordination. They receive the delegated prompt
 and applicable instruction context, not a copy of the full parent conversation.
-Plugins are not re-imported in children. Children currently use the parent's
-active model; arbitrary custom-provider cloning and persistent peer-to-peer
-inboxes are not implemented.
+Plugins are not re-imported in children. Children inherit the active model and
+provider unless their profile or delegation supplies an explicit selection.
+The `delegate` tool accepts `model`, a configured `provider` connection, and
+`compact_trigger`, `compact_tokens`, and `compact_messages` choices. Compiled
+Agent Designer definitions retain control of their provider and model.
 
 Tasks are process-local, not durable jobs or persistent Bot identities. Cancelling
 or closing a run cancels and awaits its children; undelivered notifications are
@@ -373,9 +383,9 @@ wait for that child and its subtree to settle before continuing it. Cancelled
 tasks cannot be resumed; delegate a new task instead.
 
 A follow-up continues the **same child conversation and identity**, not a new
-unrelated agent. Its human message and returned response are visible in the
-parent conversation too. If the parent is already running, it receives the
-notification at its next safe turn boundary. If idle, ngn waits for the child
+unrelated agent. Its message stays in that child's transcript; the parent receives
+a pickup notification and the child's returned result. If the parent is already
+running, it receives the notification at its next safe turn boundary. If idle, ngn waits for the child
 result and runs the parent to consider the exchange. It does not inject a second
 tool result or silently treat child output as higher-priority instructions.
 
@@ -384,6 +394,12 @@ to 64 identities for its process lifetime. Every continuation also consumes one
 of the current root run's eight execution slots. Full quotas and unsupported
 continuations are rejected explicitly. These handles do not survive restarting
 ngn, even though the underlying transcripts remain on disk.
+
+The [web task inspector](task-inspection.md) also accepts messages while a child
+is running. These wait for its next complete response and tool batch, including
+any pending approval. Reading a child conversation never starts it or approves
+its tools. The web inspector preserves readable task records after restart;
+the workers themselves remain process-local.
 
 Python clients use the same interfaces:
 
@@ -566,7 +582,7 @@ text streams to stdout; tool progress and approval prompts use stderr. JSON
 mode writes versioned event records to stdout, with command errors/denials still
 possible on stderr. Consumers should dispatch on `event`, tolerate additional
 fields, and handle tool failures as well as the final response. Subagent events
-include `task_started` and `task_completed`.
+include `task_started`, `task_completed`, and scoped `task_activity` records.
 
 Exit codes are `0` for a completed command, `1` for a run that emits an agent
 error, `2` for a configuration/usage failure, and `130` for interruption. A
@@ -676,6 +692,28 @@ No literal API keys belong in JSON.
 See the [full configuration reference](ngn-configuration.md) for every accepted
 field, exact types/defaults/ranges, provider recipes, and the distinction between
 configuration precedence and runtime profile model selection.
+
+## Default and workspace instructions
+
+Every coding Harness starts with ngn's bundled
+`nagents/harness/instructions/AGENTS.md`. The same Markdown resource ships in the
+wheel and source distribution; it contains the default coding, verification, and
+approval guidance. Framework maintainers can edit
+`src/nagents/harness/instructions/AGENTS.md` to change those defaults without
+editing Python prompt strings. Active workspace, profile, tool capabilities, and
+delegation limits are added by the runtime.
+
+For project-specific guidance, create or edit your workspace's `AGENTS.md`.
+The Harness loads an existing root file automatically when initialized, including
+when constructed programmatically; it never creates or overwrites this file.
+Native file tools also load applicable nested `AGENTS.md` files when accessing
+their paths. Nested guidance takes precedence within its subtree. These files
+provide task context and cannot grant tools, bypass approvals, or change project
+configuration trust. Ordinary delegated children receive the defaults once and
+retain the applicable workspace guidance.
+
+Agent Designer definitions keep their explicitly configured instructions and do
+not implicitly load either coding-harness defaults or workspace `AGENTS.md`.
 
 ## Skills
 

@@ -8,6 +8,7 @@ import logging
 import secrets
 import sqlite3
 from contextlib import aclosing
+from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from contextlib import nullcontext
 from contextlib import suppress
@@ -51,6 +52,7 @@ from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
 from .subscriptions import EventBus
+from .tasks import Tasks
 from .tool_approvals import ToolApprovals
 from .tool_approvals import ToolBinding
 from .trash import SessionTrash
@@ -59,12 +61,14 @@ from .wakeups import Chain
 from .wakeups import Wakeups
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from collections.abc import Awaitable
     from collections.abc import Callable
     from collections.abc import Iterator
 
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
+    from nagents.harness.followups import RunInput
     from nagents.harness.followups import RunTurn
     from nagents.harness.types import ApprovalRequest
     from nagents.harness.types import SessionInfo
@@ -75,6 +79,7 @@ if TYPE_CHECKING:
     from .wakeups import Wakeup
 
 APPROVAL_TIMEOUT = 300
+MUTATION_WAIT_TIMEOUT = 5
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -102,6 +107,7 @@ class Run:
     final_text: str = ""
     finished: bool = False
     executing: bool = False
+    draining: bool = False
     background: bool = False
     server_owned: bool = False
     voice: bool = False
@@ -109,6 +115,7 @@ class Run:
     wakeup_id: str = ""
     harness: Harness | None = field(default=None, repr=False)
     message_id: str = ""
+    task_message_id: str = ""
     source: dict[str, str] = field(default_factory=dict)
     chain: Chain = field(default_factory=Chain)
     drafts: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -253,9 +260,12 @@ class WebState:
         self.session_revision = 0
         self.executions = Executions(self, factory or type(harness))
         self.mutating = False
+        self.mutation_released = asyncio.Event()
+        self.mutation_released.set()
         self.bus = EventBus()
         self.run_observers: set[Callable[[Run | None, dict[str, object]], None]] = set()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
+        self.tasks = Tasks(self)
         self.queued_inputs = QueuedInputs(self)
         self.tool_approvals = ToolApprovals(
             harness.agent.session.db_path.with_name("tool-approvals.db"), harness.workspace
@@ -360,11 +370,41 @@ class WebState:
         if (self.executions.runs and not allow_running) or self.mutating:
             raise HTTPException(409, "Harness busy. Cancel or finish the active operation first.")
         self.mutating = True
+        self.mutation_released.clear()
         try:
             yield
         finally:
             self.mutating = False
+            self.mutation_released.set()
             self.changed()
+
+    @asynccontextmanager
+    async def queued_mutation(self) -> AsyncIterator[None]:
+        """Wait briefly for bookkeeping without waiting for model execution.
+
+        Claiming inbox work and empty trash sweeps can briefly own the same
+        mutation guard as preference writes. Keep their exclusion intact, but
+        do not turn that internal bookkeeping into a user-visible conflict.
+        """
+        try:
+            async with asyncio.timeout(MUTATION_WAIT_TIMEOUT):
+                while self.mutating:
+                    await self.mutation_released.wait()
+        except TimeoutError:
+            raise HTTPException(409, "Workspace update is still in progress. Try saving again shortly.") from None
+        if self.executions.closed:
+            raise HTTPException(503, "The server is shutting down. Try again after it restarts.")
+        # No await between checking the guard and acquiring it. A competing
+        # waiter must observe the new owner before it can enter this block.
+        with self.idle(allow_running=True):
+            yield
+
+    @asynccontextmanager
+    async def configure(self) -> AsyncIterator[None]:
+        """Serialize preference writes while allowing existing runs to continue."""
+        with self.idle(allow_running=True):
+            await _join(asyncio.create_task(self.executions.configuration_owner()))
+            yield
 
     async def list_sessions(self) -> list[SessionInfo]:
         sessions: list[SessionInfo] = []
@@ -400,11 +440,7 @@ class WebState:
         return {
             "session_id": session_id,
             "activity_cursor": self.wakeups.cursor,
-            "retained_tasks": [
-                asdict(info)
-                for info in self.harness_for(session_id).tasks._infos.values()
-                if info.session_id == session_id
-            ],
+            "retained_tasks": (await self.tasks.index(session_id))["tasks"],
             "sessions": [asdict(session) for session in sessions],
             "history": history,
             "active_run": active.snapshot() if active is not None and active.session_id == session_id else None,
@@ -478,6 +514,7 @@ class WebState:
         pass
 
     async def send(self, run: Run, record: dict[str, object]) -> None:
+        await self.tasks.record(run, record)
         self.publish(run, record)
 
     async def approve(self, request: ApprovalRequest) -> bool:
@@ -651,7 +688,15 @@ class WebState:
             }
         )
 
-    async def produce(self, run: Run, prompt: str | list[ContentPart], *, task_id: str = "") -> None:
+    async def produce(
+        self,
+        run: Run,
+        prompt: str | list[ContentPart],
+        *,
+        task_id: str = "",
+        task_agent: str = "",
+        task_input: RunInput | None = None,
+    ) -> None:
         notices = run.notices = ChannelNotices(self, run)
         transcript = DeliveryTranscript(
             capture=type(self.running_harness.agent.session) in {WebHistory, _HarnessSession}
@@ -659,7 +704,14 @@ class WebState:
         try:
             await self.channels.activity(run.session_id, True, run.source)
             await notices.start(live=True)
-            if run.background:
+            if task_input is not None:
+                assert isinstance(prompt, str)
+                source = (
+                    self.running_harness.start_task(prompt, task_agent, message=task_input)
+                    if task_agent
+                    else self.running_harness.continue_task(task_id, prompt, message=task_input)
+                )
+            elif run.background:
                 if not isinstance(prompt, str):
                     raise ValueError("Background wake prompts must be text")
                 source = self.running_harness.wake(prompt, task_id=task_id)
@@ -799,6 +851,10 @@ class WebState:
                 },
             )
         finally:
+            # The core source has closed; remaining awaits only publish and
+            # settle this run. A child input may wait for this owner to release,
+            # but must not revive its inactive task group.
+            run.draining = True
             if run.pending is not None and not run.pending.answer.done():
                 run.pending.answer.set_result(False)
             run.pending = None
@@ -810,6 +866,7 @@ class WebState:
                 else:
                     await notices.finish("completed")
             finally:
+                await _join(asyncio.create_task(self.tasks.finish(run)))
                 await _join(asyncio.create_task(self.queued_inputs.finish(run)))
                 await _join(asyncio.create_task(self.channels.activity(run.session_id, False)))
 

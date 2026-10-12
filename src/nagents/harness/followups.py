@@ -68,6 +68,11 @@ class RunInputs(AgentPlugin):
     def pending(self) -> bool:
         return bool(self._pending) or self._changed
 
+    @property
+    def accepting(self) -> bool:
+        """False immediately after the final empty decision, before cleanup awaits."""
+        return bool(self._session)
+
     def changed(self) -> None:
         self._changed = True
 

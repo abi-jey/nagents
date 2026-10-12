@@ -9,6 +9,7 @@ import { useApproval } from "../approvals/useApproval";
 import { applySnapshot, LiveSessions, pendingApprovals, type LiveTranscript } from "./liveTranscript";
 import { changesContext } from "../context/controller";
 import { useSessionDraft } from "./useSessionDraft.js";
+import { mergeTaskActivity, validTaskActivity, type TaskActivity } from "../team/model.js";
 
 export function useChatRun(token: string, sessionId: string, receive: (frame: EventFrame) => void, acceptCredentials: (bootstrap: Bootstrap) => void, unavailable: () => void) {
   const latestToken = useRef(token);
@@ -24,6 +25,8 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const [activityError, setActivityError] = useState("");
   const [connected, setConnected] = useState(false);
   const [contextRevision, setContextRevision] = useState(0);
+  const [taskRevision, setTaskRevision] = useState(0);
+  const [taskActivity, setTaskActivity] = useState<{ session: string; events: TaskActivity[] }>({ session: "", events: [] });
   const [connectionVersion, setConnectionVersion] = useState(0);
   const [suspended, setSuspended] = useState(false);
   const stopSubscription = useRef<(() => void) | undefined>(undefined);
@@ -37,6 +40,13 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
   const receiveFrame = useEffectEvent((frame: EventFrame) => {
     receive(frame);
     if ((frame.type !== "snapshot" && frame.type !== "event") || frame.session_id !== selected.current) return;
+    if (frame.type === "snapshot" || frame.record.event.startsWith("task_") || frame.record.event === "approval_closed") {
+      setTaskRevision(value => value + 1);
+      const records = frame.type === "snapshot" ? frame.snapshot.active_run?.events || [] : [frame.record];
+      const events = records.filter(validTaskActivity);
+      setTaskActivity(previous => ({ session: frame.session_id,
+        events: mergeTaskActivity(previous.session === frame.session_id ? previous.events : [], events) }));
+    }
     if (frame.type === "snapshot" || changesContext(frame.record.event)) setContextRevision((revision) => revision + 1);
     const previousRun = cache.current.get(frame.session_id).activeRun;
     const next = cache.current.receive(frame);
@@ -86,6 +96,9 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
 
   function loadHistory(snapshot: Snapshot) {
     setContextRevision((revision) => revision + 1);
+    setTaskRevision(value => value + 1);
+    setTaskActivity(previous => ({ session: snapshot.session_id, events: mergeTaskActivity(
+      previous.session === snapshot.session_id ? previous.events : [], (snapshot.active_run?.events || []).filter(validTaskActivity)) }));
     const next = cache.current.set(snapshot.session_id, { ...applySnapshot(cache.current.get(snapshot.session_id), snapshot, false), position: undefined });
     setView(next); approval.close(); setStatus("Ready");
   }
@@ -136,6 +149,7 @@ export function useChatRun(token: string, sessionId: string, receive: (frame: Ev
     entries: view.entries, prompt, setPrompt, drafts, runId: view.activeRun?.id || "", connected,
     submitting, stopping,
     contextRevision,
+    taskRevision, taskActivity: taskActivity.session === sessionId ? taskActivity.events : [],
     backgroundRunId: "", activityError, pendingWakeups: view.entries.filter((entry) => entry.kind === "wakeup" && entry.state === "Scheduled").length,
     transcriptVersion: 0, status: stopping ? "Cancelling the run…" : status,
     setStatus, approval, loadHistory, forgetSession, submit, cancel,

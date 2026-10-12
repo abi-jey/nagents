@@ -51,6 +51,26 @@ export type RetainedTask = {
   followups: number;
   activation: number;
   trigger: "delegation" | "human" | "wakeup" | "notification";
+  provider?: string;
+  provider_kind?: string;
+  model?: string;
+  phase?: string;
+  started_at?: number;
+  updated_at?: number;
+  completed_at?: number;
+  activity_sequence?: number;
+  can_message?: boolean;
+  message_unavailable_reason?: string;
+  unavailable_reason?: string;
+  phase_detail?: string;
+  compaction?: { trigger?: string; token_threshold?: number; message_threshold?: number };
+  next_settings?: { provider?: string; model?: string; compact_trigger?: string; compact_tokens?: number; compact_messages?: number };
+  origin_history_id?: string;
+  origin_run_id?: string;
+  compact_trigger?: string;
+  compact_tokens?: number;
+  compact_messages?: number;
+  context?: ContextStats;
 };
 // Native parts returned by the backend for a saved multimodal message.
 export type MessagePart =

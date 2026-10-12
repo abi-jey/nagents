@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { request, RequestError } from "../../api/client";
-import { Icon } from "../../components/Icon";
-import { McpDiscovery, type McpDiagnostics } from "./McpDiagnostics";
-import "./tools.css";
+import { request, RequestError } from "../../api/client.js";
+import { Icon } from "../../components/Icon.js";
+import { McpDiscovery, type McpDiagnostics } from "./McpDiagnostics.js";
 
 interface ToolInfo {
   name: string; description: string; parameters: Record<string, unknown>;
@@ -15,6 +14,7 @@ interface ToolSettings {
   profiles: { id: string; mode: string }[]; tools: ToolInfo[];
   tool_approvals?: SavedToolApproval[];
   mcp_diagnostics?: McpDiagnostics;
+  mcp_retry?: { server: string; status: "queued" | "completed" };
 }
 
 export function ToolsDialog({ token, blocked, close }: { token: string; blocked: boolean; close: () => void }) {
@@ -22,6 +22,9 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   const heading = useRef<HTMLHeadingElement>(null);
   const requestRef = useRef<AbortController | undefined>(undefined);
   const writing = useRef(false);
+  const retryBusy = useRef(false);
+  const alive = useRef(false);
+  const queuedRetry = useRef("");
   const [catalog, setCatalog] = useState<ToolSettings>();
   const [agents, setAgents] = useState<ToolSettings["agents"]>({});
   const [agent, setAgent] = useState("");
@@ -31,6 +34,9 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [retrying, setRetrying] = useState("");
+  const [mcpNotice, setMcpNotice] = useState("");
+  const [mcpError, setMcpError] = useState("");
   const disabled = blocked || pending;
   const dirty = !!catalog && JSON.stringify(agents) !== JSON.stringify(catalog.agents);
 
@@ -39,6 +45,21 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     setAgent((current) => next.profiles.some((profile) => profile.id === current) ? current : next.active_agent);
     setConflict(false);
   }
+  function receiveDiscovery(next: ToolSettings) {
+    // Resource recovery and background status checks must not overwrite an
+    // unsaved tool-selection draft or advance its optimistic write revision.
+    setCatalog(current => current ? { ...current, tools: next.tools,
+      mcp_diagnostics: next.mcp_diagnostics, tool_approvals: next.tool_approvals } : next);
+    if (queuedRetry.current) {
+      const server = queuedRetry.current;
+      const failed = next.mcp_diagnostics?.failed_servers?.find(item => item.name === server);
+      if (!failed?.retry_pending) {
+        queuedRetry.current = "";
+        setMcpNotice(failed ? `${server} is still unavailable. Check the failure below, then retry when ready.`
+          : `${server} connected. Its available tools are listed below.`);
+      }
+    }
+  }
   async function refresh() {
     if (writing.current) return;
     requestRef.current?.abort();
@@ -46,16 +67,29 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     setPending(true); setError(""); setNotice("");
     try { const next = await (await request("tools", token, undefined, controller.signal)).json() as ToolSettings; if (!controller.signal.aborted) receive(next); }
     catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load tools."); }
-    finally { if (!controller.signal.aborted) setPending(false); }
+    finally { if (!controller.signal.aborted) setPending(false); if (requestRef.current === controller) requestRef.current = undefined; }
   }
   useEffect(() => {
+    alive.current = true;
     const element = dialog.current, previous = document.activeElement;
     element?.showModal(); heading.current?.focus(); void refresh();
-    return () => { requestRef.current?.abort(); element?.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+    const timer = setInterval(() => {
+      if (writing.current || requestRef.current) return;
+      const controller = new AbortController(); requestRef.current = controller;
+      void (async () => {
+        try {
+          const next = await (await request("tools", token, undefined, controller.signal)).json() as ToolSettings;
+          if (!controller.signal.aborted) receiveDiscovery(next);
+        } catch { /* Keep the last diagnostic visible; manual refresh reports read errors. */ }
+        finally { if (requestRef.current === controller) requestRef.current = undefined; }
+      })();
+    }, 3000);
+    return () => { alive.current = false; clearInterval(timer); requestRef.current?.abort(); element?.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
 
   async function save() {
     if (!catalog || disabled || writing.current || conflict || !dirty) return;
+    requestRef.current?.abort(); requestRef.current = undefined;
     writing.current = true; setPending(true); setError(""); setNotice("");
     try {
       const next = await (await request("tools", token, { revision: catalog.revision, agents })).json() as ToolSettings;
@@ -67,6 +101,7 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   }
   async function revoke(approval: SavedToolApproval) {
     if (disabled || writing.current) return;
+    requestRef.current?.abort(); requestRef.current = undefined;
     writing.current = true; setPending(true); setError(""); setNotice("");
     try {
       const next = await (await request("tools/approvals/revoke", token, { tool: approval.tool, revision: approval.revision })).json() as ToolSettings;
@@ -76,6 +111,24 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Removal was not confirmed. Refresh to check saved permissions.");
     } finally { writing.current = false; setPending(false); }
+  }
+  async function retryMcp(server: string) {
+    if (disabled || writing.current || retryBusy.current) return;
+    retryBusy.current = true; setRetrying(server); setMcpError(""); setMcpNotice("");
+    queuedRetry.current = "";
+    try {
+      const next = await (await request("tools/mcp/retry", token, { server })).json() as ToolSettings;
+      if (!alive.current) return;
+      receiveDiscovery(next);
+      queuedRetry.current = next.mcp_retry?.status === "queued" ? server : "";
+      const failed = next.mcp_diagnostics?.failed_servers?.find(item => item.name === server);
+      setMcpNotice(next.mcp_retry?.status === "queued"
+        ? `${server}: retry queued. Current work continues; it will run at the next safe response boundary or message.`
+        : failed ? `${server} is still unavailable. Check the failure below, then retry when ready.`
+        : `${server} connected. Its available tools are listed below.`);
+    } catch (cause) {
+      if (alive.current) setMcpError(cause instanceof Error ? cause.message : "Retry was not confirmed. Refresh tools before trying again.");
+    } finally { retryBusy.current = false; if (alive.current) setRetrying(""); }
   }
   function choose(names: string[], enabled: boolean) {
     const next = { ...agents[agent] };
@@ -103,7 +156,8 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     {error && <p role="alert" className="tools-feedback error-text">{error}</p>}
     {notice && <p role="status" className="tools-feedback">{notice}</p>}
     <div className="tools-list">
-      <McpDiscovery value={catalog?.mcp_diagnostics} />
+      <McpDiscovery value={catalog?.mcp_diagnostics} retry={server => void retryMcp(server)} retrying={retrying}
+        disabled={disabled} notice={mcpNotice} error={mcpError} />
       <section className="tool-saved-approvals" aria-labelledby="tool-saved-approvals-title">
         <h3 id="tool-saved-approvals-title">Saved tool approvals</h3>
         <p>Saved for the approved tool definition across chats and agents in this workspace. Changed tools require approval again. Tool selections and read-only restrictions still apply.</p>

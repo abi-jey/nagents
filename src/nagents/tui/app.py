@@ -44,6 +44,7 @@ from nagents.harness.commands import BUILTIN_COMMANDS
 from nagents.harness.commands import split_command
 from nagents.harness.credentials import ProviderLogin
 from nagents.harness.execution import host_run
+from nagents.harness.followups import RunInput
 from nagents.harness.types import Notice
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
@@ -182,6 +183,8 @@ class NagentsApp(App[None]):
         self._queued_prompts: deque[str] = deque()
         self._queue_paused = False
         self._task_drafts: dict[str, str] = {}
+        self._pending_task_notes: dict[tuple[str, str], tuple[str, str]] = {}
+        self._task_note_run = ""
         self._clipboard_task: asyncio.Task[None] | None = None
         self._clipboard_pending: str | None = None
         self._mouse_selection_editor: TextArea | Input | None = None
@@ -785,6 +788,8 @@ class NagentsApp(App[None]):
     async def _send(self, text: str, *, display_text: str = "", task_id: str = "") -> None:
         if not self._backend_ready:
             await self._initialize()
+        run_id = uuid4().hex
+        self._task_note_run = run_id
         self._answer = None
         self._answer_text = ""
         self._run_text = ""
@@ -797,7 +802,11 @@ class NagentsApp(App[None]):
         if not task_id:
             await self._add(Turn("user", display_text or text))
         # Close the producer even if cancellation happens while rendering an event.
-        stream = self.harness.continue_task(task_id, text) if task_id else self.harness.run(text)
+        stream = (
+            self.harness.continue_task(task_id, text, message=self._task_input(task_id, text))
+            if task_id
+            else self.harness.run(text)
+        )
         pending_events: deque[HarnessEvent] = deque()
 
         async def present(event: HarnessEvent) -> None:
@@ -812,7 +821,7 @@ class NagentsApp(App[None]):
                         break
 
         try:
-            with host_run(self.harness, uuid4().hex, observe=pending_events.append):
+            with host_run(self.harness, run_id, observe=pending_events.append):
                 async with aclosing(stream) as events:
                     async for event in events:
                         await join_owned(asyncio.create_task(present(event)))
@@ -820,9 +829,40 @@ class NagentsApp(App[None]):
             # Closing the stream joins the producer. Recover its bounded tail,
             # including an anchor already dequeued when cancellation arrived.
             # Finish only incremental presentation; existing cards retain state.
-            while pending_events and not self._shutting_down:
-                await present(pending_events[0])
-            await self._reconcile_deliveries(force=True)
+            try:
+                while pending_events and not self._shutting_down:
+                    await present(pending_events[0])
+                await self._reconcile_deliveries(force=True)
+            finally:
+                # This root producer has joined all of its children. Any note
+                # without pickup was not consumed; keep its draft for retry.
+                self._pending_task_notes = {
+                    key: note for key, note in self._pending_task_notes.items() if note[0] != run_id
+                }
+                if self._task_note_run == run_id:
+                    self._task_note_run = ""
+
+    def _task_input(self, task_id: str, prompt: str) -> RunInput:
+        identifier = uuid4().hex
+        self._pending_task_notes[task_id, identifier] = (self._task_note_run, prompt)
+        return RunInput(prompt, identifier=identifier, message_id=identifier)
+
+    def _picked_up_task_note(self, event: TaskMessage) -> str:
+        _, prompt = self._pending_task_notes.pop((event.task_id, event.message_id), ("", ""))
+        if not prompt:
+            return event.prompt
+        # An inspector may have reopened while pickup waited on the parent
+        # stream. Its editor is newer than the draft saved on its last close.
+        if isinstance(self.screen, TaskScreen) and self.screen.selected_id == event.task_id:
+            composer = self.screen.query_one("#task-followup", TextArea)
+            if composer.text == prompt:
+                composer.clear()
+                self._task_drafts.pop(event.task_id, None)
+            else:
+                self._task_drafts[event.task_id] = composer.text
+        elif self._task_drafts.get(event.task_id) == prompt:
+            self._task_drafts.pop(event.task_id, None)
+        return prompt
 
     async def _text(self, text: str) -> None:
         if not text:
@@ -897,12 +937,11 @@ class NagentsApp(App[None]):
             self._refresh_tasks()
             self._status(f"{event.name} started in the background  /  /tasks for details")
         elif isinstance(event, TaskMessage):
+            prompt = self._picked_up_task_note(event)
             await self._flush_stream()
             self._answer = None
             self._answer_text = ""
-            await self._add(Turn("user", f"Follow-up to {event.name}:\n\n{event.prompt}"))
-            if self._task_drafts.get(event.task_id) == event.prompt:
-                self._task_drafts.pop(event.task_id, None)
+            await self._add(Turn("user", f"Follow-up to {event.name}:\n\n{prompt}"))
             self._refresh_tasks()
         elif isinstance(event, TaskCompleted):
             key = f"task:{event.task_id}" + (f":{event.followup}" if event.followup else "")
@@ -1154,12 +1193,20 @@ class NagentsApp(App[None]):
         if self.harness._busy != "run":
             self._status("Wait for the current operation to finish before continuing an agent. Your draft is kept.")
             return
+        message = self._task_input(task_id, prompt)
+        accepted = False
         try:
-            async with aclosing(self.harness.continue_task(task_id, prompt)) as events:
+            async with aclosing(self.harness.continue_task(task_id, prompt, message=message)) as events:
                 async for event in events:
+                    # The busy continuation yields only its acceptance notice;
+                    # its pickup belongs to the already-active root stream.
+                    accepted = True
                     await self._event(event)
         except (ValueError, RuntimeError, PermissionError) as exc:
             self._status(f"Follow-up not sent; draft kept. {exc}", error=True)
+        finally:
+            if not accepted:
+                self._pending_task_notes.pop((task_id, message.message_id), None)
 
     def command(self, text: str) -> None:
         self._hide_completions()

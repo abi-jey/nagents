@@ -85,6 +85,8 @@ class MCPClient:
         self._stderr_task: asyncio.Task[None] | None = None
         self._server_capabilities: dict[str, Any] = {}
         self._server_info: dict[str, Any] = {}
+        self.failure_category = "server_error"
+        self.tools_revision = 0
 
     @property
     def is_connected(self) -> bool:
@@ -150,8 +152,12 @@ class MCPClient:
     async def _drain_stderr(self) -> None:
         """Drain diagnostics without leaking server environment/secrets to clients."""
         if self._process is not None and self._process.stderr is not None:
-            while await self._process.stderr.read(65536):
-                pass
+            while chunk := await self._process.stderr.read(65536):
+                # Keep only a finite category. Subprocess output can contain
+                # tokens, URLs, command arguments, or an entire environment.
+                category = _error_category(chunk.decode(errors="replace"))
+                if category != "server_error":
+                    self.failure_category = category
 
     async def _initialize(self) -> None:
         """Perform the MCP initialization handshake."""
@@ -323,6 +329,7 @@ class MCPClient:
                     method = message.get("method", "")
                     logger.debug("MCP notification received: server=%s", self.config.name)
                     if method == "notifications/tools/list_changed":
+                        self.tools_revision += 1
                         logger.info("MCP server '%s' reported tools changed", self.config.name)
 
                 else:
@@ -502,6 +509,10 @@ def _extract_text_content(content: list[dict[str, Any]]) -> str:
 def _error_category(message: object) -> str:
     """Bounded classification only; upstream text may contain credential values."""
     text = message[:4096].casefold() if isinstance(message, str) else ""
+    if ("environment variable" in text or "env var" in text) and any(
+        term in text for term in ("missing", "required", "not set", "not defined", "must be set", "unset")
+    ):
+        return "missing_environment"
     authorization = (
         "unauthorized",
         "unauthenticated",
@@ -518,8 +529,29 @@ def _error_category(message: object) -> str:
 class MCPError(Exception):
     """Raised when an MCP server returns a JSON-RPC error response."""
 
-    def __init__(self, message: str, code: int = -1, data: Any = None, *, stage: str = "") -> None:
+    def __init__(self, message: str, code: int = -1, data: Any = None, *, stage: str = "", category: str = "") -> None:
         self.stage = stage
+        self.category = category or _error_category(message)
         self.code = code
         self.data = data
         super().__init__(f"MCP error (code={code}): {message}")
+
+
+def _failure_category(error: BaseException, client: MCPClient) -> str:
+    """Select a safe diagnostic without returning exception/subprocess text."""
+    if isinstance(error, FileNotFoundError):
+        return "executable_not_found"
+    if isinstance(error, PermissionError):
+        return "permission_denied"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    category = getattr(client, "failure_category", "server_error")
+    if category != "server_error":
+        return category
+    if isinstance(error, MCPError):
+        return error.category
+    if isinstance(error, (ConnectionError, BrokenPipeError)) or "disconnected" in str(error).casefold():
+        return "disconnected"
+    if isinstance(error, (TypeError, ValueError)):
+        return "invalid_configuration"
+    return "server_error"

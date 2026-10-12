@@ -301,7 +301,10 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
             await submit_and_wait(app, headers, first, "start")
             snapshot = (await client.get("/api/sessions", headers=headers)).json()
             retained = snapshot["retained_tasks"]
-            assert retained == [asdict(info) for info in state.harness.tasks.list()]
+            expected = [
+                {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
+            ]
+            assert retained == expected
             assert len(retained) == 1 and retained[0]["session_id"] == first
             assert retained[0]["status"] == "completed" and retained[0]["result"] == "recorded result"
             assert retained[0]["activation"] == 0 and retained[0]["trigger"] == "delegation"
@@ -319,7 +322,16 @@ def test_snapshot_retained_tasks_are_selected_root_and_process_local(
         # Persisted history is unchanged, but a new process has no retained task handles.
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, _, providers, _):
             resumed = (await client.post("/api/sessions/resume", json={"session_id": first}, headers=headers)).json()
-            assert resumed["session_id"] == first and resumed["retained_tasks"] == []
+            restored = resumed["retained_tasks"]
+            assert resumed["session_id"] == first and len(restored) == 1
+            assert {
+                key: value for key, value in restored[0].items() if key not in {"can_message", "unavailable_reason"}
+            } == {key: value for key, value in retained[0].items() if key not in {"can_message", "unavailable_reason"}}
+            assert restored[0]["can_message"] is False
+            assert restored[0]["unavailable_reason"]
+            task_detail = (await client.get(f"/api/sessions/{first}/tasks/{restored[0]['id']}", headers=headers)).json()
+            assert task_detail["history"]
+            assert task_detail["history"][-1]["content"] == "recorded result"
             assert resumed["history"] == snapshot["history"]
             assert not providers[0].requests
 
@@ -359,7 +371,13 @@ def test_nested_wakeup_reactivates_immediate_parent_before_main(
             resumed = (
                 await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
             ).json()
-            assert resumed["retained_tasks"] == [asdict(info) for info in state.harness.tasks.list()]
+            # Identity membership is stable; SQLite query order is not an API contract.
+            retained = resumed["retained_tasks"]
+            expected = [
+                {**asdict(info), "can_message": True, "unavailable_reason": ""} for info in state.harness.tasks.list()
+            ]
+            assert len(retained) == len(expected) == 2
+            assert sorted(retained, key=lambda task: task["id"]) == sorted(expected, key=lambda task: task["id"])
             assert all(info["activation"] == 1 for info in resumed["retained_tasks"])
             events = (await client.get(f"/api/activity/{session_id}/{cursor}", headers=headers)).json()["events"]
             assert events[-1]["status"] == "completed"
@@ -574,13 +592,16 @@ def test_due_wakeup_runs_beside_other_session_and_can_be_cancelled_independently
                 await client.post("/api/sessions/resume", json={"session_id": second}, headers=headers)
             ).status_code == 200
             settings = (await client.get("/api/settings", headers=headers)).json()
-            assert (
-                await client.post(
-                    "/api/settings",
-                    json={"revision": settings["revision"], "values": settings["values"]},
-                    headers=headers,
-                )
-            ).status_code == 409
+            running = state.harness_for(first)
+            saved = await client.post(
+                "/api/settings",
+                json={"revision": settings["revision"], "values": {**settings["values"], "model": "next-model"}},
+                headers=headers,
+            )
+            assert saved.status_code == 200, saved.text
+            assert state.harness is not running and state.harness.agent.provider.model == "next-model"
+            assert state.run_for(first) is active and active.harness is running and not active.task.done()
+            assert running.agent.provider.model == "fake-model"
             assert (await client.get("/api/sessions", headers=headers)).status_code == 200
             other = (await client.get(f"/api/activity/{second}/{cursor}", headers=headers)).json()
             assert other["events"] == [] and other["active_run_id"] == ""
@@ -855,6 +876,8 @@ def test_child_wakeup_obeys_current_root_permission_settings(
         async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, providers, clock):
             first = state.harness.session_id
             await submit_and_wait(app, headers, first, "start")
+            retained = state.harness_for(first)
+            task = retained.tasks.list()[0]
             settings = (await client.get("/api/settings", headers=headers)).json()
             values = {
                 **settings["values"],
@@ -864,16 +887,27 @@ def test_child_wakeup_obeys_current_root_permission_settings(
                 "/api/settings", json={"revision": settings["revision"], "values": values}, headers=headers
             )
             assert response.status_code == 200
+            assert state.harness is not retained
+            configuration_provider = providers[-1]
+            assert configuration_provider is state.harness.agent.provider
+            assert not configuration_provider.requests
+            before_wakeup = tuple(providers)
             cursor = state.wakeups.cursor
             clock.now += 10
             await state.wakeups.tick()
             events = (await client.get(f"/api/activity/{first}/{cursor}", headers=headers)).json()["events"]
+            resumed = [provider for provider in providers if provider not in before_wakeup]
+            assert not configuration_provider.requests, "Saving defaults must not execute a model request"
             if downgrade == "reviewer":
-                assert events[-1]["status"] == "completed" and len(providers) == 3
-                assert not {"write", "edit", "shell"}.intersection(providers[-1].schemas[0])
-                assert state.harness.tasks.list()[0].mode == "reviewer"
+                assert events[-1]["status"] == "completed" and len(resumed) == 1
+                assert resumed[0].requests and resumed[0].schemas
+                assert not {"write", "edit", "shell"}.intersection(resumed[0].schemas[0])
+                continued = retained.tasks.list()[0]
+                assert continued.id == task.id and continued.child_session_id == task.child_session_id
+                assert continued.mode == "reviewer" and continued.status == "completed"
             else:
-                assert events[-1]["status"] == "failed" and len(providers) == 2
+                assert events[-1]["status"] == "failed" and not resumed
+                assert retained.config.max_subagent_depth == 0
             assert not state.wakeups.pending
 
     asyncio.run(check())

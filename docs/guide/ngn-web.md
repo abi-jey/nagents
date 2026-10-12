@@ -4,6 +4,12 @@
 terminal client's workspace-scoped sessions, tools, provider configuration, and
 per-call approvals.
 
+The Team pane shows the main conversation and delegated agents in an activity
+tree. Select an agent to inspect its conversation and send it a message through
+the shared composer. Discovered profiles that have not run appear as **Not
+started**. See [Inspecting and messaging delegated agents](task-inspection.md)
+for message delivery, settings, and restart behavior.
+
 ## Source Availability
 
 Published distributions include `ngn serve`, the `web` extra, and built
@@ -48,8 +54,7 @@ Common Harness options work before or after `serve`, including `--provider`,
 `--model`, `--agent`, `--config`, `--continue`, and `--resume`. API keys and saved
 OAuth credentials stay on the backend. Configure model-provider credentials through
 the existing CLI/environment. Connector credentials have a separate Channels form
-described below. Textual is not required. The existing `server` extra also supplies
-the HTTP/WebSocket dependencies, but the applications are independent.
+described below. Textual is not required.
 
 ### Your Own Connection
 

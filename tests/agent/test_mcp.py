@@ -5,6 +5,7 @@ import inspect
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import cast
+from unittest.mock import AsyncMock
 
 from nagents.mcp import MCPError
 from nagents.mcp import MCPManager
@@ -16,8 +17,11 @@ from nagents.mcp.manager import _MCPToolInfo
 from nagents.mcp.manager import _mcp_type_to_python
 from nagents.mcp.manager import _param_to_mcp_name
 from nagents.tools.registry import ToolRegistry
+from nagents.types import ToolCall
 
 if TYPE_CHECKING:
+    import pytest
+
     from nagents.types import JsonSchema
 
 
@@ -355,6 +359,46 @@ class _FakeMCPClient:
 
 class TestMCPManagerAddRemoveServer:
     """Tests for runtime add_server / remove_server (mid-turn MCP adds)."""
+
+    def test_refresh_drops_disconnected_tools_without_releasing_other_connections(
+        self, monkeypatch: "pytest.MonkeyPatch"
+    ) -> None:
+        from nagents.mcp import manager as mgr_mod
+
+        monkeypatch.setattr(mgr_mod, "MCPClient", _FakeMCPClient)
+        manager = MCPManager([])
+
+        async def run() -> None:
+            try:
+                await manager.add_server(MCPServerConfig(name="healthy", command="fake"))
+                await manager.add_server(MCPServerConfig(name="disconnected", command="fake"))
+                healthy = manager._clients["healthy"]
+                disconnected = manager._clients["disconnected"]
+                connections = dict(manager._connections)
+                healthy_close = AsyncMock(wraps=healthy.disconnect)
+                disconnected_close = AsyncMock(wraps=disconnected.disconnect)
+                call = AsyncMock(return_value=[{"type": "text", "text": "pong"}])
+                monkeypatch.setattr(healthy, "disconnect", healthy_close)
+                monkeypatch.setattr(disconnected, "disconnect", disconnected_close)
+                monkeypatch.setattr(healthy, "call_tool", call, raising=False)
+                await disconnected.disconnect()
+
+                await manager.refresh_tools()
+
+                expected = {"mcp__healthy__do_thing", "mcp__healthy__ping"}
+                assert {tool.__name__ for tool in await manager.get_tools()} == expected
+                assert {tool.name for tool in await manager.get_tool_definitions()} == expected
+                assert "disconnected" not in manager._tool_revisions
+                assert manager._connections == connections
+                assert all(connection.references == 1 for connection in connections.values())
+                healthy_close.assert_not_awaited()
+                disconnected_close.assert_awaited_once()
+                assert await manager.execute_tool(ToolCall("ping", "mcp__healthy__ping", {})) == "pong"
+                call.assert_awaited_once_with("ping", {})
+            finally:
+                await manager.disconnect_all()
+
+        asyncio.run(run())
 
     def test_add_server_registers_tools(self, monkeypatch: Any) -> None:
         from nagents.mcp import manager as mgr_mod

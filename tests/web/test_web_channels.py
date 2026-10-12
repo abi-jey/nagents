@@ -163,9 +163,9 @@ def test_ws_server_owned_disconnect_draft_cancel_and_guards(tmp_path: Path, monk
                     headers=app.headers,
                     json={"revision": settings["revision"], "values": settings["values"]},
                 ).status_code
-                == 409
+                == 200
             )
-            assert app.client.post("/api/channels/refresh", headers=app.headers, json={}).status_code == 409
+            assert app.client.post("/api/channels/refresh", headers=app.headers, json={}).status_code == 200
             assert app.client.post("/api/cancel", headers=app.headers, json={"run_id": run_id}).status_code == 200
         app.idle()
 

@@ -170,6 +170,10 @@ class ChannelNotices:
                 ):
                     return
                 kind = record.get("event")
+                if kind in {"task_activity", "task_message_receipt"}:
+                    # Task inspection is not a channel tool/execution action.
+                    # Never unwrap its public child evidence into this sink.
+                    return
                 if kind not in ("tool_call", "tool_result"):
                     return
                 tool = _tool(record)

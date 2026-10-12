@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -68,11 +69,22 @@ def test_followup_while_parent_busy_uses_existing_run_stream(tmp_path: Path, mon
             release.set()
             await idle(app, pilot)
             assert any(message.content == "Human child follow-up" for message in await harness.task_history(task_id))
-            assert any(
-                isinstance(message.content, str)
+            parent_history = await harness.history()
+            notifications = [
+                str(message.content).split("\n", 1)[1]
+                for message in parent_history
+                if isinstance(message.content, str)
+                and message.content.startswith("BACKGROUND TASK NOTIFICATION:")
                 and '"human_messages"' in message.content
-                and "Human child follow-up" in message.content
-                for message in await harness.history()
+            ]
+            pickup = next(
+                item
+                for notice in notifications
+                for item in json.loads(notice)["human_messages"]
+                if item["task_id"] == task_id
             )
+            assert pickup["prompt"] == "A human message was picked up by this agent."
+            assert pickup["message_id"]
+            assert all("Human child follow-up" not in str(message.content) for message in parent_history)
 
     asyncio.run(scenario())

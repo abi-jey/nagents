@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
+    from nagents.harness.followups import RunInput
     from nagents.harness.types import HarnessEvent
     from nagents.harness.types import TaskCompleted
     from nagents.harness.types import TaskMessage
@@ -170,12 +171,23 @@ def test_parent_stop_preserves_cancellation_when_child_execution_also_raises(
             child: Harness,
             message: str,
             *,
+            task_id: str = "",
             trigger: str = "human",
             notifications: tuple[TaskCompleted | TaskMessage, ...] = (),
+            initial_input: RunInput | None = None,
+            start_profile: str = "",
         ) -> AsyncIterator[HarnessEvent]:
             try:
                 async with aclosing(
-                    original_run(child, message, trigger=trigger, notifications=notifications)
+                    original_run(
+                        child,
+                        message,
+                        task_id=task_id,
+                        trigger=trigger,
+                        notifications=notifications,
+                        initial_input=initial_input,
+                        start_profile=start_profile,
+                    )
                 ) as events:
                     async for event in events:
                         yield event

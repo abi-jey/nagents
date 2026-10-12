@@ -16,6 +16,7 @@ import { readSettings, saveSettings } from "../features/settings/transport.js";
 import { createDraft, parseDraft, selectProfile } from "../features/settings/draft.js";
 import { useVoicePresence } from "./useVoicePresence.js";
 import { useSkills } from "../features/chat/skills.js";
+import { useTeam } from "../features/team/useTeam.js";
 
 export function useClient() {
   const sessions = useSessions();
@@ -27,6 +28,7 @@ export function useClient() {
     () => void connect(),
   );
   const operations = useOperations();
+  const team = useTeam(sessions.config?.token || "", sessions.sessionId, chat.taskRevision, !!chat.runId, chat.taskActivity);
   const { operating, error, setError } = operations;
   const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
   const voice = useVoicePresence();
@@ -42,8 +44,8 @@ export function useClient() {
 
   const settings = useSettings({
     token: sessions.config?.token || "",
-    blocked: busy || !!sessions.externalRun || !!chat.approval.pending,
-    operate: (action) => busy ? Promise.resolve(false) : operate(action),
+    blocked: false,
+    operate,
     accept: sessions.acceptSettings,
   });
   const channels = useChannels(sessions.config?.token || "", sessions.sessions, sessions.sessionId);
@@ -129,7 +131,7 @@ export function useClient() {
   async function command({ name, argument }: CommandIntent): Promise<boolean> {
     if (uploadState.items.length) throw new Error("Remove draft attachments before running a command. Your draft is kept.");
     if (["login", "settings", "model", "agent", "provider"].includes(name) && !access().settings)
-      throw new Error("Finish the active run before changing settings or signing in. Your draft is kept.");
+      throw new Error("Close the current dialog or wait for the pending request. Your draft is kept.");
     if (name === "help") { setCommandHelp(true); return true; }
     if (name === "skills") { skills.show(argument); return true; }
     if (name === "login") { voice.close(); setLoginOpen(true); return true; }
@@ -262,6 +264,7 @@ export function useClient() {
     sessions,
     context,
     chat,
+    team,
     uploads,
     uploadState,
     settings,

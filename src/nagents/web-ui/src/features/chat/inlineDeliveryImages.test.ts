@@ -140,7 +140,7 @@ for (const change of ["token", "root"] as const) {
   });
 }
 
-test("near-viewport images load once and explicit cancel or unload suppresses automatic reload", async t => {
+test("images load near the viewport and release memory offscreen without preview controls", async t => {
   const network = controlledFetch(t);
   await mounted(t, async view => {
     await view.render(oneImage);
@@ -151,22 +151,21 @@ test("near-viewport images load once and explicit cancel or unload suppresses au
     assert.equal(network.requests.length, 0);
     await act(async () => view.observed[0].fire(true));
     assert.equal(network.requests.length, 1);
-    assert.equal(view.observed[0].disconnected, true);
-    await view.click("Cancel loading");
+    assert.equal(view.observed[0].disconnected, false);
+    await act(async () => view.observed[0].fire(false));
     assert.equal(network.requests[0].signal.aborted, true);
     await act(async () => view.observed[0].fire(true));
     await view.render({ ...oneImage });
-    assert.equal(network.requests.length, 1);
-    await view.click("Show image preview");
+    assert.equal(network.requests.length, 2);
     await act(async () => network.requests[1].finish());
     assert.ok(view.container.querySelector("img"));
-    await view.click("Unload preview");
+    assert.doesNotMatch(view.container.textContent!, /preview|Unload|Cancel loading/i);
+    await act(async () => view.observed[0].fire(false));
     assert.equal(view.container.querySelector("img"), null);
     assert.equal(view.revoked.length, 1);
-    await act(async () => view.observed[0].fire(true));
     await view.render({ ...oneImage });
     assert.equal(network.requests.length, 2);
-    await view.click("Show image preview");
+    await act(async () => view.observed[0].fire(true));
     await act(async () => network.requests[2].finish());
     assert.ok(view.container.querySelector("img"));
   }, true);
@@ -190,7 +189,7 @@ test("stale intersection callbacks cannot load another identity and missing auth
   }, true);
 });
 
-test("retained-byte exhaustion exposes retry without fetching or automatically retrying", async t => {
+test("images wait quietly for available memory and appear automatically when it is released", async t => {
   const held = Array.from({ length: 3 }, () => {
     const reservation = mediaBudget.reserve(20 * 1024 * 1024); reservation.loaded(); return reservation;
   });
@@ -198,12 +197,9 @@ test("retained-byte exhaustion exposes retry without fetching or automatically r
   try {
     await mounted(t, async view => {
       await view.render(oneImage);
-      assert.match(view.container.textContent!, /Media budget is full/);
+      assert.doesNotMatch(view.container.textContent!, /budget|preview|Unload/i);
       assert.equal(fetch.mock.callCount(), 0);
-      held.forEach(reservation => reservation.release());
-      await view.render({ ...oneImage });
-      assert.equal(fetch.mock.callCount(), 0, "Available bytes do not cause uncontrolled automatic retries");
-      await view.click("Retry preview");
+      await act(async () => held.forEach(reservation => reservation.release()));
       assert.equal(fetch.mock.callCount(), 1);
       assert.ok(view.container.querySelector("img"));
     });
@@ -219,13 +215,13 @@ test("network failure remains retryable without looping on replay or intersectio
   await mounted(t, async view => {
     await view.render(oneImage);
     await act(async () => view.observed[0].fire(true));
-    assert.match(view.container.textContent!, /Temporary image failure/);
+    assert.match(view.container.textContent!, /Couldn’t load this image/);
     for (let index = 0; index < 3; index++) {
       await view.render({ ...oneImage });
       await act(async () => view.observed[0].fire(true));
     }
     assert.equal(calls, 1);
-    await view.click("Retry preview");
+    await view.click("Retry");
     assert.equal(calls, 2);
     assert.ok(view.container.querySelector("img"));
   }, true);
@@ -238,13 +234,13 @@ test("automatic fetch waiting is bounded at sixteen and cancellation frees queue
   const wait = (controller: AbortController) => budget.reserveWhenReady(1, controller.signal)
     .then(reservation => ({ reservation, error: undefined }), (error: unknown) => ({ reservation: undefined, error }));
   const pending = controllers.map(wait);
-  await assert.rejects(budget.reserveWhenReady(1, new AbortController().signal), /Too many previews/);
+  await assert.rejects(budget.reserveWhenReady(1, new AbortController().signal), /Too many media/);
   const reason = new Error("Cancelled queued image");
   controllers[0].abort(reason);
   assert.equal((await pending[0]).error, reason);
   const replacementController = new AbortController();
   const replacement = wait(replacementController);
-  await assert.rejects(budget.reserveWhenReady(1, new AbortController().signal), /Too many previews/);
+  await assert.rejects(budget.reserveWhenReady(1, new AbortController().signal), /Too many media/);
   held.release();
   const first = await pending[1];
   assert.ok(first.reservation, "A queued image acquires the freed fetch slot");
