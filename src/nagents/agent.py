@@ -3,6 +3,7 @@ Main orchestrator for LLM interactions with auto tool execution.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -18,7 +19,9 @@ from contextlib import aclosing
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from contextlib import nullcontext
+from contextlib import suppress
 from copy import deepcopy
+from dataclasses import dataclass
 from dataclasses import replace
 from enum import Enum
 from pathlib import Path
@@ -38,6 +41,7 @@ from .channels.types import Channel
 from .channels.types import ChannelEventHandler
 from .channels.types import discard_event
 from .compaction import ModelCompaction
+from .compaction import describe_compaction
 from .compaction import estimate_messages_tokens
 from .compaction import get_model_context_limit
 from .context_stats import ContextStats
@@ -99,6 +103,19 @@ if TYPE_CHECKING:
     from .realtime import RealtimeConfig
     from .realtime import RealtimeSession
     from .stt import STTService
+
+
+@dataclass(frozen=True)
+class _UsageOrigin:
+    provider: tuple[int, str, str, str, str, str]
+    context_id: int
+    history_count: int
+    history_digest: str
+    setup_digest: str
+
+
+def _context_digest(value: object) -> str:
+    return hashlib.sha256(repr(value).encode("utf-8")).hexdigest()
 
 
 class _DefaultCompactionStrategy:
@@ -355,6 +372,7 @@ class Agent:
         self._session_usage: dict[str, TokenUsage] = {}
         # Last single generation's real usage per session, for context-stat comparison.
         self._last_usage: dict[str, TokenUsage] = {}
+        self._usage_origins: dict[str, _UsageOrigin] = {}
 
         # Flag to request compaction during run (set by trigger_compaction())
         self._compaction_requested: bool = False
@@ -1065,13 +1083,14 @@ class Agent:
         history = await self.session.get_history(session_id)
         original_count = len(history)
         original_tokens = estimate_messages_tokens(history)
+        observed = await self._observed_usage(session_id, history)
         request = CompactionRequest(
             messages=deepcopy(history),
             session_id=session_id,
             provider=self.provider,
             estimated_tokens=original_tokens,
             force=force,
-            actual_input_tokens=self._session_tokens.get(session_id, 0),
+            actual_input_tokens=observed.prompt_tokens if observed is not None else 0,
         )
         if not force and not await strategy.should_compact(request):
             return
@@ -1087,7 +1106,7 @@ class Agent:
             raise ValueError("Compaction strategy returned empty history")
         await self.session.replace_context(session_id, result.messages)
         new_tokens = estimate_messages_tokens(result.messages)
-        self._session_tokens[session_id] = new_tokens
+        self._discard_observed_usage(session_id)
         yield CompactionDoneEvent(
             original_message_count=original_count,
             original_token_count=original_tokens,
@@ -1170,12 +1189,57 @@ class Agent:
 
         return result
 
+    def _usage_provider_identity(self) -> tuple[int, str, str, str, str, str]:
+        provider = self.provider
+        return (
+            id(provider),
+            provider.provider_type.value,
+            provider.model,
+            provider.base_url,
+            provider.api,
+            provider._context_metadata_identity()[2],
+        )
+
+    def _usage_setup_digest(self) -> str:
+        tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else []
+        return _context_digest(
+            (
+                self.system_prompt,
+                [(tool.name, tool.description, tool.parameters) for tool in tools],
+                render_skill_manifest(self.skills.values()) if self.skill_discoverer is not None else "",
+                self.save_tool_outputs,
+            )
+        )
+
+    def _discard_observed_usage(self, session_id: str) -> None:
+        self._last_usage.pop(session_id, None)
+        self._usage_origins.pop(session_id, None)
+        self._session_tokens.pop(session_id, None)
+
+    async def _observed_usage(self, session_id: str, history: list[Message]) -> TokenUsage | None:
+        """A last prompt count survives append-only history, never a new context/model."""
+        origin = self._usage_origins.get(session_id)
+        if origin is None:
+            return None
+        context_id = await self.session.context_identity(session_id)
+        if (
+            origin.provider != self._usage_provider_identity()
+            or origin.setup_digest != self._usage_setup_digest()
+            or len(history) < origin.history_count
+            or _context_digest(history[: origin.history_count]) != origin.history_digest
+            or context_id != origin.context_id
+        ):
+            self._discard_observed_usage(session_id)
+            return None
+        return self._last_usage.get(session_id)
+
     async def context_stats(self, session_id: str) -> ContextStats:
         """Estimate the token breakdown of the request this session would send.
 
         Read-only: it assembles the same system prompt, tool schemas, skill
-        catalog and history that the next text request uses, without calling the
-        provider or changing session state. Values are character/byte heuristics;
+        catalog and history that the next text request uses, without making
+        a generation or changing session state. Optional provider metadata is
+        refreshed through a bounded cache. Breakdown values are character/byte heuristics;
         see :func:`nagents.estimate_context_stats` for what is included.
 
         Explicit ``$skill`` activation text is request-local and never persisted,
@@ -1190,21 +1254,30 @@ class Agent:
         self._check_channel_access()
         if not await self.session.session_exists(session_id):
             raise ValueError(f"Session '{session_id}' not found")
+        provider = self.provider
+        identity = self._usage_provider_identity()
+        window = await provider.resolve_context_window()
         history = await self.session.get_history(session_id)
+        observed = await self._observed_usage(session_id, history)
+        if identity != self._usage_provider_identity():
+            provider = self.provider
+            window = provider.cached_context_window()
+            observed = None
         messages = self._filter_unsupported_audio(list(history))
         tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else []
         if tools and self.save_tool_outputs:
             tools = _inject_save_to(tools)
         skill_manifest = render_skill_manifest(self.skills.values()) if self.skill_discoverer is not None else ""
-        observed = self._last_usage.get(session_id)
         return estimate_context_stats(
             system_prompt=self.system_prompt or "",
             tools=tools,
             skill_manifest=skill_manifest,
             messages=messages,
-            context_window=get_model_context_limit(self.provider),
-            provider=self.provider.provider_type.value,
-            model=self.provider.model,
+            context_window=window.tokens,
+            context_window_source=window.source,
+            compaction=describe_compaction(self.compaction_strategy, provider),
+            provider=provider.provider_type.value,
+            model=provider.model,
             observed=observed,
         )
 
@@ -1438,7 +1511,8 @@ class Agent:
             messages = self._filter_unsupported_audio(messages)
 
             # Get stored prompt_tokens from previous API calls (or estimate if first call)
-            stored_prompt_tokens = self._session_tokens.get(session_id, 0)
+            observed_usage = await self._observed_usage(session_id, history)
+            stored_prompt_tokens = observed_usage.prompt_tokens if observed_usage is not None else 0
 
             # Estimate tokens for new user message (not yet in history)
             new_message_tokens = estimate_messages_tokens([processed_message])
@@ -1484,7 +1558,7 @@ class Agent:
                     messages = self._filter_unsupported_audio(messages)
                     # Reset token tracking after compaction (context was summarized)
                     # The next API call will give us new actual prompt_tokens
-                    self._session_tokens[session_id] = event.summary_tokens
+                    self._discard_observed_usage(session_id)
                     observe("context_after_compaction", messages=messages, session_id=session_id)
 
             # Generate response
@@ -1544,6 +1618,20 @@ class Agent:
                 ],
                 config=request.config,
             )
+            # Resolve deferred auth before binding usage to this request. Failure
+            # remains the generation transport's responsibility and error event.
+            with suppress(Exception):
+                async with asyncio.timeout(3.0):
+                    await self.provider._prepare_context_metadata()
+            usage_origin = _UsageOrigin(
+                self._usage_provider_identity(),
+                await self.session.context_identity(session_id),
+                len(history),
+                _context_digest(history),
+                self._usage_setup_digest(),
+            )
+            # A new generation without usage must not inherit an older round's count.
+            self._discard_observed_usage(session_id)
             async with self._closing_events(
                 self.provider.generate(
                     messages=request.messages,
@@ -1561,11 +1649,13 @@ class Agent:
                         last_usage = replace(event.usage)
                         # Context size remains the latest prompt, not accumulated billing usage.
                         self._session_tokens[session_id] = last_usage.prompt_tokens
-                        self._last_usage[session_id] = TokenUsage(
-                            prompt_tokens=last_usage.prompt_tokens,
-                            completion_tokens=last_usage.completion_tokens,
-                            total_tokens=last_usage.total_tokens,
-                        )
+                        if last_usage.prompt_tokens > 0:
+                            self._usage_origins[session_id] = usage_origin
+                            self._last_usage[session_id] = TokenUsage(
+                                prompt_tokens=last_usage.prompt_tokens,
+                                completion_tokens=last_usage.completion_tokens,
+                                total_tokens=last_usage.total_tokens,
+                            )
                     event.usage = replace(last_usage, session=replace(session_usage))
 
                     if isinstance(event, TextChunkEvent):

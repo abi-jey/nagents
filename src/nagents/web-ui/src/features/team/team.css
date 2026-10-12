@@ -37,8 +37,10 @@
 .team-agent-model .provider-logo, .team-agent-model .provider-logo.has-brand, .focused-task-model .provider-logo, .focused-task-model .provider-logo.has-brand { width: 12px; height: 12px; flex: 0 0 12px; margin: 0; padding: 0; background: transparent; border-radius: 0; }
 .team-agent-model .provider-logo.has-brand, .focused-task-model .provider-logo.has-brand { background: #f5f5f3; border-radius: 3px; }
 .team-agent-model .provider-logo img, .focused-task-model .provider-logo img { width: 12px; height: 12px; }
-.team-agent-context { width: 100%; display: flex; justify-content: space-between; gap: 5px; color: var(--text-secondary); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 12px; }
-.team-agent-context > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-agent-context { width: 100%; display: grid; gap: 2px; color: var(--text-secondary); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 12px; }
+.team-agent-context > span { overflow-wrap: anywhere; }
+.team-agent-compaction { color: var(--text-secondary); }
+.team-context-warning { color: var(--accent-amber, #d9ad65); font-size: 9px; line-height: 1.4; }
 .team-agent-meter { display: block; height: 2px; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); width: 100%; border-radius: 2px; }
 .team-agent-meter i { display: block; height: 100%; background: color-mix(in srgb, var(--accent-blue) 65%, transparent); border-radius: inherit; }
 .team-agent-settings { position: absolute; top: 3px; right: 2px; display: grid; place-items: center; width: 26px; min-height: 26px; padding: 0; border: 0; color: var(--text-secondary); background: transparent; }

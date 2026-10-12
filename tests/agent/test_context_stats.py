@@ -116,7 +116,7 @@ def test_component_sums_equal_total_and_observed_window_is_reported() -> None:
     )
 
     assert stats.total_tokens == sum(component.tokens for component in stats.components)
-    assert stats.remaining_tokens == 1000 - stats.total_tokens
+    assert stats.remaining_tokens == 1000 - 321
     assert stats.observed_prompt_tokens == 321
     assert stats.observed_completion_tokens == 12
     assert stats.provider == "openai_compatible"
@@ -161,5 +161,209 @@ def test_agent_context_stats_rejects_unknown_session(tmp_path: Path) -> None:
         else:  # pragma: no cover - the assertion above is the contract
             raise AssertionError("Expected a missing-session error")
         await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_observed_usage_is_scoped_to_live_history_and_request_setup(tmp_path: Path) -> None:
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+
+    async def drive() -> None:
+        provider = OfflineProvider([[TextDoneEvent(text="answer", usage=Usage(248_779, 12, 248_791))]])
+        provider.configure_context_window(1_000_000, {})
+        agent = Agent(provider, SessionManager(tmp_path / "observed.db"), compaction_strategy=None)
+        try:
+            assert [event async for event in agent.run("hello", session_id="s")]
+            stats = await agent.context_stats("s")
+            assert stats.observed_prompt_tokens == 248_779
+            assert stats.remaining_tokens == 1_000_000 - 248_779
+            assert stats.total_tokens == sum(component.tokens for component in stats.components)
+            assert stats.context_window_source == "configured"
+            assert stats.as_dict()["compaction"] == {"trigger": "off"}
+            # Appended outputs/history preserve the last measured prompt; its
+            # label is explicitly last-provider input, not an exact next request.
+            await agent.session.add_message("s", Message(role="user", content="continue"))
+            assert (await agent.context_stats("s")).observed_prompt_tokens == 248_779
+            agent.system_prompt = "A different request setup"
+            assert (await agent.context_stats("s")).observed_prompt_tokens is None
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_observed_usage_is_invalidated_by_same_text_reset_or_model_switch(tmp_path: Path) -> None:
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+
+    async def drive() -> None:
+        for change in ("reset", "replace", "model", "provider"):
+            provider = OfflineProvider([[TextDoneEvent(text="answer", usage=Usage(321, 12, 333))]])
+            agent = Agent(provider, SessionManager(tmp_path / f"{change}.db"), compaction_strategy=None)
+            try:
+                assert [event async for event in agent.run("same text", session_id="s")]
+                history = await agent.session.get_history("s")
+                if change == "reset":
+                    await agent.session.clear_session("s")
+                    for message in history:
+                        await agent.session.add_message("s", message)
+                elif change == "replace":
+                    await agent.session.replace_context("s", history)
+                elif change == "model":
+                    provider.model = "another-model"
+                else:
+                    agent.provider = OfflineProvider()
+                stats = await agent.context_stats("s")
+                assert stats.observed_prompt_tokens is None
+                assert stats.context_window is not None
+                assert stats.remaining_tokens == stats.context_window - stats.total_tokens
+            finally:
+                await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_compaction_and_generation_without_usage_discard_old_observation(tmp_path: Path) -> None:
+    from nagents import ModelCompaction
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+
+    async def drive() -> None:
+        provider = OfflineProvider(
+            [
+                [TextDoneEvent(text="answer", usage=Usage(321, 12, 333))],
+                [TextDoneEvent(text="new answer without usage")],
+                [TextDoneEvent(text="summary")],
+            ]
+        )
+        agent = Agent(provider, SessionManager(tmp_path / "fresh.db"), compaction_strategy=None)
+        try:
+            assert [event async for event in agent.run("first", session_id="s")]
+            assert (await agent.context_stats("s")).observed_prompt_tokens == 321
+            assert [event async for event in agent.run("second", session_id="s")]
+            assert (await agent.context_stats("s")).observed_prompt_tokens is None
+            agent.compaction_strategy = ModelCompaction(token_budget=600_001)
+            await agent.compact("s")
+            stats = await agent.context_stats("s")
+            assert stats.observed_prompt_tokens is None
+            assert stats.compaction == {"trigger": "tokens", "token_budget": 600_001, "token_threshold": 420_000}
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_context_metadata_wait_rechecks_history_and_setup(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+    from nagents.provider.context import ContextWindow
+
+    async def drive() -> None:
+        for change in ("instructions", "history"):
+            provider = OfflineProvider([[TextDoneEvent(text="answer", usage=Usage(321, 12, 333))]])
+            provider.configure_context_window(1_000_000, {})
+            agent = Agent(provider, SessionManager(tmp_path / f"metadata-{change}.db"), compaction_strategy=None)
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def blocked_window(
+                current_provider: OfflineProvider = provider,
+                entered_event: asyncio.Event = entered,
+                release_event: asyncio.Event = release,
+            ) -> ContextWindow:
+                entered_event.set()
+                await release_event.wait()
+                return current_provider.cached_context_window()
+
+            try:
+                assert [event async for event in agent.run("original", session_id="s")]
+                with patch.object(provider, "resolve_context_window", blocked_window):
+                    pending = asyncio.create_task(agent.context_stats("s"))
+                    await entered.wait()
+                    if change == "instructions":
+                        agent.system_prompt = "new setup" * 20
+                    else:
+                        await agent.session.replace_context("s", [Message(role="user", content="x" * 800)])
+                    release.set()
+                    stats = await pending
+                assert stats.observed_prompt_tokens is None
+                if change == "history":
+                    assert tokens(stats, HISTORY_USER_KEY) == 204
+                else:
+                    assert tokens(stats, SYSTEM_PROMPT_KEY) == 45
+            finally:
+                await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_completion_only_usage_does_not_claim_zero_prompt_context(tmp_path: Path) -> None:
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+
+    async def drive() -> None:
+        provider = OfflineProvider([[TextDoneEvent(text="answer", usage=Usage(completion_tokens=12, total_tokens=12))]])
+        agent = Agent(provider, SessionManager(tmp_path / "output-only.db"), compaction_strategy=None)
+        try:
+            assert [event async for event in agent.run("hello", session_id="s")]
+            stats = await agent.context_stats("s")
+            assert stats.observed_prompt_tokens is None
+            assert stats.total_tokens > 0
+            assert stats.context_window is not None
+            assert stats.remaining_tokens == stats.context_window - stats.total_tokens
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_deferred_auth_usage_is_bound_after_credentials_resolve(tmp_path: Path) -> None:
+    import os
+    from collections.abc import AsyncIterator
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
+
+    from nagents import ModelCompaction
+    from nagents.events import Event
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+    from nagents.harness.config import HarnessConfig
+    from nagents.harness.provider import HarnessProvider
+    from nagents.harness.providers import ProviderProfile
+    from nagents.provider import Provider
+    from nagents.types import GenerationConfig
+
+    async def generate(
+        self: Provider,
+        messages: list[Message],
+        tools: list[ToolDefinition] | None = None,
+        config: GenerationConfig | None = None,
+        stream: bool = True,
+        verify_model: bool = False,
+    ) -> AsyncIterator[Event]:
+        assert self.api_key == "resolved-test-key"
+        yield TextDoneEvent(text="answer", usage=Usage(321, 12, 333))
+
+    async def drive() -> None:
+        for strategy in (None, ModelCompaction(token_budget=600_000)):
+            profile = ProviderProfile(
+                kind="openai", auth="api-key", api_key_env="NGN_CONTEXT_TEST_KEY", context_window=1_000_000
+            )
+            provider = HarnessProvider(HarnessConfig(workspace=tmp_path, providers={"": profile}, model="test-model"))
+            agent = Agent(
+                provider, SessionManager(tmp_path / f"deferred-{strategy is None}.db"), compaction_strategy=strategy
+            )
+            try:
+                with (
+                    patch.dict(os.environ, {"NGN_CONTEXT_TEST_KEY": "resolved-test-key"}),
+                    patch.object(provider, "verify_model", AsyncMock(return_value=True)),
+                    patch.object(Provider, "generate", generate),
+                ):
+                    assert [event async for event in agent.run("hello", session_id="s")]
+                    assert (await agent.context_stats("s")).observed_prompt_tokens == 321
+            finally:
+                await agent.close()
 
     asyncio.run(drive())

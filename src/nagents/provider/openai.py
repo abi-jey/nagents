@@ -10,6 +10,7 @@ and token budgets are unsupported on that route.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -560,6 +561,8 @@ class OpenAIProvider(Provider):
             raise ModelListError(str(error)) from None
         except Exception:
             raise ModelListError("ChatGPT credentials are unavailable; sign in again with /login.") from None
+        self._context_auth_identity = hashlib.sha256(f"{account_id}:{access_token}:{residency}".encode()).hexdigest()
+        identity = self._context_metadata_identity()
         client_version = await catalog_version(self._model_list_timeout)
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -601,7 +604,25 @@ class OpenAIProvider(Provider):
             if visibility == "list" and model_id not in seen:
                 models.append(model_id)
                 seen.add(model_id)
+        if identity == self._context_metadata_identity():
+            self._context_metadata.select(identity)
+            self._context_metadata.update(response["models"], id_key="slug")
         return models
+
+    async def _prepare_context_metadata(self) -> None:
+        if self._local_api:
+            await super()._prepare_context_metadata()
+        else:
+            credentials = await self._credentials()
+            self._context_auth_identity = hashlib.sha256(
+                f"{credentials.account_id}:{credentials.access_token}:{credentials.residency}".encode()
+            ).hexdigest()
+
+    async def _fetch_context_metadata(self) -> None:
+        if self._local_api:
+            await super()._fetch_context_metadata()
+        else:
+            await self.get_model_list()
 
     async def generate(
         self,

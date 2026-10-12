@@ -32,6 +32,8 @@ export type TaskDetail = {
 export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string };
 
 export function taskAgent(task: RetainedTask): TeamAgent {
+  const context = validContextStats(task.context) ? task.context : undefined;
+  const compaction = context?.compaction || task.compaction;
   const waiting = task.phase?.startsWith("waiting");
   const phase: AgentPhase = task.status === "failed" ? "failed" : task.status === "cancelled" ? "cancelled"
     : task.status === "completed" ? "done" : waiting ? "waiting" : "running";
@@ -42,7 +44,7 @@ export function taskAgent(task: RetainedTask): TeamAgent {
   return { id: task.id, name: task.name, parentId: task.parent_task_id || MAIN_AGENT, prompt: task.prompt,
     phase, reason, provider: task.provider || "", providerKind: task.provider_kind || task.provider || "", model: task.model || "",
     startedAt: task.started_at || 0, updatedAt: task.updated_at || task.completed_at || task.started_at || 0,
-    context: validContextStats(task.context) ? task.context : undefined, compactTrigger: task.compact_trigger || task.compaction?.trigger, compactTokens: task.compact_tokens, compactThreshold: task.compaction?.token_threshold, compactMessages: task.compact_messages ?? task.compaction?.message_threshold,
+    context, compactTrigger: compaction?.trigger || task.compact_trigger, compactTokens: compaction?.token_budget, compactThreshold: compaction?.token_threshold, compactMessages: compaction?.message_threshold,
     canMessage: task.can_message === true, messageReason: task.unavailable_reason || task.message_unavailable_reason || "", task };
 }
 

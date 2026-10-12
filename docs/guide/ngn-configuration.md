@@ -132,6 +132,45 @@ Example:
 }
 ```
 
+Provider connections also accept `context_window` (a positive input-token limit,
+or `0` for automatic) and `model_context_windows` (exact model IDs mapped to
+positive limits). Model overrides take precedence over the connection default:
+
+```json
+{
+  "kind": "litellm",
+  "base_url": "https://gateway.example/v1",
+  "context_window": 0,
+  "model_context_windows": {
+    "eu.anthropic.claude-opus-5-5": 1000000
+  }
+}
+```
+
+When no override applies, ngn uses exact-model provider metadata where available:
+LiteLLM's [`/model/info`](https://docs.litellm.ai/docs/proxy/model_management)
+`model_info.max_input_tokens`, Anthropic's model `max_input_tokens`, Gemini's
+`inputTokenLimit`, OpenRouter's `context_length`, and context metadata returned by
+compatible or Codex catalogs. The public OpenAI `/models` API does not advertise
+context limits. Name-based estimates remain a last resort and are labelled
+**guessed** in the interface. Metadata requests stay on the configured provider,
+are bounded to three seconds and 1 MiB, and cache results or failures for five
+minutes per model. A denied LiteLLM management endpoint does not block generation;
+set an explicit override when the key cannot read model metadata.
+
+Automatic compaction uses 70% of this same effective window. A token compaction
+budget is separate: a configured `compact_tokens` value of 600,000 triggers at
+420,000, even on a model with a 1,000,000-token window. The interface shows both
+values and warns when a configured budget exceeds a known model window. Child
+agents use their own model, connection, and applied compaction settings.
+
+Context usage prefers the last provider-reported prompt-token count for the active
+session and model; it is a last measured request, not a prediction of the next
+request. Append-only history can retain that measurement. Resetting or replacing
+history, compaction, changing provider/model or request setup, or completing a
+new generation without usage invalidates it. The component breakdown remains a
+separate estimate whose parts always sum to its estimated total.
+
 `request_timeout` is the total deadline, in seconds, for each ngn-issued model
 HTTP request on this named connection, including connection setup and streaming
 response reads. It accepts positive finite integers or decimals; omission keeps

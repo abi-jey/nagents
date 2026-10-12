@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
-import { formatTokens } from "../context/controller.js";
+import { contextPercent, contextSummary, contextUsage, contextUsageLabel, contextWindowSource } from "../context/controller.js";
+import { compactLabel, compactionWarning } from "./context.js";
 import { agentAncestors, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
 import { profileTarget } from "./useTeam.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
@@ -19,19 +20,11 @@ export function AgentState({ agent }: { agent: TeamAgent }) {
   return <span className={`team-state state-${agent.phase}`} title={agent.reason}><i aria-hidden="true" />{phaseLabel(agent)}</span>;
 }
 
-function compactLabel(agent: TeamAgent): string {
-  if (agent.compactTrigger === "off") return "Compaction off";
-  if (agent.compactTrigger === "messages" && agent.compactMessages) return `Compact at ${agent.compactMessages} messages`;
-  if (agent.compactThreshold) return `Compact at ${formatTokens(agent.compactThreshold)}`;
-  if (agent.compactTokens) return `Compact at ${formatTokens(Math.floor(agent.compactTokens * .7))}`;
-  if (agent.compactTrigger === "auto") return "Auto compaction";
-  return "";
-}
-
 export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: {
   agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; arrivalAt?: number;
 }) {
   const context = agent.context, compact = compactLabel(agent);
+  const warning = compactionWarning(agent);
   const provider = providerLabel(agent);
   const motion = useArrivalStyle(arrivalAt);
   return <article className={`team-agent-row${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
@@ -39,8 +32,12 @@ export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: 
       aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${provider ? `. ${provider} ${agent.model}` : ""}`}>
       <span className="team-agent-heading"><strong>{agent.name}</strong><AgentState agent={agent} /></span>
       <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
-      <span className="team-agent-context"><span>{context ? `~${formatTokens(context.total_tokens)}${context.context_window ? ` / ${formatTokens(context.context_window)}` : " tokens"}` : "Context unavailable"}</span>{compact && <span>{compact}</span>}</span>
-      {context?.context_window ? <span className="team-agent-meter" aria-hidden="true"><i style={{ width: `${Math.min(100, 100 * context.total_tokens / context.context_window)}%` }} /></span> : null}
+      <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}` : undefined}>
+        <span>{context ? contextSummary(context) : "Context unavailable"}</span>
+        {compact && <span className="team-agent-compaction">{compact}</span>}
+      </span>
+      {context?.context_window ? <span className="team-agent-meter" aria-hidden="true"><i style={{ width: `${contextPercent(context)}%` }} /></span> : null}
+      {warning && <span className="team-context-warning">{warning}</span>}
     </button>
     <button type="button" className="team-agent-settings" aria-label={`Settings for ${agent.name}`} onClick={settings}><Icon name="settings" size={14} /></button>
   </article>;

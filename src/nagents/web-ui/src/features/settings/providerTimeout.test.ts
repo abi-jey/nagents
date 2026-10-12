@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { ProvidersPanel } from "./ProvidersPanel.js";
 
-async function editor(t: TestContext, auth: string, requestTimeout?: number) {
+async function editor(t: TestContext, auth: string, requestTimeout?: number, limits = { context_window: 0, model_context_windows: {} as Record<string, number> }) {
   const dom = new JSDOM("<div id='root'></div>");
   const descriptors = Object.getOwnPropertyDescriptors(globalThis);
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
@@ -14,6 +14,7 @@ async function editor(t: TestContext, auth: string, requestTimeout?: number) {
   const profile = {
     kind: "openai", auth, base_url: "", api: "auto", api_key_env: "OPENAI_API_KEY",
     api_version: "", scope: "https://ai.azure.com/.default",
+    ...limits,
     ...(requestTimeout === undefined ? {} : { request_timeout: requestTimeout }),
   };
   const kinds = {
@@ -50,6 +51,13 @@ async function editor(t: TestContext, auth: string, requestTimeout?: number) {
       await act(async () => {
         input().value = value;
         input().dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      });
+    },
+    async field(label: string, value: string, index = 0) {
+      const input = [...container.querySelectorAll("label")].filter(node => node.textContent?.startsWith(label))[index].querySelector("input")!;
+      await act(async () => {
+        input.value = value;
+        input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
       });
     },
     async select(label: string, value: string) {
@@ -103,6 +111,45 @@ test("request timeout rejects empty, nonpositive and nonfinite input without sen
     assert.equal(view.input().value, value);
     assert.equal(view.dirty.at(-1), false);
   }
+});
+
+test("connection and exact-model context overrides survive unrelated settings changes and save numeric values", async t => {
+  const view = await editor(t, "api-key", 120, { context_window: 200000, model_context_windows: { "eu.anthropic.claude-opus-5-5": 1000000 } });
+  assert.equal(view.dirty.at(-1), false);
+  await view.type("180");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved[0].context_window, 200000);
+  assert.deepEqual(view.saved[0].model_context_windows, { "eu.anthropic.claude-opus-5-5": 1000000 });
+  await view.field("Connection input limit", "");
+  await view.field("Input limit", "1200000");
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.at(-1)!.context_window, 0);
+  assert.deepEqual(view.saved.at(-1)!.model_context_windows, { "eu.anthropic.claude-opus-5-5": 1200000 });
+});
+
+test("context overrides reject invalid tokens and duplicate model IDs instead of silently overwriting a limit", async t => {
+  const view = await editor(t, "api-key", 120);
+  for (const invalid of ["-", "1e", "-1", "1.5", "1e100", "1000000001"]) {
+    await view.field("Connection input limit", invalid);
+    assert.equal(view.button("Save connection").disabled, true, invalid);
+  }
+  await view.field("Connection input limit", "0");
+  await act(async () => view.button("Add model limit").click());
+  assert.equal(view.button("Save connection").disabled, true);
+  await view.field("Model ID", "model-a");
+  await view.field("Input limit", "0");
+  assert.equal(view.button("Save connection").disabled, true);
+  await view.field("Input limit", "1000000");
+  assert.equal(view.button("Save connection").disabled, false);
+  await act(async () => view.button("Add model limit").click());
+  await view.field("Model ID", "model-a", 1);
+  await view.field("Input limit", "200000", 1);
+  assert.equal(view.button("Save connection").disabled, true);
+  await act(async () => view.button("Save connection").click());
+  assert.equal(view.saved.length, 0);
+  await view.field("Model ID", "model-b", 1);
+  await act(async () => view.button("Save connection").click());
+  assert.deepEqual(view.saved[0].model_context_windows, { "model-a": 1000000, "model-b": 200000 });
 });
 
 test("authentication and provider changes retain timeout while new connections start at 120 seconds", async t => {

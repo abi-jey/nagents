@@ -109,8 +109,15 @@ def codex_discovery_selected(profile: ProviderProfile) -> bool:
 
 
 def build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAIAuth) -> Provider:
-    """Use the library's provider-specific discovery and keep Azure SDK optional."""
+    """Use the connection's routing, credentials, and context settings together."""
     profile.validate()
+    provider = _build_provider(profile, config, auth)
+    provider.configure_context_window(profile.context_window, profile.model_context_windows)
+    return provider
+
+
+def _build_provider(profile: ProviderProfile, config: HarnessConfig, auth: OpenAIAuth) -> Provider:
+    """Use the library's provider-specific discovery and keep Azure SDK optional."""
     if config.demo:
         return HarnessProvider(config, request_timeout=profile.request_timeout)
     if profile.auth == "entra":

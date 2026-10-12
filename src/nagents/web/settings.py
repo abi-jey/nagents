@@ -56,7 +56,11 @@ def _current_compaction(harness: "Harness") -> tuple[str, int, int]:
         if configured.message_threshold is not None:
             return "messages", DEFAULT_COMPACT_TOKENS, configured.message_threshold
         if configured.token_threshold is not None:
-            return "tokens", (configured.token_threshold * 10 + 6) // 7, DEFAULT_COMPACT_MESSAGES
+            return (
+                "tokens",
+                configured.token_budget or (configured.token_threshold * 10 + 6) // 7,
+                DEFAULT_COMPACT_MESSAGES,
+            )
     return "auto", DEFAULT_COMPACT_TOKENS, DEFAULT_COMPACT_MESSAGES
 
 
@@ -67,7 +71,7 @@ def _apply_compaction(harness: "Harness", trigger: str, tokens: int, messages: i
         return
     if trigger == "tokens":
         # Saved preferences express a context window, with 30% kept in reserve.
-        harness.agent.compaction_strategy = ModelCompaction(token_threshold=tokens * 7 // 10)
+        harness.agent.compaction_strategy = ModelCompaction(token_budget=tokens)
     elif trigger == "messages":
         harness.agent.compaction_strategy = ModelCompaction(message_threshold=messages)
     else:

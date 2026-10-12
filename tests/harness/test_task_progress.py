@@ -216,3 +216,34 @@ async def test_closing_while_progress_flush_waits_on_full_queue_does_not_hang(
         release_child.set()
         await stream.aclose()
         await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_task_index_retains_last_provider_context_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.events import Usage
+    from tests.support.providers import collect
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        if provider.index:
+            yield TextDoneEvent(text="Child result", usage=Usage(321, 12, 333))
+        elif notifications(messages):
+            yield TextDoneEvent(text="Parent integrated result")
+        elif len(provider.requests) == 1:
+            yield ToolCallEvent(id="child", name="delegate", arguments={"prompt": "Review this"})
+        else:
+            yield TextDoneEvent(text="Waiting for review")
+
+    harness, providers = setup_harness(tmp_path, monkeypatch, script)
+    try:
+        await asyncio.wait_for(collect(harness), HANG_GUARD)
+        tasks = harness.tasks.list()
+        assert len(tasks) == 1
+        info = tasks[0]
+        assert info.status == "completed"
+        assert info.context["observed_prompt_tokens"] == 321
+        assert info.context["total_tokens"] != 321
+        assert providers[1].requests
+    finally:
+        await harness.close()

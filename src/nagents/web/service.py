@@ -471,7 +471,9 @@ class WebState:
                     ContextComponent("streaming_reply", "Streaming reply (not yet saved)", tokens),
                 ),
                 total_tokens=stats.total_tokens + tokens,
-                remaining_tokens=stats.remaining_tokens - tokens if stats.remaining_tokens is not None else None,
+                remaining_tokens=stats.remaining_tokens - tokens
+                if stats.remaining_tokens is not None and stats.observed_prompt_tokens is None
+                else stats.remaining_tokens,
             )
         return stats.as_dict()
 

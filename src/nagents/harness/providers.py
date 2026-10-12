@@ -27,6 +27,8 @@ from urllib.parse import urlsplit
 
 from nagents.provider import ProviderType
 from nagents.provider.auth import validate_prefix
+from nagents.provider.context import validate_context_window
+from nagents.provider.context import validate_model_context_windows
 from nagents.provider.openai import CODEX_ENDPOINT
 
 if TYPE_CHECKING:
@@ -189,6 +191,8 @@ class ProviderProfile:
     api_version: str = ""
     scope: str = "https://ai.azure.com/.default"
     request_timeout: float = 120.0
+    context_window: int = 0
+    model_context_windows: dict[str, int] = field(default_factory=dict)
 
     def validate(self) -> None:
         if any(
@@ -197,6 +201,8 @@ class ProviderProfile:
         ):
             raise ValueError("Provider fields must be strings")
         validate_request_timeout(self.request_timeout)
+        validate_context_window(self.context_window)
+        validate_model_context_windows(self.model_context_windows)
         spec = KINDS.get(self.kind)
         if spec is None or self.auth not in spec.auth or self.api not in spec.apis:
             raise ValueError("Unsupported provider, authentication mode, or API")

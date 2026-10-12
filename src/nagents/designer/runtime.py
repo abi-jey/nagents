@@ -67,6 +67,20 @@ class DesignProvider(Provider):
     async def verify_model(self, force: bool = False) -> bool:
         return True
 
+    async def _prepare_context_metadata(self) -> None:
+        if not self.demo:
+            self.api_key = resolve_secret(
+                self.design,
+                self.definition.secret,
+                self.recorder,
+                provider=self.definition.type,
+                base_url=self.definition.base_url,
+            )
+
+    async def _fetch_context_metadata(self) -> None:
+        if not self.demo:
+            await super()._fetch_context_metadata()
+
     async def generate(
         self,
         messages: list[Message],

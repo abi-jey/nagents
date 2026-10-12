@@ -59,6 +59,7 @@ class HarnessProvider(Provider):
             api=api,
             timeout=request_timeout,
         )
+        self.configure_context_window(profile.context_window, profile.model_context_windows)
 
     @property
     def model(self) -> str:
@@ -91,6 +92,14 @@ class HarnessProvider(Provider):
         # The actual generation endpoint is authoritative; startup stays local.
         self.credentials()
         return True
+
+    async def _prepare_context_metadata(self) -> None:
+        if not self.harness_config.demo:
+            self.credentials()
+
+    async def _fetch_context_metadata(self) -> None:
+        if not self.harness_config.demo:
+            await super()._fetch_context_metadata()
 
     async def get_model_list(self) -> list[str]:
         if self.harness_config.demo:

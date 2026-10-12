@@ -9,8 +9,11 @@ designed sessions without starting MCP servers or issuing provider requests.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from typing import cast
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
 
@@ -39,7 +42,8 @@ def _assert_sums(data: dict[str, object]) -> None:
     assert total == sum(cast("int", item["tokens"]) for item in components)
     window = data["context_window"]
     if isinstance(window, int):
-        assert data["remaining_tokens"] == window - total
+        observed = data.get("observed_prompt_tokens")
+        assert data["remaining_tokens"] == window - (observed if isinstance(observed, int) else total)
 
 
 def test_run_context_reply_tracks_root_chunks_and_clears_on_boundaries() -> None:
@@ -105,6 +109,15 @@ def test_active_run_context_reports_streaming_reply_before_completion(tmp_path: 
                 assert data["provider"] and data["model"]
                 # Read-only: the run is still active and unfinished.
                 assert not stream.task.done() and state.active is active
+                measured = await harness.agent.context_stats(session_id)
+                assert measured.context_window is not None
+                measured = replace(measured, observed_prompt_tokens=321, remaining_tokens=measured.context_window - 321)
+                with patch.object(harness.agent, "context_stats", AsyncMock(return_value=measured)):
+                    observed = (await client.get(f"/api/sessions/{session_id}/context", headers=headers)).json()
+                _assert_sums(observed)
+                assert observed["observed_prompt_tokens"] == 321
+                assert observed["remaining_tokens"] == measured.remaining_tokens
+                assert observed["total_tokens"] > measured.total_tokens
             finally:
                 active = app.state.web.active
                 if active is not None:
@@ -227,3 +240,33 @@ def test_idle_pinned_context_does_not_start_mcp_or_contact_provider(
             _assert_sums(response.json())
 
     asyncio.run(check())
+
+
+@pytest.mark.requires_posix
+def test_idle_pinned_context_reuses_metadata_without_retaining_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.designer.runtime import DesignProvider
+
+    calls = 0
+
+    async def metadata(provider: DesignProvider) -> None:
+        nonlocal calls
+        calls += 1
+        provider._context_metadata.update([{"id": provider.model, "max_input_tokens": 1_000_000}])
+
+    with site(tmp_path, monkeypatch) as app:
+        app.configure(auto_reply=True)
+        design = parse(STARTER)
+        design.channels = {"fixture": "assistant"}
+        _publish(app, serialize(design))
+        app.emit("hello")
+        app.idle()
+        session = app.bindings()["chat-a"]
+        monkeypatch.setattr(DesignProvider, "_fetch_context_metadata", metadata)
+        for _ in range(3):
+            response = app.client.get(f"/api/sessions/{session}/context", headers=app.headers)
+            assert response.status_code == 200, response.text
+            assert response.json()["context_window"] == 1_000_000
+            assert response.json()["context_window_source"] == "provider"
+        assert calls == 1

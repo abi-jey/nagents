@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .compaction import CHARS_PER_TOKEN
+from .compaction import CompactionSnapshot
 from .compaction import estimate_tokens
 from .types import ContentPart
 from .types import Message
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from .events import TokenUsage
+    from .provider.context import ContextWindowSource
 
 SYSTEM_PROMPT_KEY = "system_prompt"
 INSTRUCTIONS_KEY = "instructions"
@@ -73,7 +75,7 @@ class ContextStats:
         components: Stable, ordered components that sum to ``total_tokens``.
         total_tokens: Estimated input tokens for the assembled request.
         context_window: Provider/model context window when known, else ``None``.
-        remaining_tokens: ``context_window - total_tokens`` when the window is
+        remaining_tokens: ``context_window - (observed_prompt_tokens or total_tokens)`` when the window is
             known, else ``None``. It can be negative if the estimate exceeds it.
         observed_prompt_tokens: Last provider-reported input tokens, when the
             agent has seen a real usage event for the session.
@@ -92,6 +94,8 @@ class ContextStats:
     provider: str = ""
     model: str = ""
     estimate_method: str = ESTIMATE_METHOD
+    context_window_source: ContextWindowSource = "heuristic"
+    compaction: CompactionSnapshot | None = None
 
     def component(self, key: str) -> ContextComponent | None:
         """Return the component with ``key``, or ``None`` when it is absent."""
@@ -106,6 +110,8 @@ class ContextStats:
             "components": [asdict(component) for component in self.components],
             "total_tokens": self.total_tokens,
             "context_window": self.context_window,
+            "context_window_source": self.context_window_source,
+            **({"compaction": self.compaction} if self.compaction is not None else {}),
             "remaining_tokens": self.remaining_tokens,
             "observed_prompt_tokens": self.observed_prompt_tokens,
             "observed_completion_tokens": self.observed_completion_tokens,
@@ -204,6 +210,8 @@ def estimate_context_stats(
     skill_text: str = "",
     messages: Sequence[Message] = (),
     context_window: int | None = None,
+    context_window_source: ContextWindowSource = "heuristic",
+    compaction: CompactionSnapshot | None = None,
     provider: str = "",
     model: str = "",
     observed: TokenUsage | None = None,
@@ -241,7 +249,11 @@ def estimate_context_stats(
         components=components,
         total_tokens=total,
         context_window=context_window,
-        remaining_tokens=context_window - total if context_window is not None else None,
+        context_window_source=context_window_source,
+        compaction=compaction,
+        remaining_tokens=(context_window - (observed.prompt_tokens if observed is not None else total))
+        if context_window is not None
+        else None,
         observed_prompt_tokens=observed.prompt_tokens if observed is not None else None,
         observed_completion_tokens=observed.completion_tokens if observed is not None else None,
         provider=provider,
