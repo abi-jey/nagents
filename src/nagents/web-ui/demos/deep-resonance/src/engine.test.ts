@@ -148,12 +148,20 @@ test("nonfinite input stays finite and reduced motion clears movement", () => {
     engine.dispose();
 });
 
-test("actual ambient and explicit delegation launches use the same bloom family", () => {
+test("actual ambient and explicit delegation launches use the same bloom family", t => {
+    // Origin selection is weighted, not unique: a random collision legitimately
+    // shares a bloom. Keep this distinct-source rendering fixture reproducible.
+    let seed = 0x12345678;
+    t.mock.method(Math, "random", () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 0x100000000;
+    });
     for (const [mode, expected] of [["listen", 3], ["think", 5], ["delegate", 4]] as const) {
         const engine = createSphereEngine({ ...config, mode }), drawing = surface();
         engine.tick(.000001, silent());
         engine.render(drawing.context, 720, 430);
-        assert.equal(drawing.radii().filter(radius => Math.abs(radius - 12) < 1e-9).length, expected, `${mode} must visibly bloom at every source`);
+        assert.equal(engine.snapshot().ambientPackets, expected);
+        assert.equal(drawing.radii().filter(radius => Math.abs(radius - 12) < 1e-9).length, expected, `${mode} must visibly bloom at each distinct seeded source`);
         assert(engine.snapshot().shock > 0);
         engine.dispose();
     }
@@ -163,6 +171,21 @@ test("actual ambient and explicit delegation launches use the same bloom family"
     assert.equal(drawing.radii().filter(radius => Math.abs(radius - 12) < 1e-9).length, 1);
     assert(engine.snapshot().shock > 0);
     engine.dispose();
+});
+
+test("simultaneous ambient signals at the same node share a bloom without losing packets", t => {
+    // Force the weighted sampler to choose the first inner node for every
+    // launch. The visual coalescing must not reduce the actual signal budget.
+    t.mock.method(Math, "random", () => 0);
+    for (const [mode, expected] of [["listen", 3], ["think", 5], ["delegate", 4]] as const) {
+        const engine = createSphereEngine({ ...config, mode }), drawing = surface();
+        engine.tick(.000001, silent());
+        engine.render(drawing.context, 720, 430);
+        assert.equal(engine.snapshot().ambientPackets, expected);
+        assert.equal(drawing.radii().filter(radius => Math.abs(radius - 12) < 1e-9).length, 1);
+        assert(engine.snapshot().shock > 0);
+        engine.dispose();
+    }
 });
 
 test("the common transit field is local, follows its edge and preserves equal-energy response", () => {
