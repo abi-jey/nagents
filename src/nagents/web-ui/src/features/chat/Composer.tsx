@@ -4,6 +4,13 @@ import { Icon } from "../../components/Icon.js";
 import { commandMatches } from "./commands.js";
 import type { SkillItem } from "./skills.js";
 
+export interface ComposerVoiceRefs {
+  presence: Ref<HTMLDivElement>;
+  caption: Ref<HTMLDivElement>;
+  controls: Ref<HTMLDivElement>;
+  details: Ref<HTMLDivElement>;
+}
+
 function ComposerInput({ inputRef, ...props }: ComponentProps<"textarea"> & { inputRef: Ref<HTMLTextAreaElement> }) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   function resize() {
@@ -50,6 +57,8 @@ export function Composer({
   submitting = false,
   stopping = false,
   voiceControl,
+  voiceLayout = false,
+  voiceRefs,
   skills = [],
   skillsLoading = false,
   skillsError = "",
@@ -76,6 +85,8 @@ export function Composer({
   submitting?: boolean;
   stopping?: boolean;
   voiceControl?: ReactNode;
+  voiceLayout?: boolean;
+  voiceRefs?: ComposerVoiceRefs;
   skills?: SkillItem[];
   skillsLoading?: boolean;
   skillsError?: string;
@@ -101,6 +112,7 @@ export function Composer({
   }
   return (
     <form
+      className={`chat-composer${voiceLayout ? " has-live-voice" : ""}`}
       onPaste={(event) => {
         const files = [...event.clipboardData.files];
         if (files.length && addAttachments && !attachmentsDisabled) { event.preventDefault(); addAttachments(files); }
@@ -123,6 +135,10 @@ export function Composer({
       {(skillsLoading || skillsError) && <div className="slash-catalog-status"><span role="status">{skillsError || "Loading skills…"}</span>
         {!!skillsError && refreshSkills && <button type="button" onClick={refreshSkills}>Retry</button>}</div>}
       </div>}
+      <div className="composer-exchange">
+      <div className="composer-voice-presence" ref={voiceRefs?.presence} hidden={!voiceLayout} />
+      <div className="composer-writing">
+      <div className="composer-voice-caption" ref={voiceRefs?.caption} hidden={!voiceLayout} />
       <label htmlFor="composer" className="sr-only">
         Message {recipient}
       </label>
@@ -164,6 +180,8 @@ export function Composer({
           }
         }}
       />
+      </div>
+      </div>
       {attachments}
       <div className="composer-bottom">
         <div className="composer-tools">
@@ -172,6 +190,7 @@ export function Composer({
             onChange={(event) => { addAttachments?.([...event.currentTarget.files || []]); event.currentTarget.value = ""; }} />
         </label>}
         {voiceControl}
+        <div className="composer-voice-controls" ref={voiceRefs?.controls} hidden={!voiceLayout} />
         </div>
         {status}
         <span id="composer-help" className="sr-only">Enter to send. Shift+Enter for a new line.{commandsEnabled && " Type / for commands; use arrows and Tab or Enter to choose, then Enter to run. Escape closes suggestions."}</span>
@@ -188,6 +207,7 @@ export function Composer({
           {submitting ? "Sending…" : "Send"}
         </button>
       </div>
+      <div className="composer-voice-details" ref={voiceRefs?.details} hidden={!voiceLayout} />
     </form>
   );
 }

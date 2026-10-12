@@ -1,0 +1,51 @@
+/* A4: one gutter beside the assistant caption and the existing editable draft. */
+.composer-exchange { display: grid; grid-template-columns: 0 minmax(0, 1fr); column-gap: 0; align-items: stretch; transition: grid-template-columns 240ms ease, column-gap 240ms ease; }
+.composer-writing { grid-column: 2; min-width: 0; }
+.chat-composer.has-live-voice .composer-exchange { grid-template-columns: 84px minmax(0, 1fr); column-gap: 16px; min-height: 96px; }
+.composer-area > .chat-composer.has-live-voice { display: flex; flex-direction: column; max-height: calc(100dvh - 100px); border-radius: 16px; padding: 11px 12px 8px; }
+.chat-composer.has-live-voice .composer-exchange { flex: 0 1 auto; min-height: min(96px, 20dvh); max-height: min(38dvh, 280px); overflow-y: auto; overflow-x: clip; scrollbar-width: thin; }
+.chat-composer.has-live-voice > .composer-bottom { flex-shrink: 0; }
+.chat-composer.has-live-voice > .upload-drafts { min-height: 0; max-height: 16dvh; overflow: auto; }
+.composer-voice-presence { display: grid; place-items: center; grid-column: 1; min-width: 0; }
+.composer-voice-presence .voice-presence { --sphere-size: 80px; display: grid; place-items: center; height: auto; animation: voice-enter 260ms ease-out both; }
+.composer-voice-presence .voice-presence.phase-ended { --sphere-size: 44px; }
+.composer-voice-presence .phase-ended .live-sphere-scene { opacity: .65; filter: saturate(.6); }
+.composer-voice-presence .phase-ending .live-sphere-scene { opacity: .5; }
+.composer-voice-presence .live-sphere-scene { transition: opacity 180ms ease, filter 180ms ease; }
+.composer-voice-caption { margin: 1px 0 8px; padding: 2px 0 8px; position: relative; }
+.composer-voice-caption::after { content: ""; position: absolute; bottom: 0; left: 0; width: 34px; height: 1px; background: var(--border-control); }
+.voice-caption .byline { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
+.voice-caption .live-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-teal, #94c7bc); font-size: 10px; }
+.voice-caption.phase-ended .live-badge { color: var(--text-secondary); }
+.voice-current-caption { margin: 7px 0 0; color: var(--text-reading); font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; max-height: min(6.6em, 18dvh); overflow-y: auto; scrollbar-width: thin; overscroll-behavior: contain; }
+.voice-current-caption:focus-visible { outline: 1px solid var(--focus); outline-offset: 3px; }
+.chat-composer.has-live-voice #composer { padding-left: 0; }
+.composer-voice-controls { display: inline-flex; align-items: center; min-width: 0; }
+.composer-voice-details { min-width: 0; min-height: 0; max-height: min(32dvh, 320px); overflow-y: auto; scrollbar-width: thin; overscroll-behavior: contain; }
+.composer-voice-details .voice-composer { display: block; animation: none; margin-top: 2px; }
+.composer-voice-details .voice-composer:empty { margin: 0; }
+.composer-voice-details .voice-context-trigger { display: inline-flex; align-items: center; min-height: 30px; border: 0; background: transparent; padding: 3px 5px; color: var(--text-secondary); font-size: 11px; }
+.composer-voice-details .voice-context-trigger:hover { color: var(--text-reading); text-decoration: underline; }
+.composer-voice-details .voice-feedback { margin: 6px 0 4px; }
+.composer-voice-details .voice-delegation { padding-inline: 0; }
+.composer-voice-details .voice-inline-expansion { max-height: min(32dvh, 320px); margin-top: 5px; margin-bottom: 2px; }
+.composer-voice-details .voice-enable-audio { margin-top: 6px; margin-bottom: 4px; }
+.chat-composer :is(.composer-voice-presence, .composer-voice-caption, .composer-voice-controls, .composer-voice-details)[hidden] { display: none; }
+@media (max-width: 760px) {
+  .chat-composer.has-live-voice .composer-exchange { grid-template-columns: 64px minmax(0, 1fr); column-gap: 10px; min-height: min(86px, 20dvh); }
+  .composer-area > .chat-composer.has-live-voice { padding: 9px 10px 7px; border-radius: 14px; }
+  .composer-voice-presence .voice-presence { --sphere-size: 62px; }
+  .voice-current-caption { font-size: 13px; max-height: min(6.6em, 16dvh); }
+  .voice-caption .byline { font-size: 10px; }
+  .voice-caption .live-badge { font-size: 9px; }
+  .chat-composer.has-live-voice .composer-tools { gap: 5px; min-width: 0; }
+  .chat-composer.has-live-voice .attachment-picker { padding-inline: 5px; min-width: 28px; }
+  .chat-composer.has-live-voice .attachment-picker > span { display: none; }
+  .chat-composer.has-live-voice .composer-bottom { gap: 5px; }
+  .chat-composer.has-live-voice .composer-bottom > .primary { padding-inline: 8px; }
+}
+@media (max-height: 680px) { .voice-current-caption { max-height: 4.95em; } }
+@media (prefers-reduced-motion: reduce) {
+  .composer-exchange, .composer-voice-presence .live-sphere-scene { transition: none; }
+  .composer-voice-presence .voice-presence { animation: none; }
+}

@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { useVoicePresence } from "../../app/useVoicePresence.js";
 import { LiveDialog } from "./LiveDialog.js";
+import type { LiveComposerTargets } from "./LiveComposer.js";
 import { LiveController } from "./controller.js";
 import { readAudioDevices, saveAudioDevices } from "./devices.js";
 import type { LiveCapability, LiveDelegationDetails, LiveDelegationRecord, LiveSettingsSnapshot, LiveSnapshot } from "./types.js";
@@ -30,22 +31,22 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = false }: {
-  token?: string; sessionId?: string; hold?: boolean;
+function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = false, targets }: {
+  token?: string; sessionId?: string; hold?: boolean; targets: LiveComposerTargets;
 }) {
   const voice = useVoicePresence();
   return createElement("div", {},
     createElement("button", { onClick: () => voice.show("start", token, sessionId) }, "Open voice"),
     createElement("button", { onClick: () => voice.show("settings", token, sessionId) }, "Open voice settings"),
     voice.open && !hold && createElement(LiveDialog, {
-      key: `${token}:${sessionId}`, token, sessionId, close: voice.close,
+      key: `${token}:${sessionId}`, token, sessionId, targets, close: voice.close,
       autoStart: voice.shouldStart(token, sessionId), openSettingsInitially: voice.intent === "settings",
       consumeStartIntent: () => voice.consumeStart(voice.request),
     }));
 }
 
 function view(options: { capability?: Promise<Response>; settings?: Promise<Response>; denied?: boolean; delegation?: boolean; voiceAuth?: LiveCapability["voice_auth"] } = {}) {
-  const dom = new JSDOM("<footer class='composer-area'><div id='root'></div><form id='text-form'><textarea id='composer'></textarea><button type='submit'>Send</button></form></footer>", { url: "https://localhost" });
+  const dom = new JSDOM("<footer class='composer-area'><div id='root'></div><form id='text-form'><div id='presence'></div><div id='caption'></div><textarea id='composer'></textarea><div id='controls'></div><button type='submit'>Send</button><div id='details'></div></form></footer>", { url: "https://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
   dom.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
@@ -103,7 +104,7 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     constructor() { assert.fail("ChatGPT login voice must never create a browser provider peer"); }
   }
   const globals = {
-    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    window: dom.window, document: dom.window.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement,
     HTMLMediaElement: dom.window.HTMLMediaElement, localStorage: dom.window.localStorage,
     AudioContext: Context, AudioWorkletNode: AudioNode, WebSocket: Socket, location: dom.window.location,
     RTCPeerConnection: ProviderPeer, isSecureContext: true, IS_REACT_ACT_ENVIRONMENT: true,
@@ -141,6 +142,10 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   saveAudioDevices({ inputId: "", outputId: "" });
   const container = dom.window.document.getElementById("root")!;
+  const targets: LiveComposerTargets = {
+    presence: document.getElementById("presence"), caption: document.getElementById("caption"),
+    controls: document.getElementById("controls"), details: document.getElementById("details"),
+  };
   const textarea = dom.window.document.querySelector<HTMLTextAreaElement>("textarea")!;
   dom.window.document.getElementById("text-form")!.addEventListener("submit", event => { event.preventDefault(); submissions++; });
   const root = createRoot(container);
@@ -151,15 +156,19 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
     counts: () => ({ captures, creates, closures, sockets, capabilityReads, dismissals, submissions }),
     capability: (next: LiveCapability) => { currentCapability = next; },
     deny: (value: boolean) => { denied = value; },
-    renderParent: async (props: ComponentProps<typeof VoiceParent> = {}) => {
+    renderParent: async (props: Omit<ComponentProps<typeof VoiceParent>, "targets"> = {}) => {
       expectedToken = props.token || "fixture-token";
-      await act(async () => root.render(createElement(VoiceParent, props)));
+      await act(async () => root.render(createElement(VoiceParent, { ...props, targets })));
     },
     render: async (props: Partial<ComponentProps<typeof LiveDialog>> = {}) => act(async () => root.render(createElement(LiveDialog, {
-      token: "fixture-token", sessionId: "ngn-one", close: () => { dismissals++; }, ...props,
+      token: "fixture-token", sessionId: "ngn-one", targets, close: () => { dismissals++; }, ...props,
       key: `${props.token || "fixture-token"}:${props.sessionId || "ngn-one"}`,
     }))),
-    click: async (name: string) => act(async () => button(name).click()),
+    click: async (name: string) => {
+      if (button(name).closest("[inert]"))
+        await act(async () => dom.window.document.querySelector<HTMLButtonElement>(".voice-controls-trigger")!.click());
+      await act(async () => button(name).click());
+    },
     flushFrames: async () => act(async () => { const current = [...frames.values()]; frames.clear(); current.forEach(callback => callback(0)); }),
     unmount: async () => { await act(async () => root.unmount()); mounted = false; },
     async close() {
@@ -445,7 +454,7 @@ test("the settings overlay swaps an active microphone without restarting voice o
   } finally { await ui.close(); }
 });
 
-test("the sphere is a native button outside the text form and toggles microphone without ending or submitting", async () => {
+test("the inset sphere is a native non-submit button and toggles microphone without ending or submitting", async () => {
   const ui = view();
   try {
     await ui.render();
@@ -453,7 +462,7 @@ test("the sphere is a native button outside the text form and toggles microphone
     assert.ok(sphere);
     assert.equal(sphere.type, "button");
     assert.equal(sphere.tabIndex, 0);
-    assert.equal(sphere.closest("form"), null);
+    assert.equal(sphere.closest("form")?.id, "text-form");
     assert.match(sphere.getAttribute("aria-label") || "", /mute (?:voice )?microphone/i);
     await act(async () => sphere.click());
     assert.equal(ui.tracks[0].enabled, false);

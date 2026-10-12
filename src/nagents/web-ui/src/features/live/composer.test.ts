@@ -7,13 +7,14 @@ import { LiveComposer } from "./LiveComposer.js";
 import type { LiveComposerProps } from "./LiveComposer.js";
 
 function view() {
-  const dom = new JSDOM("<main><div id='root'></div><button id='chat'>Chat remains available</button></main>");
+  const dom = new JSDOM("<main><div id='root'></div><form><div id='presence'></div><div id='caption'></div><div id='controls'></div><div id='details'></div></form><button id='chat'>Chat remains available</button></main>");
   const previous = Object.getOwnPropertyDescriptors(globalThis);
-  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
-  const container = dom.window.document.getElementById("root")!;
-  const root = createRoot(container);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  const container = dom.window.document.body;
+  const root = createRoot(dom.window.document.getElementById("root")!);
   const actions: string[] = [];
   const props: LiveComposerProps = {
+    targets: { presence: document.getElementById("presence"), caption: document.getElementById("caption"), controls: document.getElementById("controls"), details: document.getElementById("details") },
     state: { phase: "idle", sessionId: "", error: "", notice: "", micMuted: false, outputMuted: false, playbackBlocked: false, startedAt: 0, endedAt: 0, captions: [], delegations: [], devices: { inputId: "", outputId: "" }, inputLevel: 0, outputLevel: 0 },
     status: "Ready to connect", elapsed: "00:00", disabled: false, unavailable: "", loading: false, voice: "cove", settingsOpen: false, settingsSaving: false, inspectionOpen: false, inspect: () => actions.push("inspect"),
     start: () => actions.push("start"), end: () => actions.push("end"), close: () => actions.push("close"), configure: () => actions.push("configure"), muteInput: () => actions.push("mute-input"), muteOutput: () => actions.push("mute-output"), play: () => actions.push("play"), refresh: () => actions.push("refresh"), viewChat: runId => actions.push(`view-chat:${runId}`),
@@ -21,17 +22,21 @@ function view() {
   return {
     dom, container, actions, props,
     render: async () => act(async () => root.render(createElement(LiveComposer, props))),
-    click: async (selector: string) => act(async () => container.querySelector<HTMLButtonElement>(selector)!.click()),
+    click: async (selector: string) => {
+      if (container.querySelector(selector)?.closest("[inert]"))
+        await act(async () => container.querySelector<HTMLButtonElement>(".voice-controls-trigger")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(selector)!.click());
+    },
     async close() {
       await act(async () => root.unmount()); dom.window.close();
-      for (const key of ["window", "document", "IS_REACT_ACT_ENVIRONMENT"]) {
+      for (const key of ["window", "document", "Element", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"]) {
         if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key);
       }
     },
   };
 }
 
-test("voice belongs to the composer with explicit controls and no separate transcript", async () => {
+test("voice shares composer slots without displaying user speech as an assistant caption", async () => {
   const ui = view();
   ui.props.state.captions = [{ id: 1, speaker: "user", text: "A caption belonging in the chat", start: 1, end: 2 }];
   try {
@@ -40,7 +45,9 @@ test("voice belongs to the composer with explicit controls and no separate trans
     assert.equal(ui.container.querySelector("dialog,[aria-modal=true],[role=log]"), null);
     assert.equal(ui.dom.window.document.getElementById("chat")?.closest("[inert]"), null);
     assert.doesNotMatch(ui.container.textContent!, /A caption belonging in the chat/);
-    assert.match(ui.container.textContent!, /Captions in chat/);
+    assert.match(ui.props.targets.caption?.textContent || "", /Assistant/);
+    assert.match(ui.props.targets.caption?.textContent || "", /Live/);
+    assert.equal(ui.props.targets.caption?.querySelector("p"), null, "No assistant speech is invented before the provider supplies it");
     await ui.click(".voice-start"); await ui.click('[aria-label="Close voice controls"]');
     assert.deepEqual(ui.actions, ["start", "close"]);
     ui.props.disabled = true; await ui.render();
@@ -115,5 +122,46 @@ test("normal closure stays quiet while an unconfirmed closure remains visible", 
     ui.props.state.notice = "Microphone off. Provider closure is unconfirmed.";
     await ui.render();
     assert.match(ui.container.querySelector(".voice-feedback")?.textContent || "", /unconfirmed/);
+  } finally { await ui.close(); }
+});
+
+test("streaming caption follows its tail, respects reading earlier text, and resets for the next caption", async () => {
+  const ui = view();
+  ui.props.state.captions = [{ id: 1, speaker: "assistant", text: "Opening words", start: 0, end: 100 }];
+  try {
+    await ui.render();
+    const paragraph = ui.container.querySelector<HTMLParagraphElement>(".voice-current-caption")!;
+    let height = 240;
+    Object.defineProperties(paragraph, {
+      clientHeight: { configurable: true, get: () => 80 },
+      scrollHeight: { configurable: true, get: () => height },
+    });
+    const append = async (text: string) => {
+      ui.props.state.captions[0] = { ...ui.props.state.captions[0], text: ui.props.state.captions[0].text + text };
+      await ui.render();
+    };
+    const scroll = async (top: number) => act(async () => {
+      paragraph.scrollTop = top;
+      paragraph.dispatchEvent(new ui.dom.window.Event("scroll"));
+    });
+    await append(" continue beyond four lines.");
+    assert.equal(paragraph.scrollTop, 160, "new speech is visible at the bottom");
+    await scroll(24);
+    height = 320;
+    await append(" Another sentence arrives while the reader looks back.");
+    assert.equal(paragraph.scrollTop, 24, "reading position is preserved");
+    await scroll(240);
+    height = 400;
+    await append(" Returning to the bottom resumes following.");
+    assert.equal(paragraph.scrollTop, 320);
+    await scroll(0);
+    height = 500;
+    ui.props.state.captions = [{ id: 2, speaker: "assistant", text: "A new caption <script>stays text</script>", start: 3000, end: 3200 }];
+    await ui.render();
+    assert.equal(ui.container.querySelector(".voice-current-caption"), paragraph);
+    assert.equal(paragraph.scrollTop, 420, "a new caption begins following again");
+    assert.equal(paragraph.querySelector("script"), null);
+    assert.match(paragraph.textContent!, /<script>stays text<\/script>/);
+    assert.equal(paragraph.closest("[aria-live], [role=log], [role=status]"), null, "the chat stream remains the sole caption announcer");
   } finally { await ui.close(); }
 });
