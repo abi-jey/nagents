@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from .wakeups import Wakeup
 
 APPROVAL_TIMEOUT = 300
+MUTATION_WAIT_TIMEOUT = 5
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -259,6 +260,8 @@ class WebState:
         self.session_revision = 0
         self.executions = Executions(self, factory or type(harness))
         self.mutating = False
+        self.mutation_released = asyncio.Event()
+        self.mutation_released.set()
         self.bus = EventBus()
         self.run_observers: set[Callable[[Run | None, dict[str, object]], None]] = set()
         self.history = WebHistory(harness.agent.session.db_path, self.user_message)
@@ -367,11 +370,34 @@ class WebState:
         if (self.executions.runs and not allow_running) or self.mutating:
             raise HTTPException(409, "Harness busy. Cancel or finish the active operation first.")
         self.mutating = True
+        self.mutation_released.clear()
         try:
             yield
         finally:
             self.mutating = False
+            self.mutation_released.set()
             self.changed()
+
+    @asynccontextmanager
+    async def queued_mutation(self) -> AsyncIterator[None]:
+        """Wait briefly for bookkeeping without waiting for model execution.
+
+        Claiming inbox work and empty trash sweeps can briefly own the same
+        mutation guard as preference writes. Keep their exclusion intact, but
+        do not turn that internal bookkeeping into a user-visible conflict.
+        """
+        try:
+            async with asyncio.timeout(MUTATION_WAIT_TIMEOUT):
+                while self.mutating:
+                    await self.mutation_released.wait()
+        except TimeoutError:
+            raise HTTPException(409, "Workspace update is still in progress. Try saving again shortly.") from None
+        if self.executions.closed:
+            raise HTTPException(503, "The server is shutting down. Try again after it restarts.")
+        # No await between checking the guard and acquiring it. A competing
+        # waiter must observe the new owner before it can enter this block.
+        with self.idle(allow_running=True):
+            yield
 
     @asynccontextmanager
     async def configure(self) -> AsyncIterator[None]:
