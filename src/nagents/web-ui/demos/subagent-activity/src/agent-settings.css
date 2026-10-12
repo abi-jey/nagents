@@ -1,0 +1,47 @@
+.agent-settings-dialog { width: min(560px, calc(100vw - 32px)); max-height: min(880px, calc(100dvh - 40px)); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 14px; color: var(--text); background: var(--surface); box-shadow: 0 28px 100px #0008; overflow: hidden; }
+.agent-settings-dialog::backdrop { background: #0a0c0ed1; backdrop-filter: blur(4px); }
+.agent-settings-dialog > form { display: flex; flex-direction: column; max-height: min(880px, calc(100dvh - 40px)); }
+.agent-settings-heading { display: flex; flex: 0 0 auto; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 21px 24px 17px; border-bottom: 1px solid var(--line-soft); }
+.agent-settings-heading h2 { margin-top: 6px; font-size: 21px; letter-spacing: -.02em; }
+.agent-settings-body { overflow: auto; min-height: 0; padding: 20px 24px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.agent-settings-intro { font-size: 12px; line-height: 1.75; color: var(--muted); }
+.agent-settings-group { min-width: 0; border: 0; margin: 24px 0 0; padding: 0; }
+.agent-settings-group legend { margin-bottom: 13px; padding: 0; font-size: 12px; font-weight: 600; }
+.agent-settings-field { display: grid; gap: 7px; margin-bottom: 15px; }
+.agent-settings-field label { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 11px; color: var(--muted); }
+.agent-settings-field label > span { font-size: 10px; color: var(--subtle); }
+.agent-settings-field select, .agent-settings-field input { width: 100%; min-width: 0; min-height: 39px; border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; font: inherit; font-size: 12px; color: var(--text); background: var(--control); }
+.agent-settings-field input::placeholder { color: var(--subtle); opacity: 1; }
+.agent-settings-field :where(select, input):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.agent-settings-field [aria-invalid=true] { border-color: var(--rose); }
+.agent-settings-window { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 13px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--output); font-size: 11px; }
+.agent-settings-window > span { color: var(--muted); }
+.agent-settings-window small { grid-column: 1 / -1; color: var(--subtle); font-size: 10px; }
+.agent-settings-help { margin-top: 7px; color: var(--subtle); font-size: 10px; line-height: 1.7; }
+.agent-settings-boundary { margin-top: 14px; padding-left: 11px; border-left: 2px solid var(--line); font-size: 10px; line-height: 1.75; color: var(--muted); }
+.agent-settings-error { color: var(--rose); font-size: 11px; line-height: 1.5; }
+.agent-settings-error-summary { margin-top: 20px; padding: 12px; border: 1px solid var(--rose); border-radius: 7px; font-size: 11px; line-height: 1.7; color: var(--rose); }
+.agent-settings-error-summary ul { padding-left: 17px; margin: 7px 0 0; }
+.agent-settings-error-summary li + li { margin-top: 8px; }
+.agent-settings-error-summary button { display: flex; margin-top: 5px; font-size: 10px; }
+.agent-settings-next { display: grid; gap: 5px; padding: 14px; margin-top: 23px; border: 1px solid #40515d; border-radius: 8px; background: #25303955; }
+.agent-settings-next > strong { font-size: 12px; font-weight: 500; }
+.agent-settings-next > span:last-child { font-size: 10px; color: var(--muted); }
+.agent-settings-json { margin-top: 12px; font-size: 10px; color: var(--subtle); }
+.agent-settings-json > summary { padding: 5px 0; }
+.agent-settings-json > pre { margin: 8px 0 0; padding: 12px; color: var(--muted); background: var(--output); border-radius: 6px; font-size: 10px; line-height: 1.7; }
+.agent-settings-footer { display: flex; flex: 0 0 auto; justify-content: space-between; gap: 14px; align-items: center; padding: 15px 24px; border-top: 1px solid var(--line-soft); background: var(--navigation); }
+.agent-settings-footer > div { display: flex; gap: 8px; }
+.agent-settings-footer button { font-size: 11px; }
+.agent-settings-footer .settings-inherit { padding-left: 0; border-color: transparent; background: transparent; color: var(--muted); }
+.agent-settings-footer .settings-save { color: #17212a; background: var(--blue); border-color: var(--blue); font-weight: 600; }
+.agent-settings-footer .settings-save:hover { background: #b8d7f0; }
+@media (max-width: 560px) {
+  .agent-settings-dialog { width: calc(100vw - 18px); max-height: calc(100dvh - 18px); border-radius: 11px; }
+  .agent-settings-dialog > form { max-height: calc(100dvh - 18px); }
+  .agent-settings-heading { padding: 17px; }
+  .agent-settings-body { padding: 18px 17px; }
+  .agent-settings-footer { padding: 13px 17px; flex-wrap: wrap; }
+  .agent-settings-footer > div { margin-left: auto; }
+  .agent-settings-footer button { min-height: 40px; }
+}

@@ -13,13 +13,20 @@ export interface AgentDefinition {
   initials: string;
   color: "blue" | "violet" | "teal" | "amber";
   assignment: string;
+  spawnedAt: number;
+  originMessageId: string;
 }
 
-export interface Message {
+export interface MainMessage {
   id: string;
   at: number;
   role: "assistant" | "user";
   text: string;
+  returnedAgentId?: AgentId;
+  originMessageId?: string;
+}
+
+export interface Message extends MainMessage {
   delivery?: "queued" | "picked_up";
   pickedUpAt?: number;
 }
@@ -55,11 +62,15 @@ export type AgentEvent = { id: string; at: number; agentId: AgentId } & (
   | { type: "tool_start"; tool: Omit<ToolCall, "startedAt" | "finishedAt"> }
   | { type: "tool_result"; toolId: string; status: "completed" | "failed"; summary: string; output: string }
   | { type: "response_boundary" }
+  | { type: "return"; text: string }
 );
 
 export interface ActivityState {
   now: number;
   agents: Record<AgentId, AgentRun>;
+  mainMessages: MainMessage[];
+  /** Scheduled fixture acknowledgements, independent of each child's queue. */
+  pendingMainReplies: { id: string; at: number; originMessageId: string }[];
   seenEvents: string[];
   nextMessageId: number;
   /** A finished demo agent can receive a new turn; this is not a tool interrupt. */

@@ -1,0 +1,58 @@
+/* Compact chat events. The team tree uses its own activity-row presentation. */
+.agent-lifecycle-block.compact-lifecycle-chat { margin-top: 10px; }
+.agent-lifecycle-block.compact-lifecycle-chat .agent-lifecycle-list { margin: 0; padding: 0; }
+.agent-lifecycle-block.compact-lifecycle-chat .agent-lifecycle-list > li { border-bottom: 1px solid var(--line-soft); border-radius: 3px; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-agent-open {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-rows: 18px 16px;
+  align-items: center;
+  min-height: 50px;
+  padding: 7px 6px;
+  gap: 2px 10px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  text-align: left;
+}
+.agent-lifecycle-block.compact-lifecycle-chat [data-lifecycle-state="done"] .lifecycle-agent-open { min-height: 34px; grid-template-rows: 20px; padding-block: 7px; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-identity { grid-column: 1; grid-row: 1; display: flex; flex-direction: row; align-items: baseline; gap: 7px; min-width: 0; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-identity > strong { flex-shrink: 0; font-size: 11px; line-height: 18px; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); font-size: 10px; line-height: 16px; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-state { grid-column: 2; grid-row: 1; align-self: center; font-size: 10px; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-spawn { grid-column: 3; grid-row: 1; color: var(--subtle); font-size: 10px; line-height: 16px; white-space: nowrap; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-spawn time { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-current-detail { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--muted); font-size: 11px; line-height: 16px; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-current-detail > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-lifecycle-block.compact-lifecycle-chat .lifecycle-current-detail > small { flex-shrink: 0; margin-left: auto; color: var(--amber); font-size: 10px; white-space: nowrap; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-more .is-child-task { margin-left: 12px; padding-left: 5px; border-left: 1px solid var(--line-soft); }
+
+/* The timeline shares the compact row, with its timestamp on a fine rail. */
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .agent-lifecycle-list { margin-left: 3px; border-left: 1px solid var(--line-soft); }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .agent-lifecycle-list > li { margin-left: 9px; border-bottom: 0; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .agent-lifecycle-list > li::before { left: -12px; top: 14px; width: 5px; height: 5px; background: var(--surface); border: 1px solid var(--subtle); }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-agent-open { grid-template-columns: 32px minmax(0, 1fr) auto auto; column-gap: 8px; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-spawn-clock { grid-column: 1; grid-row: 1; display: block; color: var(--subtle); font-size: 10px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-identity { grid-column: 2; grid-row: 1; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-state { grid-column: 3; grid-row: 1; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-spawn { grid-column: 4; grid-row: 1; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-current-detail { grid-column: 2 / -1; grid-row: 2; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .is-child-task { margin-left: 21px; }
+.agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .is-child-task::before { left: -22px; top: 17px; width: 16px; height: 1px; border: 0; border-radius: 0; background: var(--line-soft); }
+
+@media (max-width: 600px) {
+  .agent-lifecycle-block.compact-lifecycle-chat .lifecycle-agent-open { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 18px 16px 14px; min-height: 64px; padding: 6px 4px; gap: 2px 8px; }
+  .agent-lifecycle-block.compact-lifecycle-chat [data-lifecycle-state="done"] .lifecycle-agent-open { grid-template-rows: 18px 14px; min-height: 46px; padding-block: 6px; }
+  .agent-lifecycle-block.compact-lifecycle-chat .lifecycle-identity { grid-column: 1; grid-row: 1; align-items: baseline; }
+  .agent-lifecycle-block.compact-lifecycle-chat .lifecycle-task { display: none; }
+  .agent-lifecycle-block.compact-lifecycle-chat .lifecycle-state { grid-column: 2; grid-row: 1; }
+  .agent-lifecycle-block.compact-lifecycle-chat .lifecycle-current-detail { grid-column: 1 / -1; grid-row: 2; font-size: 11px; }
+  .agent-lifecycle-block.compact-lifecycle-chat .lifecycle-spawn { grid-column: 1 / -1; grid-row: 3; font-size: 10px; line-height: 14px; }
+  .agent-lifecycle-block.compact-lifecycle-chat [data-lifecycle-state="done"] .lifecycle-spawn { grid-row: 2; }
+  .agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-agent-open { grid-template-columns: 30px minmax(0, 1fr) auto; column-gap: 6px; }
+  .agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-identity { grid-column: 2; }
+  .agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-state { grid-column: 3; }
+  .agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-spawn { grid-column: 2 / -1; grid-row: 3; }
+  .agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer [data-lifecycle-state="done"] .lifecycle-spawn { grid-row: 2; }
+  .agent-lifecycle-block.compact-lifecycle-chat.lifecycle-view-drawer .lifecycle-current-detail { grid-column: 2 / -1; }
+}

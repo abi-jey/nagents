@@ -1,8 +1,6 @@
-# Subagent interaction studies · revision 2
+# Subagent interaction studies · revision 8
 
-Three **standalone React demos** for choosing a UI direction. They do not connect to ngn, run tools, call providers, or expose private model reasoning. All messages, paths, commands, results, approvals, and timings are illustrative fixtures.
-
-Revision 2 combines a conversation tree **inside the chat** with a **Working team panel on the right**. The palette, system font, surface colors, state accents, and control shapes now follow the production ngn interface: charcoal surfaces, readable neutral text, restrained blue selection, and teal completed states. All three options use the same event simulation, so the interaction differences can be compared directly.
+Two compact chat presentations share one activity tree and one message box. This is a standalone React demo, with simulated agents and tools. No production configuration or provider calls change.
 
 From `src/nagents/web-ui`:
 
@@ -12,33 +10,33 @@ npm run demo:subagents:build
 npm run demo:subagents:test
 ```
 
-Preview: `http://127.0.0.1:4175/`. Direct choices: `#tree`, `#workspace`, `#board`. The build is written to repository `dist/subagent-concepts/`; it does not replace the production UI build. No additional packages, remote assets, or network connections are required.
+Preview: `http://127.0.0.1:4175/`. A Activity uses `#more`; B Timeline uses `#drawer`. Older variant hashes fall back to A. Build output remains `dist/subagent-concepts/`.
 
-## Directions
+## Chat and composition
 
-- **A — Tree + team index (`#tree`).** The main conversation contains expandable delegation branches, with their messages, tool arguments/results, assignment, and addressed composer. Several branches can stay open. The slim right-side team tree selects and scrolls to a branch, preserving the parent/child relationship. The panel can collapse to agent shortcuts.
-- **B — Tree + side inspector (`#workspace`).** The main chat keeps a compact tree with current work and the latest published message. Selecting a branch opens a right-side inspector. The short team tree stays above the selected agent's activity, tool evidence, filters, and composer. This option preserves conversation space and puts detailed investigation beside it. On mobile, the inspector opens in the Working team drawer.
-- **C — Tree + focus rail (`#board`).** A small delegation tree opens one full-width focused thread inside the conversation. The focused thread has an ownership breadcrumb, activity, tools, and composer; it can be closed and reopened. The right rail starts as agent avatar shortcuts and expands into the full Working team tree. Selecting a parent breadcrumb switches focus to that parent agent.
+Activity and Timeline keep spawn parent/time and explicit Running, Waiting, Done, or Failed state. Completed entries are short event rows (34 px desktop / 46 px mobile), without a repeated result sentence. Active/waiting entries retain one short activity line or wait reason. No Agent activity heading, New tags, or grouped spawn banner.
 
-All options support a native mobile dialog with focus containment, Escape/backdrop close, and an explicit close button. Agent drafts survive layout changes and branch selection. The main-chat composer is a labeled read-only visual reference; only subagent messages are interactive in this study.
+The existing footer message box follows the selected conversation. Selecting Explorer addresses Explorer; selecting the root Assistant addresses the main conversation. The recipient is shown in the label and send button. Each agent keeps its own draft. Sending stays in that conversation, uses its own queue, clears only its draft, and reveals sent messages if the Tools filter was active. Main and child queue behavior is unchanged. During the short closing animation the composer still names and addresses the visible child, then switches to Assistant.
 
-## Interaction to review
+## One tree
 
-1. The demo opens paused at 0:08 with running, approval, and completed examples.
-2. Open Explorer's tool arguments and output. Send it a note.
-3. Advance to 0:12: its tool completes but the note stays **Queued**.
-4. Advance to 0:13: the note becomes **Picked up** at the agent's response boundary.
-5. Play at 2× or 4× to see approval, test failure, a fix, and a successful recheck.
-6. Compare A/B/C without losing sent notes, drafts, or event state. Reset clears the fixture run, sent notes, and drafts.
-7. Open Builder and its nested Layout agent. Inspect the ownership tree and, in C, use the parent breadcrumb to return to Builder.
-8. Collapse/expand Working team. At 390 px, open its header button and try selecting a branch, messaging in B, and closing with Escape.
+The main Assistant is the normal root node, rendered with the same activity row, model, context, settings, selection, and scroll behavior as other agents. No pinned root section, originating-message headers, Earlier work labels, archive drawers, or separate old-work groups remain. Redundant row activity/result descriptions have been removed from the side pane.
 
-Queued notes are scoped to their addressed agent. Tools continue while notes wait. Several notes are picked up together in arrival order. Notes sent after a completed/failed turn receive a simulated follow-up boundary after three timeline seconds. An acknowledgement is explicitly labeled simulated; it does not claim the model executed the note.
+Siblings are ordered by the newest event anywhere in their branch. `activityTree.ts` computes each node's own activity and the maximum across all descendants, including hidden ones. Message arrival/pickup, tool start/result, acknowledged status events, and spawns contribute; time passing alone and future scheduled work do not. Ties are deterministic, and malformed parent cycles remain inspectable.
 
-## Interfaces
+The first recent candidates and their ancestors load initially. Scrolling to the end loads more; the Load more control is also keyboard-accessible. The root is depth 0; children at depth 1 and grandchildren at depth 2 show by default. Deeper descendants stay under their parent until expanded. Explicit expansion loads its immediate children even when they are older than the current page. Selecting a deeper conversation reveals its ancestry; explicitly collapsing it leaves the focused conversation and composer recipient unchanged.
 
-`src/types.ts` defines small transport-independent records: agent identity and parent IDs, events, messages with delivery state, JSON tool arguments, literal output, and timestamps. `applyEvent` consumes normalized, ordered events and deduplicates event IDs. `queueMessage` is the demo's local send boundary; it leaves running tools intact. `advanceTo` drives fixtures only. Revision 2 changes presentation and local UI state, not the event engine.
+## Arrival motion
 
-This is a design study rather than a production transport proposal. A production adapter must replace the fixture clock/send operation with real backend admission and response-boundary acknowledgements, enforce authorization, and preserve server ordering. The test module checks queue isolation/order, tool versus response boundaries, idempotent event handling, approval isolation, and finished-agent follow-ups. Keyboard controls are native buttons, disclosures, selects, dialogs, and text areas. Enter sends; Shift+Enter inserts a newline. Animation respects reduced-motion preferences.
+A new agent slides and fades into its tree row with a short highlight and a drawing connector. Its chat entry settles into place with matching restrained motion. App-owned timestamps cap the effect at 1.4 seconds even when paused. Memoized elapsed delays prevent typing, variant switches, and responsive remounts from restarting it. Old entries loaded later do not animate as new spawns. Reduced motion disables the movement; screen readers receive a concise spawn announcement. Motion never moves focus or scrolls the chat.
 
-Current backend integration still needs work: `SubagentManager.history(task_id)` can inspect a busy child, but `continue_task` rejects a running child and only reactivates a completed one. These demos do not change that behavior or add a web messaging route. Production integration needs child activity/history endpoints and a root-scoped queue that admits addressed messages after the current response/tool batch, with server-confirmed queued and picked-up events. A chosen layout can then use those events in place of the simulator.
+## Try it
+
+1. Reset, then Show first spawn (0:02). Use Next event to see approval waiting and Builder spawning Layout.
+2. Next delegation reaches 0:52. Show mixed states reaches 1:00: Running, Waiting, and Done appear together.
+3. Reviewer → Security is expanded by default. Expand Security to see Access audit at depth 3, or select it from chat. Its 1:01 tool result updates the recency of the entire Reviewer branch.
+4. Select agents in chat or the tree. Type drafts in several conversations and switch back; the single message box restores each draft.
+5. Send a note during a tool call. It remains queued until the next response. Sending to a finished agent schedules another demo response.
+6. Show completions and scroll the tree to load older agents. They stay in their parent branches, without archive sections.
+
+Context windows and token estimates are illustrative. Saved provider/model/compaction settings apply on Reset/Replay and do not rewrite the accepted running configuration. Main and child state, drafts, loaded tree count, and branch expansion survive chat-variant changes.
