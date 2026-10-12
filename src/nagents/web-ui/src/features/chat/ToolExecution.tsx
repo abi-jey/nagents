@@ -68,6 +68,10 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
         <span className="tool-outcome">
           <span className="execution-state" data-state={entry.state} title={statusDescription}
             role="status" aria-live="polite" aria-atomic="true">{status.label}</span>
+          {entry.approval && <span className="execution-approval" title={`Approval: ${entry.approval}`} aria-label={`Approval: ${entry.approval}`}>
+            {entry.approval === "Always allowed in workspace" ? "Always allowed"
+              : entry.approval === "Allowed by channel policy" ? "Channel policy" : entry.approval}
+          </span>}
           {entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0 &&
             <span className="execution-duration">{executionDuration(entry.durationMs)}</span>}
         </span>

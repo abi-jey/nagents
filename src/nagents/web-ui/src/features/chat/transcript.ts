@@ -693,7 +693,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       true,
     );
   }
-  if (event.event === "notice" && event.policy === "workspace_tool_allow") {
+  if (event.event === "notice" && ["workspace_tool_allow", "channel_auto_reply"].includes(text(event, "policy"))) {
     const index = entries.findLastIndex((entry) => entry.kind === "tool" && !entry.unattributed && (generationId && toolIndex !== undefined
       ? sameProgress(entry) : execution(entry) && entry.callId === text(event, "call_id") && entry.title === text(event, "tool") &&
         entry.result === undefined && !entry.abandoned && entry.toolProgress !== "abandoned" &&
@@ -703,10 +703,14 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       kind: "tool", text: "", ...previous, ...scope,
       ...(generationId && toolIndex !== undefined ? { generationId, toolIndex } : {}),
       callId: text(event, "call_id"), title: text(event, "tool"),
-      approval: "Always allowed in workspace", toolProgress: undefined, streaming: false,
+      approval: event.policy === "workspace_tool_allow" ? "Always allowed in workspace" : "Allowed by channel policy",
+      toolProgress: undefined, streaming: false,
       provisional: previous?.provisional ?? true,
       state: !previous || previous.toolProgress ? "Awaiting execution result" : previous.state,
     }, index);
+    // Policy evidence belongs to its tool card, including on replay. Never
+    // duplicate an automatic approval as a standalone chat notice.
+    return entries;
   }
   if (
     [

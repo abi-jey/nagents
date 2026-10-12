@@ -7,7 +7,9 @@ import { JSDOM } from "jsdom";
 import { ApprovalDialog } from "../approvals/ApprovalDialog.js";
 import { useApproval } from "../approvals/useApproval.js";
 import { appendEvent, type Entry } from "./transcript.js";
-import type { Approval, Decision } from "../../types.js";
+import { LiveSessions } from "./liveTranscript.js";
+import { Conversation } from "./Conversation.js";
+import type { Approval, Decision, Snapshot, WireEvent } from "../../types.js";
 
 const approval: Approval = {
   run_id: "run", approval_id: "nonce", call_id: "call", tool: "shell",
@@ -84,3 +86,68 @@ test("saved and one-time approval labels remain bound to the exact task and call
   assert.equal(first.approval, "Always allowed in workspace");
   assert.equal(first.state, "Awaiting execution result");
 });
+
+for (const [policy, badge] of [
+  ["workspace_tool_allow", "Always allowed in workspace"],
+  ["channel_auto_reply", "Allowed by channel policy"],
+] as const) {
+  test(`${policy} renders only tool badges during streaming, reconnect and cold replay`, () => {
+    const cache = new LiveSessions();
+    const events: WireEvent[] = [];
+    const tool = policy === "workspace_tool_allow" ? "shell" : "channel_send";
+    const arguments_ = tool === "shell" ? { command: "pwd" } : { channel: "telegram", destination: "owning-chat", text: "Hello" };
+    const assertCards = (entries: Entry[], count: number) => {
+      assert.equal(entries.filter(entry => entry.kind === "status").length, 0);
+      const calls = entries.filter(entry => entry.kind === "tool");
+      assert.equal(calls.length, count);
+      assert.ok(calls.every(entry => entry.approval === badge));
+      const dom = new JSDOM(renderToStaticMarkup(createElement(Conversation, {
+        entries, sessionId: "root", demo: false, canSubmit: false, submit: () => {},
+      })));
+      try {
+        assert.equal(dom.window.document.querySelectorAll(".execution-record").length, count);
+        assert.equal(dom.window.document.querySelectorAll(".execution-approval").length, count);
+        assert.doesNotMatch(dom.window.document.body.textContent!, /is always allowed|Automatic approval for/);
+      } finally { dom.window.close(); }
+    };
+    for (let i = 0; i < 20; i++) {
+      const scope = { run_id: "run", generation_id: `generation-${i}`, index: 0 };
+      // The host approval can arrive before the provider's queued tool call.
+      for (const event of [
+        { event: "notice", ...scope, automatic: true, policy, call_id: `call-${i}`, tool,
+          text: policy === "workspace_tool_allow" ? "shell is always allowed in this workspace."
+            : "Automatic approval for this session's permanently owned chat under its connection's automatic-message policy." },
+        { event: "tool_call", ...scope, id: `call-${i}`, name: tool, arguments: arguments_ },
+        { event: "tool_result", ...scope, id: `call-${i}`, result: "/workspace", duration_ms: 10 },
+      ]) {
+        events.push(event);
+        cache.receive({ type: "event", session_id: "root", epoch: "one", cursor: events.length, record: event });
+      }
+      assertCards(cache.get("root").entries, i + 1);
+    }
+    const snapshot: Snapshot = { session_id: "root", sessions: [], history: [], retained_tasks: [],
+      active_run: { id: "run", session_id: "root", status: "running", events } };
+    const frame = { type: "snapshot" as const, session_id: "root", epoch: "one", cursor: events.length, snapshot };
+    cache.receive(frame);
+    assertCards(cache.get("root").entries, 20);
+    const cold = new LiveSessions();
+    cold.receive(frame);
+    assertCards(cold.get("root").entries, 20);
+  });
+
+  test(`${policy} stays scoped to the correct child and consumes incomplete policy notices`, () => {
+    let entries: Entry[] = [];
+    for (const task_id of ["one", "two"]) entries = appendEvent(entries, {
+      event: "tool_call", run_id: "run", task_id, activation: 2, id: "same", name: "channel_send", arguments: {},
+    });
+    entries = appendEvent(entries, { event: "notice", run_id: "run", task_id: "two", activation: 2,
+      call_id: "same", tool: "channel_send", policy, text: "Policy evidence" });
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].approval, undefined);
+    assert.equal(entries[1].approval, badge);
+    assert.equal(appendEvent(entries, { event: "notice", policy, text: "No call identity" }), entries);
+    const notice = appendEvent(entries, { event: "notice", text: "Unattended approval was denied; no action was taken." });
+    assert.equal(notice.at(-1)!.kind, "status");
+    assert.equal(notice.at(-1)!.text, "Unattended approval was denied; no action was taken.");
+  });
+}
