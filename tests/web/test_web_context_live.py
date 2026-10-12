@@ -3,7 +3,7 @@
 The context endpoint must stay read-only and safe while a run is active. It reads
 the running harness for the active session (no idle gate), folds in the bounded
 uncommitted root reply, and otherwise assembles a metadata-only pinned harness for
-designed sessions without starting MCP servers or issuing provider requests.
+designed sessions without starting MCP servers or generating model responses.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from tests.support.web import LiveStream
 from tests.support.web import client_app
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from tests.support.channels import Site
@@ -270,3 +271,68 @@ def test_idle_pinned_context_reuses_metadata_without_retaining_runtime(
             assert response.json()["context_window"] == 1_000_000
             assert response.json()["context_window_source"] == "provider"
         assert calls == 1
+
+
+@pytest.mark.requires_posix
+def test_pinned_oauth_context_cache_survives_idle_polls_but_not_account_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nagents.designer.runtime import DesignedHarness
+    from nagents.events import Event
+    from nagents.events import TextDoneEvent
+    from nagents.provider import OpenAIProvider
+    from nagents.provider.gateway import GatewayHTTPClient
+    from nagents.provider.openai import CODEX_MODELS_ENDPOINT
+    from nagents.provider.openai import CodexCredentials
+
+    account = "first-account"
+    requests: list[str] = []
+    model = "pinned-codex-model"
+
+    async def credentials(self: DesignedHarness) -> CodexCredentials:
+        return CodexCredentials("fixture-token-" + account, account)
+
+    async def generate(self: OpenAIProvider, *args: object, **kwargs: object) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Fixture response")
+
+    async def catalog(self: GatewayHTTPClient, url: str, headers: dict[str, str] | None = None) -> dict[str, object]:
+        assert url.startswith(CODEX_MODELS_ENDPOINT + "?")
+        assert headers is not None
+        selected = headers["ChatGPT-Account-Id"]
+        requests.append(selected)
+        return {
+            "models": [
+                {
+                    "slug": model,
+                    "visibility": "list",
+                    "context_window": 1_000_000 if selected == "first-account" else 512_000,
+                }
+            ]
+        }
+
+    with site(tmp_path, monkeypatch) as app:
+        monkeypatch.setattr(DesignedHarness, "codex_credentials", credentials)
+        monkeypatch.setattr(OpenAIProvider, "generate", generate)
+        monkeypatch.setattr(GatewayHTTPClient, "get_json", catalog)
+        monkeypatch.setattr("nagents.provider.openai.catalog_version", AsyncMock(return_value="0.162.0"))
+        app.configure(auto_reply=True)
+        design = parse(STARTER)
+        design.channels = {"fixture": "assistant"}
+        design.providers["primary"].auth = "chatgpt"
+        design.providers["primary"].model = model
+        _publish(app, serialize(design))
+        app.emit("hello")
+        app.idle()
+        session = app.bindings()["chat-a"]
+        requests.clear()  # Count only the new ephemeral idle-context harnesses.
+        for _ in range(3):
+            response = app.client.get(f"/api/sessions/{session}/context", headers=app.headers)
+            assert response.status_code == 200, response.text
+            assert response.json()["context_window"] == 1_000_000
+            assert response.json()["context_window_source"] == "provider"
+        assert requests == ["first-account"]
+        account = "second-account"
+        response = app.client.get(f"/api/sessions/{session}/context", headers=app.headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["context_window"] == 512_000
+        assert requests == ["first-account", "second-account"]

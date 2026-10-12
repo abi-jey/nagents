@@ -377,6 +377,7 @@ class Provider:
         if identity != self._context_metadata_identity():
             return
         rows = response.get("data", []) if kind in {ProviderType.LITELLM, ProviderType.OPENROUTER} else [response]
+        self._context_metadata_candidate = ContextMetadata()
         self._context_metadata.update(rows, id_key=key, nested=nested)
         if kind == ProviderType.GEMINI_NATIVE:
             prefixed = "models/" + model.removeprefix("models/")
@@ -497,6 +498,7 @@ class Provider:
                 models.append(model_id)
                 seen.add(model_id)
         if catalog_identity == self._context_metadata_identity():
+            self._context_metadata_candidate = ContextMetadata()
             self._context_metadata.select(catalog_identity)
             self._context_metadata.update(response["data"])
         return models

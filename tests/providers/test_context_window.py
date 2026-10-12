@@ -268,3 +268,27 @@ def test_bearer_catalog_context_uses_only_the_actual_request_token() -> None:
             assert calls == 1
 
     asyncio.run(scenario())
+
+
+def test_fresh_oauth_catalog_replaces_a_pending_older_metadata_snapshot() -> None:
+    async def scenario() -> None:
+        async def credentials() -> CodexCredentials:
+            return CodexCredentials("fixture-access", "fixture-account")
+
+        responses = [
+            {"models": [{"slug": "alias", "visibility": "list", "context_window": limit}]}
+            for limit in (1_000_000, 512_000)
+        ]
+        with (
+            patch("nagents.provider.openai.catalog_version", AsyncMock(return_value="0.162.0")),
+            patch.object(GatewayHTTPClient, "get_json", AsyncMock(side_effect=responses)),
+        ):
+            async with OpenAIProvider(credentials, model="alias") as first:
+                await first.get_model_list()
+                snapshot = first.context_metadata_snapshot()
+            async with OpenAIProvider(credentials, model="alias") as fresh:
+                fresh.restore_context_metadata(snapshot)
+                await fresh.get_model_list()
+                assert fresh.cached_context_window() == ContextWindow(512_000, "provider")
+
+    asyncio.run(scenario())
