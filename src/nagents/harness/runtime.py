@@ -114,6 +114,12 @@ class _HarnessSession(SessionManager):
     async def get_history(self, session_id: str, limit: int | None = None) -> list["Message"]:
         return await _await_cleanup(asyncio.create_task(super().get_history(session_id, limit)))
 
+    async def context_identity(self, session_id: str) -> int:
+        return await _await_cleanup(asyncio.create_task(super().context_identity(session_id)))
+
+    async def session_exists(self, session_id: str) -> bool:
+        return await _await_cleanup(asyncio.create_task(super().session_exists(session_id)))
+
     async def add_message(self, session_id: str, message: "Message") -> int:
         reservation = capture_write(self, session_id, message)
         row_id = await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))

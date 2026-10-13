@@ -43,6 +43,7 @@ from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
 from .design_channels import DesignedChannels
+from .diagnostics import exception_diagnostic
 from .executions import MAX_PARALLEL_RUNS
 from .executions import Executions
 from .history import WebHistory
@@ -844,21 +845,18 @@ class WebState:
             raise
         except Exception as error:
             task = asyncio.current_task()
-            try:
-                code = getattr(error, "sqlite_errorcode", None)
-            except Exception:
-                code = None
-            sqlite_code = code if type(code) is int and 0 <= code <= 2**31 - 1 else "unavailable"
+            exception, sqlite_code, nested = exception_diagnostic(error)
             if task is not None and task.cancelling():
                 # An owned operation can finish with its own error while Stop
                 # is joining it. Keep the stop outcome, as with child workers.
                 run.outcome = "cancelled"
                 logger.warning(
-                    "Run producer failed during cancellation: session=%s run=%s reason=cleanup_failed exception=%s sqlite_code=%s",
+                    "Run producer failed during cancellation: session=%s run=%s reason=cleanup_failed exception=%s sqlite_code=%s nested=%s",
                     run.session_id,
                     run.id,
-                    type(error).__name__[:80],
+                    exception,
                     sqlite_code,
+                    nested,
                 )
                 self.wakeups.cancel(run.chain)
                 raise asyncio.CancelledError from None
@@ -869,12 +867,13 @@ class WebState:
             setup = provider_setup(self.running_harness)
             reason = "missing_credentials" if not setup["configured"] else "run_failed"
             logger.warning(
-                "Run producer failed: session=%s run=%s reason=%s exception=%s sqlite_code=%s",
+                "Run producer failed: session=%s run=%s reason=%s exception=%s sqlite_code=%s nested=%s",
                 run.session_id,
                 run.id,
                 reason,
-                type(error).__name__[:80],
+                exception,
                 sqlite_code,
+                nested,
             )
             await self.send(
                 run,
