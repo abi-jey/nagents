@@ -781,7 +781,9 @@ def test_responses_reasoning_metadata_and_role_image_history() -> None:
     inputs = [object_data(item) for item in list_data(body["input"])]
     assert [item.get("role") for item in inputs[:3]] == ["system", "developer", "user"]
     assert object_data(list_data(inputs[2]["content"])[1])["type"] == "input_image"
-    assert inputs[4] == reasoning and inputs[5]["call_id"] == "a" and inputs[6]["output"] == "HELLO"
+    assert inputs[4] == {**reasoning, "summary": []}
+    assert "Brief summary" not in json.dumps(inputs)
+    assert inputs[5]["call_id"] == "a" and inputs[6]["output"] == "HELLO"
 
 
 @pytest.mark.parametrize("stream", [False, True])

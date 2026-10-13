@@ -297,6 +297,7 @@ def create_app(
             designer = Designer(state)
             await designer.traces.initialize()
             await state.history.initialize()
+            await state.responses.initialize()
             await session_groups.initialize()
             state.tool_approvals.initialize()
             harness.agent.plugins.append(state.history.identity)

@@ -21,6 +21,7 @@ class EventType(Enum):
     # Streaming events
     TEXT_CHUNK = "text_chunk"  # Partial text during streaming
     REASONING_CHUNK = "reasoning_chunk"  # Partial reasoning/thinking during streaming
+    RESPONSE_METADATA = "response_metadata"  # Cumulative display-only response summary/usage
 
     # Audio events (Realtime speech-to-speech)
     AUDIO_CHUNK = "audio_chunk"  # Base64-encoded output audio delta
@@ -76,6 +77,12 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    prompt_reported: bool = False
+    completion_reported: bool = False
+    total_reported: bool = False
+    reasoning_tokens: int = 0
+    reasoning_reported: bool = False
+    reasoning_in_output: Literal["included", "separate", "unknown"] = "unknown"
 
 
 @dataclass
@@ -90,6 +97,12 @@ class Usage:
         cached_tokens: Cached prompt tokens (OpenAI)
         audio_tokens: Audio input/output tokens
         reasoning_tokens: Tokens used for reasoning/thinking (chain-of-thought models)
+        reasoning_reported: Distinguishes a provider-reported zero from an absent breakdown
+        reasoning_in_output: Whether reasoning is included in completion_tokens
+        reported: The provider supplied usage counts, even if every count is zero
+        prompt_reported: The provider supplied an input count, including zero
+        completion_reported: The provider supplied an output count, including zero
+        total_reported: The provider supplied a total; inferred totals remain unreported
         session: Cumulative token usage across the entire session/run
     """
 
@@ -99,11 +112,27 @@ class Usage:
     cached_tokens: int = 0
     audio_tokens: int = 0
     reasoning_tokens: int = 0
+    reasoning_reported: bool = False
+    reasoning_in_output: Literal["included", "separate", "unknown"] = "unknown"
+    reported: bool = False
+    prompt_reported: bool = False
+    completion_reported: bool = False
+    total_reported: bool = False
     session: TokenUsage | None = None
 
     def has_usage(self) -> bool:
         """Check if this usage has any actual token counts."""
-        return self.prompt_tokens > 0 or self.completion_tokens > 0 or self.total_tokens > 0
+        return (
+            self.prompt_tokens > 0
+            or self.completion_tokens > 0
+            or self.total_tokens > 0
+            or self.reasoning_tokens > 0
+            or self.reasoning_reported
+            or self.reported
+            or self.prompt_reported
+            or self.completion_reported
+            or self.total_reported
+        )
 
 
 @dataclass
@@ -126,10 +155,28 @@ class TextChunkEvent(Event):
 
 @dataclass
 class ReasoningChunkEvent(Event):
-    """Streaming reasoning/thinking chunk (e.g., from models with chain-of-thought)."""
+    """Reasoning text; only explicitly displayable provider summaries enter UI metadata."""
 
     type: EventType = field(default=EventType.REASONING_CHUNK)
     chunk: str = ""
+    displayable: bool = False
+
+
+@dataclass
+class ResponseMetadataEvent(Event):
+    """Versioned display-only response metadata, separate from prompt history."""
+
+    type: EventType = field(default=EventType.RESPONSE_METADATA)
+    response_id: str = ""
+    revision: int = 0
+    summary: str = ""
+    summary_truncated: bool = False
+    summary_expired: bool = False
+    usage_reported: bool = False
+    status: Literal["thinking", "responding", "completed", "cancelled", "failed"] = "responding"
+    history_id: str = ""
+    response_session_id: str = ""
+    round_number: int = 0
 
 
 @dataclass

@@ -50,7 +50,16 @@ def test_real_agent_invocations_assign_fresh_identity_to_legacy_reused_ids(tmp_p
             assert observed[1]["tool_generation_id"] not in {"parent", "current"}
             assert observed[1]["tool_index"] == 0
             calls = [event for event in events if isinstance(event, ToolCallEvent)]
-            assert calls[1].extra == {"generation_id": observed[1]["tool_generation_id"], "index": 0}
+            assert calls[1].extra == {
+                "generation_id": observed[1]["tool_generation_id"],
+                "index": 0,
+                "response_id": calls[1].extra["response_id"],
+                "response_session_id": calls[1].extra["response_session_id"],
+            }
+            assert calls[0].extra["response_id"] and calls[1].extra["response_id"]
+            assert calls[0].extra["response_id"] != calls[1].extra["response_id"]
+            assert calls[0].extra["response_session_id"] == calls[1].extra["response_session_id"]
+            assert str(calls[1].extra["response_session_id"]).startswith("session-")
             assert {key: scope.get()[key] for key in parent} == parent
         finally:
             await agent.close()

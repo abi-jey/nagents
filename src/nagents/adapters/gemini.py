@@ -300,7 +300,7 @@ def parse_response(
         for raw_part in parts:
             part = object_data(raw_part)
             # Extract text
-            if "text" in part:
+            if "text" in part and part.get("thought") is not True:
                 text += string_data(part["text"])
 
             # Extract function calls
@@ -329,3 +329,11 @@ def parse_response(
     usage = object_data(raw_usage) if raw_usage is not None else None
 
     return text, tool_calls, usage
+
+
+def parse_summary(response: dict[str, object]) -> str:
+    """Thought-marked text is display metadata, not assistant answer content."""
+    candidate = _response_candidate(response)
+    content = object_data(candidate.get("content") or {})
+    parts = [object_data(part) for part in list_data(content.get("parts", []))]
+    return "".join(string_data(part.get("text", "")) for part in parts if part.get("thought") is True)

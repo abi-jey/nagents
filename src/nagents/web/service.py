@@ -34,6 +34,7 @@ from nagents.harness.execution import host_run
 from nagents.harness.runtime import _HarnessSession
 from nagents.harness.types import TaskDeliveryWarning
 from nagents.observation import scope as observation_scope
+from nagents.response_metadata import observe_responses
 
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
@@ -51,6 +52,7 @@ from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
+from .response_metadata import Responses
 from .session_agents import SessionAgents
 from .subscriptions import EventBus
 from .tasks import Tasks
@@ -168,7 +170,9 @@ class Run:
                 self._context_reply_live = True
             elif event in {"text_done", "tool_call_progress", "tool_call", "tool_result", "done", "compaction_started"}:
                 self._context_reply_live = False
-        if event in {"text_chunk", "reasoning_chunk"}:
+        if event == "response_metadata":
+            self.retain(f"response:{record.get('response_id', '')}", record)
+        elif event in {"text_chunk", "reasoning_chunk"}:
             key = f"{scope}:{event}"
             old = self.drafts.get(key, {})
             self.retain(key, {**record, "chunk": (str(old.get("chunk", "")) + str(record.get("chunk", "")))[-262144:]})
@@ -292,6 +296,7 @@ class WebState:
         self.channels = ChannelHost(self)
         self.designed_channels = DesignedChannels(self)
         self.session_agents = SessionAgents(self)
+        self.responses = Responses(self)
         self.uploads = Uploads(self)
         self.trash = SessionTrash(self)
         harness.approval_handler = self.approve
@@ -521,6 +526,9 @@ class WebState:
         pass
 
     async def send(self, run: Run, record: dict[str, object]) -> None:
+        await self.responses.record(run, record)
+        if record.get("event") == "task_completed":
+            await self.responses.finish(run, str(record.get("task_id", "")), str(record.get("status", "failed")))
         await self.tasks.record(run, record)
         self.publish(run, record)
 
@@ -740,6 +748,7 @@ class WebState:
             with (
                 binding,
                 host_run(self.running_harness, run.id),
+                observe_responses(lambda adapter, event: self.responses.capture(run, adapter, event)),
                 self.running_harness.followups.source(
                     lambda: self.queued_inputs.pull(run),
                     (run.work.voice_session_id, run.work.voice_delegation_id) if run.work is not None else ("", ""),
@@ -873,6 +882,7 @@ class WebState:
                 else:
                     await notices.finish("completed")
             finally:
+                await _join(asyncio.create_task(self.responses.finish(run)))
                 await _join(asyncio.create_task(self.tasks.finish(run)))
                 await _join(asyncio.create_task(self.queued_inputs.finish(run)))
                 await _join(asyncio.create_task(self.channels.activity(run.session_id, False)))

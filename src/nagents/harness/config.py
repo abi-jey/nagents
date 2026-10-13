@@ -105,6 +105,7 @@ class HarnessConfig:
     provider_paths: dict[str, Path] = field(default_factory=dict)
     theme: str = "terminal"
     animations: bool = True
+    reasoning_summaries: bool = True
     submit_mode: Literal["queue", "interrupt"] = "queue"
     tab_action: str = "agent"
     max_subagent_depth: int = 2
@@ -134,6 +135,8 @@ class HarnessConfig:
             raise ValueError(f"theme_background must be one of: {', '.join(THEME_BACKGROUNDS)}")
         if type(self.animations) is not bool:
             raise ValueError("animations must be a boolean")
+        if type(self.reasoning_summaries) is not bool:
+            raise ValueError("reasoning_summaries must be a boolean")
         if self.submit_mode not in {"queue", "interrupt"}:
             raise ValueError("submit_mode must be queue or interrupt")
         if self.tab_action not in {"agent", "complete", "focus"}:
@@ -344,7 +347,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_tool_rounds",
         "max_subagent_depth",
     }
-    booleans = {"demo", "animations", "read_only"}
+    booleans = {"demo", "animations", "read_only", "reasoning_summaries"}
     allowed = (
         strings
         | integers

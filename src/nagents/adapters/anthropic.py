@@ -21,6 +21,8 @@ from ..types import ToolDefinition
 from ._tool_progress import ToolCallProgressTracker
 from ._validation import ProtocolError
 from ._validation import json_values_equal
+from ._validation import list_data
+from ._validation import object_data
 from ._validation import string_data
 from ._validation import tool_arguments
 
@@ -134,6 +136,13 @@ def format_messages(messages: list[Message]) -> tuple[str | None, list[dict[str,
         if role == "assistant":
             # Assistant messages can have content and/or tool_use blocks
             content_parts: list[dict[str, Any]] = []
+            for call in msg.tool_calls:
+                if "anthropic_thinking" in call.metadata:
+                    for raw in list_data(json.loads(call.metadata["anthropic_thinking"])):
+                        block = object_data(raw)
+                        if block.get("type") not in {"thinking", "redacted_thinking"}:
+                            raise ProtocolError("Messages history contains invalid thinking metadata.")
+                        content_parts.append(block)
 
             # Add text content if present
             if msg.content:
@@ -262,8 +271,19 @@ def parse_response(response: dict[str, Any]) -> tuple[str, list[ToolCall], dict[
 
     # Parse usage
     usage = response.get("usage")
+    thinking = [block for block in content if block.get("type") in {"thinking", "redacted_thinking"}]
+    if tool_calls and thinking:
+        tool_calls[0].metadata["anthropic_thinking"] = json.dumps(thinking, allow_nan=False)
 
     return text, tool_calls, usage
+
+
+def parse_summaries(response: dict[str, object]) -> list[str]:
+    """Opaque redacted blocks and signatures never become display text."""
+    blocks = [object_data(block) for block in list_data(response.get("content") or [])]
+    return [
+        string_data(block["thinking"]) for block in blocks if block.get("type") == "thinking" and block.get("thinking")
+    ]
 
 
 class StreamingToolCallAccumulator:

@@ -90,19 +90,47 @@ def token_usage(value: object, api: str) -> Usage:
     if api == "gemini":
         prompt = count(data, "promptTokenCount")
         completion = count(data, "candidatesTokenCount")
+        reasoning = count(data, "thoughtsTokenCount")
         return Usage(
             prompt_tokens=prompt,
             completion_tokens=completion,
             total_tokens=count(data, "totalTokenCount")
             if data.get("totalTokenCount") is not None
-            else prompt + completion,
+            else prompt + completion + reasoning,
+            reasoning_tokens=reasoning,
+            prompt_reported=data.get("promptTokenCount") is not None,
+            completion_reported=data.get("candidatesTokenCount") is not None,
+            total_reported=data.get("totalTokenCount") is not None,
+            reasoning_reported=data.get("thoughtsTokenCount") is not None,
+            reasoning_in_output="separate" if data.get("thoughtsTokenCount") is not None else "unknown",
+            reported=any(
+                data.get(key) is not None
+                for key in ("promptTokenCount", "candidatesTokenCount", "totalTokenCount", "thoughtsTokenCount")
+            ),
         )
     if api == "messages":
         cached = count(data, "cache_read_input_tokens")
         prompt = count(data, "input_tokens") + cached + count(data, "cache_creation_input_tokens")
         completion = count(data, "output_tokens")
+        details = object_data(data.get("output_tokens_details") or {})
         return Usage(
-            prompt_tokens=prompt, completion_tokens=completion, total_tokens=prompt + completion, cached_tokens=cached
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
+            cached_tokens=cached,
+            prompt_reported=any(
+                data.get(key) is not None
+                for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            ),
+            completion_reported=data.get("output_tokens") is not None,
+            reasoning_tokens=count(details, "thinking_tokens"),
+            reasoning_reported=details.get("thinking_tokens") is not None,
+            reasoning_in_output="included" if details.get("thinking_tokens") is not None else "unknown",
+            reported=any(
+                data.get(key) is not None
+                for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            )
+            or details.get("thinking_tokens") is not None,
         )
     input_key, output_key = (
         ("input_tokens", "output_tokens") if api == "responses" else ("prompt_tokens", "completion_tokens")
@@ -115,6 +143,13 @@ def token_usage(value: object, api: str) -> Usage:
         completion_tokens=completion,
         total_tokens=count(data, "total_tokens") if data.get("total_tokens") is not None else prompt + completion,
         cached_tokens=count(inputs, "cached_tokens"),
+        prompt_reported=data.get(input_key) is not None,
+        completion_reported=data.get(output_key) is not None,
+        total_reported=data.get("total_tokens") is not None,
         reasoning_tokens=count(outputs, "reasoning_tokens"),
+        reasoning_reported=outputs.get("reasoning_tokens") is not None,
+        reasoning_in_output="included" if outputs.get("reasoning_tokens") is not None else "unknown",
+        reported=any(data.get(key) is not None for key in (input_key, output_key, "total_tokens"))
+        or outputs.get("reasoning_tokens") is not None,
         audio_tokens=count(inputs, "audio_tokens") + count(outputs, "audio_tokens"),
     )

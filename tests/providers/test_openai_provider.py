@@ -567,11 +567,57 @@ def test_responses_conversion_headers_and_text_usage(monkeypatch: pytest.MonkeyP
             assert [event.chunk for event in events if isinstance(event, TextChunkEvent)] == (
                 ["Hel", "lo"] if streaming else []
             )
-            assert [event.chunk for event in events if isinstance(event, ReasoningChunkEvent)] == (
-                ["Brief reasoning"] if streaming else []
-            )
+            assert [event.chunk for event in events if isinstance(event, ReasoningChunkEvent)] == ["Brief reasoning"]
             assert ACCESS not in repr(events) and ACCESS not in json.dumps(body)
             await provider.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("with_delta", [False, True])
+def test_codex_final_summary_and_streamed_summary_are_displayed_once(
+    monkeypatch: pytest.MonkeyPatch, streaming: bool, with_delta: bool
+) -> None:
+    async def scenario() -> None:
+        async def handle(request: web.Request) -> web.Response:
+            reasoning: dict[str, object] = {
+                "type": "reasoning",
+                "id": "rs-1",
+                "encrypted_content": "opaque-state",
+                "summary": [{"type": "summary_text", "text": "Display summary"}],
+            }
+            frames: list[dict[str, object]] = []
+            if with_delta:
+                frames.extend(
+                    [
+                        {
+                            "type": "response.reasoning_summary_text.delta",
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "delta": "Display ",
+                        },
+                        {
+                            "type": "response.reasoning_summary_text.done",
+                            "output_index": 0,
+                            "summary_index": 0,
+                            "text": "Display summary",
+                        },
+                    ]
+                )
+            frames.append(completion([reasoning, text_item()]))
+            return web.Response(text=sse(frames), content_type="text/event-stream")
+
+        async with endpoint(monkeypatch, handle), OpenAIProvider(credentials) as provider:
+            events = [
+                event async for event in provider.generate([Message(role="user", content="Hello")], stream=streaming)
+            ]
+        assert not any(isinstance(event, ErrorEvent) for event in events)
+        summaries = [event.chunk for event in events if isinstance(event, ReasoningChunkEvent)]
+        assert "".join(summaries) == "Display summary"
+        assert all(event.displayable for event in events if isinstance(event, ReasoningChunkEvent))
+        assert next(event for event in events if isinstance(event, TextDoneEvent)).text == "Hello"
+        assert "opaque-state" not in repr(events)
 
     asyncio.run(scenario())
 

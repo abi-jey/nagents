@@ -2,6 +2,7 @@ import type { ActiveRun, Snapshot, WireEvent } from "../../types.js";
 import type { Position, SessionFrame } from "../../api/subscription.js";
 import type { QueuedMessage } from "../../api/messages.js";
 import { appendEvent, fromHistory, sameLiveCaption, sameTranscriptUser, type Entry } from "./transcript.js";
+import { latestResponseMetadata } from "./responseMetadata.js";
 
 export type LiveTranscript = {
   entries: Entry[];
@@ -29,6 +30,9 @@ function compatible(saved: Entry, previous: Entry): boolean {
   if (saved.toolProgress || previous.toolProgress || saved.unattributed || previous.unattributed) return false;
   if (saved.callPosition !== undefined && previous.callPosition !== undefined && saved.callPosition !== previous.callPosition) return false;
   if (saved.kind !== previous.kind || previous.taskId || (previous.recorded && previous.kind !== "context")) return false;
+  if (saved.responseId || previous.responseId) return saved.responseId === previous.responseId &&
+    (!saved.responseMetadata || !previous.responseMetadata ||
+      saved.responseMetadata.response_session_id === previous.responseMetadata.response_session_id);
   return saved.kind !== "tool" || saved.callId === previous.callId;
 }
 
@@ -41,6 +45,7 @@ function sameSavedEntry(saved: Entry, previous: Entry): boolean {
   if (!compatible(saved, previous)) return false;
   if (saved.delivery) return true;
   if (saved.kind === "user" && sameTranscriptUser(saved, previous)) return true;
+  if (saved.responseId && saved.responseId === previous.responseId) return true;
   const a = rowIds(saved), b = rowIds(previous);
   if (a.length && b.length) return a.some((id) => b.includes(id));
   if (a.length || b.length || saved.messageId || previous.messageId || saved.ingressId || previous.ingressId || saved.originId || previous.originId) return false;
@@ -135,6 +140,8 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
           origin: entry.origin, originId: entry.originId, provenance: entry.provenance, channelContext: entry.channelContext,
            channel: entry.channel, parts: entry.parts, uploads: entry.uploads }
       : { ...entry, ...old, historyId: entry.historyId, resultHistoryId: entry.resultHistoryId,
+          responseId: entry.responseId || old.responseId,
+          responseMetadata: latestResponseMetadata(entry.responseMetadata, old.responseMetadata),
           callPosition: entry.callPosition,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
           text: entry.kind === "assistant" ? entry.text : old.text,
@@ -187,7 +194,9 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
         item.activation === entry.activation && (item.followup || 0) === (entry.followup || 0) &&
         item.kind === entry.kind && !!item.unattributed === !!entry.unattributed && (entry.generationId && item.generationId
           ? entry.generationId === item.generationId && entry.toolIndex === item.toolIndex : item.callId === entry.callId) && !conflictingRows(entry, item) &&
-        (!entry.streaming || !!item.streaming) &&
+        (!(entry.responseId || item.responseId) || entry.responseId === item.responseId) &&
+        (!entry.responseMetadata || !item.responseMetadata || entry.responseMetadata.response_session_id === item.responseMetadata.response_session_id) &&
+        (!entry.streaming || !!item.streaming || !!entry.responseId) &&
         (entry.kind !== "user" || sameTranscriptUser(entry, item)) &&
         (!owner || !oldOwners.has(item) || sameTurn(owner, oldOwners.get(item))));
       // A complete replay identifies every response slot within its own user
@@ -199,6 +208,7 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
             !conflictingRows(entry, item) && sameTurn(owner, oldOwners.get(item))));
       if (old) { claimed.add(old.id); if (owner) positions.set(owner, entries.indexOf(old)); }
       return { ...entry, id: old?.id || (entry.kind === "live_caption" ? entry.id : `run:${run.id}:${index}`),
+        responseMetadata: latestResponseMetadata(entry.responseMetadata, old?.responseMetadata),
         historyId: entry.historyId || old?.historyId, resultHistoryId: entry.resultHistoryId || old?.resultHistoryId,
         historyIndex: old?.historyIndex, historyTurn: old?.historyTurn,
       };
@@ -224,6 +234,10 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
   // a full event log. Replace only those streams, retaining observed tool/task
   // evidence, provisional approvals and earlier activations in this connection.
   for (const record of run?.records || []) {
+    if (record.event === "response_metadata") {
+      entries = appendEvent(entries, { ...record, run_id: record.run_id || run?.id });
+      continue;
+    }
     if (!run?.events && ["tool_call_progress", "tool_call", "tool_execution_started"].includes(record.event)) {
       entries = appendEvent(entries, { ...record, run_id: record.run_id || run?.id });
       continue;
@@ -231,7 +245,9 @@ export function applySnapshot(current: LiveTranscript, snapshot: Snapshot, annou
     if (record.event !== "text_chunk") continue;
     const event = { ...record, run_id: record.run_id || run?.id, event: "text_done", text: record.chunk };
     entries = appendEvent(entries, event);
-    const index = entries.findLastIndex((entry) => entry.kind === "assistant" && entry.runId === event.run_id &&
+    const responseId = typeof record.response_id === "string" ? record.response_id
+      : record.extra && typeof record.extra === "object" && "response_id" in record.extra ? record.extra.response_id : undefined;
+    const index = entries.findLastIndex((entry) => entry.kind === "assistant" && (!responseId || entry.responseId === responseId) && entry.runId === event.run_id &&
       (entry.taskId || "") === (record.task_id || "") && (entry.activation || 0) === (record.activation || 0) &&
       (entry.followup || 0) === (record.followup || 0));
     entries = entries.map((entry, i) => i === index ? { ...entry, streaming: true } : entry);

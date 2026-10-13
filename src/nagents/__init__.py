@@ -169,6 +169,7 @@ from .events import RealtimeSessionUpdatedEvent
 from .events import ReasoningChunkEvent
 from .events import ResponseCancelledEvent
 from .events import ResponseCreatedEvent
+from .events import ResponseMetadataEvent
 from .events import SpeechStartedEvent
 from .events import SpeechStoppedEvent
 from .events import TextChunkEvent
@@ -362,6 +363,7 @@ __all__ = [
     "ReasoningChunkEvent",
     "ResponseCancelledEvent",
     "ResponseCreatedEvent",
+    "ResponseMetadataEvent",
     "RetryConfig",
     "RunContext",
     "STTService",

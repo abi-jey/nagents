@@ -340,3 +340,53 @@ and [Codex's public release metadata checks](https://github.com/openai/codex/blo
         - generate
         - get_model_list
         - close
+
+## Displayable reasoning summaries and usage
+
+`HarnessConfig.reasoning_summaries` defaults to `true`. Set
+`"reasoning_summaries": false` in trusted configuration, or
+`NGN_REASONING_SUMMARIES=false`, to stop requesting summaries. Framework callers
+opt in with `GenerationConfig(reasoning_summary="auto")`; its default is `"off"`.
+This controls requesting summaries, not whether the model reasons or how many
+tokens it uses. Providers may return summaries or usage without being asked.
+
+Automatic requests apply to recognized reasoning models on native OpenAI
+Responses, Gemini, and Anthropic endpoints, and the fixed ChatGPT/Codex route.
+They request Responses `summary: "auto"`, Gemini `includeThoughts: true`, or
+Anthropic adaptive `display: "summarized"`. Older/non-thinking models and custom
+gateways receive no extra summary parameter. There is no speculative second
+generation when a provider rejects a request. For an explicitly compatible
+Responses gateway, use
+`GenerationConfig(responses_reasoning={"effort": "low", "summary": "concise"})`.
+Explicit Responses effort/summary and Gemini thinking settings are preserved.
+Anthropic automatic requests only target models whose default is already
+adaptive thinking (Claude 5 families and Mythos Preview); this flag does not
+turn thinking on for Claude 4 models.
+
+Provider adapters mark displayable summary text with
+`ReasoningChunkEvent(displayable=True)`. Custom providers must explicitly opt in;
+the default `False` preserves private framework reasoning and excludes it from
+web response metadata. Display summaries remain separate from answer text,
+ordinary prompt history, and voice delivery.
+Responses continuation retains encrypted state with an empty summary; Anthropic
+tool continuation must retain its signed thinking blocks unchanged as protocol
+metadata. Those required signed blocks are not copied into assistant prose.
+Opaque signatures, encrypted content, and redacted thinking are never emitted
+as display text. Responses summary reconciliation retains at most 65,536
+characters and 1,024 parts before downstream UI retention rules apply.
+
+`Usage.reported` and `Usage.reasoning_reported` distinguish missing counts from
+reported zero. Input, output, and total have independent `prompt_reported`,
+`completion_reported`, and `total_reported` flags: a reasoning-only usage
+snapshot does not imply zero input or output. Fallback totals remain unreported.
+`reasoning_in_output` is `"included"` for OpenAI reasoning and
+Anthropic `output_tokens_details.thinking_tokens`; Gemini
+`thoughtsTokenCount` is `"separate"` from `candidatesTokenCount`. Totals use the
+provider's total where supplied. Gemini's fallback includes thought tokens
+once; included reasoning is never added again. These counts are distinct from
+context-window estimates and the length of a displayed summary.
+
+Provider references: [OpenAI reasoning summaries](https://developers.openai.com/api/docs/guides/reasoning),
+[Gemini thought summaries and usage](https://ai.google.dev/gemini-api/docs/generate-content/thinking),
+[Anthropic display and signed blocks](https://platform.claude.com/docs/en/build-with-claude/thinking),
+and [Anthropic thinking-token accounting](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).

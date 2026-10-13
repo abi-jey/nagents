@@ -22,6 +22,7 @@ from nagents.channels.store import InboxStore
 from nagents.extensions import AgentPlugin
 from nagents.harness.execution import _register_owned_adapter_type
 from nagents.harness.runtime import _HarnessSession
+from nagents.session import response_metadata
 from nagents.session.deliveries import DeliveryJournal
 from nagents.types import AudioContent
 from nagents.types import DocumentContent
@@ -112,6 +113,7 @@ class WebHistory(_HarnessSession):
                     def create(db: sqlite3.Connection) -> None:
                         live_captions.initialize(db)
                         initialize_markers(db)
+                        response_metadata.initialize(db)
                         db.execute(
                             "CREATE TABLE IF NOT EXISTS ngn_web_message_origins ("
                             "history_id INTEGER PRIMARY KEY REFERENCES v2_messages(id), "
@@ -442,7 +444,8 @@ class WebHistory(_HarnessSession):
                     }
                     for receipt in deliveries.earlier
                 ]
-                return [*earlier, *merge_markers(db, session_id, live_captions.merge(db, session_id, records))]
+                records = merge_markers(db, session_id, live_captions.merge(db, session_id, records))
+                return [*earlier, *response_metadata.merge(db, session_id, records)]
 
         return await finish_on_cancel(asyncio.to_thread(read))
 

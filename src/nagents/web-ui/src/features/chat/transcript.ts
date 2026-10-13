@@ -4,6 +4,7 @@ import type { ChannelMeta } from "./channelMessage.js";
 import type { LocalDelivery } from "./deliveries.js";
 import { uploadedAttachments } from "./uploads.js";
 import { channelMessage, sameUserMessage } from "./channelMessage.js";
+import { responseMetadata, sameResponse, type ResponseMetadata } from "./responseMetadata.js";
 
 export type LiveCaption = {
   sessionId: string;
@@ -52,6 +53,8 @@ export type Entry = {
   title?: string;
   callId?: string;
   generationId?: string;
+  responseId?: string;
+  responseMetadata?: ResponseMetadata;
   toolIndex?: number;
   toolProgress?: "streaming" | "ready" | "abandoned";
   inputsTruncated?: boolean;
@@ -193,7 +196,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
   if (event.extra && typeof event.extra === "object" && !Array.isArray(event.extra)) {
     const extra = event.extra as Record<string, unknown>;
     event = { ...event };
-    for (const key of ["task_id", "activation", "followup", "generation_id", "index"])
+    for (const key of ["task_id", "activation", "followup", "generation_id", "response_id", "response_session_id", "index"])
       if (event[key] === undefined && extra[key] !== undefined) event[key] = extra[key];
   }
   if (event.event === "agent_changed") {
@@ -245,6 +248,8 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     (entry.activation || 0) === activation &&
     (entry.followup || 0) === followup;
   const generationId = text(event, "generation_id");
+  const responseId = text(event, "response_id");
+  const responseSessionId = text(event, "response_session_id");
   const toolIndex = typeof event.index === "number" && Number.isSafeInteger(event.index) && event.index >= 0 ? event.index : undefined;
   const sameProgress = (entry: Entry) => !!generationId && toolIndex !== undefined &&
     entry.generationId === generationId && entry.toolIndex === toolIndex && execution(entry);
@@ -311,6 +316,22 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       : entries.map((previous, i) => (i === index ? entry : previous));
   }
 
+  if (event.event === "response_metadata") {
+    const metadata = responseMetadata(event);
+    if (!metadata) return entries;
+    const index = entries.findIndex(entry => entry.kind === "assistant" &&
+      (entry.responseMetadata ? sameResponse(entry.responseMetadata, metadata)
+        : entry.responseId === metadata.response_id && execution(entry) ||
+          !entry.responseId && !!metadata.history_id && entry.historyId === metadata.history_id && (entry.taskId || "") === taskId));
+    const previous = entries[index];
+    if (previous?.responseMetadata && previous.responseMetadata.revision >= metadata.revision) return entries;
+    return save({ ...previous, kind: "assistant", text: previous?.text || "", ...scope,
+      responseId: metadata.response_id, responseMetadata: metadata,
+      historyId: metadata.history_id || previous?.historyId,
+      streaming: ["thinking", "responding"].includes(metadata.status),
+    }, index);
+  }
+
   if (["run_finished", "client_disconnected", "done"].includes(event.event)) {
     const activity =
       entries.reduce(
@@ -344,13 +365,18 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
                 : event.status === "completed" || event.status === "unknown"
                 ? "No result recorded"
                 : entry.state;
-      return entry.streaming || state !== entry.state || entry.queued
+      const metadata = entry.responseMetadata;
+      const responseStatus = metadata && ["thinking", "responding"].includes(metadata.status) && event.event === "run_finished" &&
+        ["completed", "cancelled", "failed"].includes(text(event, "status"))
+        ? text(event, "status") as ResponseMetadata["status"] : undefined;
+      return entry.streaming || state !== entry.state || entry.queued || responseStatus
         ? {
             ...entry,
             streaming: false,
             ...(entry.toolProgress && entry.toolProgress !== "abandoned" ? { toolProgress: "abandoned" as const } : {}),
             queued: false,
             state,
+            ...(responseStatus && metadata ? { responseMetadata: { ...metadata, status: responseStatus } } : {}),
             activity: state !== entry.state ? activity : entry.activity,
           }
         : entry;
@@ -393,15 +419,21 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     );
     if (compaction?.compacting) return entries;
     const index = entries.findLastIndex(
-      (entry) => entry.kind === "assistant" && entry.streaming && execution(entry),
+      (entry) => entry.kind === "assistant" && (responseId
+        ? entry.responseId === responseId && (execution(entry) ||
+          !!responseSessionId && entry.responseMetadata?.response_session_id === responseSessionId || !!historyId && entry.historyId === historyId)
+        : entry.streaming && !entry.responseId && execution(entry)),
     );
     const previous = index >= 0 ? entries[index] : undefined;
+    if (previous && responseId && event.event === "text_chunk" && previous.responseMetadata &&
+      ["completed", "cancelled", "failed"].includes(previous.responseMetadata.status)) return entries;
     if (event.event === "text_done" && !text(event, "text") && !previous) return entries;
     return save(
       {
         ...previous,
         kind: "assistant",
         ...scope,
+        ...(responseId ? { responseId } : {}),
         historyId: historyId || previous?.historyId,
         text:
           event.event === "text_chunk"
@@ -944,6 +976,7 @@ export function fromHistory({
     entries.push({ id: `delivery:${delivery.delivery_id}`, kind: "delivery", text: delivery.text, delivery });
   }
   for (const [historyIndex, message] of messages.entries()) {
+    const metadata = responseMetadata(message.response_metadata);
     if (message.role === "agent_changed") {
       entries = appendEvent(entries, { ...message, event: "agent_changed", history_index: historyIndex, saved: true });
       continue;
@@ -958,6 +991,9 @@ export function fromHistory({
     }
     if (message.role === "user") historyTurn = historyIndex;
     const identity = { history_id: message.history_id, history_index: historyIndex, history_turn: historyTurn };
+    const responseIdentity = { ...identity,
+      ...(metadata?.response_session_id === session_id ? { response_id: metadata.response_id,
+        response_session_id: metadata.response_session_id, run_id: metadata.run_id || "" } : {}) };
     if (message.role === "tool") {
       entries = appendEvent(entries, {
         event: "tool_result",
@@ -1033,7 +1069,7 @@ export function fromHistory({
           parts: message.role === "user" ? message.parts : undefined,
           uploads: message.role === "user" ? message.uploads : undefined,
           saved: true,
-          ...identity,
+          ...responseIdentity,
         });
         // Anonymous persisted rows have only a snapshot position. This fallback
         // never identifies an optimistic or replayed message by its text.
@@ -1041,6 +1077,11 @@ export function fromHistory({
         if (entry?.kind === "user" && entries.length > previousLength && !entry.messageId && !entry.originId)
           entries[entries.length - 1] = { ...entry, historyIndex };
       }
+    }
+    if (metadata?.response_session_id === session_id && ["assistant", "response_metadata"].includes(message.role)) {
+      entries = appendEvent(entries, { ...identity, ...metadata, event: "response_metadata", saved: true });
+      entries = entries.map(entry => entry.responseId === metadata.response_id && entry.responseMetadata?.response_session_id === session_id
+        ? { ...entry, historyId: message.history_id || entry.historyId, historyIndex, historyTurn } : entry);
     }
     for (const [position, call] of message.tool_calls.entries()) {
       entries = appendEvent(entries, {

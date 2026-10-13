@@ -14,6 +14,7 @@ from nagents.channels.delivery_types import DeliveryOrigin
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.types import ChannelError
 
+from . import response_metadata
 from .deliveries import _anchor
 
 if TYPE_CHECKING:
@@ -235,6 +236,8 @@ def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (target, ids.get(int(anchor), 0), agent, previous, model, provider),
             )
+    if "ngn_response_metadata" in tables:
+        response_metadata.fork(db, source, target, ids)
     _web_annotations(db, source, target, ids, tables)
     _deliveries(db, source, target, ids)
     return target

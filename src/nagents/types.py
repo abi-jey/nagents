@@ -56,6 +56,13 @@ class OpenRouterReasoningConfig(TypedDict, total=False):
     max_tokens: int  # Maximum tokens for reasoning output
 
 
+class ResponsesReasoningConfig(TypedDict, total=False):
+    """Explicit Responses reasoning settings; effort is never changed by summary opt-in."""
+
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+    summary: Literal["auto", "concise", "detailed"]
+
+
 # =============================================================================
 # Multimodal Content Types
 # =============================================================================
@@ -185,3 +192,6 @@ class GenerationConfig:
     thinking_config: GeminiThinkingConfig | None = None
     # OpenRouter-specific
     reasoning: OpenRouterReasoningConfig | None = None
+    # Request displayable summaries only on recognized supporting provider/model routes.
+    reasoning_summary: Literal["off", "auto"] = "off"
+    responses_reasoning: ResponsesReasoningConfig = field(default_factory=ResponsesReasoningConfig)

@@ -153,6 +153,7 @@ class DesignedHarness(Harness):
             max_tokens=settings.max_tokens if "max_tokens" in fields else None,
             top_p=settings.top_p if "top_p" in fields else None,
             stop=settings.stop if "stop" in fields else None,
+            reasoning_summary="auto" if self.config.reasoning_summaries else "off",
         )
 
     def __init__(

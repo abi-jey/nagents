@@ -25,6 +25,7 @@ from pydantic import field_validator
 from nagents.harness.followups import RunInput
 from nagents.harness.runtime import _HarnessSession
 from nagents.harness.task_activity import TaskOptions
+from nagents.session import response_metadata
 
 from ._async import finish_on_cancel
 from .task_history import TaskHistory
@@ -212,12 +213,23 @@ class Tasks:
             elif event in {
                 "text_chunk",
                 "text_done",
+                "response_metadata",
                 "tool_call_progress",
                 "tool_call",
                 "tool_execution_started",
                 "tool_output",
                 "tool_result",
             }:
+                if event == "response_metadata":
+                    events[:] = [
+                        old
+                        for old in events
+                        if not (
+                            isinstance(previous_metadata := old.get("payload"), dict)
+                            and previous_metadata.get("type") == event
+                            and previous_metadata.get("response_id") == payload.get("response_id")
+                        )
+                    ]
                 copied = json.loads(json.dumps(record))
                 if events and event in {"text_chunk", "tool_output"}:
                     old = events[-1]
@@ -599,6 +611,7 @@ class Tasks:
                     elif len(content) > 32768:
                         record["truncated"] = True
                     records.append(record)
+                records = response_metadata.merge(db, child, records, orphans=not before, maximum=boundary)
                 while len(json.dumps(records)) > 262144:
                     records.pop(0)
                     more = True
