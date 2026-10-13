@@ -111,3 +111,62 @@ def test_finish_on_cancel_passes_result_when_not_cancelled() -> None:
         assert await finish_on_cancel(work()) == "value"
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("cancellations", [1, 3])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+def test_cancelled_owner_observes_child_without_unhandled_loop_reports(cancellations: int, outcome: str) -> None:
+    async def check() -> None:
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        notifications: list[dict[str, object]] = []
+        started, release = asyncio.Event(), asyncio.Event()
+        error = ValueError("PRIVATE owned operation data must not reach the loop exception handler")
+
+        def notified(_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+            notifications.append(context)
+
+        async def work() -> str:
+            started.set()
+            await release.wait()
+            if outcome == "error":
+                raise error
+            return "completed"
+
+        loop.set_exception_handler(notified)
+        child = asyncio.create_task(work())
+        owner = asyncio.create_task(join_owned(child))
+        try:
+            await started.wait()
+            for _ in range(cancellations):
+                owner.cancel()
+                # A scheduling checkpoint delivers each cancellation separately
+                # while the explicit release barrier keeps the child unfinished.
+                await asyncio.sleep(0)
+                assert not owner.done() and not child.done()
+                assert child.cancelling() == 0
+            if outcome == "cancel":
+                child.cancel()
+            else:
+                release.set()
+            if outcome == "error":
+                with pytest.raises(ValueError) as raised:
+                    await owner
+                assert raised.value is error and child.exception() is error
+            else:
+                with pytest.raises(asyncio.CancelledError):
+                    await owner
+                assert child.cancelled() if outcome == "cancel" else child.result() == "completed"
+            assert owner.cancelling() == cancellations and child.done()
+            # Finish done callbacks before restoring the previous handler. This
+            # catches 3.14's cancelled-shield notification despite task.result()
+            # having already consumed exactly the same child exception.
+            await asyncio.sleep(0)
+            assert notifications == []
+        finally:
+            release.set()
+            await asyncio.gather(child, owner, return_exceptions=True)
+            await asyncio.sleep(0)
+            loop.set_exception_handler(previous_handler)
+
+    asyncio.run(check())

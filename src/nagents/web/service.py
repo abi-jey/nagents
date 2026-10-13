@@ -842,16 +842,23 @@ class WebState:
             logger.info("Run producer cancelled: session=%s run=%s", run.session_id, run.id)
             self.wakeups.cancel(run.chain)
             raise
-        except Exception:
+        except Exception as error:
             task = asyncio.current_task()
+            try:
+                code = getattr(error, "sqlite_errorcode", None)
+            except Exception:
+                code = None
+            sqlite_code = code if type(code) is int and 0 <= code <= 2**31 - 1 else "unavailable"
             if task is not None and task.cancelling():
                 # An owned operation can finish with its own error while Stop
                 # is joining it. Keep the stop outcome, as with child workers.
                 run.outcome = "cancelled"
                 logger.warning(
-                    "Run producer failed during cancellation: session=%s run=%s reason=cleanup_failed",
+                    "Run producer failed during cancellation: session=%s run=%s reason=cleanup_failed exception=%s sqlite_code=%s",
                     run.session_id,
                     run.id,
+                    type(error).__name__[:80],
+                    sqlite_code,
                 )
                 self.wakeups.cancel(run.chain)
                 raise asyncio.CancelledError from None
@@ -861,7 +868,14 @@ class WebState:
             # the same local-only setup guidance without exposing its exception.
             setup = provider_setup(self.running_harness)
             reason = "missing_credentials" if not setup["configured"] else "run_failed"
-            logger.warning("Run producer failed: session=%s run=%s reason=%s", run.session_id, run.id, reason)
+            logger.warning(
+                "Run producer failed: session=%s run=%s reason=%s exception=%s sqlite_code=%s",
+                run.session_id,
+                run.id,
+                reason,
+                type(error).__name__[:80],
+                sqlite_code,
+            )
             await self.send(
                 run,
                 {

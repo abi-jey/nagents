@@ -10,6 +10,7 @@ or a cross-process lease. Do not run multiple processes for the same DB/session.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 InboxStatus = Literal["completed", "failed", "interrupted"]
+logger = logging.getLogger(__name__)
 
 
 class Admission(Enum):
@@ -52,9 +54,27 @@ class InboxStore:
 
     async def _transaction(self, operation: Callable[[sqlite3.Connection], T]) -> T:
         def execute() -> T:
-            with closing(sqlite3.connect(self.db_path, timeout=5)) as db, db:
-                db.execute("BEGIN IMMEDIATE")
-                return operation(db)
+            phase = "connect"
+            try:
+                with closing(sqlite3.connect(self.db_path, timeout=5)) as db, db:
+                    phase = "begin"
+                    db.execute("BEGIN IMMEDIATE")
+                    phase = "body"
+                    result = operation(db)
+                    phase = "commit"
+                    return result
+            except sqlite3.Error as error:
+                try:
+                    code = getattr(error, "sqlite_errorcode", None)
+                except Exception:
+                    code = None
+                logger.warning(
+                    "SQLite transaction failed: phase=%s exception=%s sqlite_code=%s",
+                    phase,
+                    type(error).__name__[:80],
+                    code if type(code) is int and 0 <= code <= 2**31 - 1 else "unavailable",
+                )
+                raise
 
         return await finish_on_cancel(asyncio.to_thread(execute))
 

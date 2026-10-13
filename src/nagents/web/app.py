@@ -736,8 +736,9 @@ def create_app(
     async def sessions() -> dict[str, object]:
         if state.executions.runs:
             return await state.snapshot()
-        with state.idle():
-            await empty_sessions.prune(state, live.active_session_id)
+        async with state.queued_mutation():
+            if not state.executions.runs:
+                await empty_sessions.prune(state, live.active_session_id)
             return await state.snapshot()
 
     @app.get("/api/sessions/{session_id}")
@@ -772,16 +773,16 @@ def create_app(
 
     @app.post("/api/sessions/new")
     async def new_session(body: Input) -> dict[str, object]:
-        with state.idle(allow_running=True):
+        async with state.queued_mutation():
             if live.active_session_id:
                 await live.close(live.active_session_id)
             await empty_sessions.new_session(state, live.active_session_id)
-            logger.info("Session ready: id=%s", state.harness.session_id)
+            logger.info("Session ready: id=%s", state.selected_session_id)
             return await state.snapshot()
 
     @app.post("/api/sessions/resume")
     async def resume(body: SessionInput) -> dict[str, object]:
-        with state.idle(allow_running=True):
+        async with state.queued_mutation():
             if body.session_id not in {session.id for session in await state.harness.list_sessions()}:
                 raise HTTPException(404, "Session not found in this workspace.")
             if body.session_id != state.selected_session_id and live.active_session_id:

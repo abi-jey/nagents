@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from nagents.web.channel_host import ChannelHost
@@ -49,6 +51,54 @@ def test_output_consumer_cannot_steal_subscription_handshake(tmp_path: Path) -> 
             assert events.count("approval") == 2
             await stream.start_task
             await stream.disconnect()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("delayed_cleanup", [False, True])
+def test_subscription_failure_reports_closed_socket_before_submitting_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delayed_cleanup: bool
+) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (app, _, headers, harnesses):
+            entered, release = asyncio.Event(), asyncio.Event()
+            submit = AsyncMock(side_effect=AssertionError("Work must not be submitted before subscription"))
+            monkeypatch.setattr(httpx.AsyncClient, "post", submit)
+
+            async def failed_snapshot(session_id: str = "") -> dict[str, object]:
+                entered.set()
+                if delayed_cleanup:
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        await release.wait()
+                        raise
+                raise RuntimeError("SECRET-snapshot-error")
+
+            monkeypatch.setattr(app.state.web, "snapshot", failed_snapshot)
+            stream = LiveStream(app, headers, harnesses[0].session_id, "SECRET-prompt")
+            try:
+                async with asyncio.timeout(HANG_GUARD):
+                    await entered.wait()
+                    if delayed_cleanup:
+                        for subscriber in app.state.web.bus.subscribers:
+                            subscriber.close(1013)
+                    with pytest.raises(AssertionError, match="subscription socket stopped") as caught:
+                        await stream.start_task
+                diagnostic = str(caught.value)
+                assert "close_code=1013" in diagnostic
+                # The diagnostic read is deliberately best-effort under DB
+                # contention. Observe admission directly instead of requiring
+                # a zero-timeout SQLite probe to win against background work.
+                submit.assert_not_awaited()
+                assert "SECRET" not in diagnostic and headers["X-Ngn-Token"] not in diagnostic
+                assert str(tmp_path) not in diagnostic
+                assert not stream.subscribed.is_set() and not app.state.web.executions.runs
+                if delayed_cleanup:
+                    assert not release.is_set() and not stream.socket_task.done()
+            finally:
+                release.set()
+                await asyncio.wait_for(stream.socket_task, HANG_GUARD)
 
     asyncio.run(scenario())
 

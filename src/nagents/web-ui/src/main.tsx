@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import "./app/styles.css";
+import "./components/codeBlock.css";
 import "./features/chat/chatMedia.css";
 import "./features/chat/toolResults.css";
 import "./features/chat/responseMetadata.css";

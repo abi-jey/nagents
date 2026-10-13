@@ -90,14 +90,17 @@ def test_soft_delete_preserves_all_history_and_restores_same_identity_without_se
             tables = ("v2_messages", "v2_sessions", "ngn_web_inbox", "ngn_web_message_origins", "nagents_channel_inbox")
             other = ""
             if selection != "last":
-                other = (await client.post("/api/sessions/new", headers=headers, json={})).json()["session_id"]
+                created = await client.post("/api/sessions/new", headers=headers, json={})
+                assert created.status_code == 200, created.text
+                other = created.json()["session_id"]
                 await state.channels.store._transaction(
                     lambda db: db.execute(
                         "UPDATE harness_sessions SET title = 'Other conversation' WHERE id = ?", (other,)
                     )
                 )
                 if selection == "selected":
-                    await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
+                    resumed = await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
+                    assert resumed.status_code == 200, resumed.text
             before = {table: await rows(state, f"SELECT * FROM {table}") for table in tables}
             await state.settings.change(state.settings.revision, state.settings.values)
             settings = await rows(state, "SELECT * FROM ngn_web_settings")

@@ -3,6 +3,7 @@ import test from "node:test";
 import { appendEvent, fromHistory } from "./transcript.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { JSDOM } from "jsdom";
 import { MessageContent } from "./MessageContent.js";
 
 test("text finalization does not duplicate streamed text and errors retain it", () => {
@@ -233,10 +234,14 @@ test("fenced code preserves indentation and escapes model HTML", () => {
       text: "Explanation\n```python\n  print('<script>')\n```\nAfter",
     }),
   );
-  assert.match(markup, /<code>  print\(&#x27;&lt;script&gt;&#x27;\)\n<\/code>/);
-  assert.match(markup, /Explanation/);
-  assert.match(markup, /After/);
-  assert.doesNotMatch(markup, /<script>/);
+  const dom = new JSDOM(markup);
+  try {
+    const document = dom.window.document;
+    assert.equal(document.querySelector("pre code")?.textContent, "  print('<script>')\n");
+    assert.deepEqual([...document.querySelectorAll("p")].map(paragraph => paragraph.textContent), ["Explanation", "After"]);
+    assert.equal(document.querySelector("script"), null);
+    assert.doesNotMatch(markup, /<script>/);
+  } finally { dom.window.close(); }
 });
 
 test("empty and null tool results remain distinguishable", () => {

@@ -869,32 +869,6 @@ main {
   font-family: monospace;
   overflow-wrap: anywhere;
 }
-.code-block {
-  margin: 8px 0 12px;
-  min-width: 0;
-}
-.code-block h3 {
-  color: var(--text-secondary);
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 500;
-}
-.code-block pre {
-  margin: 0;
-  padding: 8px 10px;
-  font:
-    14px/1.5 ui-monospace,
-    "SFMono-Regular",
-    Consolas,
-    monospace;
-  color: var(--text-code);
-  background: var(--surface-output);
-  border: 1px solid var(--border-group);
-  white-space: pre;
-  overflow: auto;
-  max-height: 400px;
-  tab-size: 4;
-}
 code {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 0.95em;
