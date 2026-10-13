@@ -39,8 +39,9 @@
 .team-agent-model .provider-logo img, .focused-task-model .provider-logo img { width: 12px; height: 12px; }
 .team-agent-context { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 12px; }
 .team-context-warning { color: var(--accent-amber, #d9ad65); font-size: 9px; line-height: 1.4; }
-.team-agent-meter { display: block; height: 2px; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); width: 100%; border-radius: 2px; }
+.team-agent-meter { position: relative; display: block; height: 2px; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); width: 100%; border-radius: 2px; }
 .team-agent-meter i { display: block; height: 100%; background: color-mix(in srgb, var(--accent-blue) 65%, transparent); border-radius: inherit; }
+.team-agent-threshold { position: absolute; top: -2px; width: 1px; height: 6px; transform: translateX(-50%); background: color-mix(in srgb, var(--text-secondary) 75%, transparent); border-radius: 1px; }
 .team-agent-settings { position: absolute; top: 3px; right: 2px; display: grid; place-items: center; width: 26px; min-height: 26px; padding: 0; border: 0; color: var(--text-secondary); background: transparent; }
 .team-collapsed-count { margin: -1px 0 5px 25px; border-color: transparent; background: transparent; min-height: 25px; padding: 3px 6px; font-size: 10px; color: var(--text-secondary); }
 .team-more { padding: 4px 0 5px 16px; }

@@ -13,6 +13,7 @@ from typing import TypedDict
 from nagents.error_presentation import transport_error_message
 from nagents.harness.provider import HarnessProvider
 from nagents.provider import OpenAIProvider
+from nagents.provider._codex_diagnostics import codex_protocol_reason
 
 if TYPE_CHECKING:
     from nagents.events import ErrorEvent
@@ -61,6 +62,15 @@ def provider_setup(harness: Harness) -> ProviderSetup:
     }
 
 
+def provider_error_diagnostic(event: ErrorEvent) -> str:
+    """Log only fixed request/stream labels and known local failure reason tokens."""
+    if event.code == "CODEX_REQUEST_INVALID":
+        return "codex_request_invalid:" + codex_protocol_reason(event.message)
+    if event.code == "CODEX_STREAM_INVALID":
+        return "codex_stream_invalid:" + codex_protocol_reason(event.message)
+    return "none"
+
+
 def provider_error(event: ErrorEvent) -> tuple[str, str]:
     """Classify known run codes; upstream messages and metadata may contain secrets."""
     code = event.code
@@ -86,8 +96,29 @@ def provider_error(event: ErrorEvent) -> tuple[str, str]:
         return "chatgpt_model", "Codex rejected this request. Check the selected model and account access."
     if code == "CODEX_CONNECTION":
         return "chatgpt_network", "Codex connection failed or timed out. Check container egress and retry later."
-    if code in {"CODEX_REQUEST_INVALID", "CODEX_STREAM_INVALID"}:
-        return "chatgpt_request", "Codex could not complete this request. Check the selected model and retry."
+    if code == "CODEX_REQUEST_INVALID":
+        reason = codex_protocol_reason(event.message)
+        messages = {
+            "request_effort": "The selected reasoning effort is unavailable for this Codex model. Choose Provider default in Settings and retry.",
+            "request_media": "This conversation contains an attachment Codex cannot use. Use a provider that supports it, or start a conversation with supported images and text.",
+            "request_history": "Codex could not prepare this conversation's tool history. Try an earlier fork or a new conversation.",
+        }
+        return "chatgpt_request", messages.get(
+            reason,
+            "This request could not be prepared for Codex. Check the conversation's attachments and model settings, then retry.",
+        )
+    if code == "CODEX_STREAM_INVALID":
+        reason = codex_protocol_reason(event.message)
+        messages = {
+            "response_failed": "Codex reported a failed response. Retry to continue; unconfirmed tool calls were not run.",
+            "response_incomplete": "Codex returned an incomplete response. Retry to continue; unconfirmed tool calls were not run.",
+            "response_cancelled": "Codex cancelled the response. Retry to continue; unconfirmed tool calls were not run.",
+            "stream_truncated": "The Codex response ended before it finished. Retry to continue; unconfirmed tool calls were not run.",
+        }
+        return "chatgpt_response", messages.get(
+            reason,
+            "The Codex response could not be verified. Retry to continue; unconfirmed tool calls were not run.",
+        )
     if code and code.isascii() and code.isdigit() and len(code) == 3:
         if code in {"401", "403"}:
             return "api_auth", "Provider rejected the request. Check the container API key and model access."

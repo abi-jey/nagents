@@ -48,6 +48,7 @@ from .executions import Executions
 from .history import WebHistory
 from .live_inspection import model_requests
 from .provider_setup import provider_error
+from .provider_setup import provider_error_diagnostic
 from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
@@ -802,11 +803,12 @@ class WebState:
                                     "recoverable": event.recoverable,
                                 }
                             logger.warning(
-                                "Run error: session=%s run=%s reason=%s recoverable=%s",
+                                "Run error: session=%s run=%s reason=%s recoverable=%s diagnostic=%s",
                                 run.session_id,
                                 run.id,
                                 reason,
                                 event.recoverable,
+                                provider_error_diagnostic(event),
                             )
                             if not event.recoverable:
                                 run.outcome = "failed"

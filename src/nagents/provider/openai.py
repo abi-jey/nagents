@@ -763,9 +763,13 @@ class OpenAIProvider(Provider):
                 async for event in _sse(response):
                     kind = _string(event.get("type"))
                     if kind in {"error", "response.failed", "response.incomplete", "response.cancelled"}:
-                        raise _ProtocolError(
-                            "Codex response failed, was incomplete, or was cancelled; no tool calls were released. Retry the request."
-                        )
+                        descriptions = {
+                            "error": "Codex reported a failed response; no tool calls were released. Retry the request.",
+                            "response.failed": "Codex reported a failed response; no tool calls were released. Retry the request.",
+                            "response.incomplete": "Codex returned an incomplete response; no tool calls were released. Retry the request.",
+                            "response.cancelled": "Codex cancelled the response; no tool calls were released. Retry the request.",
+                        }
+                        raise _ProtocolError(descriptions[kind])
                     if kind in {"response.output_item.added", "response.output_item.done"}:
                         index = _index(event.get("output_index"))
                         item = _object(event.get("item"))

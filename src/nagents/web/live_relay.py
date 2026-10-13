@@ -8,7 +8,11 @@ The native login provisioning and delegation protocol live in live_login.py.
 from __future__ import annotations
 
 import asyncio
+import logging
+from array import array
+from asyncio import sleep
 from fractions import Fraction
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from aiortc import AudioStreamTrack
@@ -31,7 +35,20 @@ SAMPLE_RATE = 24000
 FRAME_SAMPLES = 480
 FRAME_BYTES = FRAME_SAMPLES * 2
 MAX_BUFFER_BYTES = SAMPLE_RATE * 2  # At most one second of unconsumed microphone audio.
+MAX_LATENCY_BYTES = FRAME_BYTES * 10  # Recover to at most 200 ms of recent speech.
+DRIFT_RESERVE_BYTES = FRAME_BYTES * 4  # Ordinary delivery jitter may retain 80 ms.
 CONNECT_SECONDS = 15.0
+logger = logging.getLogger("uvicorn.error")
+
+
+def _correct_drift(pcm: bytes) -> bytes:
+    """Fit 481 samples into 480 without a discontinuous single-sample deletion."""
+    samples = array("h", pcm)
+    corrected = array("h")
+    for index in range(FRAME_SAMPLES):
+        offset = index / (FRAME_SAMPLES - 1)
+        corrected.append(round(samples[index] * (1 - offset) + samples[index + 1] * offset))
+    return corrected.tobytes()
 
 
 class _MicrophoneTrack(AudioStreamTrack):
@@ -43,32 +60,89 @@ class _MicrophoneTrack(AudioStreamTrack):
         self.silent = False
         self._started = 0.0
         self._samples = 0
+        self.input_samples = 0
+        self.dropped_samples = 0
+        self.adjusted_samples = 0
+        self.silence_samples = 0
+        self.clock_rebases = 0
+        self.late_ms = 0.0
+        self.peak_buffered_bytes = 0
+        self.recoveries = 0
+        self._last_report = float("-inf")
+
+    def _drop(self, count: int) -> None:
+        self.dropped_samples += count // 2
+        self.recoveries += 1
+        now = monotonic()
+        if now - self._last_report >= 5:
+            self._last_report = now
+            logger.warning(
+                "Live microphone backlog recovered: dropped_samples=%d buffered_samples=%d clock_rebases=%d late_ms=%.0f recoveries=%d",
+                self.dropped_samples,
+                len(self.buffer) // 2,
+                self.clock_rebases,
+                self.late_ms,
+                self.recoveries,
+            )
 
     def append(self, chunk: bytes) -> None:
         if self.silent:
             return
-        if len(chunk) % 2 or len(self.buffer) + len(chunk) > MAX_BUFFER_BYTES:
-            raise LoginVoiceError("Microphone audio could not be relayed in time. Reconnect voice.")
-        self.buffer.extend(chunk)
+        if len(chunk) % 2:
+            raise LoginVoiceError("Microphone PCM audio ended with an incomplete sample. Reconnect voice.")
+        self.input_samples += len(chunk) // 2
+        size = len(self.buffer) + len(chunk)
+        self.peak_buffered_bytes = max(self.peak_buffered_bytes, min(size, MAX_BUFFER_BYTES))
+        if size > MAX_BUFFER_BYTES:
+            # A browser/network backlog may arrive without yielding. Retain its
+            # newest speech without allocating an unbounded temporary buffer.
+            keep = max(0, MAX_LATENCY_BYTES - len(chunk))
+            self.buffer = self.buffer[-keep:] if keep else bytearray()
+            self.buffer.extend(chunk[-MAX_LATENCY_BYTES:])
+            self._drop(size - len(self.buffer))
+        else:
+            self.buffer.extend(chunk)
+
+    def _deadline(self, now: float) -> float:
+        due = self._started + self._samples / SAMPLE_RATE
+        if now - due > 0.1:
+            self.clock_rebases += 1
+            self.late_ms += (now - due) * 1000
+            self._started = now - self._samples / SAMPLE_RATE
+            return now
+        return due
 
     async def recv(self) -> AudioFrame:
         if self.readyState != "live":
             raise MediaStreamError
-        now = asyncio.get_running_loop().time()
+        now = monotonic()
         if not self._started:
             self._started = now
-        due = self._started + self._samples / SAMPLE_RATE
         # Never burst old frames after the event loop stalls; retain timestamps
-        # while resuming a paced clock instead of sending a backlog at once.
-        if now - due > 0.1:
-            self._started = now - self._samples / SAMPLE_RATE
-            due = now
-        await asyncio.sleep(max(0, due - now))
+        # while resuming a paced clock. Check after sleep too: delegation/tool
+        # processing may have delayed the scheduled wake-up itself.
+        due = self._deadline(now)
+        await sleep(max(0, due - now))
+        self._deadline(monotonic())
         if self.readyState != "live":
             raise MediaStreamError
-        count = min(FRAME_BYTES, len(self.buffer)) if not self.silent else 0
-        pcm = bytes(self.buffer[:count]) + bytes(FRAME_BYTES - count)
+        if len(self.buffer) > MAX_LATENCY_BYTES:
+            count = len(self.buffer) - MAX_LATENCY_BYTES
+            del self.buffer[:count]
+            self._drop(count)
+        # The capture hardware and server RTP clock are independent. A gentle
+        # maximum 1/480 (0.208%) correction drains sustained drift above the
+        # jitter reserve; brief jitter below it retains every original sample.
+        correct = not self.silent and len(self.buffer) > DRIFT_RESERVE_BYTES
+        count = min(FRAME_BYTES + (2 if correct else 0), len(self.buffer)) if not self.silent else 0
+        pcm = bytes(self.buffer[:count])
         del self.buffer[:count]
+        if correct:
+            pcm = _correct_drift(pcm)
+            self.adjusted_samples += 1
+        else:
+            self.silence_samples += (FRAME_BYTES - count) // 2
+            pcm += bytes(FRAME_BYTES - count)
         frame = AudioFrame(format="s16", layout="mono", samples=FRAME_SAMPLES)
         frame.planes[0].update(pcm)
         frame.sample_rate = SAMPLE_RATE
@@ -145,6 +219,9 @@ class ChatGPTMediaRelay:
             if self._quiet:
                 return
             self._track.append(chunk)
+            # Queue.get() can complete synchronously for an entire browser
+            # backlog. Give RTP/control/result delivery a turn between chunks.
+            await asyncio.sleep(0)
         self._fail("The microphone audio stream ended. Reconnect voice.")
 
     def _remote_track(self, track: MediaStreamTrack) -> None:
@@ -215,3 +292,14 @@ class ChatGPTMediaRelay:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._track.stop()
         await self._peer.close()
+        logger.info(
+            "Live microphone relay closed: input_samples=%d dropped_samples=%d adjusted_samples=%d silence_samples=%d peak_buffered_bytes=%d clock_rebases=%d late_ms=%.0f recoveries=%d",
+            self._track.input_samples,
+            self._track.dropped_samples,
+            self._track.adjusted_samples,
+            self._track.silence_samples,
+            self._track.peak_buffered_bytes,
+            self._track.clock_rebases,
+            self._track.late_ms,
+            self._track.recoveries,
+        )
