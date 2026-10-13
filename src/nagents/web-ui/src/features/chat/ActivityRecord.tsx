@@ -1,4 +1,5 @@
 import { MessageContent } from "./MessageContent.js";
+import { Icon } from "../../components/Icon.js";
 import type { Entry } from "./transcript.js";
 
 export function ActivityRecord({ entry, open, toggle }: {
@@ -16,11 +17,14 @@ export function ActivityRecord({ entry, open, toggle }: {
     ["Recipient task", entry.taskId], ["Cause", entry.cause],
   ];
   return (
-    <details className="activity-record" data-disclosure-key={entry.id} open={open}
+    <details className="activity-record" data-activity-kind={notification ? "notification" : "wakeup"} data-disclosure-key={entry.id} open={open}
       onToggle={(event) => toggle(event.currentTarget.open)}>
       <summary>
         <span className="execution-summary">
-          <span className="execution-name" title={label}>{label}</span>
+          <span className="activity-heading">
+            <span className="activity-symbol"><Icon name={!notification || entry.cause === "wakeup" ? "clock" : "team"} size={16} /></span>
+            <span className="execution-name" title={label}>{label}</span>
+          </span>
           <span className="execution-state" data-state={entry.state}>{notification ? "Delivered" : entry.state}</span>
         </span>
       </summary>

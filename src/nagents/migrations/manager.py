@@ -7,6 +7,8 @@ from typing import Any
 
 import aiosqlite
 
+from nagents._async import finish_on_cancel
+
 from .base import Migration
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,14 @@ class MigrationManager:
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
+        if self.atomic and await finish_on_cancel(self._schema_is_current()):
+            # Child harnesses open the already initialized session database.
+            # Reading its committed version must not reserve a second writer
+            # while the parent is saving a tool result.
+            self._initialized = True
+            logger.debug(f"{self.db_name} database already at latest version")
+            return
+
         async with aiosqlite.connect(self.db_path) as db:
             if self.atomic:
                 # Reserve the writer before reading versions: another initializer
@@ -81,6 +91,24 @@ class MigrationManager:
 
         self._initialized = True
         logger.debug(f"{self.db_name} database initialized with migrations")
+
+    async def _schema_is_current(self) -> bool:
+        """Read committed schema evidence, owning and closing both cursors.
+
+        Missing or outdated metadata continues through the atomic writer path,
+        which rechecks the version after acquiring its reservation. Read errors
+        propagate; an inaccessible database is never treated as initialized.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+            ) as cursor:
+                if await cursor.fetchone() is None:
+                    return False
+            async with db.execute("SELECT MAX(version) FROM schema_migrations") as cursor:
+                row = await cursor.fetchone()
+                version = row[0] if row and row[0] is not None else 0
+            return all(migration.version <= version for migration in self.migrations)
 
     async def _ensure_schema_migrations_table(self, db: aiosqlite.Connection, *, atomic: bool = False) -> None:
         """Create schema_migrations table if it doesn't exist."""

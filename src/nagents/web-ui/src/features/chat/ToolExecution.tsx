@@ -1,7 +1,8 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "../../components/Icon.js";
 import { ExecutionValue } from "./ExecutionValue.js";
-import { executionDuration, executionName, executionStatus, executionTarget } from "./executionPresentation.js";
+import { executionDuration, executionStatus, executionTarget } from "./executionPresentation.js";
+import { toolPresentation } from "./toolPresentation.js";
 import type { Entry } from "./transcript.js";
 
 type Panel = { key: string; label: string; content: ReactNode };
@@ -13,12 +14,17 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const tabs = useRef<HTMLDivElement>(null);
   const separateResult = useRef(false);
   const revealedStream = useRef(false);
+  const streamedInputs = useRef(false);
   const [chosen, choose] = useState("");
   const name = entry.title || "Tool call";
+  const presentation = toolPresentation(name);
   const target = executionTarget(entry);
   const status = executionStatus(entry);
   const busy = status.tone === "active" && entry.result === undefined;
   const preparing = entry.state === "Preparing";
+  // Argument streaming is also a reading surface. Keep its plain pre/code
+  // after the call is ready instead of replacing it with a native input view.
+  if (preparing) streamedInputs.current = true;
   // Reveal the first live chunk, then keep that reading surface through the
   // final result. Explicit disclosure and tab choices always take precedence.
   if (busy && entry.text) revealedStream.current = true;
@@ -41,6 +47,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
       {entry.toolProgress === "abandoned" && <p className="tool-input-note">This proposed call was not executed.</p>}
       {entry.inputsTruncated && <p className="tool-input-note">Partial preview limited to 16,384 characters. Complete inputs appear when the call is ready.</p>}
       <ExecutionValue label={preparing ? "Arguments being received" : "Inputs"} text={entry.inputs}
+        formatInputs={!streamedInputs.current && !entry.inputsTruncated} toolName={name}
         emptyText={preparing ? "Waiting for arguments…" : undefined} />
     </>,
   });
@@ -49,18 +56,20 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
     {entry.state === "Recorded result" && <p className="record-note">Result saved in conversation history. Original execution status and timing may be unavailable.</p>}
     {entry.delegatedTaskId && <p className="record-note">Delegated to <a href={`#${encodeURIComponent(`task-${entry.delegatedTaskId}`)}`}>{entry.delegatedTaskId}</a>. The task has its own execution state.</p>}
     {["schedule_wakeup", "wake_up_in"].includes(name) && <p className="record-note">This is the scheduling request, not evidence that a wake-up fired.</p>}
+    {presentation.origin && <p className="record-note">MCP connection: {presentation.origin}. Method: {presentation.method}.</p>}
     {metadata}
   </div> });
   const selected = panels.some((panel) => panel.key === chosen) ? chosen
     : revealedStream.current && entry.text ? "stream" : panels[0].key;
   return (
     <details className="execution-record tool-record" data-tone={status.tone} data-busy={busy || undefined}
+      data-tool-family={presentation.family}
       data-preparing={preparing || undefined} data-disclosure-key={entry.id} open={open ?? revealedStream.current}
       onToggle={(event) => toggle?.(event.currentTarget.open)}>
       <summary>
-        <span className="tool-symbol"><Icon name={name === "channel_send" ? "channels" : "tools"} size={16} /></span>
+        <span className="tool-symbol"><Icon name={presentation.icon} size={16} /></span>
         <span className="tool-heading">
-          <span className="execution-name" title={name}>{executionName(name)}</span>
+          <span className="execution-name" title={name}>{presentation.label}</span>
           {preparing && entry.inputs ? <span className="tool-argument-preview">{entry.inputs}</span>
             : target ? <span className="execution-target" title={target}>{target}</span>
             : busy && <span className="tool-skeleton" aria-hidden="true"><i /><i /></span>}

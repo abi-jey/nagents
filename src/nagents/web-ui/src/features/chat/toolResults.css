@@ -16,6 +16,20 @@
 .tool-result-sections > section + section { border-top: 1px solid color-mix(in srgb, var(--border-group) 45%, transparent); }
 .tool-result-sections h4 { margin: 0; padding: 5px 10px 0; color: var(--text-secondary); font-size: 11px; font-weight: 550; }
 .tool-result-value .tool-result-sections pre { max-height: none; }
+.tool-value-metadata { display: flex; flex-wrap: wrap; gap: 0 18px; margin: 0; padding: 4px 10px; max-height: 7rem; overflow: auto; font-size: 12px; }
+.tool-value-metadata > div { display: flex; gap: 10px; padding: 2px 0; min-width: 0; }
+.tool-value-metadata dt { flex-shrink: 0; color: var(--text-secondary); }
+.tool-value-metadata dd { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-value-diagnostics { border-top: 1px solid color-mix(in srgb, var(--border-group) 45%, transparent); }
+.tool-value-diagnostics > summary { padding: 7px 10px; color: var(--text-secondary); font-size: 11px; cursor: pointer; }
+.tool-value-diagnostics .tool-value-metadata { display: block; }
+.tool-value-diagnostics dt { flex-basis: 100px; }
+.tool-diff-addition { color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 9%, transparent); }
+.tool-diff-deletion { color: var(--state-error); background: color-mix(in srgb, var(--state-error) 9%, transparent); }
+.tool-diff-header { color: var(--accent-blue); }
+.tool-list-line { display: inline; }
+.activity-heading { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.activity-symbol { display: inline-flex; align-items: center; flex-shrink: 0; color: var(--text-secondary); }
 .tool-result-overflow { display: flex; align-items: center; gap: 12px; border-top: 1px solid color-mix(in srgb, var(--border-group) 45%, transparent); }
 .tool-result-overflow > span { flex: 1; min-width: 0; }
 .tool-result-overflow > button { flex-shrink: 0; min-height: 36px; padding: 6px 10px; font-size: 12px; }
