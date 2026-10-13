@@ -185,7 +185,7 @@ jobs:
         shell: bash
         run: |
           pytest $(python .github/scripts/shard_tests.py --shards ${{ matrix.shards }} --group ${{ matrix.group }}) \
-            -n auto -v -rs
+            -n auto -v -rs -o faulthandler_timeout=60
 
   # =============================================================================
   # BUMP VERSION (runs only after all tests pass)

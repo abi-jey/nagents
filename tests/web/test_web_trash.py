@@ -809,7 +809,7 @@ def test_expiry_scan_moves_past_full_blocked_batch_and_revisits_repaired_rows(tm
 
 def test_expiry_rolls_back_one_root_failure_and_continues_other_roots(tmp_path: Path, clock: Clock) -> None:
     async def run() -> None:
-        async with client_app(tmp_path) as (app, _, _, _):
+        async with asyncio.timeout(HANG_GUARD), client_app(tmp_path) as (app, _, _, _):
             state = cast("WebState", app.state.web)
             await quiet(state)
             bad = state.selected_session_id
