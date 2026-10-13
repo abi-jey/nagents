@@ -395,11 +395,14 @@ def test_parallel_roots_with_identical_answers_keep_independent_summaries(
     asyncio.run(scenario())
 
 
-def test_child_cancel_before_observer_drain_keeps_scope_and_monotonic_sequence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("published_before_cancel", [False, True])
+def test_child_cancel_keeps_scope_and_monotonic_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published_before_cancel: bool
 ) -> None:
     async def scenario() -> None:
         ready = asyncio.Event()
+        published = asyncio.Event()
+        observed: list[dict[str, object]] = []
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             if provider.harness_config.agent == "reviewer":
@@ -409,6 +412,15 @@ def test_child_cancel_before_observer_drain_keeps_scope_and_monotonic_sequence(
             yield TextDoneEvent(text="Main")
 
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+
+            def observe(run: Run | None, record: dict[str, object]) -> None:
+                if record.get("event") == "task_activity":
+                    observed.append(dict(record))
+                    payload = object_record(record["payload"])
+                    if payload.get("type") == "response_metadata" and payload.get("status") == "thinking":
+                        published.set()
+
+            state.run_observers.add(observe)
             root = state.selected_session_id
             prefix = f"/api/sessions/{root}/tasks"
             result = await client.post(
@@ -418,8 +430,17 @@ def test_child_cancel_before_observer_drain_keeps_scope_and_monotonic_sequence(
             task = result.json()["task"]["id"]
             async with asyncio.timeout(HANG_GUARD):
                 await ready.wait()
+                if published_before_cancel:
+                    await published.wait()
             run = state.run_for(root)
             assert run is not None and run.harness is not None
+            if published_before_cancel:
+                thinking = next(
+                    record for record in observed if object_record(record["payload"]).get("status") == "thinking"
+                )
+                response = str(object_record(thinking["payload"])["response_id"])
+                pending = object_record(state.responses.pending[run.id][response]["payload"])
+                assert pending["revision"] == state.responses.captured[run.id][response]["revision"]
             await state.stop(run)
             detail = (await client.get(f"{prefix}/{task}", headers=headers)).json()
             rows = [row for row in detail["history"] if row.get("role") == "response_metadata"]
@@ -437,6 +458,19 @@ def test_child_cancel_before_observer_drain_keeps_scope_and_monotonic_sequence(
             ]
             assert captured and object_record(captured[-1]["payload"])["status"] == "cancelled"
             assert captured[-1]["sequence"] == run.harness.tasks._lookup(task).activity_sequence
+            activity = [record for record in observed if record.get("task_id") == task]
+            sequences = [record["sequence"] for record in activity]
+            assert all(type(sequence) is int for sequence in sequences)
+            sequence_ids = cast("list[int]", sequences)
+            assert sequence_ids == sorted(set(sequence_ids))
+            assert captured[-1]["sequence"] == sequence_ids[-1]
+            terminals = [
+                record
+                for record in activity
+                if object_record(record["payload"]).get("type") == "response_metadata"
+                and object_record(record["payload"]).get("status") == "cancelled"
+            ]
+            assert len(terminals) == 1
 
     asyncio.run(scenario())
 

@@ -167,9 +167,7 @@ class Responses:
             )
             if info is None or (task_id and info.id != task_id):
                 continue
-            info = owner.tasks._lookup(info.id)
             child_owner = owner.tasks._children.get(info.id)
-            info.activity_sequence += 1
             pending[response] = {
                 "event": "task_activity",
                 "task_id": info.id,
@@ -178,8 +176,6 @@ class Responses:
                 "child_session_id": info.child_session_id,
                 "depth": info.depth,
                 "activation": payload.get("activation", info.activation),
-                "sequence": info.activity_sequence,
-                "timestamp": time(),
                 "turn_id": payload.get("turn_id", child_owner.followups.current.id if child_owner is not None else ""),
                 "payload": {**payload, "type": "response_metadata", "task_id": info.id},
             }
@@ -202,8 +198,14 @@ class Responses:
             saved = await self.state.history.store._transaction(partial(_save, record=canonical))
             payload.update(saved)
             if child is not None:
+                # Both captured-only and already-published thinking snapshots
+                # need a fresh canonical cursor for this synthetic terminal.
+                # Reusing the pending envelope's cursor makes clients drop it.
+                owner = run.harness or self.state.running_harness
+                info = owner.tasks._lookup(str(record["task_id"]))
+                info.activity_sequence += 1
                 payload["type"] = "response_metadata"
-                final = {**record, "payload": payload}
+                final = {**record, "payload": payload, "sequence": info.activity_sequence, "timestamp": time()}
             else:
                 final = payload
             pending.pop(response, None)
