@@ -713,8 +713,10 @@ main {
 }
 .tool-outcome {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 0 8px;
   max-width: 50%;
   min-width: 0;
   line-height: 1.4;
@@ -727,7 +729,13 @@ main {
   max-width: 100%;
   text-align: right;
 }
-.tool-outcome .execution-duration { font-variant-numeric: tabular-nums; }
+.tool-outcome .execution-duration {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .tool-outcome .execution-approval {
   min-width: 0;
   max-width: 100%;
@@ -840,7 +848,7 @@ main {
 @media (max-width: 600px) {
   .tool-record > summary { min-height: 44px; gap: 6px; }
   .tool-heading .execution-name { max-width: 100%; }
-  .tool-outcome { flex-wrap: wrap; justify-content: flex-end; gap: 0 6px; }
+  .tool-outcome { column-gap: 6px; }
   .tool-outcome .execution-approval { display: none; }
   .tool-inspector { margin-left: 24px; }
   .tool-tabs > button { min-height: 44px; }
