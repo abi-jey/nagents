@@ -21,6 +21,9 @@ JsonValue = str | int | float | bool | None | list[Any] | dict[str, Any]
 # Type alias for tool arguments (always a dict mapping param names to values)
 ToolArguments = dict[str, JsonValue]
 
+# Empty means omit the effort setting and preserve the provider's default.
+ReasoningEffort = Literal["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
 
 class JsonSchemaProperty(TypedDict, total=False):
     """JSON Schema property definition."""
@@ -47,6 +50,7 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
     thinkingBudget: int  # Maximum tokens for thinking
     includeThoughts: bool  # Whether to include thoughts in response
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 class OpenRouterReasoningConfig(TypedDict, total=False):
@@ -54,12 +58,13 @@ class OpenRouterReasoningConfig(TypedDict, total=False):
 
     enabled: bool  # Whether to enable reasoning/thinking
     max_tokens: int  # Maximum tokens for reasoning output
+    effort: ReasoningEffort
 
 
 class ResponsesReasoningConfig(TypedDict, total=False):
     """Explicit Responses reasoning settings; effort is never changed by summary opt-in."""
 
-    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+    effort: ReasoningEffort
     summary: Literal["auto", "concise", "detailed"]
 
 
@@ -195,3 +200,4 @@ class GenerationConfig:
     # Request displayable summaries only on recognized supporting provider/model routes.
     reasoning_summary: Literal["off", "auto"] = "off"
     responses_reasoning: ResponsesReasoningConfig = field(default_factory=ResponsesReasoningConfig)
+    reasoning_effort: ReasoningEffort = ""

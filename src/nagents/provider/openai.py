@@ -46,6 +46,7 @@ from ..observation import response_chunk
 from ..observation import trace_config
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
+from ..types import ReasoningEffort
 from ..types import TextContent
 from ._codex_catalog import catalog_version
 from ._diagnostics import FailurePhase
@@ -54,6 +55,8 @@ from .base import Provider
 from .base import ProviderType
 from .context import ContextMetadata
 from .gateway import GatewayHTTPClient
+from .reasoning import reasoning_effort_options
+from .reasoning import validate_reasoning_choice
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -373,6 +376,8 @@ def _request_body(
     }
     if config:
         reasoning: dict[str, object] = dict(config.responses_reasoning)
+        if config.reasoning_effort:
+            reasoning["effort"] = config.reasoning_effort
         if (
             config.reasoning_summary == "auto"
             and (not config.reasoning or config.reasoning.get("enabled") is not False)
@@ -562,6 +567,16 @@ class OpenAIProvider(Provider):
         credentials = await self._credentials()
         self._remember_context_auth(credentials.access_token, credentials.account_id, credentials.residency)
 
+    def cached_reasoning_efforts(self, model: str = "") -> tuple[ReasoningEffort, ...]:
+        if self._local_api:
+            return super().cached_reasoning_efforts(model)
+        # Apply only metadata belonging to the currently resolved OAuth identity.
+        super().cached_reasoning_efforts(model)
+        selected = model or self.model
+        return self._context_metadata.reasoning_efforts.get(
+            selected, reasoning_effort_options("openai", selected, auth="codex")
+        )
+
     async def get_model_list(self) -> list[str]:
         """Fetch model IDs from the API-key catalog or the subscription catalog.
 
@@ -690,6 +705,12 @@ class OpenAIProvider(Provider):
             )
             return
         self._remember_context_auth(credentials.access_token, credentials.account_id, credentials.residency)
+        if config:
+            try:
+                validate_reasoning_choice(config.reasoning_effort, self.cached_reasoning_efforts())
+            except ValueError as error:
+                yield ErrorEvent(message=str(error), code="CODEX_REQUEST_INVALID")
+                return
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
             "Accept": "text/event-stream",

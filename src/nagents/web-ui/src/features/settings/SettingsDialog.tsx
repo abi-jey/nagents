@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createDraft, executionLimits, compactionLimits } from "./draft.js";
 import { ModelSelector } from "./ModelSelector.js";
+import { ReasoningEffort, effortLabel } from "./ReasoningEffort.js";
 import { ProvidersPanel } from "./ProvidersPanel.js";
 import type { useSettings } from "./useSettings";
 import type { SettingsScope } from "./transport.js";
@@ -34,7 +35,7 @@ export function SettingsDialog({
     return <span className="settings-origin">
       {inherited ? (changed ? "Will inherit Global after saving" : "Inherited from Global")
         : (changed ? "Unsaved workspace override" : "Workspace override")}
-      {!inherited && <> · Global default: {typeof value === "boolean" ? (value ? "On" : "Off") : value}</>}
+      {!inherited && <> · Global default: {key === "reasoning_effort" ? effortLabel(String(value || "")) : typeof value === "boolean" ? (value ? "On" : "Off") : value}</>}
     </span>;
   }
 
@@ -320,6 +321,13 @@ export function SettingsDialog({
                  <ModelSelector token={settings.token} scope={settings.scope} model={draft.model}
                    error={errors.model} disabled={disabled || !!confirmation}
                    update={model => settings.update("model", model)} />
+                 <ReasoningEffort id="settings-reasoning_effort" token={settings.token} scope={settings.scope}
+                   provider={snapshot.connection.provider_id || ""} model={draft.model}
+                   value={draft.reasoning_effort} error={errors.reasoning_effort} disabled={disabled || !!confirmation}
+                   update={effort => settings.update("reasoning_effort", effort)}>{origin("reasoning_effort")}</ReasoningEffort>
+                 {!!snapshot.profiles.find(profile => profile.name === draft.agent)?.reasoning_effort && <p>
+                   This agent profile sets its own reasoning effort: {effortLabel(snapshot.profiles.find(profile => profile.name === draft.agent)?.reasoning_effort)}.
+                 </p>}
               </fieldset>
               <fieldset className="settings-group" disabled={disabled || !!confirmation}>
                 <legend>Message submission</legend>

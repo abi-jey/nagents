@@ -85,6 +85,7 @@ class TaskStarted:
     timestamp: float = 0.0
     origin_history_id: str = ""
     origin_run_id: str = ""
+    reasoning_effort: str = ""
 
 
 @dataclass

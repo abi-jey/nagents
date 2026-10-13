@@ -24,6 +24,8 @@ from nagents.events import ToolExecutionStartedEvent
 from nagents.events import ToolResultEvent
 from nagents.extensions import AgentPlugin
 
+from .reasoning import ReasoningPreference
+from .reasoning import resolve_effort
 from .types import Notice
 from .types import ToolOutput
 
@@ -157,8 +159,10 @@ class TaskOptions:
     compact_trigger: str = ""
     compact_tokens: int = 200000
     compact_messages: int = 100
+    reasoning_effort: ReasoningPreference = ""
 
     def validate(self, harness: Harness) -> None:
+        resolve_effort(self.reasoning_effort)
         if not isinstance(self.provider, str) or (self.provider and self.provider not in harness.providers.providers):
             raise ValueError("Delegation provider must name a configured provider connection")
         if (

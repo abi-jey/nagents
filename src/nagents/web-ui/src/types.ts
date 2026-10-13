@@ -65,7 +65,8 @@ export type RetainedTask = {
   unavailable_reason?: string;
   phase_detail?: string;
   compaction?: CompactionStats;
-  next_settings?: { provider?: string; model?: string; compact_trigger?: string; compact_tokens?: number; compact_messages?: number };
+  reasoning_effort?: string;
+  next_settings?: { provider?: string; model?: string; reasoning_effort?: string; compact_trigger?: string; compact_tokens?: number; compact_messages?: number };
   origin_history_id?: string;
   origin_run_id?: string;
   compact_trigger?: string;

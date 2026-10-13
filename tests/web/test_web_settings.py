@@ -147,6 +147,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "persisted",
                     "effective_mode",
                     "effective_model",
+                    "effective_reasoning_effort",
                     "connection",
                     "providers",
                     "apis",
@@ -163,6 +164,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                         *COMPACTION_FIELDS,
                         *SUBMIT_FIELDS,
                         *READ_ONLY_FIELDS,
+                        "reasoning_effort",
                     }
                 )
                 assert body["providers"] == sorted(body["providers"]) and "openai" in body["providers"]
@@ -170,8 +172,8 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 assert body["auths"] == ["auto", "api-key", "chatgpt", "codex", "entra"]
                 assert body["persisted"] is False and body["effective_mode"] == "build"
                 assert body["profiles"] == [
-                    {"name": "assistant", "mode": "build", "model": ""},
-                    {"name": "audit", "mode": "reviewer", "model": "profile-model"},
+                    {"name": "assistant", "mode": "build", "model": "", "reasoning_effort": ""},
+                    {"name": "audit", "mode": "reviewer", "model": "profile-model", "reasoning_effort": ""},
                 ]
                 assert body["connection"] == {
                     "provider_id": "fixture",
@@ -548,6 +550,52 @@ def test_settings_stale_other_client_and_harness_busy(tmp_path: Path) -> None:
                 assert (
                     await other.post("/api/settings/reset", json={"revision": before["revision"]}, headers=headers)
                 ).status_code == 409
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("scope", ["workspace", "global"])
+@pytest.mark.parametrize("reset", [False, True])
+def test_settings_wait_for_bookkeeping_guard_without_waiting_for_a_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str, reset: bool
+) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = app.state.web
+            endpoint = "/api/settings" + ("/global" if scope == "global" else "")
+            before = (await client.get(endpoint, headers=headers)).json()
+            body = {"revision": before["revision"]}
+            if not reset:
+                body["values"] = {**before["values"], "model": "after-bookkeeping"}
+            waiting = asyncio.Event()
+            mutation_released: asyncio.Event = state.mutation_released
+            original_wait = mutation_released.wait
+
+            async def observe_wait() -> bool:
+                waiting.set()
+                return await original_wait()
+
+            monkeypatch.setattr(mutation_released, "wait", observe_wait)
+            # Inbox claims and trash sweeps own this same short-lived guard.
+            # Hold both guards to prove settings do not touch the runtime early.
+            with state.idle(allow_running=True), state.harness.operation("bookkeeping fixture"):
+                request = asyncio.create_task(
+                    client.post(endpoint + ("/reset" if reset else ""), headers=headers, json=body)
+                )
+                barrier = asyncio.create_task(waiting.wait())
+                try:
+                    async with asyncio.timeout(HANG_GUARD):
+                        done, _ = await asyncio.wait((request, barrier), return_when=asyncio.FIRST_COMPLETED)
+                    assert barrier in done and not request.done(), "Settings must wait for the bookkeeping owner"
+                    assert state.settings.values.model == before["values"]["model"]
+                finally:
+                    barrier.cancel()
+                    await asyncio.gather(barrier, return_exceptions=True)
+            response = await request
+            assert response.status_code == 200, response.text
+            if not reset:
+                assert response.json()["values"]["model"] == "after-bookkeeping"
+            assert not state.mutating and not state.harness._busy
 
     asyncio.run(check())
 

@@ -19,6 +19,8 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.credentials import ProviderLoginStore
 from nagents.harness.providers import PROVIDERS
 from nagents.harness.providers import ProviderProfile
+from nagents.harness.reasoning import ReasoningPreference
+from nagents.harness.reasoning import resolve_effort
 from nagents.harness.runtime import Harness
 from nagents.mcp import MCPManager
 from nagents.mcp import MCPServerConfig
@@ -28,6 +30,7 @@ from nagents.provider import Provider
 from nagents.provider.openai import CodexCredentials
 from nagents.provider.openai import OpenAIProvider
 from nagents.types import GenerationConfig
+from nagents.types import ReasoningEffort
 
 from .store import Recorder
 
@@ -145,6 +148,10 @@ class DesignedHarness(Harness):
         # Definition IDs are names, not implicit coding/reviewer policy presets.
         return self._permission_ceiling
 
+    def reasoning_effort(self) -> ReasoningEffort:
+        setting = self._reasoning_effort_override or self.definition.generation.reasoning_effort
+        return resolve_effort(setting, self.config.reasoning_effort)
+
     def generation_config(self) -> GenerationConfig:
         settings = self.definition.generation
         fields = settings.model_fields_set
@@ -154,11 +161,13 @@ class DesignedHarness(Harness):
             top_p=settings.top_p if "top_p" in fields else None,
             stop=settings.stop if "stop" in fields else None,
             reasoning_summary="auto" if self.config.reasoning_summaries else "off",
+            reasoning_effort=self.reasoning_effort(),
         )
 
     def __init__(
         self, config: HarnessConfig, design: Design, agent_id: str = "", recorder: Recorder | None = None
     ) -> None:
+        self._reasoning_effort_override: ReasoningPreference = ""
         self.design = design
         self.agent_id = agent_id or design.entrypoint
         if self.agent_id not in design.agents:

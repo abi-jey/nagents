@@ -332,6 +332,13 @@ delegating to `assistant` or a build-mode custom profile. Build-capable child ac
 still need the ordinary guarded-tool approvals. An instruction or profile name
 does not bypass this boundary.
 
+`reasoning_effort` in trusted configuration (or `NGN_REASONING_EFFORT`) selects
+a supported reasoning level; an empty value uses the provider default. Native
+agent profiles and `delegate` accept the same field: omission inherits the
+profile/parent preference, while `"default"` explicitly clears it. Retained child
+settings apply on their next activation, leaving already accepted work unchanged.
+Reasoning effort is independent of the `reasoning_summaries` display preference.
+
 `max_subagent_depth` defaults to `2` and accepts integers from `0` through `8`.
 Depth counts the root as `0`, a child as `1`, and a grandchild as `2`. The default
 therefore permits grandchildren, but not great-grandchildren. Set it to `0` to

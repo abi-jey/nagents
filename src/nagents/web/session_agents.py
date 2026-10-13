@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from nagents.harness.reasoning import resolve_effort
 from nagents.provider.context import ContextMetadata
 from nagents.tools.registry import ToolRegistry
 
@@ -41,6 +42,7 @@ class AgentIdentity(TypedDict):
     provider: str
     provider_kind: str
     mode: str
+    reasoning_effort: str
 
 
 @dataclass(frozen=True)
@@ -201,7 +203,14 @@ class SessionAgents:
     def identity(self, name: str) -> AgentIdentity:
         harness = self.state.harness
         if name not in harness.config.profile_names:
-            return {"agent": name, "model": "", "provider": "", "provider_kind": "", "mode": "reviewer"}
+            return {
+                "agent": name,
+                "model": "",
+                "provider": "",
+                "provider_kind": "",
+                "mode": "reviewer",
+                "reasoning_effort": "",
+            }
         profile = harness.config.profile(name)
         provider_id = profile.provider or harness.providers.active or harness.config.provider
         provider = harness.providers.providers.get(provider_id) or harness.config.provider_profile()
@@ -211,6 +220,7 @@ class SessionAgents:
             "provider": provider_id or provider.kind,
             "provider_kind": provider.kind,
             "mode": harness.mode_for_profile(name),
+            "reasoning_effort": resolve_effort(profile.reasoning_effort, self.state.settings.values.reasoning_effort),
         }
 
     @staticmethod
@@ -221,6 +231,7 @@ class SessionAgents:
             "provider": harness.config.provider or harness.config.provider_profile().kind,
             "provider_kind": harness.config.provider_profile().kind,
             "mode": harness.mode,
+            "reasoning_effort": harness.reasoning_effort(),
         }
 
     def target(self, session_id: str) -> AgentIdentity:

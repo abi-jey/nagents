@@ -3,6 +3,7 @@ import { request, RequestError } from "../../api/client.js";
 export type SessionAgentIdentity = {
   agent: string;
   model: string;
+  reasoning_effort?: string;
   provider: string;
   provider_kind: string;
   mode: "build" | "reviewer";

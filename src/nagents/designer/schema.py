@@ -14,6 +14,7 @@ from pydantic import model_validator
 
 from nagents.harness.providers import API_NAMES
 from nagents.harness.providers import PROVIDERS
+from nagents.harness.reasoning import ReasoningPreference  # noqa: TC001
 
 BUILTINS = ("read_file", "list_files", "find", "search", "edit", "write", "shell", "compact_history")
 IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
@@ -93,6 +94,7 @@ class Generation(Definition):
     max_tokens: int = Field(default=4096, ge=1)
     top_p: float = Field(default=1, ge=0, le=1)
     stop: list[str] = Field(default_factory=list)
+    reasoning_effort: ReasoningPreference = ""
 
 
 class AgentDefinition(Definition):

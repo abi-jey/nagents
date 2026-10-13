@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Literal
 
 from nagents.mcp import MCPServerConfig
+from nagents.provider.reasoning import validate_reasoning_effort
+from nagents.types import ReasoningEffort
 
 from .agent_definitions import DefinitionBatch
 from .agent_definitions import discover_agents
@@ -24,6 +26,8 @@ from .agent_definitions import import_agents
 from .providers import ProviderProfile
 from .providers import ScopedProviderRegistryStore
 from .providers import validate_provider
+from .reasoning import ReasoningPreference
+from .reasoning import resolve_effort
 from .resource_config import parse_mcp_servers
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
@@ -49,8 +53,10 @@ class AgentProfile:
     subagent_available: bool = True
     source: str = field(default="", compare=False)
     source_format: str = field(default="", compare=False)
+    reasoning_effort: ReasoningPreference = ""
 
     def validate(self) -> None:
+        resolve_effort(self.reasoning_effort)
         if self.mode not in {"build", "reviewer"}:
             raise ValueError("mode must be build or reviewer")
         for name in ("instructions", "description", "model", "provider", "source", "source_format"):
@@ -106,6 +112,7 @@ class HarnessConfig:
     theme: str = "terminal"
     animations: bool = True
     reasoning_summaries: bool = True
+    reasoning_effort: ReasoningEffort = ""
     submit_mode: Literal["queue", "interrupt"] = "queue"
     tab_action: str = "agent"
     max_subagent_depth: int = 2
@@ -127,6 +134,7 @@ class HarnessConfig:
         Callers that overlay allowlisted fields on a copy can validate the
         candidate configuration without constructing a new dataclass.
         """
+        validate_reasoning_effort(self.reasoning_effort)
         if type(self.read_only) is not bool:
             raise ValueError("read_only must be a boolean")
         if self.theme not in THEME_NAMES:
@@ -215,6 +223,7 @@ def _install_agents(config: HarnessConfig, batch: DefinitionBatch, diagnostics: 
             subagent_available=definition.subagent_available,
             source=definition.source,
             source_format=definition.source_format,
+            reasoning_effort=definition.reasoning_effort,
         )
         try:
             _install_profile(config, definition.name, profile, diagnostics)
@@ -225,7 +234,7 @@ def _install_agents(config: HarnessConfig, batch: DefinitionBatch, diagnostics: 
 
 
 def _json_profile(value: object, source: Path) -> AgentProfile:
-    string_fields = {"mode", "instructions", "model", "provider", "description"}
+    string_fields = {"mode", "instructions", "model", "provider", "description", "reasoning_effort"}
     bool_fields = {"user_invocable", "subagent_available"}
     list_fields = {"tools", "denied_tools", "allowed_agents"}
     if not isinstance(value, dict) or value.keys() - (string_fields | bool_fields | list_fields):
@@ -339,6 +348,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "submit_mode",
         "tab_action",
         "theme_background",
+        "reasoning_effort",
     }
     integers = {
         "max_output",

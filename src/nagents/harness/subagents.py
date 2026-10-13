@@ -27,11 +27,15 @@ from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.provider.openai import OpenAIProvider
+from nagents.provider.reasoning import validate_reasoning_choice
 
 from .execution import ExecutionBridge
 from .followups import RunInput
 from .followups import RunTurn
 from .provider import HarnessProvider
+from .reasoning import ReasoningPreference
+from .reasoning import resolve_effort
+from .reasoning import validate_effort
 from .task_activity import ChildActivity
 from .task_activity import TaskOptions
 from .task_activity import compaction_snapshot
@@ -48,6 +52,7 @@ if TYPE_CHECKING:
     import builtins
 
     from nagents.types import Message
+    from nagents.types import ReasoningEffort
 
     from .providers import ProviderProfile
     from .runtime import Harness
@@ -95,6 +100,7 @@ class TaskInfo:
     next_settings: dict[str, object] = field(default_factory=dict)
     origin_history_id: str = ""
     origin_run_id: str = ""
+    reasoning_effort: ReasoningEffort = ""
 
 
 class SubagentManager:
@@ -216,6 +222,7 @@ class SubagentManager:
         compact_trigger: str = "",
         compact_tokens: int = 200000,
         compact_messages: int = 100,
+        reasoning_effort: ReasoningPreference = "",
     ) -> dict[str, str]:
         """Start a general-purpose child and immediately return task_id, name, status.
         Continue useful independent work. When only waiting, end the current model
@@ -233,12 +240,13 @@ class SubagentManager:
             compact_trigger: Optional auto, tokens, messages, or off; omission inherits parent compaction.
             compact_tokens: Context budget for tokens mode; compaction starts at seventy percent.
             compact_messages: Message threshold for messages mode.
+            reasoning_effort: Optional model effort; omission inherits profile or parent, default clears to provider default.
         """
         if not self.harness.can_delegate:
             raise PermissionError("Delegation is disabled at the configured subagent depth limit")
         self._check_budget(prompt)
         profile = self.harness.config.profile(agent)
-        options = TaskOptions(provider, model, compact_trigger, compact_tokens, compact_messages)
+        options = TaskOptions(provider, model, compact_trigger, compact_tokens, compact_messages, reasoning_effort)
         options.validate(self.harness)
         if agent not in self.harness.delegatable_profile_names:
             raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
@@ -264,6 +272,9 @@ class SubagentManager:
             provider=provider or profile.provider or self.harness.config.provider,
             provider_kind=self.harness.config.provider_profile().kind,
             model=model or profile.model or self.harness.agent.provider.model,
+            reasoning_effort=resolve_effort(
+                reasoning_effort, resolve_effort(profile.reasoning_effort, self.harness.reasoning_effort())
+            ),
             started_at=time.time(),
             updated_at=time.time(),
         )
@@ -325,6 +336,7 @@ class SubagentManager:
             options.compact_trigger,
             options.compact_tokens,
             options.compact_messages,
+            options.reasoning_effort,
         )
         info = self._lookup(result["task_id"])
         # delegate schedules the worker only after its final await. Install this
@@ -384,6 +396,19 @@ class SubagentManager:
         if info.status == "cancelled":
             raise RuntimeError("Cancelled tasks cannot be configured for continuation")
         options.validate(self.harness)
+        accepted = self.child(task_id)
+        route = (
+            self.harness.providers.providers[options.provider]
+            if options.provider
+            else accepted.config.provider_profile()
+        )
+        effort = resolve_effort(options.reasoning_effort, accepted.reasoning_effort())
+        if not accepted.config.demo:
+            model = options.model or accepted.agent.provider.model
+            if route == accepted.config.provider_profile():
+                validate_reasoning_choice(effort, accepted.agent.provider.cached_reasoning_efforts(model))
+            else:
+                validate_effort(effort, route.kind, model, api=route.api, auth=route.auth, base_url=route.base_url)
         self._next_options[task_id] = options
         if options.provider:
             self._next_providers[task_id] = replace(self.harness.providers.providers[options.provider])
@@ -448,7 +473,13 @@ class SubagentManager:
         if isinstance(phase, str):
             info.phase = phase
         if payload.get("type") == "status":
-            payload = {**payload, "provider": info.provider, "provider_kind": info.provider_kind, "model": info.model}
+            payload = {
+                **payload,
+                "provider": info.provider,
+                "provider_kind": info.provider_kind,
+                "model": info.model,
+                "reasoning_effort": info.reasoning_effort,
+            }
         child = self._children.get(info.id)
         event = TaskActivity(
             info.id,
@@ -644,6 +675,7 @@ class SubagentManager:
             info.started_at,
             info.origin_history_id,
             info.origin_run_id,
+            info.reasoning_effort,
         )
 
     def _create_child(self, agent: str, info: TaskInfo | None = None, *, continuing: bool = False) -> Harness:
@@ -665,6 +697,11 @@ class SubagentManager:
                 raise ValueError(
                     "Designed agents use their saved provider/model definition; edit that definition to change routing"
                 )
+            defined._reasoning_effort_override = options.reasoning_effort or (
+                parent._reasoning_effort_override if continuing else ""
+            )
+            if defined._built_provider_profile == parent._built_provider_profile:
+                defined.agent.provider.restore_context_metadata(parent.agent.provider.context_metadata_snapshot())
             options.apply_compaction(defined, parent)
             defined._is_subagent = True
             defined._task_id = info.id if info else str(uuid.uuid4())
@@ -689,6 +726,7 @@ class SubagentManager:
                 profiles[agent],
                 model=options.model or profiles[agent].model,
                 provider=options.provider or profiles[agent].provider,
+                reasoning_effort=options.reasoning_effort or profiles[agent].reasoning_effort,
             )
         config = replace(
             parent.config,
@@ -696,6 +734,7 @@ class SubagentManager:
             provider=options.provider or parent.config.provider,
             model=options.model or parent.agent.provider.model,
             model_explicit=bool(options.model) or parent.config.model_explicit,
+            reasoning_effort=resolve_effort(options.reasoning_effort, parent.reasoning_effort()),
             profiles=profiles,
             plugins=(),
             diagnostics=(),
@@ -742,6 +781,8 @@ class SubagentManager:
             ),
             shared_auth=self.root.harness.openai_auth,
         )
+        if child._built_provider_profile == parent._built_provider_profile:
+            child.agent.provider.restore_context_metadata(parent.agent.provider.context_metadata_snapshot())
         options.apply_compaction(child, parent)
         child._is_subagent = True
         child._task_id = info.id if info else str(uuid.uuid4())
@@ -794,6 +835,7 @@ class SubagentManager:
                     child.config.provider_profile().kind,
                     child.agent.provider.model,
                 )
+                info.reasoning_effort = child.reasoning_effort()
                 info.compaction = compaction_snapshot(child)
                 child.agent.plugins.append(ChildActivity(self, info, child))
                 done: DoneEvent | None = None

@@ -27,7 +27,8 @@ def test_new_assistant_and_hosted_voice_reasoning_default_to_astra(tmp_path: Pat
         ("openai", "responses", "", "gpt-6-astra", "responses"),
         ("openai", "auto", "https://example.test/v1", "gpt-6-astra", "chat_completions"),
         ("openai_compatible", "auto", "https://example.test/v1", "gpt-6-astra", "chat_completions"),
-        ("openai", "auto", "", "gpt-6-luna", "chat_completions"),
+        ("openai", "auto", "", "gpt-6-luna", "responses"),
+        ("openai", "auto", "", "gpt-4o", "chat_completions"),
     ],
 )
 def test_astra_implicit_openai_tool_route_respects_explicit_contracts(

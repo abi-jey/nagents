@@ -120,6 +120,10 @@ def format_request(
                 body[name] = value
         if config.responses_reasoning:
             body["reasoning"] = dict(config.responses_reasoning)
+        if config.reasoning_effort:
+            reasoning = dict(config.responses_reasoning)
+            reasoning["effort"] = config.reasoning_effort
+            body["reasoning"] = reasoning
     return body
 
 

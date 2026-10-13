@@ -160,8 +160,26 @@ class LocalOnly:
                 )
             except (ValueError, UnicodeError):
                 pass
+        reasoning_query = False
+        if scope["method"] == "GET" and path == "/api/reasoning-options" and len(scope["query_string"]) <= 4096:
+            try:
+                query = scope["query_string"].decode("ascii")
+                if re.search(r"%(?![0-9a-fA-F]{2})", query):
+                    raise ValueError("Invalid query encoding")
+                pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=7, errors="strict")
+                reasoning_query = (
+                    bool(pairs)
+                    and len({key for key, _ in pairs}) == len(pairs)
+                    and all(
+                        key in {"scope", "provider", "model", "kind", "api", "auth", "base_url"}
+                        and (not value or value.isprintable())
+                        for key, value in pairs
+                    )
+                )
+            except (ValueError, UnicodeError):
+                pass
         if scope["query_string"] and not (
-            live_cursor or voice_scope or skill_scope or delegation_query or task_history_query
+            live_cursor or voice_scope or skill_scope or delegation_query or task_history_query or reasoning_query
         ):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return

@@ -8,7 +8,7 @@ export interface AgentDefinition {
   name: string; provider: string; instructions: { text: string; file: string };
   tools: ToolSelection[]; mcp: { server: string; tools: ToolSelection[] }[];
   invokes: Invocation[]; max_tool_rounds: number;
-  generation?: { temperature?: number; max_tokens?: number; top_p?: number; stop?: string[] };
+  generation?: { temperature?: number; max_tokens?: number; top_p?: number; stop?: string[]; reasoning_effort?: string };
 }
 export interface Design {
   version: 1; id: string; entrypoint: string;

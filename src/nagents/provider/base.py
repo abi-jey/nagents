@@ -51,6 +51,7 @@ from ..media import MediaCapabilities
 from ..media import get_media_capabilities
 from ..types import GenerationConfig
 from ..types import Message
+from ..types import ReasoningEffort
 from ..types import RetryConfig
 from ..types import ToolCall
 from ..types import ToolDefinition
@@ -65,6 +66,9 @@ from .context import fetch_context_metadata
 from .context import validate_context_window
 from .context import validate_model_context_windows
 from .gateway import GatewayHTTPClient
+from .reasoning import native_openai_api
+from .reasoning import reasoning_effort_options
+from .reasoning import validate_reasoning_choice
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -183,6 +187,10 @@ class Provider:
         if provider_type == ProviderType.LITELLM and not base_url:
             raise ValueError("LiteLLM requires an explicit base_url pointing to your gateway")
         default_api = "messages" if provider_type == ProviderType.ANTHROPIC else "chat_completions"
+        if provider_type == ProviderType.OPENAI_COMPATIBLE:
+            default_api = native_openai_api(model, base_url=base_url or "")
+            if default_api == "auto":
+                default_api = "chat_completions"
         if provider_type == ProviderType.GEMINI_NATIVE:
             default_api = "auto"
         self.api = default_api if api == "auto" else api
@@ -221,6 +229,7 @@ class Provider:
             if bearer_token_provider is not None
             or provider_type in {ProviderType.LITELLM, ProviderType.OPENROUTER, ProviderType.AZURE_OPENAI_COMPATIBLE_V1}
             or api != "auto"
+            or self.api == "responses"
             else HTTPClient(timeout=timeout)
         )
         self._model_verified: bool | None = None  # None = not checked, True/False = result
@@ -295,9 +304,38 @@ class Provider:
         return ContextWindow(guess_model_context_limit(self.model), "heuristic")
 
     def context_metadata_snapshot(self) -> ContextMetadata:
-        """Copy only limits and backoff state; no credentials or transport ownership."""
+        """Copy bounded model capabilities and backoff; no credentials or transport ownership."""
         self._context_metadata.select(self._context_metadata_identity())
         return self._context_metadata.copy()
+
+    def cached_reasoning_efforts(self, model: str = "") -> tuple[ReasoningEffort, ...]:
+        """Return exact catalog choices or conservative documented route defaults."""
+        identity = self._context_metadata_identity()
+        if self._context_metadata_candidate.identity == identity:
+            self._context_metadata = self._context_metadata_candidate
+            self._context_metadata_candidate = ContextMetadata()
+        self._context_metadata.select(identity)
+        selected = model or self.model
+        return self._context_metadata.reasoning_efforts.get(
+            selected,
+            reasoning_effort_options(self.provider_type.value, selected, api=self.api, base_url=self.base_url),
+        )
+
+    async def resolve_reasoning_efforts(self) -> tuple[ReasoningEffort, ...]:
+        """Bound capability discovery to the same credential-scoped catalog as context."""
+        prepared = False
+        try:
+            async with asyncio.timeout(min(self._model_list_timeout, 3.0)):
+                await self._prepare_context_metadata()
+                prepared = True
+                self.cached_reasoning_efforts()
+                await self._resolve_prepared_context_window()
+        except Exception:
+            if not prepared:
+                self._context_metadata = ContextMetadata()
+                self._context_metadata_candidate = ContextMetadata()
+            logger.debug("Reasoning effort metadata unavailable; using documented model choices")
+        return self.cached_reasoning_efforts()
 
     def restore_context_metadata(self, snapshot: ContextMetadata) -> None:
         """The caller must also match its trusted connection profile before reuse."""
@@ -688,6 +726,11 @@ class Provider:
         stream: bool,
     ) -> AsyncIterator[Event]:
         """Dispatch to the appropriate provider-specific generator."""
+        if config:
+            try:
+                validate_reasoning_choice(config.reasoning_effort, self.cached_reasoning_efforts())
+            except ValueError as error:
+                raise ProtocolError(str(error)) from None
         if self.api == "responses":
             async for event in self._generate_responses(messages, tools, config, stream):
                 yield event
@@ -842,6 +885,9 @@ class Provider:
             if config.stop:
                 body["stop"] = config.stop
 
+            if config.reasoning_effort:
+                body["reasoning_effort"] = config.reasoning_effort
+
         if stream:
             async for event in self._stream_openai(url, body, headers):
                 yield event
@@ -886,7 +932,12 @@ class Provider:
             if config.stop:
                 body["stop"] = config.stop
             if config.reasoning:
-                body["reasoning"] = config.reasoning
+                body["reasoning"] = dict(config.reasoning)
+            if config.reasoning_effort:
+                reasoning = body.setdefault("reasoning", {})
+                reasoning.pop("max_tokens", None)
+                reasoning.pop("enabled", None)
+                reasoning["effort"] = config.reasoning_effort
 
         if stream:
             async for event in self._stream_openai(url, body, headers):
@@ -966,6 +1017,9 @@ class Provider:
                 body["top_p"] = config.top_p
             if config.stop:
                 body["stop"] = config.stop
+
+            if config.reasoning_effort:
+                body["reasoning_effort"] = config.reasoning_effort
 
         # Reuse the same streaming/non-streaming handlers as OpenAI
         if stream:
@@ -1210,12 +1264,21 @@ class Provider:
         headers = {"Content-Type": "application/json"}
 
         body = gemini_adapter.format_request(messages, tools, config)
+        if config and config.reasoning_effort:
+            thinking = dict(config.thinking_config or {})
+            thinking.pop("thinkingBudget", None)
+            thinking["thinkingLevel"] = config.reasoning_effort
+            body.setdefault("generationConfig", {})["thinkingConfig"] = thinking
         if (
             config
             and config.reasoning_summary == "auto"
             and urlsplit(self.base_url).hostname == "generativelanguage.googleapis.com"
             and gemini_summary_model(self.model)
-            and (not config.thinking_config or config.thinking_config.get("thinkingBudget") != 0)
+            and (
+                config.reasoning_effort
+                or not config.thinking_config
+                or config.thinking_config.get("thinkingBudget") != 0
+            )
         ):
             body.setdefault("generationConfig", {}).setdefault("thinkingConfig", {}).setdefault("includeThoughts", True)
 
@@ -1386,6 +1449,8 @@ class Provider:
                 body["top_p"] = config.top_p
             if config.stop:
                 body["stop_sequences"] = config.stop
+            if config.reasoning_effort:
+                body["output_config"] = {"effort": config.reasoning_effort}
             if (
                 config.reasoning_summary == "auto"
                 and urlsplit(self.base_url).hostname == "api.anthropic.com"
@@ -1639,6 +1704,8 @@ class Provider:
             and (not config.reasoning or config.reasoning.get("enabled") is not False)
         ):
             reasoning = dict(config.responses_reasoning)
+            if config.reasoning_effort:
+                reasoning["effort"] = config.reasoning_effort
             reasoning.setdefault("summary", "auto")
             body["reasoning"] = reasoning
         url = f"{self._api_prefix()}/responses"
