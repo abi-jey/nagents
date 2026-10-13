@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING
+from typing import cast
 from unittest.mock import AsyncMock
 
 import httpx
@@ -15,9 +18,12 @@ from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import LiveStream
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
+from tests.support.web import stop_maintenance
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from nagents.web.service import WebState
 
 
 def test_output_consumer_cannot_steal_subscription_handshake(tmp_path: Path) -> None:
@@ -103,7 +109,9 @@ def test_subscription_failure_reports_closed_socket_before_submitting_work(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("failure", ["worker_error", "worker_complete", "socket_close", "watchdog", "outer_watchdog"])
+@pytest.mark.parametrize(
+    "failure", ["worker_error", "worker_complete", "socket_close", "watchdog", "busy_watchdog", "outer_watchdog"]
+)
 def test_admission_reports_owner_failure_and_queue_without_payloads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -125,18 +133,30 @@ def test_admission_reports_owner_failure_and_queue_without_payloads(
                 for subscriber in app.state.web.bus.subscribers:
                     subscriber.close(1013)
                 await stream.socket_task
-            if failure == "watchdog":
+            if failure in {"watchdog", "busy_watchdog"}:
                 # Exercise the timeout branch directly; normal test progress
                 # keeps the shared sixty-second watchdog unchanged.
                 with monkeypatch.context() as local:
                     local.setattr(web_support, "HANG_GUARD", 0)
-                    await wait(stream)
+                    if failure == "busy_watchdog":
+                        # A real lock makes the bounded diagnostic unavailable;
+                        # it must still report the owner failure without data.
+                        with closing(sqlite3.connect(state.channels.store.db_path, timeout=0)) as blocker:
+                            blocker.execute("BEGIN EXCLUSIVE")
+                            await wait(stream)
+                    else:
+                        await wait(stream)
             else:
                 await wait(stream)
 
         monkeypatch.setattr(ChannelHost, "worker", worker)
         monkeypatch.setattr(LiveStream, "wait_for_admission", controlled_wait)
         async with client_app(tmp_path) as (app, _, headers, harnesses):
+            state = cast("WebState", app.state.web)
+            # This fixture owns the inbox worker's outcome. Stop unrelated
+            # writers so the readable-diagnostic cases have a deterministic
+            # precondition; busy_watchdog covers the unavailable-read branch.
+            await stop_maintenance(state)
             stream = LiveStream(app, headers, harnesses[0].session_id, "SECRET-prompt")
             try:
                 if failure == "outer_watchdog":
@@ -152,7 +172,10 @@ def test_admission_reports_owner_failure_and_queue_without_payloads(
                         async with asyncio.timeout(HANG_GUARD):
                             await stream.start_task
                     diagnostic = str(caught.value)
-                assert "queued=1,running=0,receipt=queued" in diagnostic
+                if failure == "busy_watchdog":
+                    assert "inbox=(unavailable:OperationalError)" in diagnostic
+                else:
+                    assert "queued=1,running=0,receipt=queued" in diagnostic
                 assert "active_runs=0" in diagnostic
                 assert "SECRET" not in diagnostic and headers["X-Ngn-Token"] not in diagnostic
                 assert str(tmp_path) not in diagnostic
