@@ -29,7 +29,9 @@ def configuration(path: Path, *, kind: str = "openai", api: str = "auto", base_u
         data_dir=path / "state",
         demo=True,
         providers={"": ProviderProfile(kind=kind, auth="api-key", api=api, base_url=base_url)},
-        model="gpt-6-luna",
+        # Start with a native Chat model so these tests exercise an actual
+        # contract transition. GPT-6 Luna now uses Responses for reasoning/tools.
+        model="gpt-4o",
     )
 
 
@@ -66,9 +68,9 @@ async def test_model_assignment_refreshes_only_automatic_openai_routing(
             provider.model = "gpt-6-astra"
             assert provider.api == expected and provider._http is transport
             assert provider.model == "gpt-6-astra"
-            provider.model = "gpt-6-luna"
+            provider.model = "gpt-4o"
             assert provider.api == original_api
-        assert config.model == "gpt-6-luna" and config.provider_profile().api == api
+        assert config.model == "gpt-4o" and config.provider_profile().api == api
     finally:
         await provider.close()
 
@@ -82,7 +84,7 @@ async def test_harness_model_selection_paths_recompute_the_automatic_contract(tm
     provider = harness.agent.provider
     try:
         assert provider.api == "chat_completions"
-        for model, expected in (("gpt-6-astra", "responses"), ("gpt-6-luna", "chat_completions")):
+        for model, expected in (("gpt-6-astra", "responses"), ("gpt-4o", "chat_completions")):
             if path == "model":
                 await harness.set_model(model)
             elif path == "profile":
@@ -110,15 +112,15 @@ async def test_initial_agent_profile_model_selects_its_automatic_contract(tmp_pa
     try:
         assert (harness.agent.provider.model, harness.agent.provider.api) == ("gpt-6-astra", "responses")
         await harness.set_agent("assistant")
-        assert (harness.agent.provider.model, harness.agent.provider.api) == ("gpt-6-luna", "chat_completions")
+        assert (harness.agent.provider.model, harness.agent.provider.api) == ("gpt-4o", "chat_completions")
     finally:
         await harness.close()
 
 
 @pytest.mark.asyncio
 async def test_saved_web_model_changes_keep_the_contract_after_restart(tmp_path: Path) -> None:
-    expected_model, expected_api = "gpt-6-luna", "chat_completions"
-    for model, api in (("gpt-6-astra", "responses"), ("gpt-6-luna", "chat_completions")):
+    expected_model, expected_api = "gpt-4o", "chat_completions"
+    for model, api in (("gpt-6-astra", "responses"), ("gpt-4o", "chat_completions")):
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             provider = harnesses[0].agent.provider
             assert (provider.model, provider.api) == (expected_model, expected_api)
