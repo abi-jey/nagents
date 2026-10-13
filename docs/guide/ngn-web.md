@@ -451,6 +451,13 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   and fenced code in both streamed responses and saved history. Tables and code
   scroll within their message on narrow screens. Embedded HTML stays literal;
   Markdown images become explicit links instead of loading remote resources.
+  Fences labeled with YAML, Python, JavaScript, TypeScript, JSON, shell, HTML/XML,
+  CSS, SQL, or diff receive syntax highlighting, including common aliases such as
+  `yml`, `py`, `js`, and `ts`. Unknown or unlabeled languages stay plaintext.
+  Highlighting uses locally bundled grammars; blocks above 32,000 characters or
+  1,000 lines stay complete and scrollable as plaintext. The reusable
+  [CodeBlock component](https://github.com/abi-jey/nagents/blob/main/src/nagents/web-ui/src/components/CodeBlock.md)
+  documents the interface, supported aliases, and rendering limits.
   Tool records retain separate inputs,
   streamed output, final result/error, call identity, and measured duration when
   provided. Their payloads stay in literal or structured views. Nested tasks are
