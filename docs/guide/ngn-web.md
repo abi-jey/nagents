@@ -447,10 +447,14 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   fresh snapshot instead of replaying model/tool work. Web input has a stable
   client message ID for durable admission deduplication. Approval decisions are
   never automatically retried.
-- The client displays model and tool output as escaped text, with fenced code
-  shown in keyboard-scrollable code regions. Tool records retain separate inputs,
+- Chat messages render Markdown headings, lists, tables, quotes, emphasis, links,
+  and fenced code in both streamed responses and saved history. Tables and code
+  scroll within their message on narrow screens. Embedded HTML stays literal;
+  Markdown images become explicit links instead of loading remote resources.
+  Tool records retain separate inputs,
   streamed output, final result/error, call identity, and measured duration when
-  provided. Nested tasks are grouped by their actual parent task IDs, not their
+  provided. Their payloads stay in literal or structured views. Nested tasks are
+  grouped by their actual parent task IDs, not their
   names or event arrival order. Later activations retain separate execution
   evidence beneath the same task identity. Child approval decisions stay with
   that child's call, even when another agent uses the same call ID.
