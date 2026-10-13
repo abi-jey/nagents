@@ -181,6 +181,21 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
   };
 }
 
+test("voice settings use the conversation's agent rather than another tab's capability metadata", async () => {
+  const ui = view();
+  try {
+    await ui.render({ autoStart: false, openSettingsInitially: true,
+      assistant: { agent: "reviewer", provider: "review-connection", model: "review-model" } });
+    assert.match(ui.container.querySelector(".live-backend-note")!.textContent!, /reviewer · review-connection: review-model/);
+    assert.doesNotMatch(ui.container.querySelector(".live-backend-note")!.textContent!, /gpt-test/);
+    await ui.render({ autoStart: false, openSettingsInitially: true,
+      assistant: { agent: "writer", provider: "write-connection", model: "write-model" } });
+    assert.match(ui.container.querySelector(".live-backend-note")!.textContent!, /writer · write-connection: write-model/);
+    assert.equal(ui.counts().captures, 0);
+    assert.equal(ui.counts().creates, 0);
+  } finally { await ui.close(); }
+});
+
 for (const phase of ["connected", "ended", "error"] as const) {
   test(`new server token cannot replay a consumed launch after ${phase}`, async () => {
     const ui = view({ denied: phase === "error" });

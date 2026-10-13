@@ -142,7 +142,7 @@ class SessionAgents:
 
     def selected(self, session_id: str) -> str:
         choice = self.choices.get(session_id)
-        return choice.agent if choice else self.state.settings.values.agent
+        return choice.agent if choice else self.state.harness.config.agent
 
     async def ensure(self, session_id: str) -> Choice:
         active = self.state.run_for(session_id)
@@ -167,6 +167,36 @@ class SessionAgents:
             return current
         self.choices[session_id] = choice
         return choice
+
+    def reset_draft_in(self, db: sqlite3.Connection, session_id: str) -> tuple[Choice, bool]:
+        """Reset a caller-verified empty draft inside its selection transaction."""
+        default = self.state.settings.values.agent
+        row = db.execute(
+            "SELECT agent, revision, applied_agent FROM ngn_web_session_agents WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        changed = row is not None and (row[0] != default or row[2] != default)
+        if row is not None and not changed:
+            return Choice(str(row[0]), str(row[1])), False
+        choice = Choice(default, secrets.token_hex(32))
+        db.execute(
+            "INSERT INTO ngn_web_session_agents VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
+            "agent = excluded.agent, revision = excluded.revision, applied_agent = excluded.applied_agent",
+            (session_id, choice.agent, choice.revision, choice.agent),
+        )
+        db.execute("DELETE FROM ngn_web_agent_changes WHERE session_id = ?", (session_id,))
+        return choice, changed
+
+    async def notify(self, session_id: str) -> dict[str, object]:
+        result = await self.snapshot(session_id)
+        self.state.bus.event(
+            {
+                "event": "agent_selection_changed",
+                "schema_version": 1,
+                "session_id": session_id,
+                "agent_selection": result,
+            }
+        )
+        return result
 
     def identity(self, name: str) -> AgentIdentity:
         harness = self.state.harness
@@ -285,15 +315,7 @@ class SessionAgents:
                     self.tighten(active)
                 elif owner := self.state.executions.owners.get(session_id):
                     self.tighten_owner(owner)
-            result = await self.snapshot(session_id)
-            self.state.bus.event(
-                {
-                    "event": "agent_selection_changed",
-                    "schema_version": 1,
-                    "session_id": session_id,
-                    "agent_selection": result,
-                }
-            )
+            result = await self.notify(session_id)
             self.state.changed()
             return result
 
@@ -308,11 +330,10 @@ class SessionAgents:
     def tighten_owner(owner: Harness) -> None:
         # Retain the execution's prompt and provider; narrow only future tool
         # authority. Children keep this ceiling even after a later root run.
-        pending = [owner]
-        while pending:
-            harness = pending.pop()
+        # Every manager references the root's flat child map; traversing each
+        # child's map recursively would revisit the same children forever.
+        for harness in {owner, *owner.tasks._children.values()}:
             harness._permission_ceiling = "reviewer"
-            pending.extend(harness.tasks._children.values())
 
     async def apply(self, run: Run, harness: Harness) -> None:
         choice = await self.ensure(run.session_id)
@@ -380,7 +401,18 @@ class SessionAgents:
         restricted = active is not None and active.read_only and not next_run
         if restricted:
             expected["mode"] = "reviewer"
-        if self.actual(current) == expected and (active is None or not next_run):
+        primary = self.state.harness
+        provider_id = primary.config.profile(name).provider or primary.providers.active or primary.config.provider
+        accepted_connection = primary.providers.providers.get(provider_id) or primary.config.provider_profile()
+        current_connection = (
+            current._built_provider_name == provider_id and current._built_provider_profile == accepted_connection
+        )
+        # The immutable built profile includes endpoint and authentication
+        # fields: equal connection IDs/model labels do not prove equal routes.
+        # A retained lane may still own children from an older endpoint or auth
+        # configuration under the same connection ID/model. Inspect the saved
+        # next-run route without mutating that lane or its children.
+        if self.actual(current) == expected and current_connection and (active is None or not next_run):
             yield current
             return
         harness = self.state.executions.factory(deepcopy(self.state.harness.config))

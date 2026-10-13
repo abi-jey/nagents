@@ -456,3 +456,136 @@ def test_read_only_switch_restricts_pending_child_and_does_not_loosen_it_on_late
             assert child._permission_ceiling == child.mode == "reviewer"
 
     asyncio.run(scenario())
+
+
+def test_new_session_resets_reused_empty_draft_to_workspace_default_without_accumulation(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=config(tmp_path)) as (app, client, headers, _):
+            state = app.state.web
+            root = state.selected_session_id
+            for _ in range(3):
+                previous = await choose(client, headers, root, "reviewer")
+                fresh = await client.post("/api/sessions/new", headers=headers, json={})
+                assert fresh.status_code == 200, fresh.text
+                body = fresh.json()
+                assert body["session_id"] == root
+                assert body["agent_selection"]["agent"] == "assistant"
+                assert body["agent_selection"]["revision"] != previous["revision"]
+                assert state.session_agents.selected(root) == "assistant"
+                assert body["history"] == []
+                assert [item["id"] for item in body["sessions"]] == [root]
+                stale = await client.post(
+                    f"/api/sessions/{root}/agent",
+                    headers=headers,
+                    json={
+                        "revision": previous["revision"],
+                        "agent": "reviewer",
+                    },
+                )
+                assert stale.status_code == 409
+            workspace = (await client.get("/api/settings", headers=headers)).json()
+            saved = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={
+                    "revision": workspace["revision"],
+                    "values": {**workspace["values"], "agent": "reviewer"},
+                },
+            )
+            assert saved.status_code == 200
+            assert state.session_agents.selected(root) == "assistant"
+            fresh = (await client.post("/api/sessions/new", headers=headers, json={})).json()
+            assert fresh["session_id"] == root
+            assert fresh["agent_selection"]["agent"] == "reviewer"
+            assert [item["id"] for item in fresh["sessions"]] == [root]
+            await state.history.add_message(root, Message(role="user", content="Retain this conversation"))
+            empty = (await client.post("/api/sessions/new", headers=headers, json={})).json()["session_id"]
+            await choose(client, headers, empty, "assistant")
+            resumed = await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
+            assert resumed.status_code == 200
+            assert [item["id"] for item in resumed.json()["sessions"]] == [root]
+            assert empty not in state.session_agents.choices
+            remaining = await state.channels.store._transaction(
+                lambda db: db.execute("SELECT session_id FROM ngn_web_session_agents ORDER BY session_id").fetchall()
+            )
+            assert remaining == [(root,)]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_posix
+def test_idle_retained_context_uses_current_connection_after_endpoint_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nagents.events import ToolCallEvent
+    from nagents.provider.context import ContextWindow
+    from tests.support.providers import FakeProvider as ProviderFixture
+
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            if messages[-1].content == "Keep a completed child for inspection":
+                yield ToolCallEvent(id="retain-child", name="delegate", arguments={"prompt": "Review the fixture"})
+            else:
+                yield TextDoneEvent(text="done")
+
+        metadata_reads: list[str] = []
+
+        async def context_window(provider: FakeProvider) -> ContextWindow:
+            endpoint = provider.harness_config.provider_profile().base_url
+            metadata_reads.append(endpoint)
+            return ContextWindow(800000 if endpoint == "https://updated.invalid/v1" else 200000, "provider")
+
+        monkeypatch.setattr(ProviderFixture, "resolve_context_window", context_window)
+        async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, _, _):
+            root = state.selected_session_id
+            registry = (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()
+            initial = await client.put(
+                "/api/provider-scopes/global/providers/fixture",
+                headers=headers,
+                json={
+                    "revision": registry["revision"],
+                    "profile": {
+                        "kind": "openai_compatible",
+                        "auth": "api-key",
+                        "api": "responses",
+                        "base_url": "https://original.invalid/v1",
+                    },
+                },
+            )
+            assert initial.status_code == 200, initial.text
+            await submit_and_wait(app, headers, root, "Keep a completed child for inspection")
+            retained = state.executions.owners[root]
+            assert retained.tasks.list() and state.run_for(root) is None
+            old_provider = retained.agent.provider
+            assert isinstance(old_provider, ProviderFixture)
+            before = (await client.get(f"/api/sessions/{root}/context", headers=headers)).json()
+            assert before["context_window"] == 200000
+            registry = (await client.get("/api/provider-scopes/global/providers", headers=headers)).json()
+            changed = await client.put(
+                "/api/provider-scopes/global/providers/fixture",
+                headers=headers,
+                json={
+                    "revision": registry["revision"],
+                    "profile": {
+                        "kind": "openai_compatible",
+                        "auth": "api-key",
+                        "api": "responses",
+                        "base_url": "https://updated.invalid/v1",
+                    },
+                },
+            )
+            assert changed.status_code == 200, changed.text
+            assert state.harness is not retained
+            assert retained.agent.provider is old_provider and not old_provider.closed
+            assert retained.config.provider == state.harness.config.provider == "fixture"
+            assert retained.agent.provider.model == state.harness.agent.provider.model == "fake-model"
+            after = await client.get(f"/api/sessions/{root}/context", headers=headers)
+            assert after.status_code == 200, after.text
+            assert after.json()["context_window"] == 800000
+            assert after.json()["context_window_source"] == "provider"
+            assert metadata_reads[-1] == "https://updated.invalid/v1"
+            assert retained.agent.provider is old_provider
+            assert retained.config.provider_profile().base_url == "https://original.invalid/v1"
+
+    asyncio.run(scenario())

@@ -881,7 +881,7 @@ def test_child_wakeup_obeys_current_root_permission_settings(
             settings = (await client.get("/api/settings", headers=headers)).json()
             values = {
                 **settings["values"],
-                **({"agent": "reviewer"} if downgrade == "reviewer" else {"max_subagent_depth": 0}),
+                **({"read_only": True} if downgrade == "reviewer" else {"max_subagent_depth": 0}),
             }
             response = await client.post(
                 "/api/settings", json={"revision": settings["revision"], "values": values}, headers=headers
@@ -896,7 +896,9 @@ def test_child_wakeup_obeys_current_root_permission_settings(
             clock.now += 10
             await state.wakeups.tick()
             events = (await client.get(f"/api/activity/{first}/{cursor}", headers=headers)).json()["events"]
-            resumed = [provider for provider in providers if provider not in before_wakeup]
+            # Idle inspection can construct providers without generating. Count
+            # actual resumed model work, not metadata-only runtime allocations.
+            resumed = [provider for provider in providers if provider not in before_wakeup and provider.requests]
             assert not configuration_provider.requests, "Saving defaults must not execute a model request"
             if downgrade == "reviewer":
                 assert events[-1]["status"] == "completed" and len(resumed) == 1
