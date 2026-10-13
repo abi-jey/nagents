@@ -29,6 +29,7 @@ from nagents.session import SessionManager
 from nagents.session import forks
 from nagents.types import ContentPart
 from nagents.types import GenerationConfig
+from nagents.types import ReasoningEffort
 from nagents.types import TextContent
 
 from .auth import OpenAIAuth
@@ -54,6 +55,8 @@ from .provider import HarnessProvider
 from .providers import ProviderProfile
 from .providers import ProviderRegistry
 from .providers import ScopedProviderRegistryStore
+from .reasoning import ReasoningPreference
+from .reasoning import resolve_effort
 from .resources import HarnessResources
 from .skills import HarnessSkillDiscoverer
 from .subagents import SubagentManager
@@ -129,8 +132,19 @@ _register_owned_adapter_type(_HarnessSession)
 class Harness:
     supports_child_custom_tools = False
 
+    def reasoning_effort(self) -> ReasoningEffort:
+        return resolve_effort(
+            self._reasoning_effort_override or self.config.profile(self.config.agent).reasoning_effort,
+            self.config.reasoning_effort,
+        )
+
     def generation_config(self) -> "GenerationConfig | None":
-        return GenerationConfig(reasoning_summary="auto") if self.config.reasoning_summaries else None
+        effort = self.reasoning_effort()
+        if not effort and not self.config.reasoning_summaries:
+            return None
+        return GenerationConfig(
+            reasoning_summary="auto" if self.config.reasoning_summaries else "off", reasoning_effort=effort
+        )
 
     def create_defined_child(self, name: str) -> "Harness | None":
         """Optional definition-driven construction; ordinary profiles use cloning."""
@@ -166,6 +180,7 @@ class Harness:
         their parent's accepted routing without rereading an operator's later
         edits. Shared authentication remains owned by the supplying runtime.
         """
+        self._reasoning_effort_override: ReasoningPreference = ""
         self.config = config
         self.allow_subagents = allow_subagents
         self._is_subagent = False

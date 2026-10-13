@@ -631,8 +631,10 @@ executes a prompt or tool again.
 
 ### Response Usage And Provider Summaries
 
-Completed responses can show provider-reported input, output, and reasoning token
-counts. An absent reasoning count stays absent; an actual zero remains zero.
+Completed responses show a compact provider-reported reasoning-token count beside
+the collapsed summary, or a count-only label when no summary is available. Input
+and output counts remain in the collapsed recorded-run breakdown. An absent
+reasoning count stays absent; an actual zero remains zero.
 OpenAI and Anthropic report reasoning as part of output when that breakdown is
 available. Gemini reports its thought count separately from candidate output.
 The usage details explain that distinction without adding tokens twice.
@@ -1499,6 +1501,20 @@ defaults, so other global fields continue to follow changes to those defaults.
 Trusted agent profiles remain workspace-specific. Provider connections carry
 environment-variable names rather than key values.
 
+**Reasoning effort** appears below the model in Settings and in each agent’s settings.
+Choose **Provider default** to omit an effort override. Supported levels come from
+the selected provider/model capability metadata or documented native support;
+unknown combinations keep the provider default. Workspace/global preferences
+persist independently, and an explicit trusted profile choice takes precedence.
+Changing a setting leaves accepted executions and their queued child notes unchanged;
+the next independent run or child activation uses the saved choice.
+
+`GET /api/reasoning-options` returns `{options, source, provider, model}` for
+`scope=workspace|global`, a saved connection `provider`, and a draft `model`.
+Options exclude the empty default. Optional `kind`, `api`, `auth`, and `base_url`
+select an offline descriptor lookup for an unsaved Designer definition. The route
+does not open a provider connection or alter an active model.
+
 **Message submission** selects what happens when another web message arrives in
 the same active conversation. **Queue** is the default: finish the current run,
 then process accepted messages in order. **Interrupt** cancels the active run,
@@ -1525,6 +1541,7 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | --- | --- |
 | `model` | Trimmed, nonblank provider model ID, at most 200 characters, without control characters |
 | `agent` | An existing built-in or trusted configured profile name |
+| `reasoning_effort` | Empty for provider default, or a supported `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` level |
 | `read_only` | Boolean workspace restriction; startup-enforced read-only operation cannot be relaxed by web preferences |
 | `provider` | An allowlisted provider name from `providers`, for example `openrouter` or `openai_compatible` |
 | `base_url` | Empty for the provider default, or an HTTP(S) endpoint without credentials, query parameters, or fragments, at most 300 characters; required for `litellm` |

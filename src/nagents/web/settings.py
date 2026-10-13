@@ -25,6 +25,9 @@ from pydantic import field_validator
 from nagents.compaction import ModelCompaction
 from nagents.harness.providers import API_NAMES
 from nagents.harness.providers import PROVIDERS
+from nagents.harness.reasoning import resolve_effort
+from nagents.provider.reasoning import reasoning_effort_options
+from nagents.types import ReasoningEffort
 
 from ._async import join_owned as _join
 
@@ -114,6 +117,7 @@ class SettingsValues(_SettingsValuesV1):
     compact_messages: int = Field(default=DEFAULT_COMPACT_MESSAGES, ge=1, le=10_000)
     submit_mode: Literal["queue", "interrupt"] = "queue"
     read_only: bool = False
+    reasoning_effort: ReasoningEffort = ""
 
     @field_validator("compact_trigger")
     @classmethod
@@ -181,6 +185,7 @@ class SettingsValues(_SettingsValuesV1):
             compact_messages=messages,
             submit_mode=config.submit_mode,
             read_only=config.read_only,
+            reasoning_effort=config.reasoning_effort,
         )
 
     def apply(self, harness: "Harness") -> None:
@@ -196,6 +201,7 @@ class SettingsValues(_SettingsValuesV1):
         config.max_tool_rounds = self.max_tool_rounds
         config.max_subagent_depth = self.max_subagent_depth
         config.submit_mode = self.submit_mode
+        config.reasoning_effort = self.reasoning_effort
         config.read_only = self.read_only or harness._permission_ceiling == "reviewer"
         harness.agent.provider.model = config.model
         harness.agent.max_tool_rounds = self.max_tool_rounds
@@ -253,6 +259,8 @@ class WebSettings:
         candidate.providers.update(registry.providers)
         if name:
             candidate.provider = name
+        candidate.reasoning_effort = values.reasoning_effort
+        candidate.agent = values.agent
         candidate.validate()
         return candidate
 
@@ -314,6 +322,7 @@ class WebSettings:
                     "name": name,
                     "mode": self.harness.mode_for_profile(name),
                     "model": config.profile(name).model,
+                    "reasoning_effort": config.profile(name).reasoning_effort,
                     **({"description": config.profile(name).description} if config.profile(name).description else {}),
                     **(
                         {"source": config.profile(name).source, "source_format": config.profile(name).source_format}
@@ -329,6 +338,9 @@ class WebSettings:
             "persisted": self.persisted,
             "effective_mode": self.effective_mode,
             "effective_model": config.profile(self.values.agent).model or self.values.model,
+            "effective_reasoning_effort": resolve_effort(
+                config.profile(self.values.agent).reasoning_effort, self.values.reasoning_effort
+            ),
             "providers": sorted(PROVIDERS),
             "apis": list(PROVIDER_APIS),
             "auths": list(PROVIDER_AUTHS),
@@ -345,6 +357,50 @@ class WebSettings:
                 "auth_status": self.harness.auth_status(),
             },
         }
+
+    def reasoning_options(
+        self,
+        *,
+        scope: str = "workspace",
+        provider: str = "",
+        model: str = "",
+        kind: str = "",
+        api: str = "auto",
+        auth: str = "",
+        base_url: str = "",
+    ) -> dict[str, object]:
+        """Read-only capability lookup; draft routing never opens a provider client."""
+        source = "Known model support"
+        descriptor = bool(kind)
+        same_route = False
+        selected_model = model or (self.defaults.model if scope == "global" else self.values.model)
+        if not kind:
+            registry = (
+                self.harness.provider_store.load_scope("global")
+                if scope == "global"
+                else self.harness.provider_store.load()
+            )
+            selected = provider or registry.active
+            profile = registry.providers.get(selected)
+            if selected and profile is None:
+                raise ValueError("Provider connection is unavailable in this scope")
+            if profile is None:
+                profile = self._provider_admin.provider_profile()
+            same_route = profile == self.harness._built_provider_profile
+            kind, api, auth, base_url = profile.kind, profile.api, profile.auth, profile.base_url
+        choices = reasoning_effort_options(kind, selected_model, api=api, auth=auth, base_url=base_url)
+        if not descriptor and same_route:
+            cached = self.harness.agent.provider.cached_reasoning_efforts(selected_model)
+            if cached != choices:
+                choices, source = cached, "Provider metadata"
+        return {"options": list(choices), "source": source, "provider": provider or kind, "model": selected_model}
+
+    def validate_reasoning(self, values: SettingsValues, *, scope: str = "workspace") -> None:
+        if not values.reasoning_effort or self.harness.config.demo:
+            return
+        options = self.reasoning_options(scope=scope, model=values.model)["options"]
+        if not isinstance(options, list) or values.reasoning_effort not in options:
+            raise ValueError("This reasoning effort is not supported by the selected provider and model")
 
     def validate(self, values: SettingsValues) -> str:
         if not self.harness.config.profile(values.agent).user_invocable:
@@ -561,6 +617,7 @@ class WebSettings:
             values=self.defaults.model_dump(),
             defaults=self.startup_defaults.model_copy(update={"model": self._global_startup_model}).model_dump(),
             effective_model=self.defaults.model,
+            effective_reasoning_effort=self.defaults.reasoning_effort,
             revision=self.global_revision,
             persisted=self.global_persisted,
             connection={
@@ -578,6 +635,8 @@ class WebSettings:
     async def change_global(self, revision: str, values: SettingsValues, *, reset: bool = False) -> None:
         # Profiles and write-only keys belong to a workspace. Global defaults
         # carry provider credential references, never copied secret values.
+        if "reasoning_effort" not in values.model_fields_set:
+            values = values.model_copy(update={"reasoning_effort": self.defaults.reasoning_effort})
         if "submit_mode" not in values.model_fields_set:
             values = values.model_copy(update={"submit_mode": self.defaults.submit_mode})
         if "read_only" not in values.model_fields_set:
@@ -586,6 +645,7 @@ class WebSettings:
         if any(getattr(values, name) != getattr(self.defaults, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
         self.validate(values)
+        self.validate_reasoning(values, scope="global")
         payload = values.model_dump_json(exclude={"agent", *_CONNECTION_FIELDS})
         next_revision = secrets.token_hex(32)
         self.global_path.parent.mkdir(parents=True, exist_ok=True)
@@ -639,6 +699,8 @@ class WebSettings:
     ) -> None:
         if any(getattr(values, name) != getattr(self.values, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
+        if "reasoning_effort" not in values.model_fields_set:
+            values = values.model_copy(update={"reasoning_effort": self.values.reasoning_effort})
         if "submit_mode" not in values.model_fields_set:
             values = values.model_copy(update={"submit_mode": self.values.submit_mode})
         if "read_only" not in values.model_fields_set:
@@ -646,6 +708,7 @@ class WebSettings:
         try:
             values = self._effective_values(values)
             self.validate(values)
+            self.validate_reasoning(values)
             base = self._effective_values(self.defaults).model_dump()
             overrides = {key: value for key, value in values.model_dump().items() if base[key] != value}
             payload = json.dumps(overrides, separators=(",", ":"))
@@ -698,6 +761,7 @@ class WebSettings:
                     config.max_subagent_depth,
                     config.submit_mode,
                     config.read_only,
+                    config.reasoning_effort,
                     harness._selected_model,
                 )
                 previous_keys = dict(self.keys)
@@ -726,6 +790,7 @@ class WebSettings:
                         config.max_subagent_depth,
                         config.submit_mode,
                         config.read_only,
+                        config.reasoning_effort,
                         harness._selected_model,
                     ) = previous
                     harness.agent.provider.model = model

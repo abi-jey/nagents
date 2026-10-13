@@ -15,6 +15,7 @@ from nagents.events import ToolCallEvent
 from nagents.exceptions import ModelListError
 from nagents.extensions import CompactionResult
 from nagents.provider import Provider
+from nagents.provider.reasoning import native_openai_api
 from nagents.types import Message
 
 from .providers import PROVIDERS
@@ -40,7 +41,7 @@ class HarnessProvider(Provider):
         self.harness_config = config
         # A saved ngn login supplies the key only when the environment does not.
         self.login_store = login_store
-        # Astra uses Responses for tool calls. Respect an explicitly selected
+        # These GPT-6 models use Responses for tool calls. Respect an explicitly selected
         # contract or compatible endpoint rather than rewriting custom routing.
         self._automatic_model_api = (
             profile.kind in {"openai", "openai_compatible"} and profile.api == "auto" and not profile.base_url
@@ -49,7 +50,7 @@ class HarnessProvider(Provider):
         # changes keep the same bounded transport used by explicit Responses.
         api = profile.api
         if self._automatic_model_api:
-            api = "responses" if config.model == "gpt-6-astra" else "chat_completions"
+            api = native_openai_api(config.model)
         super().__init__(
             provider_type=PROVIDERS[config.provider_profile().kind],
             api_key="deferred-until-live-request",
@@ -72,7 +73,7 @@ class HarnessProvider(Provider):
         # attribute. Keep only the default OpenAI auto contract model-aware;
         # explicit APIs and compatible endpoints retain their chosen contract.
         if self._automatic_model_api:
-            self.api = "responses" if value == "gpt-6-astra" else "chat_completions"
+            self.api = native_openai_api(value)
 
     def credentials(self) -> None:
         if self.harness_config.demo:

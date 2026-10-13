@@ -10,6 +10,7 @@ export type AgentPhase = "running" | "waiting" | "done" | "failed" | "cancelled"
 export type TeamAgent = {
   id: string; name: string; parentId: string; prompt: string; phase: AgentPhase; reason: string;
   provider: string; providerKind: string; model: string; startedAt: number; updatedAt: number;
+  reasoningEffort?: string;
   context?: ContextStats; compactTrigger?: string; compactTokens?: number; compactThreshold?: number; compactMessages?: number;
   canMessage: boolean; messageReason: string; task?: RetainedTask;
 };
@@ -38,6 +39,7 @@ export function conversationAgent(selection: SessionAgentSelection | undefined, 
   return { id: MAIN_AGENT, parentId: MAIN_AGENT, name: identity?.agent || "Assistant", prompt: "",
     reason: approval ? "Waiting for approval" : "", phase: approval ? "waiting" : running ? "running" : "ready",
     provider: identity?.provider || "", providerKind: identity?.provider_kind || "", model: identity?.model || "",
+    reasoningEffort: identity?.reasoning_effort,
     context, compactTrigger: context?.compaction?.trigger, compactTokens: context?.compaction?.token_budget,
     compactThreshold: context?.compaction?.token_threshold, compactMessages: context?.compaction?.message_threshold,
     startedAt: 0, updatedAt: 0, canMessage: true, messageReason: "" };
@@ -55,6 +57,7 @@ export function taskAgent(task: RetainedTask): TeamAgent {
     : phase === "waiting" ? "Waiting for delegated work" : phase === "failed" ? task.error : phase === "done" ? task.result : task.prompt);
   return { id: task.id, name: task.name, parentId: task.parent_task_id || MAIN_AGENT, prompt: task.prompt,
     phase, reason, provider: task.provider || "", providerKind: task.provider_kind || task.provider || "", model: task.model || "",
+    reasoningEffort: task.reasoning_effort,
     startedAt: task.started_at || 0, updatedAt: task.updated_at || task.completed_at || task.started_at || 0,
     context, compactTrigger: compaction?.trigger || task.compact_trigger, compactTokens: compaction?.token_budget, compactThreshold: compaction?.token_threshold, compactMessages: compaction?.message_threshold,
     canMessage: task.can_message === true, messageReason: task.unavailable_reason || task.message_unavailable_reason || "", task };

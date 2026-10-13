@@ -13,8 +13,12 @@ import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import yaml
+
+from .reasoning import ReasoningPreference
+from .reasoning import resolve_effort
 
 MAX_AGENT_FILES = 256
 MAX_AGENT_BYTES = 262144
@@ -41,6 +45,7 @@ class ParsedAgent:
     source: str = ""
     source_format: str = ""
     allowed_agents: tuple[str, ...] | None = None
+    reasoning_effort: ReasoningPreference = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,7 @@ _FIELDS = {
         "user_invocable",
         "subagent_available",
         "allowed_agents",
+        "reasoning_effort",
     },
     "claude": {"name", "description", "model", "tools", "disallowedTools", "permissionMode"},
     "copilot": {"name", "description", "model", "tools", "user-invocable", "disable-model-invocation", "agents"},
@@ -348,6 +354,8 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         model, provider = options.model or model, options.provider or provider
     if provider and not _PROVIDER.fullmatch(provider):
         raise ValueError("provider must name an ngn provider connection")
+    effort = _text(data.get("reasoning_effort", ""), "reasoning_effort", optional=True)
+    resolve_effort(effort)
     allowed, denied = _tool_policy(data, options)
     mode = "build"
     user_invocable = True
@@ -411,6 +419,7 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         str(path.absolute()),
         fmt,
         allowed_agents,
+        cast("ReasoningPreference", effort),
     )
 
 

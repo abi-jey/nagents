@@ -43,6 +43,17 @@ test("named Codex and Entra authentication survive a settings save", () => {
   }
 });
 
+test("reasoning effort round-trips and can be cleared to the provider default", () => {
+  for (const reasoning_effort of ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+    const saved = settingsValues({ reasoning_effort });
+    assert.deepEqual(parseDraft(createDraft(saved), reply.profiles), { ok: true, values: saved });
+  }
+  const cleared = parseDraft({ ...createDraft(settingsValues({ reasoning_effort: "high" })), reasoning_effort: "" }, reply.profiles);
+  assert.equal(cleared.ok && cleared.values.reasoning_effort, "");
+  const invalid = parseDraft({ ...createDraft(values), reasoning_effort: "invented" }, reply.profiles);
+  assert.ok(!invalid.ok && invalid.errors.reasoning_effort);
+});
+
 test("compaction criteria round-trip and reject unsupported triggers or limits", () => {
   const parsed = parseDraft(
     { ...createDraft(values), compact_trigger: "tokens", compact_tokens: " 50000 ", compact_messages: "7" },

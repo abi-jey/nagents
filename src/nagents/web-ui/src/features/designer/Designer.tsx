@@ -7,6 +7,7 @@ import { NewDesignDialog } from "./NewDesignDialog";
 import { ChannelRoutes } from "./ChannelRoutes";
 import { TestPrompt } from "./TestPrompt";
 import { Icon } from "../../components/Icon";
+import { ReasoningEffort } from "../settings/ReasoningEffort.js";
 import { appendTrace, newAgent, removeAgent, traceMatches } from "./types";
 import type { AgentDefinition, Design, RunSummary, TraceRecord, TraceReply, ChatMessage, ConversationReply } from "./types";
 import "./designer.css";
@@ -228,8 +229,16 @@ export function Designer({ token, close, configureChannels }: { token: string; c
            })}<p>Configure servers in Resources. MCP tool schemas and descriptions come from the server and are read-only; discover tools to inspect them in Preview.</p></details>
            <details><summary>Advanced</summary><label>Instruction file<input placeholder="agents/instructions.md" value={agent.instructions.file} onChange={(e) => editAgent({ instructions: { ...agent.instructions, file: e.target.value } })} /></label>
            {([ ["temperature", "Temperature", 0, 2], ["max_tokens", "Maximum output tokens", 1, undefined], ["top_p", "Top P", 0, 1] ] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} step={key === "max_tokens" ? 1 : 0.05} placeholder="Provider default" value={agent.generation?.[key] ?? ""} onChange={(e) => { const generation = { ...agent.generation }; if (e.target.value === "") delete generation[key]; else generation[key] = Number(e.target.value); editAgent({ generation }); }} /></label>)}
+           {provider && <ReasoningEffort token={token} model={provider.model}
+             defaultLabel="Use workspace preference" allowReset
+             descriptor={{ kind: provider.type, api: provider.api, auth: provider.auth || "api-key", base_url: provider.base_url }}
+             value={agent.generation?.reasoning_effort || ""} update={effort => {
+               const generation = { ...agent.generation };
+               if (effort) generation.reasoning_effort = effort; else delete generation.reasoning_effort;
+               editAgent({ generation });
+             }} />}
            <label>Stop sequences (one per line)<textarea value={agent.generation?.stop?.join("\n") || ""} onChange={(e) => { const generation = { ...agent.generation }; if (e.target.value) generation.stop = e.target.value.split("\n"); else delete generation.stop; editAgent({ generation }); }} /></label>
-           <p>Blank generation fields use the provider default. Delegation depth is configured in Resources.</p>
+           <p>Blank sampling fields use the provider default. Reasoning effort can inherit the workspace preference. Delegation depth is configured in Resources.</p>
           <label>Maximum model rounds<input type="number" min="1" max="1000" value={agent.max_tool_rounds} onChange={(e) => editAgent({ max_tool_rounds: Number(e.target.value) })} /></label></details>
         </aside>}
       </div>

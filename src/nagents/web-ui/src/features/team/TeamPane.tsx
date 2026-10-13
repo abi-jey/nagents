@@ -6,6 +6,7 @@ import type { TeamController } from "./useTeam.js";
 import { request } from "../../api/client.js";
 import { compactLabel, compactionWarning } from "./context.js";
 import { contextSummary, contextUsageLabel, contextWindowSource } from "../context/controller.js";
+import { ReasoningEffort, effortLabel } from "../settings/ReasoningEffort.js";
 
 export function TeamPane({ team, agents, arrivals, open, close, configure }: {
   team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; open: boolean; close: () => void; configure: (id: string) => void;
@@ -31,6 +32,7 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
   const pending = agent.task?.next_settings;
   const [provider, setProvider] = useState(pending?.provider || agent.provider);
   const [model, setModel] = useState(pending?.model || agent.model);
+  const [effort, setEffort] = useState(pending?.reasoning_effort || "");
   const [trigger, setTrigger] = useState(pending?.compact_trigger || "");
   const [budget, setBudget] = useState(String(pending?.compact_tokens || agent.compactTokens || 200000));
   const [messages, setMessages] = useState(String(pending?.compact_messages || agent.compactMessages || 100));
@@ -48,7 +50,7 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
     setSaving(true); setError(""); setNotice("");
     try {
       await request(`sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(agent.id)}/settings`, token, {
-        provider: provider.trim(), model: model.trim(), compact_trigger: trigger,
+        provider: provider.trim(), model: model.trim(), reasoning_effort: effort, compact_trigger: trigger,
         ...(trigger === "tokens" ? { compact_tokens: tokens } : {}), ...(trigger === "messages" ? { compact_messages: count } : {}),
       }, undefined, "PUT");
       changed(); setNotice("Saved for the next idle activation. Current work keeps its accepted configuration.");
@@ -58,6 +60,7 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
   return <dialog className="agent-configuration-dialog" ref={dialog} aria-labelledby="agent-config-title" onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2 id="agent-config-title">{agent.name}</h2><button type="button" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
     <p>Accepted configuration for this agent.</p><dl><dt>Provider</dt><dd>{agent.provider || (agent.providerKind ? `${agent.providerKind} · default connection` : "Unavailable")}</dd><dt>Model</dt><dd>{agent.model || "Unavailable"}</dd>
+      <dt>Reasoning effort</dt><dd>{effortLabel(agent.reasoningEffort)}</dd>
       <dt>Compaction</dt><dd>{compactLabel(agent) || "Unavailable"}{compactionWarning(agent) && <p className="team-context-warning">{compactionWarning(agent)}</p>}</dd>
       <dt>Context</dt><dd>{agent.context ? <>{contextSummary(agent.context)}<small>{contextUsageLabel(agent.context)} · {contextWindowSource(agent.context)}</small></> : "Unavailable"}</dd>
       <dt>Status</dt><dd>{agent.phase === "waiting" ? agent.reason : agent.phase}</dd>
@@ -66,6 +69,8 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
       <label>Provider connection<input list="agent-provider-connections" value={provider} onChange={event => setProvider(event.target.value)} maxLength={200} autoComplete="off" /></label>
       <datalist id="agent-provider-connections">{providers.map(id => <option key={id} value={id} />)}</datalist>
       <label>Model<input value={model} onChange={event => setModel(event.target.value)} maxLength={200} autoComplete="off" spellCheck={false} /></label>
+      <ReasoningEffort token={token} provider={provider} model={model} value={effort} update={setEffort}
+        defaultLabel={`Keep accepted effort · ${effortLabel(agent.reasoningEffort)}`} allowReset />
       <label>Compaction<select value={trigger} onChange={event => setTrigger(event.target.value)}><option value="">Keep accepted policy</option><option value="auto">Automatic</option><option value="tokens">Token budget</option><option value="messages">Message threshold</option><option value="off">Off</option></select></label>
       {trigger === "tokens" && <label>Context budget<input type="number" min={1024} max={10000000} value={budget} onChange={event => setBudget(event.target.value)} /><small>Compaction starts at 70% of this budget.</small></label>}
       {trigger === "messages" && <label>Messages before compaction<input type="number" min={1} max={10000} value={messages} onChange={event => setMessages(event.target.value)} /></label>}

@@ -60,6 +60,11 @@ def test_connector_updates_conflict_only_with_that_connectors_own_calls(
 def test_saved_defaults_leave_execution_resources_alive_and_apply_to_next_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
 ) -> None:
+    from tests.support.providers import FakeProvider
+
+    # This scripted provider supports the new preference for its fixture-only model IDs.
+    monkeypatch.setattr(FakeProvider, "cached_reasoning_efforts", lambda self, model="": ("high",))
+
     async def scenario() -> None:
         entered, release = asyncio.Event(), asyncio.Event()
         observed: list[tuple[str, str]] = []
@@ -103,7 +108,12 @@ def test_saved_defaults_leave_execution_resources_alive_and_apply_to_next_run(
                     headers=headers,
                     json={
                         "revision": before["revision"],
-                        "values": {**before["values"], "model": "next-model", "max_output": 8192},
+                        "values": {
+                            **before["values"],
+                            "model": "next-model",
+                            "max_output": 8192,
+                            "reasoning_effort": "high",
+                        },
                     },
                 )
                 assert response.status_code == 200, response.text
@@ -111,6 +121,8 @@ def test_saved_defaults_leave_execution_resources_alive_and_apply_to_next_run(
                 assert primary is not initial
                 assert primary.config is not initial.config
                 assert primary.config.model == "next-model"
+                assert primary.reasoning_effort() == "high"
+                assert initial.reasoning_effort() == ""
                 assert initial.config.model == "fake-model"
                 assert state.run_for(root) is active and not active.task.done()
                 assert primary.openai_auth is initial.openai_auth is auth
@@ -148,6 +160,7 @@ def test_saved_defaults_leave_execution_resources_alive_and_apply_to_next_run(
             saved = (await client.get("/api/settings", headers=headers)).json()
             assert saved["values"]["model"] == "next-model"
             assert saved["values"]["max_output"] == 8192
+            assert saved["values"]["reasoning_effort"] == "high"
 
     asyncio.run(scenario())
 

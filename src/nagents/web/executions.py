@@ -156,6 +156,8 @@ class Executions:
             replacement._permission_ceiling = primary._permission_ceiling
             replacement.allow_subagents = primary.allow_subagents
             await self.borrow_auth(replacement)
+            if replacement._built_provider_profile == primary._built_provider_profile:
+                replacement.agent.provider.restore_context_metadata(primary.agent.provider.context_metadata_snapshot())
             replacement.session_id = self.state.selected_session_id
             replacement.agent.session = self.state.history
             replacement.approval_handler = self.state.approve
@@ -203,6 +205,10 @@ class Executions:
                         harness._permission_ceiling = primary._permission_ceiling
                         harness.allow_subagents = primary.allow_subagents
                         await self.borrow_auth(harness)
+                        if harness._built_provider_profile == primary._built_provider_profile:
+                            harness.agent.provider.restore_context_metadata(
+                                primary.agent.provider.context_metadata_snapshot()
+                            )
                         harness.session_id = run.session_id
                         harness.agent.session = self.state.history
                         harness.approval_handler = self.state.approve

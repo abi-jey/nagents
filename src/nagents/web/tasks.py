@@ -23,6 +23,8 @@ from pydantic import Field
 from pydantic import field_validator
 
 from nagents.harness.followups import RunInput
+from nagents.harness.reasoning import ReasoningPreference
+from nagents.harness.reasoning import resolve_effort
 from nagents.harness.runtime import _HarnessSession
 from nagents.harness.task_activity import TaskOptions
 from nagents.session import response_metadata
@@ -74,6 +76,7 @@ class TaskSettingsInput(BaseModel):
     compact_trigger: str = Field(default="", pattern=r"^(|auto|tokens|messages|off)$")
     compact_tokens: int = Field(default=200000, ge=1024, le=10000000)
     compact_messages: int = Field(default=100, ge=1, le=10000)
+    reasoning_effort: ReasoningPreference = ""
 
 
 class Tasks:
@@ -139,6 +142,7 @@ class Tasks:
                         or profile_owner.config.provider
                         or profile_owner.config.provider_profile().kind,
                         "model": profile.model or profile_owner.agent.provider.model,
+                        "reasoning_effort": resolve_effort(profile.reasoning_effort, profile_owner.reasoning_effort()),
                         "source": profile.source,
                         "used": name in used,
                         "available": available,
@@ -469,7 +473,12 @@ class Tasks:
             info = owner.tasks.configure_task(
                 task_id,
                 TaskOptions(
-                    body.provider, body.model, body.compact_trigger, body.compact_tokens, body.compact_messages
+                    body.provider,
+                    body.model,
+                    body.compact_trigger,
+                    body.compact_tokens,
+                    body.compact_messages,
+                    body.reasoning_effort,
                 ),
             )
         except (ValueError, RuntimeError, PermissionError) as error:

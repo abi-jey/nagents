@@ -50,6 +50,7 @@ export const executionLimits = [
 
 export const providerApis = ["auto", "chat_completions", "responses", "messages"] as const;
 export const providerAuths = ["auto", "api-key", "chatgpt", "codex", "entra"] as const;
+export const reasoningEfforts = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export const compactionTriggers = ["auto", "tokens", "messages", "off"] as const;
 
@@ -75,6 +76,7 @@ export const compactionLimits = [
 export function createDraft(values: SettingsValues): SettingsDraft {
   return {
     model: values.model,
+    reasoning_effort: values.reasoning_effort || "",
     agent: values.agent,
     provider: values.provider,
     base_url: values.base_url,
@@ -111,6 +113,7 @@ export function parseDraft(
   const errors: DraftErrors = {};
   const values: SettingsValues = {
     model: draft.model.trim(),
+    reasoning_effort: draft.reasoning_effort || "",
     agent: draft.agent,
     provider: draft.provider.trim(),
     base_url: draft.base_url.trim(),
@@ -138,6 +141,9 @@ export function parseDraft(
   }
   if (!profiles.some((profile) => profile.name === draft.agent)) {
     errors.agent = "Choose a profile provided by this server.";
+  }
+  if (!(reasoningEfforts as readonly string[]).includes(values.reasoning_effort)) {
+    errors.reasoning_effort = "Choose a supported reasoning effort.";
   }
   if (
     !values.provider ||

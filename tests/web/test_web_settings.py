@@ -147,6 +147,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "persisted",
                     "effective_mode",
                     "effective_model",
+                    "effective_reasoning_effort",
                     "connection",
                     "providers",
                     "apis",
@@ -163,6 +164,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                         *COMPACTION_FIELDS,
                         *SUBMIT_FIELDS,
                         *READ_ONLY_FIELDS,
+                        "reasoning_effort",
                     }
                 )
                 assert body["providers"] == sorted(body["providers"]) and "openai" in body["providers"]
@@ -170,8 +172,8 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 assert body["auths"] == ["auto", "api-key", "chatgpt", "codex", "entra"]
                 assert body["persisted"] is False and body["effective_mode"] == "build"
                 assert body["profiles"] == [
-                    {"name": "assistant", "mode": "build", "model": ""},
-                    {"name": "audit", "mode": "reviewer", "model": "profile-model"},
+                    {"name": "assistant", "mode": "build", "model": "", "reasoning_effort": ""},
+                    {"name": "audit", "mode": "reviewer", "model": "profile-model", "reasoning_effort": ""},
                 ]
                 assert body["connection"] == {
                     "provider_id": "fixture",

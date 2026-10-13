@@ -341,6 +341,44 @@ and [Codex's public release metadata checks](https://github.com/openai/codex/blo
         - get_model_list
         - close
 
+## Reasoning effort
+
+`GenerationConfig(reasoning_effort="low")` selects an explicit effort. The default
+empty string omits the effort parameter, preserving the provider's default. This
+is independent of requesting displayable summaries. Effort levels are
+model-specific; there is no universal `none` or `max` setting.
+
+| Route | Request field |
+|---|---|
+| OpenAI Chat Completions | `reasoning_effort` |
+| OpenAI Responses and ChatGPT/Codex | `reasoning.effort` |
+| Anthropic Messages | `output_config.effort` |
+| Gemini 3 native | `generationConfig.thinkingConfig.thinkingLevel` |
+| OpenRouter | `reasoning.effort` |
+
+`await provider.resolve_reasoning_efforts()` returns supported choices with
+bounded catalog discovery. `provider.cached_reasoning_efforts(model="...")`
+reads choices for a draft model without changing the provider's active model or
+making a request. Exact Codex `supported_reasoning_levels` and OpenRouter
+`reasoning.supported_efforts` take precedence over conservative documented model
+choices. Catalog data is bounded and isolated by endpoint and authentication
+identity; unsupported or unknown portable choices fail before generation HTTP.
+Custom gateways without advertised capabilities retain their defaults.
+
+An explicit portable effort replaces only the corresponding effort control in
+authored provider settings. Gemini's conflicting `thinkingBudget` and
+OpenRouter's conflicting `max_tokens`/`enabled` reasoning controls are removed
+from the outgoing request, without changing the supplied configuration object.
+Anthropic effort does **not** turn thinking on. Gemini 2.5 uses token budgets,
+so it has no portable effort selector; its explicit `thinking_config` remains
+available. Deliberately authored `responses_reasoning`, `thinking_config`, and
+OpenRouter `reasoning` settings remain available for custom routes.
+
+Provider references: [OpenAI reasoning effort](https://developers.openai.com/api/docs/guides/reasoning),
+[Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Gemini thinking levels](https://ai.google.dev/gemini-api/docs/generate-content/thinking),
+and [OpenRouter model reasoning capabilities](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
 ## Displayable reasoning summaries and usage
 
 `HarnessConfig.reasoning_summaries` defaults to `true`. Set

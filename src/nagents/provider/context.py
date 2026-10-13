@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import monotonic
+from typing import TYPE_CHECKING
 from typing import Literal
 
 import aiohttp
 
 from ..adapters._validation import load_object
+from .reasoning import catalog_reasoning_efforts
+
+if TYPE_CHECKING:
+    from ..types import ReasoningEffort
 
 ContextWindowSource = Literal["configured", "provider", "heuristic"]
 MAX_CONTEXT_WINDOW = 1_000_000_000
@@ -51,17 +56,19 @@ class ContextMetadata:
     def __init__(self) -> None:
         self.identity: tuple[str, str, str] = ("", "", "")
         self.limits: dict[str, int] = {}
+        self.reasoning_efforts: dict[str, tuple[ReasoningEffort, ...]] = {}
         self.retry_at: dict[str, float] = {}
 
     def copy(self) -> ContextMetadata:
         copied = ContextMetadata()
         copied.identity = self.identity
         copied.limits = dict(self.limits)
+        copied.reasoning_efforts = dict(self.reasoning_efforts)
         copied.retry_at = dict(self.retry_at)
         return copied
 
     def bound(self) -> None:
-        for values in (self.limits, self.retry_at):
+        for values in (self.limits, self.reasoning_efforts, self.retry_at):
             while len(values) > MAX_METADATA_MODELS:
                 values.pop(next(iter(values)))
 
@@ -73,12 +80,14 @@ class ContextMetadata:
         if self.identity != identity:
             self.identity = identity
             self.limits.clear()
+            self.reasoning_efforts.clear()
             self.retry_at.clear()
 
     def update(self, rows: object, *, id_key: str = "id", nested: bool = False) -> None:
         if not isinstance(rows, list):
             return
         found: dict[str, int] = {}
+        found_efforts: dict[str, tuple[ReasoningEffort, ...]] = {}
         for row in rows[:MAX_METADATA_MODELS]:
             if not isinstance(row, dict):
                 continue
@@ -86,9 +95,15 @@ class ContextMetadata:
             if not isinstance(model, str) or not model or len(model) > 200:
                 continue
             self.limits.pop(model, None)
+            self.reasoning_efforts.pop(model, None)
             info = row.get("model_info", {}) if nested else row
             if not isinstance(info, dict):
                 continue
+            available, efforts = catalog_reasoning_efforts(info)
+            if available:
+                found_efforts[model] = tuple(
+                    effort for effort in efforts if effort in found_efforts.get(model, efforts)
+                )
             limit = next(
                 (
                     valid
@@ -102,6 +117,7 @@ class ContextMetadata:
             if limit:
                 found[model] = min(limit, found.get(model, limit))
         self.limits.update(found)
+        self.reasoning_efforts.update(found_efforts)
         self.retry_at.update({model: monotonic() + METADATA_TTL for model in found})
         self.bound()
 

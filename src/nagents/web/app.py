@@ -18,6 +18,7 @@ import anyio
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import Path as PathParameter
+from fastapi import Query
 from fastapi import WebSocket
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
@@ -521,6 +522,23 @@ def create_app(
     @app.get("/api/settings")
     async def settings() -> dict[str, object]:
         return state.settings.snapshot()
+
+    @app.get("/api/reasoning-options")
+    async def reasoning_options(
+        scope: Literal["workspace", "global"] = "workspace",
+        provider: Annotated[str, Query(max_length=64)] = "",
+        model: Annotated[str, Query(max_length=200)] = "",
+        kind: Annotated[str, Query(max_length=40)] = "",
+        api: Annotated[str, Query(max_length=20)] = "auto",
+        auth: Annotated[str, Query(max_length=20)] = "",
+        base_url: Annotated[str, Query(max_length=300)] = "",
+    ) -> dict[str, object]:
+        try:
+            return state.settings.reasoning_options(
+                scope=scope, provider=provider, model=model, kind=kind, api=api, auth=auth, base_url=base_url
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
 
     @app.get("/api/models")
     async def models() -> dict[str, object]:

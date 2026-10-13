@@ -17,10 +17,10 @@ const agent: TeamAgent = { id: "", name: "Assistant", parentId: "", prompt: "", 
   provider: context.provider, providerKind: "litellm", model: context.model, startedAt: 0, updatedAt: 0,
   context, compactTrigger: "tokens", compactTokens: 600000, compactThreshold: 420000, canMessage: true, messageReason: "" };
 
-test("main and child rows share observed usage, their own effective windows and the budget relationship", () => {
+test("main and child rows show their own usage and window without the compaction detail line", () => {
   const root = renderToStaticMarkup(createElement(AgentRow, { agent, selected: true, inspect() {}, settings() {} }));
   assert.match(root, /249k \/ 1M/);
-  assert.match(root, /Compact at 420k \(70% of 600k\)/);
+  assert.doesNotMatch(root, /Compact at/);
   assert.match(root, /width:25%/);
   assert.doesNotMatch(root, /~249k|100k|exceeds/);
   const child = taskAgent({ id: "child", name: "Research", status: "running", context: { ...context, context_window: 200000,
@@ -30,7 +30,7 @@ test("main and child rows share observed usage, their own effective windows and 
   assert.equal(child.compactTokens, 150000, "Accepted context policy wins over a stale task snapshot");
   const html = renderToStaticMarkup(createElement(AgentRow, { agent: child, selected: false, inspect() {}, settings() {} }));
   assert.match(html, /110k \/ 200k/);
-  assert.match(html, /Compact at 105k \(70% of 150k\)/);
+  assert.doesNotMatch(html, /Compact at/);
   assert.doesNotMatch(html, /900k|600k/);
 });
 

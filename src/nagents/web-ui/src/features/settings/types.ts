@@ -1,6 +1,7 @@
 
 export type SettingsValues = {
   model: string;
+  reasoning_effort: string;
   agent: string;
   provider: string;
   base_url: string;
@@ -23,6 +24,7 @@ export type SettingsProfile = {
   name: string;
   mode: "build" | "reviewer";
   model: string;
+  reasoning_effort?: string;
   provider?: string;
   description?: string;
   source?: string;
@@ -50,6 +52,7 @@ export type SettingsReply = {
   persisted: boolean;
   effective_mode: "build" | "reviewer";
   effective_model?: string;
+  effective_reasoning_effort?: string;
   providers: string[];
   apis: string[];
   auths: string[];
