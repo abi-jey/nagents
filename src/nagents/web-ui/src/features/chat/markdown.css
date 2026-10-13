@@ -1,0 +1,76 @@
+.markdown-content {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content p { margin: 0 0 .7em; }
+.markdown-content :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.05em 0 .4em;
+  font-weight: 600;
+  line-height: 1.35;
+  color: inherit;
+}
+.markdown-content h1 { font-size: 1.4em; }
+.markdown-content h2 { font-size: 1.25em; }
+.markdown-content h3 { font-size: 1.1em; }
+.markdown-content :is(h4, h5, h6) { font-size: 1em; }
+.markdown-content :is(ul, ol) { margin: .5em 0 .85em; padding-inline-start: 1.6em; }
+.markdown-content li { padding-inline-start: .15em; margin: .22em 0; }
+.markdown-content li > :is(ul, ol) { margin-block: .3em; }
+.markdown-content li > p { margin-block: .4em; }
+.markdown-content li > p:last-child { margin-bottom: 0; }
+.markdown-content .markdown-task-item { list-style: none; position: relative; }
+.markdown-task-item > input, .markdown-task-item > p > input {
+  position: absolute;
+  inset-inline-start: -1.45em;
+  top: .3em;
+  width: .95em;
+  height: .95em;
+  margin: 0;
+  accent-color: var(--accent-teal);
+}
+.markdown-content blockquote {
+  margin: .7em 0;
+  padding: .1em 0 .1em 1em;
+  border-inline-start: 2px solid var(--border-group);
+  color: var(--text-secondary);
+}
+.markdown-content blockquote > :last-child { margin-bottom: 0; }
+.markdown-content hr { border: 0; border-top: 1px solid var(--border-group); margin: 1.2em 0; }
+.markdown-content :not(pre) > code {
+  padding: .08em .3em;
+  border-radius: 4px;
+  background: var(--surface-output);
+  color: inherit;
+  box-decoration-break: clone;
+  overflow-wrap: anywhere;
+}
+.markdown-content .code-block { max-width: 100%; }
+.markdown-content .code-block > h3 { margin: 0 0 4px; font-size: .82em; font-weight: 500; color: var(--text-secondary); }
+.markdown-content .code-block pre { max-width: 100%; font-size: .9em; overflow-wrap: normal; }
+.markdown-content .markdown-literal { white-space: pre-wrap; }
+.markdown-table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  margin: .85em 0;
+  border: 1px solid var(--border-group);
+  border-radius: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-group) transparent;
+}
+.markdown-table-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.markdown-table-scroll table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: .92em; }
+.markdown-table-scroll :is(th, td) {
+  padding: .55em .8em;
+  text-align: start;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-group);
+  max-width: 34ch;
+  min-width: 8ch;
+  overflow-wrap: anywhere;
+}
+.markdown-table-scroll th { font-weight: 600; background: var(--surface-output); }
+.markdown-table-scroll tbody tr:last-child td { border-bottom: 0; }
+.markdown-table-scroll tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-output) 45%, transparent); }
