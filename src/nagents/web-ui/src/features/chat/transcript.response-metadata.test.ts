@@ -48,9 +48,11 @@ test("reported thinking precedes one answer, with a separate collapsed summary a
   assert.equal(doc.querySelector(".entry.assistant > .entry-content")?.textContent, "The answer.");
   assert.equal(doc.querySelector("details")?.open, false);
   assert.equal(doc.querySelector(".response-usage"), null);
-  assert.equal(doc.querySelector("summary")?.textContent, "Reasoning summary · 600 reasoning tokens");
-  assert.equal(doc.querySelector("summary .response-reasoning-count .sr-only")?.textContent, "reasoning ", "The compact count retains its accessible meaning");
-  assert.match(doc.querySelector(".response-reasoning-count")?.getAttribute("title") || "", /600 provider-reported reasoning tokens.*included in Output/);
+  assert.equal(doc.querySelector("summary")?.textContent, "Reasoning summary");
+  assert.match(doc.querySelector(".response-reasoning-content")?.textContent || "", /The provider is checking the available evidence/);
+  assert.doesNotMatch(doc.querySelector(".response-details")?.textContent || "", /600|1,200|800/);
+  const expanded = render(entries, new Map([["reasoning:response-one", true]]));
+  assert.equal(expanded.querySelector(".response-reasoning")?.hasAttribute("open"), true);
   assert.equal(entries[0].responseMetadata?.usage?.total_tokens, 2000, "Reasoning never inflates the provider total");
   assert.doesNotMatch(entries[0].text, /checking the available evidence/);
 });
@@ -65,29 +67,37 @@ test("cumulative metadata replaces by revision without repeating summaries or co
   assert.equal(entries[0].responseMetadata?.summary, "A complete cumulative summary.");
 });
 
-test("missing reasoning differs from an actual zero; summary-only responses invent no usage", () => {
+test("missing reasoning differs from an actual zero in metadata while neither creates a count-only row", () => {
   const counts = metadata({ status: "completed", summary: "", usage_reported: true });
   let doc = render(appendEvent([], update(counts)));
   assert.equal(doc.querySelector("article"), null, "Input/output-only metadata must not leave an empty assistant row");
   assert.equal(doc.querySelector("details"), null);
-  doc = render(appendEvent([], update({ ...counts, usage: { ...counts.usage!, reasoning_reported: true } })));
-  assert.equal(doc.querySelector(".response-reasoning-count")?.textContent, "0 reasoning tokens");
+  const zero = responseMetadata({ ...counts, usage: { ...counts.usage!, reasoning_reported: true } });
+  assert.equal(responseMetadata(counts)?.usage?.reasoning_reported, false);
+  assert.equal(zero?.usage?.reasoning_reported, true);
+  assert.equal(zero?.usage?.reasoning_tokens, 0);
+  doc = render(appendEvent([], update(zero!)));
+  assert.equal(doc.querySelector("article"), null);
   assert.equal(doc.querySelector(".response-usage"), null);
   assert.equal(render(appendEvent([], update())).querySelector(".response-reasoning-count"), null);
   assert.equal(render(appendEvent([], update({ ...counts, usage_reported: false, usage: { ...counts.usage!, reasoning_reported: true } }))).querySelector("article"), null);
   assert.equal(render(appendEvent([], update(metadata({ status: "responding", summary: "" })))).querySelector("article"), null);
 });
 
-test("a reasoning-only usage report never fabricates Input zero or Output zero", () => {
+test("reasoning-only usage is retained without an inline count or an empty response row", () => {
   const value = metadata({ status: "completed", summary: "", usage_reported: true,
     usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, reasoning_tokens: 7,
       prompt_reported: false, completion_reported: false, total_reported: false,
       reasoning_reported: true, reasoning_in_output: "unknown" } });
-  const doc = render(appendEvent([], update(value)));
-  assert.equal(doc.querySelector(".response-reasoning-count")?.textContent, "7 reasoning tokens");
+  const entries = appendEvent([], update(value));
+  assert.equal(entries[0].responseMetadata?.usage?.reasoning_tokens, 7);
+  assert.equal(entries[0].responseMetadata?.usage?.prompt_reported, false);
+  assert.equal(entries[0].responseMetadata?.usage?.completion_reported, false);
+  const doc = render(entries);
+  assert.equal(doc.querySelector("article"), null);
   assert.equal(doc.querySelector(".response-usage"), null);
   const actualZero = { ...value, usage: { ...value.usage!, ...reportedCounters } };
-  assert.equal(render(appendEvent([], update(actualZero))).querySelector(".response-details")?.textContent, "7 reasoning tokens");
+  assert.equal(render(appendEvent([], update(actualZero))).querySelector("article"), null);
   assert.equal(render(appendEvent([], update({ ...value, usage: { ...value.usage!, reasoning_reported: false } }))).querySelector("article"), null);
 });
 
@@ -104,28 +114,32 @@ test("old positive counts can be known without flags, but absent zero counts sta
   assert.equal(doc.querySelector("summary")?.textContent, "Thinking");
 });
 
-test("reasoning count keeps output semantics in its tooltip without a usage strip or calculated total", () => {
-  for (const [meaning, explanation] of [["included", /included in Output/], ["separate", /separately from Output/], ["unknown", /does not report whether/]] as const) {
-    const doc = render(appendEvent([], update(metadata({ status: "completed", summary: "", usage_reported: true,
-      usage: { ...reportedCounters, prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, reasoning_tokens: 3, reasoning_reported: true, reasoning_in_output: meaning } }))));
-    assert.match(doc.querySelector(".response-reasoning-count")?.getAttribute("title") || "", explanation);
-    assert.equal(doc.querySelector(".response-reasoning-count")?.textContent, "3 reasoning tokens");
+test("provider output semantics remain in metadata without decorating the visible reasoning summary", () => {
+  for (const meaning of ["included", "separate", "unknown"] as const) {
+    const entries = appendEvent([], update(metadata({ status: "completed", usage_reported: true,
+      usage: { ...reportedCounters, prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, reasoning_tokens: 3, reasoning_reported: true, reasoning_in_output: meaning } })));
+    assert.equal(entries[0].responseMetadata?.usage?.reasoning_in_output, meaning);
+    assert.equal(entries[0].responseMetadata?.usage?.total_tokens, 15);
+    const doc = render(entries);
+    assert.equal(doc.querySelector("summary")?.textContent, "Reasoning summary");
     assert.equal(doc.querySelector(".response-usage"), null);
     assert.doesNotMatch(doc.body.textContent || "", /Input|Output|Total|Context/);
   }
 });
 
-test("reasoning counts stay beside their thinking or interrupted state with and without a summary", () => {
+test("reasoning phases retain their text and status while usage-only terminal frames leave no empty rows", () => {
   for (const summary of ["A provider-supplied summary.", ""]) {
     for (const [status, label] of [["thinking", "Thinking"], ["cancelled", "Stopped"], ["failed", "Interrupted"]] as const) {
       const value = metadata({ status, summary, usage_reported: true,
         usage: { ...reportedCounters, prompt_tokens: 10, completion_tokens: 5, total_tokens: 15,
           reasoning_tokens: 1, reasoning_reported: true, reasoning_in_output: "included" } });
       const doc = render(appendEvent([], update(value)));
-      const count = doc.querySelector(".response-reasoning-count");
-      assert.equal(doc.querySelectorAll(".response-reasoning-count").length, 1);
-      assert.match(count?.parentElement?.textContent || "", new RegExp(label));
-      assert.match(count?.textContent || "", /1 reasoning token$/);
+      if (summary || status === "thinking") {
+        assert.match(doc.querySelector(".response-details")?.textContent || "", new RegExp(label));
+      } else {
+        assert.equal(doc.querySelector("article"), null);
+      }
+      assert.equal(doc.querySelector(".response-reasoning-count"), null);
       assert.equal(doc.querySelector(".response-usage"), null);
       assert.equal(!!doc.querySelector(".response-thinking"), status === "thinking");
     }
@@ -325,6 +339,7 @@ test("retained usage survives expired summary without bringing the old text back
   const doc = render(state.entries);
   assert.equal(doc.querySelector("details"), null);
   assert.match(doc.querySelector(".response-reasoning-expired")?.getAttribute("title") || "", /latest 100 responses/);
-  assert.equal(doc.querySelector(".response-reasoning-meta")?.textContent, "Summary no longer retained · 600 reasoning tokens");
+  assert.equal(doc.querySelector(".response-reasoning-meta")?.textContent, "Summary no longer retained");
+  assert.equal(state.entries[0].responseMetadata?.usage?.reasoning_tokens, 600);
   assert.equal(doc.querySelector(".response-usage"), null);
 });

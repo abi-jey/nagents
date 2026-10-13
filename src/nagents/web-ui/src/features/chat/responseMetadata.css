@@ -4,7 +4,6 @@
 .response-usage b { font-weight: 500; color: var(--text-secondary); }
 .response-usage-meaning { font-size: 10px; }
 .response-reasoning { max-width: 100%; }
-.response-reasoning-count { font-size: 10px; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .response-reasoning-meta { display: block; }
 .response-reasoning > summary, .response-run-usage > summary { cursor: pointer; width: fit-content; padding: 3px 0; user-select: none; }
 .response-reasoning > summary:hover, .response-run-usage > summary:hover { color: var(--text-reading); }

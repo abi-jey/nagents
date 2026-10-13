@@ -99,7 +99,7 @@ export function latestResponseMetadata(saved?: ResponseMetadata, previous?: Resp
 }
 
 export function hasResponseDetails(value?: ResponseMetadata, includeRunUsage = false): boolean {
-  return !!value && (!!value.summary || value.status === "thinking" || value.usage_reported && value.usage?.reasoning_reported || value.summary_expired ||
+  return !!value && (!!value.summary || value.status === "thinking" || value.summary_expired ||
     includeRunUsage && !!value.run_id && (value.run_usage?.response_count || 0) > 1 && (value.run_usage?.usage_response_count || 0) > 0);
 }
 

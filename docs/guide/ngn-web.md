@@ -631,17 +631,17 @@ executes a prompt or tool again.
 
 ### Response Usage And Provider Summaries
 
-Completed responses show a compact provider-reported reasoning-token count beside
-the collapsed summary, or a count-only label when no summary is available. Input
-and output counts remain in the collapsed recorded-run breakdown. An absent
-reasoning count stays absent; an actual zero remains zero.
+Completed responses show provider-supplied reasoning text in a subdued section,
+collapsed by default. Per-response token counts are not shown inline; reported
+usage remains available in the collapsed recorded-run breakdown. In stored usage,
+an absent reasoning count stays absent and an actual zero remains zero.
 OpenAI and Anthropic report reasoning as part of output when that breakdown is
 available. Gemini reports its thought count separately from candidate output.
 The usage details explain that distinction without adding tokens twice.
 
 A collapsed **Thinking** section contains displayable text supplied by the
-provider. It streams independently of the answer and tool results. Count-only
-providers show counts without invented summaries. The harness requests supported
+provider. It streams independently of the answer and tool results. Providers that
+return counts without text do not create an empty summary. The harness requests supported
 summaries by default; set `reasoning_summaries` to `false` in harness configuration
 to disable that request. Explicit library callers can use
 `GenerationConfig(reasoning_summary="auto")` or `"off"`. Unsupported models keep

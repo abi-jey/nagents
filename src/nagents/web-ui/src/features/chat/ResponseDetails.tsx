@@ -12,16 +12,6 @@ const outputLabel: Record<ResponseUsage["reasoning_in_output"], string> = {
 };
 const tokens = (value: number) => value.toLocaleString("en-US");
 
-function ReasoningCount({ usage, compact = false }: { usage?: ResponseUsage; compact?: boolean }) {
-  if (!usage?.reasoning_reported) return null;
-  const unit = usage.reasoning_tokens === 1 ? "token" : "tokens";
-  return <span className="response-reasoning-count"
-    title={`${tokens(usage.reasoning_tokens)} provider-reported reasoning ${unit} for this response. ${outputMeaning[usage.reasoning_in_output]}`}>
-    {compact && <> <span aria-hidden="true">· </span></>}{tokens(usage.reasoning_tokens)}{" "}
-    {compact ? <><span className="sr-only">reasoning </span>{unit}</> : `reasoning ${unit}`}
-  </span>;
-}
-
 function RunTokenBreakdown({ usage }: { usage: RunUsage }) {
   if (!hasVisibleUsage(usage)) return null;
   const partial = (reported: number) => reported < usage.response_count
@@ -43,7 +33,6 @@ export function ResponseDetails({ metadata, open, toggle, showRunUsage = false, 
   toggleRun?: (open: boolean) => void;
 }) {
   if (!hasResponseDetails(metadata, showRunUsage) || !metadata) return null;
-  const usage = metadata.usage_reported ? metadata.usage : undefined;
   const thinking = metadata.status === "thinking";
   const interrupted = ["cancelled", "failed"].includes(metadata.status);
   const interruption = interrupted && <> <span className="response-interrupted">{metadata.status === "cancelled" ? "Stopped" : "Interrupted"}</span></>;
@@ -54,15 +43,15 @@ export function ResponseDetails({ metadata, open, toggle, showRunUsage = false, 
       open={open} onToggle={event => toggle(event.currentTarget.open)}>
       <summary><span className={thinking ? "response-thinking" : undefined} role={thinking ? "status" : undefined}>
         {thinking && <i aria-hidden="true" />}{thinking ? "Thinking" : "Reasoning summary"}
-      </span><ReasoningCount usage={usage} compact />{interruption}</summary>
+      </span>{interruption}</summary>
       <div className="response-reasoning-content"><p className="response-reasoning-note">Provider-supplied summary</p>
         <MessageContent text={metadata.summary} />
         {metadata.summary_truncated && <p className="response-reasoning-note">Summary shortened to the 16,384-character retention limit.</p>}
       </div>
-    </details> : (thinking || metadata.summary_expired || usage?.reasoning_reported) && <span className="response-reasoning-meta">
+    </details> : (thinking || metadata.summary_expired) && <span className="response-reasoning-meta">
       {thinking ? <span className="response-thinking" role="status"><i aria-hidden="true" />Thinking</span>
         : metadata.summary_expired && <span className="response-reasoning-expired" title="Summaries are retained for the latest 100 responses in this conversation. Usage is kept separately.">Summary no longer retained</span>}
-      <ReasoningCount usage={usage} compact={thinking || metadata.summary_expired} />{interruption}
+      {interruption}
     </span>}
     {run && <details className="response-run-usage" data-disclosure-key={`run-usage:${metadata.response_session_id}:${metadata.run_id}`}
       open={runOpen} onToggle={event => toggleRun?.(event.currentTarget.open)}>
