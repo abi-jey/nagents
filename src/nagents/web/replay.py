@@ -36,6 +36,7 @@ class RunReplay:
                     "followup",
                     "stream",
                     "generation_id",
+                    "response_id",
                     "index",
                 )
             ),
@@ -50,6 +51,16 @@ class RunReplay:
         # deltas in the exact same scope can be coalesced without reordering.
         copied: dict[str, object] = json.loads(json.dumps(record, default=_json_default, ensure_ascii=True))
         event = copied.get("event")
+        if event == "response_metadata":
+            for index in range(len(self.records) - 1, -1, -1):
+                old = self.records[index]
+                if old.get("event") == event and old.get("response_id") == copied.get("response_id"):
+                    if int(str(old.get("revision", 0))) >= int(str(copied.get("revision", 0))):
+                        return
+                    self.records.pop(index)
+                    self.bytes -= self.sizes.pop(index)
+                    break
+
         delta = "text" if event == "tool_output" else "chunk" if event in {"text_chunk", "reasoning_chunk"} else ""
         progress = bool(
             event == "tool_call_progress"

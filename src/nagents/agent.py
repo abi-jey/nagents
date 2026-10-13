@@ -73,7 +73,10 @@ from .observation import observe
 from .observation import scope as observation_scope
 from .provider import Provider
 from .provider import ProviderType
+from .response_metadata import ResponseTrace
+from .response_metadata import capture_response
 from .session import SessionManager
+from .session.response_metadata import response_write
 from .skills import DEFAULT_SKILL_TOKEN_LIMIT
 from .skills import Skill
 from .skills import SkillDiscoverer
@@ -370,6 +373,9 @@ class Agent:
         self._session_tokens: dict[str, int] = {}
         # Main-generation usage observed by this agent, not persisted history or compaction billing.
         self._session_usage: dict[str, TokenUsage] = {}
+        self._reasoning_coverage: dict[str, tuple[int, int]] = {}
+        self._reasoning_inclusions: dict[str, set[str]] = {}
+        self._counter_coverage: dict[str, dict[str, int]] = {}
         # Last single generation's real usage per session, for context-stat comparison.
         self._last_usage: dict[str, TokenUsage] = {}
         self._usage_origins: dict[str, _UsageOrigin] = {}
@@ -1411,6 +1417,7 @@ class Agent:
                     raise TypeError(f"{type(plugin).__name__}.before_run must return Message")
             text_run = self._run_text(message, context, config, plugins, references)
             async for event in text_run:
+                capture_response(self.session, event)
                 for plugin in plugins:
                     await plugin.on_event(context, deepcopy(event))
                 yield event
@@ -1596,6 +1603,12 @@ class Agent:
                 deepcopy(config),
             )
             model_call_id = uuid.uuid4().hex
+            response = ResponseTrace(model_call_id, session_id, round_num)
+            generation_reasoning_seen = False
+            total_generations, reported_generations = self._reasoning_coverage.get(session_id, (0, 0))
+            self._reasoning_coverage[session_id] = (total_generations + 1, reported_generations)
+            session_usage.reasoning_reported = False
+            session_usage.prompt_reported = session_usage.completion_reported = session_usage.total_reported = False
             observation_scope.set(
                 {
                     **observation_scope.get(),
@@ -1641,13 +1654,57 @@ class Agent:
                 )
             ) as events:
                 async for event in events:
-                    # Providers repeat cumulative snapshots within a generation, not additive deltas.
-                    if event.usage.has_usage():
-                        session_usage.prompt_tokens += event.usage.prompt_tokens - last_usage.prompt_tokens
-                        session_usage.completion_tokens += event.usage.completion_tokens - last_usage.completion_tokens
-                        session_usage.total_tokens += event.usage.total_tokens - last_usage.total_tokens
-                        last_usage = replace(event.usage)
-                        # Context size remains the latest prompt, not accumulated billing usage.
+                    # Provider usage frames are cumulative and may contain only a later
+                    # breakdown. Preserve known counts while deduplicating snapshots.
+                    supplied = event.usage
+                    if supplied.has_usage():
+                        merged = replace(
+                            supplied,
+                            prompt_tokens=max(last_usage.prompt_tokens, supplied.prompt_tokens),
+                            completion_tokens=max(last_usage.completion_tokens, supplied.completion_tokens),
+                            total_tokens=max(last_usage.total_tokens, supplied.total_tokens),
+                            reasoning_tokens=max(last_usage.reasoning_tokens, supplied.reasoning_tokens),
+                            prompt_reported=last_usage.prompt_reported
+                            or supplied.prompt_reported
+                            or (not supplied.reported and supplied.prompt_tokens > 0),
+                            completion_reported=last_usage.completion_reported
+                            or supplied.completion_reported
+                            or (not supplied.reported and supplied.completion_tokens > 0),
+                            total_reported=last_usage.total_reported
+                            or supplied.total_reported
+                            or (not supplied.reported and supplied.total_tokens > 0),
+                            reasoning_reported=last_usage.reasoning_reported
+                            or supplied.reasoning_reported
+                            or supplied.reasoning_tokens > 0,
+                            reasoning_in_output=(
+                                supplied.reasoning_in_output
+                                if supplied.reasoning_reported
+                                else last_usage.reasoning_in_output
+                            ),
+                        )
+                        session_usage.prompt_tokens += merged.prompt_tokens - last_usage.prompt_tokens
+                        session_usage.completion_tokens += merged.completion_tokens - last_usage.completion_tokens
+                        session_usage.total_tokens += merged.total_tokens - last_usage.total_tokens
+                        session_usage.reasoning_tokens += merged.reasoning_tokens - last_usage.reasoning_tokens
+                        if merged.reasoning_reported and not generation_reasoning_seen:
+                            count, reported = self._reasoning_coverage[session_id]
+                            self._reasoning_coverage[session_id] = (count, reported + 1)
+                            generation_reasoning_seen = True
+                        count, reported = self._reasoning_coverage[session_id]
+                        session_usage.reasoning_reported = count == reported
+                        counters = self._counter_coverage.setdefault(session_id, {})
+                        for counter in ("prompt", "completion", "total"):
+                            flag = f"{counter}_reported"
+                            if getattr(merged, flag) and not getattr(last_usage, flag):
+                                counters[counter] = counters.get(counter, 0) + 1
+                            setattr(session_usage, flag, counters.get(counter, 0) == count)
+                        if merged.reasoning_reported:
+                            inclusions = self._reasoning_inclusions.setdefault(session_id, set())
+                            inclusions.add(merged.reasoning_in_output)
+                            session_usage.reasoning_in_output = (
+                                merged.reasoning_in_output if len(inclusions) == 1 else "unknown"
+                            )
+                        last_usage = merged
                         self._session_tokens[session_id] = last_usage.prompt_tokens
                         if last_usage.prompt_tokens > 0:
                             self._usage_origins[session_id] = usage_origin
@@ -1657,6 +1714,9 @@ class Agent:
                                 total_tokens=last_usage.total_tokens,
                             )
                     event.usage = replace(last_usage, session=replace(session_usage))
+                    response.observe(event)
+                    if response.dirty:
+                        yield response.snapshot()
 
                     if isinstance(event, TextChunkEvent):
                         full_text += event.chunk
@@ -1708,6 +1768,7 @@ class Agent:
                 await plugin.after_model(context)
 
             if fatal_error:
+                yield response.snapshot(terminal=True, failed=True)
                 yield DoneEvent(
                     final_text="",
                     session_id=session_id,
@@ -1718,6 +1779,7 @@ class Agent:
 
             # If we hit an error, don't continue
             if has_error:
+                yield response.snapshot(terminal=True, failed=True)
                 if self._execution_bridge:
                     await self._execution_bridge.abandon(tuple(pending_tool_events))
                 continue
@@ -1727,8 +1789,12 @@ class Agent:
                 # Add assistant message with tool calls to history
                 assistant_block = Message(role="assistant", content=full_text or None, tool_calls=pending_tool_calls)
                 bridge = self._execution_bridge
-                with bridge.reserve(assistant_block, tuple(pending_tool_events)) if bridge else nullcontext():
-                    await self.session.add_message(session_id, assistant_block)
+                with (
+                    bridge.reserve(assistant_block, tuple(pending_tool_events)) if bridge else nullcontext(),
+                    response_write(response.snapshot(terminal=True)),
+                ):
+                    history_id = await self.session.add_message(session_id, assistant_block)
+                yield response.snapshot(terminal=True, history_id=history_id)
 
                 # Execute each tool
                 for call_position, tool_call in enumerate(pending_tool_calls):
@@ -1798,8 +1864,13 @@ class Agent:
                 continue
 
             # No tool calls - we're done
+            history_id = 0
             if full_text:
-                await self.session.add_message(session_id, Message(role="assistant", content=full_text))
+                with response_write(response.snapshot(terminal=True)):
+                    history_id = await self.session.add_message(
+                        session_id, Message(role="assistant", content=full_text)
+                    )
+            yield response.snapshot(terminal=True, history_id=history_id)
 
             yield DoneEvent(
                 final_text=full_text,
@@ -2106,29 +2177,42 @@ class Agent:
             self.provider.generate(messages=messages, tools=tools, config=config, stream=self.streaming)
         ) as events:
             async for event in events:
-                # Track usage from events that have actual token counts
                 if event.usage.has_usage():
-                    # For simple runs, session_usage = current usage
+                    incoming = event.usage
+                    last_usage = replace(
+                        incoming,
+                        prompt_tokens=max(last_usage.prompt_tokens, incoming.prompt_tokens),
+                        completion_tokens=max(last_usage.completion_tokens, incoming.completion_tokens),
+                        total_tokens=max(last_usage.total_tokens, incoming.total_tokens),
+                        reasoning_tokens=max(last_usage.reasoning_tokens, incoming.reasoning_tokens),
+                        prompt_reported=last_usage.prompt_reported
+                        or incoming.prompt_reported
+                        or (not incoming.reported and incoming.prompt_tokens > 0),
+                        completion_reported=last_usage.completion_reported
+                        or incoming.completion_reported
+                        or (not incoming.reported and incoming.completion_tokens > 0),
+                        total_reported=last_usage.total_reported
+                        or incoming.total_reported
+                        or (not incoming.reported and incoming.total_tokens > 0),
+                        reasoning_reported=last_usage.reasoning_reported
+                        or incoming.reasoning_reported
+                        or incoming.reasoning_tokens > 0,
+                        reasoning_in_output=incoming.reasoning_in_output
+                        if incoming.reasoning_reported
+                        else last_usage.reasoning_in_output,
+                    )
                     session_usage = TokenUsage(
-                        prompt_tokens=event.usage.prompt_tokens,
-                        completion_tokens=event.usage.completion_tokens,
-                        total_tokens=event.usage.total_tokens,
-                    )
-                    last_usage = Usage(
-                        prompt_tokens=event.usage.prompt_tokens,
-                        completion_tokens=event.usage.completion_tokens,
-                        total_tokens=event.usage.total_tokens,
-                    )
-                else:
-                    # Use last known usage for events without usage data
-                    event.usage = Usage(
                         prompt_tokens=last_usage.prompt_tokens,
                         completion_tokens=last_usage.completion_tokens,
                         total_tokens=last_usage.total_tokens,
+                        reasoning_tokens=last_usage.reasoning_tokens,
+                        reasoning_reported=last_usage.reasoning_reported,
+                        reasoning_in_output=last_usage.reasoning_in_output,
+                        prompt_reported=last_usage.prompt_reported,
+                        completion_reported=last_usage.completion_reported,
+                        total_reported=last_usage.total_reported,
                     )
-
-                # Always attach session usage to the event
-                event.usage.session = session_usage
+                event.usage = replace(last_usage, session=replace(session_usage))
 
                 yield event
 
@@ -2144,6 +2228,10 @@ class Agent:
         try:
             await self._ensure_initialized()
             await self.session.clear_session(session_id)
+            self._session_usage.pop(session_id, None)
+            self._reasoning_coverage.pop(session_id, None)
+            self._reasoning_inclusions.pop(session_id, None)
+            self._counter_coverage.pop(session_id, None)
         finally:
             self._active_runs -= 1
 

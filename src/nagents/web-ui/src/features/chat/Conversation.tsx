@@ -3,6 +3,8 @@ import { ExecutionRecord } from "./ExecutionRecord.js";
 import { TeamIcon } from "../team/TeamTree.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
+import { ResponseDetails } from "./ResponseDetails.js";
+import { hasResponseDetails } from "./responseMetadata.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
@@ -51,6 +53,16 @@ export function TranscriptItems({
   toggle: (key: string, open: boolean) => void;
   renderTask?: (thread: TaskThread) => ReactNode;
 }) {
+  const latestResponses = new Map<string, Entry>();
+  for (const item of items) {
+    if (item.kind !== "entry" || item.entry.kind !== "assistant") continue;
+    const metadata = item.entry.responseMetadata;
+    if (!metadata?.run_id) continue;
+    const key = `${metadata.response_session_id}:${metadata.run_id}`;
+    // Queued inputs and child activations can reset the model-round counter
+    // inside the same web run. Transcript order identifies the newest response.
+    latestResponses.set(key, item.entry);
+  }
   return items.map((item) => {
     // Registry-only tasks have no proven location in this transcript. The team
     // tree still exposes them; do not attach them to its last user message.
@@ -131,6 +143,8 @@ export function TranscriptItems({
       );
     }
     const entry = item.entry;
+    const showRunUsage = latestResponses.get(`${entry.responseMetadata?.response_session_id}:${entry.responseMetadata?.run_id}`) === entry;
+    if (entry.kind === "assistant" && !entry.text && !hasResponseDetails(entry.responseMetadata, showRunUsage)) return null;
     return (
       <article
         key={entry.id}
@@ -184,6 +198,12 @@ export function TranscriptItems({
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
             <MessageContent text={entry.text} />
+            {entry.kind === "assistant" && <ResponseDetails metadata={entry.responseMetadata}
+              open={disclosures.get(`reasoning:${entry.responseId}`) ?? false}
+              toggle={open => toggle(`reasoning:${entry.responseId}`, open)}
+              showRunUsage={showRunUsage}
+              runOpen={disclosures.get(`run-usage:${entry.responseMetadata?.response_session_id}:${entry.responseMetadata?.run_id}`) ?? false}
+              toggleRun={open => toggle(`run-usage:${entry.responseMetadata?.response_session_id}:${entry.responseMetadata?.run_id}`, open)} />}
              {entry.uploads?.map((upload) => <UploadAttachment key={upload.upload_id} upload={upload} ready={!entry.queued} />)}
             {entry.channel && <ChannelAttachments parts={entry.parts} />}
             {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}

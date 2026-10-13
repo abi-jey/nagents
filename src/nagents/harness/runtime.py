@@ -28,6 +28,7 @@ from nagents.provider.openai import OpenAIProvider
 from nagents.session import SessionManager
 from nagents.session import forks
 from nagents.types import ContentPart
+from nagents.types import GenerationConfig
 from nagents.types import TextContent
 
 from .auth import OpenAIAuth
@@ -75,7 +76,6 @@ if TYPE_CHECKING:
     from nagents.context_stats import ContextStats
     from nagents.events import CompactionDoneEvent
     from nagents.provider import Provider
-    from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolArguments
     from nagents.types import ToolDefinition
@@ -130,7 +130,7 @@ class Harness:
     supports_child_custom_tools = False
 
     def generation_config(self) -> "GenerationConfig | None":
-        return None
+        return GenerationConfig(reasoning_summary="auto") if self.config.reasoning_summaries else None
 
     def create_defined_child(self, name: str) -> "Harness | None":
         """Optional definition-driven construction; ordinary profiles use cloning."""

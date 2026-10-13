@@ -16,6 +16,7 @@ from nagents import SessionManager
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import FinishReason
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import TokenUsage
@@ -77,10 +78,23 @@ def test_usage_aggregates_snapshots_once_and_preserves_details(tmp_path: Path) -
 
         agent = Agent(provider, SessionManager(tmp_path / "usage.db"), tools=[work], compaction_strategy=None)
         try:
-            events = [event async for event in agent.run("go", session_id="s")]
-            assert events[0].usage.session == TokenUsage(10, 1, 11)
+            events = [
+                event async for event in agent.run("go", session_id="s") if not isinstance(event, ResponseMetadataEvent)
+            ]
+            assert events[0].usage.session == TokenUsage(
+                10, 1, 11, prompt_reported=True, completion_reported=True, total_reported=True
+            )
             for event in events[1:-2]:
-                assert event.usage.session == TokenUsage(10, 4, 14)
+                assert event.usage.session == TokenUsage(
+                    10,
+                    4,
+                    14,
+                    reasoning_tokens=1,
+                    reasoning_reported=True,
+                    prompt_reported=True,
+                    completion_reported=True,
+                    total_reported=True,
+                )
                 assert event.usage.cached_tokens == 2
                 assert event.usage.reasoning_tokens == 1
             assert len([event for event in events if isinstance(event, ToolResultEvent)]) == 2
@@ -91,7 +105,20 @@ def test_usage_aggregates_snapshots_once_and_preserves_details(tmp_path: Path) -
                     total_tokens=26,
                     audio_tokens=3,
                     reasoning_tokens=2,
-                    session=TokenUsage(30, 10, 40),
+                    reasoning_reported=True,
+                    prompt_reported=True,
+                    completion_reported=True,
+                    total_reported=True,
+                    session=TokenUsage(
+                        30,
+                        10,
+                        40,
+                        reasoning_tokens=3,
+                        reasoning_reported=True,
+                        prompt_reported=True,
+                        completion_reported=True,
+                        total_reported=True,
+                    ),
                 )
             assert agent._session_tokens["s"] == 20  # Context size is not cumulative billing usage.
             assert len({id(event.usage.session) for event in events}) == len(events)
@@ -108,14 +135,22 @@ def test_usage_survives_runs_without_cross_session_or_consumer_mutation(tmp_path
         agent = Agent(provider, SessionManager(tmp_path / "sessions.db"), compaction_strategy=None)
         try:
             first = [event async for event in agent.run("one", session_id="s")]
-            assert first[-1].usage.session == TokenUsage(10, 4, 14)
+            assert first[-1].usage.session == TokenUsage(
+                10, 4, 14, prompt_reported=True, completion_reported=True, total_reported=True
+            )
             first[-1].usage.prompt_tokens = 999
             first[-1].usage.session.prompt_tokens = 999
             second = [event async for event in agent.run("two", session_id="s")]
-            assert second[-1].usage.session == TokenUsage(20, 8, 28)
+            assert second[-1].usage.session == TokenUsage(
+                20, 8, 28, prompt_reported=True, completion_reported=True, total_reported=True
+            )
             other = [event async for event in agent.run("three", session_id="other")]
-            assert other[-1].usage.session == TokenUsage(10, 4, 14)
-            assert first[0].usage.session == TokenUsage(10, 4, 14)
+            assert other[-1].usage.session == TokenUsage(
+                10, 4, 14, prompt_reported=True, completion_reported=True, total_reported=True
+            )
+            assert next(event for event in first if isinstance(event, TextDoneEvent)).usage.session == TokenUsage(
+                10, 4, 14, prompt_reported=True, completion_reported=True, total_reported=True
+            )
         finally:
             await agent.close()
 
@@ -139,7 +174,14 @@ def test_usage_keeps_failed_rounds_but_does_not_reuse_missing_usage(tmp_path: Pa
         agent = Agent(provider, SessionManager(tmp_path / "failure.db"), compaction_strategy=None)
         try:
             events = [event async for event in agent.run("go", session_id="s")]
-            assert events[-1].usage.session == TokenUsage(10, 4, 14)
+            assert events[-1].usage.session == TokenUsage(
+                10,
+                4,
+                14,
+                prompt_reported=not recoverable,
+                completion_reported=not recoverable,
+                total_reported=not recoverable,
+            )
             if not recoverable:
                 assert isinstance(events[-1], DoneEvent)
                 assert events[-1].finish_reason == FinishReason.UNKNOWN
@@ -178,7 +220,19 @@ def test_round_limit_does_not_report_a_natural_stop(tmp_path: Path) -> None:
             assert isinstance(events[-2], ErrorEvent)
             assert isinstance(events[-1], DoneEvent)
             assert events[-1].finish_reason == FinishReason.UNKNOWN
-            assert events[-2].usage == events[-1].usage == Usage(10, 4, 14, session=TokenUsage(10, 4, 14))
+            assert (
+                events[-2].usage
+                == events[-1].usage
+                == Usage(
+                    10,
+                    4,
+                    14,
+                    prompt_reported=True,
+                    completion_reported=True,
+                    total_reported=True,
+                    session=TokenUsage(10, 4, 14, prompt_reported=True, completion_reported=True, total_reported=True),
+                )
+            )
         finally:
             await agent.close()
 

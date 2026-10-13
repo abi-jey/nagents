@@ -21,6 +21,7 @@ from ..types import Message
 from ..types import TextContent
 from ..types import ToolCall
 from .deliveries import delivery_cleanup_statements
+from .response_metadata import anchor_response
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,8 @@ class SessionManager:
                 "UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (session_id,),
             )
+            if message.role == "assistant":
+                await anchor_response(db, session_id, message_id)
             await db.commit()
 
         return message_id

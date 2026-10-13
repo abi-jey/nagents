@@ -3,7 +3,7 @@
 API-key configurations use the normal Provider HTTP contract. ChatGPT credentials
 only go to fixed Codex endpoints, without base Provider logging or retries. The
 OAuth transport releases tools only after a validated completed response;
-GenerationConfig.reasoning.enabled requests a summary, while sampling settings
+GenerationConfig.reasoning_summary requests a summary, while sampling settings
 and token budgets are unsupported on that route.
 """
 
@@ -28,6 +28,7 @@ from typing import cast
 
 import aiohttp
 
+from ..adapters._reasoning import SummaryAccumulator
 from ..adapters._tool_progress import ToolCallProgressTracker
 from ..adapters._validation import ProtocolError
 from ..adapters._validation import json_values_equal
@@ -370,8 +371,15 @@ def _request_body(
             for tool in tools or []
         ],
     }
-    if config and config.reasoning and config.reasoning.get("enabled"):
-        body["reasoning"] = {"summary": "auto"}
+    if config:
+        reasoning: dict[str, object] = dict(config.responses_reasoning)
+        if (
+            config.reasoning_summary == "auto"
+            and (not config.reasoning or config.reasoning.get("enabled") is not False)
+        ) or (config.reasoning and config.reasoning.get("enabled")):
+            reasoning.setdefault("summary", "auto")
+        if reasoning:
+            body["reasoning"] = reasoning
     return body
 
 
@@ -420,9 +428,12 @@ def _index(value: object) -> int:
 
 def _usage(value: object) -> Usage:
     usage = _object(value) if value is not None else {}
+    details = _object(usage.get("output_tokens_details") or {})
 
     def count(data: dict[str, object], name: str) -> int:
         result = data.get(name, 0)
+        if result is None:
+            return 0
         if type(result) is not int or result < 0:
             raise _ProtocolError("Codex returned invalid token usage.")
         return result
@@ -431,10 +442,17 @@ def _usage(value: object) -> Usage:
         prompt_tokens=count(usage, "input_tokens"),
         completion_tokens=count(usage, "output_tokens"),
         total_tokens=count(usage, "total_tokens")
-        if "total_tokens" in usage
+        if usage.get("total_tokens") is not None
         else count(usage, "input_tokens") + count(usage, "output_tokens"),
         cached_tokens=count(_object(usage.get("input_tokens_details") or {}), "cached_tokens"),
-        reasoning_tokens=count(_object(usage.get("output_tokens_details") or {}), "reasoning_tokens"),
+        prompt_reported=usage.get("input_tokens") is not None,
+        completion_reported=usage.get("output_tokens") is not None,
+        total_reported=usage.get("total_tokens") is not None,
+        reasoning_tokens=count(details, "reasoning_tokens"),
+        reasoning_reported=details.get("reasoning_tokens") is not None,
+        reasoning_in_output="included" if details.get("reasoning_tokens") is not None else "unknown",
+        reported=any(usage.get(key) is not None for key in ("input_tokens", "output_tokens", "total_tokens"))
+        or details.get("reasoning_tokens") is not None,
     )
 
 
@@ -718,6 +736,7 @@ class OpenAIProvider(Provider):
                 completed_arguments: dict[int, ToolArguments] = {}
                 texts: dict[tuple[int, int], str] = {}
                 texts_done: set[tuple[int, int]] = set()
+                summaries = SummaryAccumulator(streaming=stream)
                 completed = False
                 usage = Usage()
                 async for event in _sse(response):
@@ -743,6 +762,8 @@ class OpenAIProvider(Provider):
                             _remember_completed_arguments(completed_arguments, index, merged_item["arguments"])
                         if kind == "response.output_item.done":
                             finished.add(index)
+                        if stream and kind.endswith(".added") and merged_item.get("type") == "reasoning":
+                            yield ReasoningChunkEvent(displayable=True)
                         if stream and merged_item.get("type") == "function_call":
                             for preview in progress.preview(
                                 index,
@@ -794,10 +815,9 @@ class OpenAIProvider(Provider):
                                 raise _ProtocolError("Codex returned inconsistent completed text.")
                             texts[text_key] = text
                             texts_done.add(text_key)
-                    elif kind == "response.reasoning_summary_text.delta":
-                        delta = _string(event.get("delta"))
-                        if stream:
-                            yield ReasoningChunkEvent(chunk=delta)
+                    elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+                        for summary_event in summaries.add(event):
+                            yield summary_event
                     elif kind == "response.completed":
                         result = _object(event.get("response"))
                         if result.get("status", "completed") != "completed" or result.get("error"):
@@ -876,10 +896,15 @@ class OpenAIProvider(Provider):
                                 final_texts[(index, part_index)] = _string(part.get("text"))
                             elif part.get("type") == "refusal":
                                 final_texts[(index, part_index)] = _string(part.get("refusal"))
+                    elif item.get("type") == "reasoning":
+                        summaries.finish_item(index, item)
                 for text_key, text in texts.items():
                     if final_texts.get(text_key) != text:
                         raise _ProtocolError("Codex terminal output did not match streamed text.")
             # Finish network cleanup before releasing executable calls.
+            for summary_event in summaries.finish():
+                summary_event.usage = usage
+                yield summary_event
             yield TextDoneEvent(
                 text="".join(text for _, text in sorted(final_texts.items())),
                 usage=usage,

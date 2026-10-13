@@ -19,6 +19,7 @@ from nagents.events import CompactionDoneEvent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import Event
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import ToolResultEvent
@@ -473,7 +474,7 @@ def test_ordered_hooks_transform_before_executor_and_persist(tmp_path: Path) -> 
         message = Message(role="user", content="go")
         events = [event async for event in agent.run(message, "s", "u")]
         assert message.content == "go"
-        assert trace == [
+        assert [item for item in trace if not item.endswith(":event:response_metadata")] == [
             "A:run",
             "B:run",
             "A:model:0",
@@ -1008,7 +1009,7 @@ def test_provider_error_still_notifies_and_cleans_up(tmp_path: Path) -> None:
             compaction_strategy=None,
         )
         await collect(agent)
-        assert observed == [ErrorEvent, DoneEvent]
+        assert observed == [ErrorEvent, ResponseMetadataEvent, DoneEvent]
         assert cleaned == [True]
         await agent.close()
 

@@ -24,6 +24,9 @@ from urllib.parse import quote
 from urllib.parse import urlsplit
 
 from ..adapters import openai as openai_adapter
+from ..adapters._reasoning import anthropic_summary_model
+from ..adapters._reasoning import gemini_summary_model
+from ..adapters._reasoning import openai_summary_model
 from ..adapters._tool_progress import ToolCallProgressTracker
 from ..adapters._validation import ProtocolError
 from ..adapters._validation import list_data
@@ -1049,7 +1052,7 @@ class Provider:
             # Handle reasoning content (e.g., from Kimi, DeepSeek, o1 models, Ollama)
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning:
-                yield ReasoningChunkEvent(chunk=string_data(reasoning), usage=latest_usage)
+                yield ReasoningChunkEvent(chunk=string_data(reasoning), usage=latest_usage, displayable=True)
             for raw_detail in list_data(delta.get("reasoning_details") or []):
                 detail = object_data(raw_detail)
                 index = detail.get("index", 0)
@@ -1158,7 +1161,7 @@ class Provider:
         # Handle reasoning content (from chain-of-thought models, Ollama)
         reasoning = message.get("reasoning_content") or message.get("reasoning")
         if reasoning:
-            yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage, extra=extra)
+            yield ReasoningChunkEvent(chunk=reasoning, usage=latest_usage, extra=extra, displayable=True)
 
         # Handle tool calls
         tool_calls = openai_adapter.parse_tool_calls(choice)
@@ -1207,6 +1210,14 @@ class Provider:
         headers = {"Content-Type": "application/json"}
 
         body = gemini_adapter.format_request(messages, tools, config)
+        if (
+            config
+            and config.reasoning_summary == "auto"
+            and urlsplit(self.base_url).hostname == "generativelanguage.googleapis.com"
+            and gemini_summary_model(self.model)
+            and (not config.thinking_config or config.thinking_config.get("thinkingBudget") != 0)
+        ):
+            body.setdefault("generationConfig", {}).setdefault("thinkingConfig", {}).setdefault("includeThoughts", True)
 
         if stream:
             async for event in self._stream_gemini(url, body, headers):
@@ -1234,9 +1245,10 @@ class Provider:
         async for data in self._http.post_stream(url, body, headers):
             chunk = load_object(data)
             text, tool_calls, usage = gemini_adapter.parse_response(chunk)
+            summary = gemini_adapter.parse_summary(chunk)
             reason = gemini_adapter.parse_finish_reason(chunk)
             if finish_reason != FinishReason.UNKNOWN:
-                if text or tool_calls or reason not in {FinishReason.UNKNOWN, finish_reason}:
+                if text or summary or tool_calls or reason not in {FinishReason.UNKNOWN, finish_reason}:
                     raise ProtocolError("Gemini sent generation data after completion; no tools were released.")
             elif reason != FinishReason.UNKNOWN:
                 finish_reason = reason
@@ -1244,6 +1256,8 @@ class Provider:
             if usage is not None:
                 latest_usage = token_usage(usage, "gemini")
 
+            if summary:
+                yield ReasoningChunkEvent(chunk=summary, usage=latest_usage, displayable=True)
             if text:
                 full_text += text
                 yield TextChunkEvent(chunk=text, usage=latest_usage, extra=extra)
@@ -1306,6 +1320,9 @@ class Provider:
         if "model" in response:
             extra["model"] = response["model"]
 
+        summary = gemini_adapter.parse_summary(response)
+        if summary:
+            yield ReasoningChunkEvent(chunk=summary, usage=latest_usage, displayable=True)
         yield TextDoneEvent(
             text=text,
             usage=latest_usage,
@@ -1369,6 +1386,12 @@ class Provider:
                 body["top_p"] = config.top_p
             if config.stop:
                 body["stop_sequences"] = config.stop
+            if (
+                config.reasoning_summary == "auto"
+                and urlsplit(self.base_url).hostname == "api.anthropic.com"
+                and anthropic_summary_model(self.model)
+            ):
+                body["thinking"] = {"type": "adaptive", "display": "summarized"}
 
         if stream:
             body["stream"] = True
@@ -1396,6 +1419,7 @@ class Provider:
         completed = False
         open_blocks: dict[int, str] = {}
         seen_blocks: set[int] = set()
+        thinking_blocks: dict[int, dict[str, object]] = {}
 
         async for data in self._http.post_stream(url, body, headers):
             chunk = load_object(data)
@@ -1432,6 +1456,13 @@ class Provider:
                     text = string_data(content_block["text"])
                     full_text += text
                     yield TextChunkEvent(chunk=text, usage=latest_usage)
+                elif block_type in {"thinking", "redacted_thinking"}:
+                    thinking_blocks[index] = dict(content_block)
+                    if block_type == "thinking":
+                        text = string_data(content_block.get("thinking", ""))
+                        # Even an empty explicit thinking block reports a real
+                        # phase; it supplies no fabricated summary or count.
+                        yield ReasoningChunkEvent(chunk=text, usage=latest_usage, displayable=True)
 
             elif event_type == "content_block_stop":
                 index = chunk.get("index")
@@ -1473,6 +1504,13 @@ class Provider:
                     tool_accumulator.add_input_delta(current_block_index, partial_json)
                     for preview in tool_accumulator.previews():
                         yield preview
+                elif delta_type in {"thinking_delta", "signature_delta"}:
+                    field_name = "thinking" if delta_type == "thinking_delta" else "signature"
+                    value = string_data(delta.get(field_name, ""))
+                    block = thinking_blocks[index]
+                    block[field_name] = string_data(block.get(field_name, "")) + value
+                    if field_name == "thinking" and value:
+                        yield ReasoningChunkEvent(chunk=value, usage=latest_usage, displayable=True)
 
             elif event_type == "message_delta":
                 # Message-level update (contains usage info at end)
@@ -1507,6 +1545,10 @@ class Provider:
             raise ProtocolError("Messages returned incomplete tool calls; no tools were released.")
         if finish_reason == FinishReason.TOOL_CALLS and not tool_calls:
             raise ProtocolError("Messages finished with tools but returned no complete calls.")
+        if tool_calls and thinking_blocks:
+            tool_calls[0].metadata["anthropic_thinking"] = json.dumps(
+                [block for _, block in sorted(thinking_blocks.items())], allow_nan=False
+            )
         yield TextDoneEvent(text=full_text, usage=latest_usage, finish_reason=finish_reason)
         if tool_calls:
             for tc in tool_calls:
@@ -1563,6 +1605,8 @@ class Provider:
         # Parse usage
         latest_usage = token_usage(usage, "messages")
 
+        for summary in anthropic_adapter.parse_summaries(response):
+            yield ReasoningChunkEvent(chunk=summary, usage=latest_usage, displayable=True)
         yield TextDoneEvent(text=text, usage=latest_usage, finish_reason=finish_reason, extra=extra)
         if tool_calls:
             for tc in tool_calls:
@@ -1587,6 +1631,16 @@ class Provider:
         from ..adapters.responses import format_request
 
         body = format_request(self.model, messages, tools, config, stream)
+        if (
+            config
+            and config.reasoning_summary == "auto"
+            and urlsplit(self.base_url).hostname == "api.openai.com"
+            and openai_summary_model(self.model)
+            and (not config.reasoning or config.reasoning.get("enabled") is not False)
+        ):
+            reasoning = dict(config.responses_reasoning)
+            reasoning.setdefault("summary", "auto")
+            body["reasoning"] = reasoning
         url = f"{self._api_prefix()}/responses"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         if self.bearer_token_provider is not None:

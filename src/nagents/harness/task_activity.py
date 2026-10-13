@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from nagents.compaction import describe_compaction
 from nagents.events import CompactionDoneEvent
 from nagents.events import CompactionStartedEvent
 from nagents.events import ErrorEvent
+from nagents.events import ResponseMetadataEvent
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
@@ -58,14 +60,20 @@ def bounded(value: object) -> object:
 
 
 def public_payload(event: HarnessEvent) -> dict[str, object]:
-    """An allowlist: no reasoning, diagnostics, provider extras, or root Done events."""
+    """An allowlist: bounded display summaries, never opaque reasoning or diagnostics."""
+    if isinstance(event, ResponseMetadataEvent):
+        return {
+            "type": "response_metadata",
+            **{key: value for key, value in asdict(event).items() if key not in {"type", "extra", "timestamp"}},
+        }
     if isinstance(event, ChildHistoryCommitted):
         return {"type": "history_committed", "history_id": event.history_id}
     if isinstance(event, TextChunkEvent):
-        return {"type": "text_chunk", "chunk": event.chunk[:MAX_ACTIVITY_TEXT]}
+        return {"type": "text_chunk", "chunk": event.chunk[:MAX_ACTIVITY_TEXT], **_response_identity(event)}
     if isinstance(event, TextDoneEvent):
         return {
             "type": "text_done",
+            **_response_identity(event),
             "text": event.text[:MAX_ACTIVITY_TEXT],
             "truncated": len(event.text) > MAX_ACTIVITY_TEXT,
         }
@@ -83,6 +91,7 @@ def public_payload(event: HarnessEvent) -> dict[str, object]:
     if isinstance(event, ToolCallEvent):
         return {
             "type": "tool_call",
+            **_response_identity(event),
             "id": event.id,
             "name": event.name,
             "arguments": bounded(event.arguments),
@@ -117,6 +126,14 @@ def public_payload(event: HarnessEvent) -> dict[str, object]:
             "detail": "Provider or tool processing encountered an error.",
         }
     return {}
+
+
+def _response_identity(event: TextChunkEvent | TextDoneEvent | ToolCallEvent) -> dict[str, object]:
+    return {
+        key: value
+        for key in ("response_id", "response_session_id")
+        if isinstance(value := event.extra.get(key), str) and 0 < len(value) <= 200
+    }
 
 
 def _tool_identity(

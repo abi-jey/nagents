@@ -95,6 +95,8 @@ export type Snapshot = {
     deliveries?: LocalDelivery[];
     uploads?: UploadMetadata[];
     history_id?: string;
+    response_id?: string;
+    response_metadata?: unknown;
     agent?: string;
     previous_agent?: string;
     model?: string;

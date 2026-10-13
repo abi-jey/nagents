@@ -38,6 +38,35 @@ other values are never coerced into this metadata. This is a round budget, not a
 aggregate tool-call count: one round can contain several calls. No extra model
 turn or automatic retry is added when the budget is exhausted.
 
+`ResponseMetadataEvent` is a cumulative, display-only snapshot for one provider
+call. `response_id` is unique per call (including retries and tool rounds),
+`response_session_id` identifies its actual root or child session, and `revision`
+increases when the snapshot changes. Text and tool events carry the same identity
+in `extra`. `history_id` names the exact saved assistant row when available;
+interrupted or reasoning-only responses can have no assistant row.
+
+`summary` contains only text explicitly marked for display, capped at 16,384
+characters. Custom providers opt in with `ReasoningChunkEvent(displayable=True)`;
+the default `False` keeps private framework reasoning out of display metadata.
+`summary_truncated` indicates this cap. Status `thinking` is emitted
+only after a provider reports a thinking phase or summary; `responding` means the
+reported phase has ended or no thinking phase has been reported. Neither status
+estimates tokens. The terminal states are `completed`, `cancelled`, and `failed`.
+Core consumers that close a generator early may receive no terminal event; the
+web host separately checkpoints the latest producer snapshot during cleanup.
+
+`usage_reported` distinguishes unavailable usage from actual zero counts.
+`prompt_reported`, `completion_reported`, and `total_reported` identify which
+individual counters were supplied; a reasoning-only frame does not claim zero
+input or output, and an inferred provider total is not labelled reported.
+`Usage.reasoning_reported` makes the same distinction for reasoning alone.
+`reasoning_in_output` is `included`, `separate`, or `unknown`; never add reasoning
+again when it is already included in output. Repeated cumulative usage snapshots
+are merged per provider call, preserving earlier counts when a later frame only
+contains a reasoning breakdown. Session reasoning totals carry a coverage flag:
+`reasoning_reported` is true only if every observed call reported that breakdown.
+These billing totals do not change the context-size estimate.
+
 The web UI describes this known error as a round limit using fixed safe text.
 A native child that reaches its limit remains failed, retains its history, and
 reports a fixed budget explanation to its parent. These diagnostics do not change

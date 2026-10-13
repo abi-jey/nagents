@@ -13,6 +13,7 @@ from ..events import ToolCallEvent
 from ..types import COMPACTION_SUMMARY_PREFIX
 from ..types import ImageContent
 from ..types import TextContent
+from ._reasoning import SummaryAccumulator
 from ._tool_progress import ToolCallProgressTracker
 from ._validation import ProtocolError
 from ._validation import json_values_equal
@@ -117,6 +118,8 @@ def format_request(
         ):
             if value is not None:
                 body[name] = value
+        if config.responses_reasoning:
+            body["reasoning"] = dict(config.responses_reasoning)
     return body
 
 
@@ -139,6 +142,7 @@ class ResponseAccumulator:
         self.completed = False
         self.streaming = streaming
         self.progress = ToolCallProgressTracker()
+        self.summaries = SummaryAccumulator(streaming=streaming)
 
     def _preview(self, index: int) -> list[Event]:
         item = self.items[index]
@@ -180,6 +184,8 @@ class ResponseAccumulator:
                 self.finished.add(index)
             if self.streaming and self.items[index].get("type") == "function_call":
                 return self._preview(index)
+            if self.streaming and kind.endswith(".added") and item.get("type") == "reasoning":
+                return [ReasoningChunkEvent(displayable=True)]
         elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
             index = _index(event.get("output_index"))
             self.items.setdefault(index, {})
@@ -223,8 +229,8 @@ class ResponseAccumulator:
                 raise ProtocolError("Responses returned inconsistent completed text.")
             self.texts[key] = text
             self.texts_done.add(key)
-        elif kind == "response.reasoning_summary_text.delta":
-            return [ReasoningChunkEvent(chunk=string_data(event.get("delta")))]
+        elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+            return list(self.summaries.add(event))
         elif kind in {"response.completed", "response.incomplete"}:
             result = object_data(event.get("response"))
             if result.get("status") != kind.removeprefix("response."):
@@ -295,9 +301,16 @@ class ResponseAccumulator:
                     else:
                         raise ProtocolError("Responses returned unsupported message content.")
             elif kind == "reasoning":
-                reasoning.append(
-                    {key: item[key] for key in ("type", "id", "summary", "encrypted_content") if key in item}
-                )
+                self.summaries.finish_item(index, item)
+                # The encrypted state carries protocol continuity. The UI's
+                # display summary is never appended to the model's prose.
+                if item.get("encrypted_content"):
+                    reasoning.append(
+                        {
+                            **{key: item[key] for key in ("type", "id", "encrypted_content") if key in item},
+                            "summary": [],
+                        }
+                    )
             else:
                 raise ProtocolError("Responses returned an unsupported output item.")
         for key, text in self.texts.items():
@@ -307,6 +320,7 @@ class ResponseAccumulator:
             calls[0].metadata["responses_reasoning"] = json.dumps(reasoning, allow_nan=False)
         self.completed = True
         return [
+            *self.summaries.finish(),
             TextDoneEvent(
                 text="".join(text for _, text in sorted(texts.items())),
                 usage=usage,

@@ -7,6 +7,7 @@ import { AgentState, type ArrivalTimes } from "./TeamTree.js";
 import { TaskTimeline } from "./TaskTimeline.js";
 import { mergeTaskActivity, providerLabel, type TaskActivity, type TaskDetail, type TeamAgent } from "./model.js";
 import type { TeamController } from "./useTeam.js";
+import type { WireEvent } from "../../types.js";
 
 export function taskEntries(detail: TaskDetail | undefined, streamed: TaskActivity[]): Entry[] {
   if (!detail) return [];
@@ -15,8 +16,9 @@ export function taskEntries(detail: TaskDetail | undefined, streamed: TaskActivi
   if (detail.activity_truncated || later.some(event => event.task_id === detail.task.id && event.payload.type === "resync_required")) return entries;
   for (const event of mergeTaskActivity(detail.activity || [], later)) {
     if (event.task_id !== detail.task.id) continue;
-    const payload = { ...event.payload, event: event.payload.type };
-    if (!["text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "status", "approval", "approval_closed"].includes(payload.event)) continue;
+    const payload: WireEvent = { ...event.payload, event: event.payload.type };
+    if (!["response_metadata", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "status", "approval", "approval_closed"].includes(payload.event)) continue;
+    if (payload.event === "response_metadata" && payload.response_session_id !== detail.task.child_session_id) continue;
     // This is a task-local transcript. Identity/recipient fields in provider data
     // cannot create a root entry, another agent, or an executable action.
     entries = appendEvent(entries, { ...payload, task_id: "", parent_task_id: "", run_id: "", activation: event.activation });

@@ -19,6 +19,7 @@ from .types import RealtimeSessionUpdatedEvent
 from .types import ReasoningChunkEvent
 from .types import ResponseCancelledEvent
 from .types import ResponseCreatedEvent
+from .types import ResponseMetadataEvent
 from .types import SpeechStartedEvent
 from .types import SpeechStoppedEvent
 from .types import TextChunkEvent
@@ -51,6 +52,7 @@ __all__ = [
     "ReasoningChunkEvent",
     "ResponseCancelledEvent",
     "ResponseCreatedEvent",
+    "ResponseMetadataEvent",
     "SpeechStartedEvent",
     "SpeechStoppedEvent",
     "TextChunkEvent",

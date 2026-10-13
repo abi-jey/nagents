@@ -226,7 +226,10 @@ def test_websocket_and_cold_replay_expose_previews_before_validation_then_real_e
                     break
             kinds = [record["event"] for record in observed]
             assert kinds.index("tool_call_progress") < kinds.index("tool_call")
-            assert next(record for record in observed if record["event"] == "tool_call")["extra"] == identity
+            call_extra = next(record for record in observed if record["event"] == "tool_call")["extra"]
+            assert isinstance(call_extra, dict)
+            assert call_extra == {**identity, "response_id": call_extra["response_id"], "response_session_id": app.main}
+            assert isinstance(call_extra["response_id"], str) and call_extra["response_id"]
             if approval_before_queued:
                 assert kinds.index("approval") < kinds.index("tool_call_progress")
             else:

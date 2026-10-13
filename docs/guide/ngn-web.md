@@ -629,6 +629,57 @@ closing it cancels that run. New browser input uses `POST messages` and the
 WebSocket subscription instead. Subscription replay replays observations, never
 executes a prompt or tool again.
 
+### Response Usage And Provider Summaries
+
+Completed responses can show provider-reported input, output, and reasoning token
+counts. An absent reasoning count stays absent; an actual zero remains zero.
+OpenAI and Anthropic report reasoning as part of output when that breakdown is
+available. Gemini reports its thought count separately from candidate output.
+The usage details explain that distinction without adding tokens twice.
+
+A collapsed **Thinking** section contains displayable text supplied by the
+provider. It streams independently of the answer and tool results. Count-only
+providers show counts without invented summaries. The harness requests supported
+summaries by default; set `reasoning_summaries` to `false` in harness configuration
+to disable that request. Explicit library callers can use
+`GenerationConfig(reasoning_summary="auto")` or `"off"`. Unsupported models keep
+their normal request shape.
+
+The web protocol uses revisioned `response_metadata` snapshots. Each has a unique
+`response_id`, actual `response_session_id`, `run_id`, and `turn_id`; child activity
+also retains its task and activation scope. A completed record is attached by its
+exact SQLite assistant-row ID, never by matching answer text. Reconnect snapshots
+replace earlier revisions. A cancelled response without a saved answer remains a
+display-only history item. Forks receive new response/run identifiers and copied
+usage, so later updates to the original cannot change the fork.
+
+Per-run totals sum each recorded response once, including tool rounds and any
+reported usage on failed calls. `run_usage.response_count`,
+`usage_response_count`, and `reasoning_response_count` expose coverage.
+`prompt_response_count` and `completion_response_count` identify coverage for
+each displayed counter; missing counters make those totals partial. Root and child
+runs are counted separately. `run_usage.complete` describes counter coverage among
+recorded responses, not every attempted request. An attempt that ends before
+response metadata arrives may be absent; the UI labels these recorded run totals.
+The context indicator continues to describe the current model input and window,
+not these usage totals.
+
+Display metadata lives in a separate SQLite sidecar. Usage is retained with the
+conversation. Summary text is retained for the latest 100 response records per
+actual session, at most 16,384 characters each; older records keep their usage and
+set `summary_expired`. Active summaries checkpoint at most every 100 ms, plus
+phase changes, usage updates, and completion. Graceful cancellation persists the
+latest producer snapshot even if its queued browser event was not yet consumed.
+After an abrupt process loss, up to the checkpoint interval of summary text can
+be missing; the next startup marks unfinished records interrupted.
+
+Deleting or clearing a session removes its display metadata. Compaction does not
+match or reattach summaries to rewritten context messages: metadata remains tied
+to the original row, subject to the same visible-history boundary as that row.
+Summaries and usage sidecars never enter model prompt/history replay, Live seeding,
+or voice playback. Opaque provider reasoning items and protocol signatures are
+not summary text.
+
 ### Context Statistics
 
 The header shows a compact **Context** indicator: total estimated input tokens
