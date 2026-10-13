@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from nagents.web.channel_host import ChannelHost
@@ -60,6 +62,8 @@ def test_subscription_failure_reports_closed_socket_before_submitting_work(
     async def scenario() -> None:
         async with client_app(tmp_path) as (app, _, headers, harnesses):
             entered, release = asyncio.Event(), asyncio.Event()
+            submit = AsyncMock(side_effect=AssertionError("Work must not be submitted before subscription"))
+            monkeypatch.setattr(httpx.AsyncClient, "post", submit)
 
             async def failed_snapshot(session_id: str = "") -> dict[str, object]:
                 entered.set()
@@ -83,7 +87,10 @@ def test_subscription_failure_reports_closed_socket_before_submitting_work(
                         await stream.start_task
                 diagnostic = str(caught.value)
                 assert "close_code=1013" in diagnostic
-                assert "queued=0,running=0,receipt=other" in diagnostic
+                # The diagnostic read is deliberately best-effort under DB
+                # contention. Observe admission directly instead of requiring
+                # a zero-timeout SQLite probe to win against background work.
+                submit.assert_not_awaited()
                 assert "SECRET" not in diagnostic and headers["X-Ngn-Token"] not in diagnostic
                 assert str(tmp_path) not in diagnostic
                 assert not stream.subscribed.is_set() and not app.state.web.executions.runs

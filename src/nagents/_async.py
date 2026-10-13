@@ -17,7 +17,11 @@ async def join_owned(task: asyncio.Task[T]) -> T:
     cancelled: tuple[asyncio.CancelledError, ...] = ()
     while not task.done():
         try:
-            await asyncio.shield(task)
+            # Wait for readiness without forwarding the child's exception into
+            # a disposable shield future. In Python 3.14, cancelling a shield
+            # can report that exception to the loop even when we later own and
+            # consume it. wait() leaves the child running when we are cancelled.
+            await asyncio.wait((task,))
         except asyncio.CancelledError as error:
             cancelled = (error,)
     result = task.result()
