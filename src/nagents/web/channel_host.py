@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from contextlib import contextmanager
 from contextlib import suppress
 from copy import deepcopy
@@ -39,7 +40,6 @@ from .upload_store import expire as expire_uploads
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import Awaitable
     from collections.abc import Callable
     from collections.abc import Iterator
@@ -179,7 +179,13 @@ class ChannelHost:
         if error is not None:
             # Worker exceptions are joined during shutdown. Report the failure
             # immediately without logging database paths, credentials or payloads.
-            logger.error("Web background worker failed: role=%s exception=%s", task.get_name(), type(error).__name__)
+            code = getattr(error, "sqlite_errorcode", None)
+            logger.error(
+                "Web background worker failed: role=%s exception=%s sqlite_code=%s",
+                task.get_name(),
+                type(error).__name__,
+                code if type(code) is int else "unavailable",
+            )
         elif not self.closed:
             logger.error("Web background worker stopped unexpectedly: role=%s", task.get_name())
 
@@ -670,13 +676,22 @@ class ChannelHost:
                 with self.state.idle():
                     await self.management.flush()
                 continue
-            pending = await self.store.has_pending(
-                web_only=not self.catalog.allow_plugins, available_channels=tuple(self.channels)
-            )
+            busy = False
+            try:
+                pending = await self.store.has_pending(
+                    web_only=not self.catalog.allow_plugins, available_channels=tuple(self.channels)
+                )
+            except sqlite3.OperationalError as error:
+                self._admission_busy(error, "pending")
+                pending, busy = False, True
             occupied = set(self.state.executions.runs) | set(self.work_tasks)
             if pending and not self.closed and len(occupied) < MAX_PARALLEL_RUNS and not self.state.mutating:
                 with self.state.idle(allow_running=True):
-                    work = await self.claim()
+                    try:
+                        work = await self.claim()
+                    except sqlite3.OperationalError as error:
+                        self._admission_busy(error, "claim")
+                        work, busy = None, True
                     if work is not None:
                         # Shutdown may have started while SQLite was claiming.
                         # Model work rechecks after its async owner validation in
@@ -704,12 +719,31 @@ class ChannelHost:
                         self.work_tasks[work.session_id] = run.task = task
                         task.add_done_callback(partial(self.claim_done, work, run, started))
                         continue
+            if busy:
+                # The failed SQLite transaction has rolled back and closed.
+                # No Work escaped the claim, so no model/tool/send is replayed.
+                # Release the mutation guard before the cancellable backoff.
+                await asyncio.sleep(0.25)
+                continue
             with suppress(TimeoutError):
                 # Python 3.11 wait_for can swallow owner cancellation when its
                 # Event.wait child finishes concurrently. Wait in this task so
                 # cancellation always escapes, retaining the same idle deadline.
                 async with asyncio.timeout(0.25):
                     await self.changed.wait()
+
+    @staticmethod
+    def _admission_busy(error: sqlite3.OperationalError, operation: str) -> None:
+        code = getattr(error, "sqlite_errorcode", None)
+        if type(code) is not int or code < 0 or code & 0xFF != sqlite3.SQLITE_BUSY:
+            raise error
+        owner = asyncio.current_task()
+        if owner is not None and owner.cancelling():
+            # Joining a cancelled claim still waits for SQLite rollback. That
+            # owned task can finish with BUSY instead of CancelledError; do not
+            # turn the remembered cancellation into another admission attempt.
+            raise asyncio.CancelledError from None
+        logger.warning("Inbox admission deferred for SQLite contention: operation=%s sqlite_code=%s", operation, code)
 
     def claim_done(self, work: Work, run: Run, started: asyncio.Event, task: asyncio.Task[None]) -> None:
         if started.is_set():

@@ -1,6 +1,19 @@
 import { formatTokens } from "../context/controller.js";
 import type { TeamAgent } from "./model.js";
 
+export function compactionMarker(agent: TeamAgent): { percent: number; description: string } | undefined {
+  const windowTokens = agent.context?.context_window;
+  const threshold = agent.compactThreshold;
+  if (!["tokens", "auto"].includes(agent.compactTrigger || "") ||
+      !windowTokens || !Number.isSafeInteger(windowTokens) || windowTokens <= 0 ||
+      !threshold || !Number.isSafeInteger(threshold) || threshold <= 0) return undefined;
+  const percent = threshold / windowTokens * 100;
+  return {
+    percent: Math.min(100, percent),
+    description: `Compaction at ${threshold.toLocaleString("en-US")} tokens (${percent.toLocaleString("en-US", { maximumSignificantDigits: 4 })}% of context window)`,
+  };
+}
+
 export function compactLabel(agent: TeamAgent): string {
   if (agent.compactTrigger === "off") return "Compaction off";
   if (agent.compactTrigger === "messages") return agent.compactMessages ? `Compact at ${agent.compactMessages} messages` : "Message compaction";

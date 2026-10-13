@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from array import array
+from itertools import pairwise
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -22,6 +23,7 @@ from nagents.web.live_login import LoginVoiceConfig
 from nagents.web.live_login import LoginVoiceError
 from nagents.web.live_relay import FRAME_BYTES
 from nagents.web.live_relay import MAX_BUFFER_BYTES
+from nagents.web.live_relay import MAX_LATENCY_BYTES
 from nagents.web.live_relay import ChatGPTMediaRelay
 from nagents.web.live_relay import _MicrophoneTrack
 from nagents.web.live_runtime import LiveService
@@ -85,11 +87,160 @@ def test_microphone_track_paces_partial_frames_and_quiet_clears_speech() -> None
         assert first.sample_rate == 24000 and first.samples == second.samples == 480
         assert bytes(first.planes[0]) == pcm(1234, 240) + bytes(480)
         assert bytes(second.planes[0]) == bytes(FRAME_BYTES)
-        with pytest.raises(LoginVoiceError, match="relayed in time"):
-            track.append(bytes(MAX_BUFFER_BYTES + 2))
-        with pytest.raises(LoginVoiceError):
+        with pytest.raises(LoginVoiceError, match="incomplete sample"):
             track.append(b"x")
         track.stop()
+
+    asyncio.run(scenario())
+
+
+class RelayClock:
+    """Exercise producer/consumer timing without OS timer precision assumptions."""
+
+    def __init__(self) -> None:
+        self.now = 10.0
+        self.wake_delay = 0.0
+        self.waits: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.waits.append(delay)
+        self.now += delay + self.wake_delay
+        self.wake_delay = 0.0
+
+
+@pytest.fixture
+def relay_clock(monkeypatch: pytest.MonkeyPatch) -> RelayClock:
+    clock = RelayClock()
+    monkeypatch.setattr("nagents.web.live_relay.monotonic", clock.time)
+    monkeypatch.setattr("nagents.web.live_relay.sleep", clock.sleep)
+    return clock
+
+
+def test_oversized_microphone_backlog_retains_newest_bounded_speech(relay_clock: RelayClock) -> None:
+    async def scenario() -> None:
+        track = _MicrophoneTrack()
+        track.append(pcm(100, 480))
+        recent = pcm(1234, MAX_LATENCY_BYTES // 2)
+        track.append(pcm(200, MAX_BUFFER_BYTES) + recent)
+        assert track.buffer == recent
+        assert track.dropped_samples == MAX_BUFFER_BYTES + 480
+        assert track.input_samples == track.dropped_samples + len(recent) // 2
+        assert track.peak_buffered_bytes <= MAX_BUFFER_BYTES
+        assert bytes((await track.recv()).planes[0]) == pcm(1234, 480)
+        assert track.adjusted_samples == 1
+        track.stop()
+
+    asyncio.run(scenario())
+
+
+def test_hardware_capture_drift_is_corrected_without_dropping_frames(relay_clock: RelayClock) -> None:
+    async def scenario() -> None:
+        track = _MicrophoneTrack()
+        # One extra sample per 20 ms is a 2083 ppm fast input clock. Real
+        # hardware drift is usually smaller; no elapsed wall time is required.
+        for index in range(5000):
+            track.append(pcm(1200, 481))
+            frame = await track.recv()
+            assert frame.pts == index * 480
+            assert bytes(frame.planes[0]) == pcm(1200, 480)
+        assert track.adjusted_samples > 1500
+        assert not track.dropped_samples and not track.silence_samples
+        assert len(track.buffer) <= FRAME_BYTES * 4
+        assert track.input_samples == track._samples + track.adjusted_samples + len(track.buffer) // 2
+        assert not track.clock_rebases
+        track.stop()
+
+    asyncio.run(scenario())
+
+
+def test_drift_correction_preserves_a_smooth_waveform(relay_clock: RelayClock) -> None:
+    async def scenario() -> None:
+        track = _MicrophoneTrack()
+        track.append(array("h", range(2400)).tobytes())
+        samples = array("h", bytes((await track.recv()).planes[0]))
+        assert len(samples) == 480 and samples[0] == 0 and samples[-1] == 480
+        assert all(1 <= current - previous <= 2 for previous, current in pairwise(samples))
+        assert array("h", track.buffer)[0] == 481
+        track.stop()
+
+    asyncio.run(scenario())
+
+
+def test_sender_wakeup_stall_rebases_without_a_following_frame_burst(relay_clock: RelayClock) -> None:
+    async def scenario() -> None:
+        track = _MicrophoneTrack()
+        first = await track.recv()
+        relay_clock.wake_delay = 0.35
+        second = await track.recv()
+        woke = relay_clock.now
+        third = await track.recv()
+        assert [first.pts, second.pts, third.pts] == [0, 480, 960]
+        assert relay_clock.now - woke == pytest.approx(0.02)
+        assert track.clock_rebases == 1 and track.late_ms == pytest.approx(350)
+        track.stop()
+
+    asyncio.run(scenario())
+
+
+def test_repeated_result_processing_stalls_recover_bounded_browser_audio(relay_clock: RelayClock) -> None:
+    async def scenario() -> None:
+        source = _BrowserInput(fill_gaps=False)
+        source.connected.set()
+        relay = ChatGPTMediaRelay(source, Output())
+        pumping = asyncio.create_task(relay._microphone())
+        try:
+            await relay._track.recv()
+            for batch in range(12):
+                # Model/tool result processing can pause the shared event loop,
+                # then release a batch of 20 ms browser frames together. The old
+                # clock rebased but accumulated each batch until it disconnected.
+                relay_clock.now += 0.4
+                for index in range(20):
+                    source.frames.put_nowait(pcm(1000 + index, 480))
+
+                def drained(expected: int = (batch + 1) * 20 * 480) -> bool:
+                    return relay._track.input_samples == expected
+
+                await eventually(drained)
+                frame = await relay._track.recv()
+                assert frame.pts == (batch + 1) * 480
+                assert array("h", bytes(frame.planes[0]))[0] == 1010
+                assert len(relay._track.buffer) < MAX_LATENCY_BYTES
+                assert not pumping.done() and not relay._failure
+            assert relay._track.clock_rebases == 12
+            assert relay._track.dropped_samples > 0
+            assert relay._track.peak_buffered_bytes <= MAX_BUFFER_BYTES
+            before = relay_clock.now
+            await relay._track.recv()
+            assert relay_clock.now - before == pytest.approx(0.02)
+        finally:
+            pumping.cancel()
+            await asyncio.gather(pumping, return_exceptions=True)
+            await relay.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_microphone_queue_drain_yields_to_result_and_rtp_workers() -> None:
+    async def scenario() -> None:
+        source = Source()
+        for _ in range(40):
+            source.frames.put_nowait(pcm(1000, 480))
+        relay = ChatGPTMediaRelay(source, Output())
+        pumping = asyncio.create_task(relay._microphone())
+        try:
+            # A concurrent delegation/control coroutine must get a turn before
+            # this already-populated source is drained synchronously in full.
+            await asyncio.sleep(0)
+            assert relay._track.input_samples == 480
+            assert source.frames.qsize() == 39
+        finally:
+            pumping.cancel()
+            await asyncio.gather(pumping, return_exceptions=True)
+            await relay.aclose()
 
     asyncio.run(scenario())
 

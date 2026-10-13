@@ -48,6 +48,7 @@ from .executions import Executions
 from .history import WebHistory
 from .live_inspection import model_requests
 from .provider_setup import provider_error
+from .provider_setup import provider_error_diagnostic
 from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
@@ -388,24 +389,25 @@ class WebState:
             self.changed()
 
     @asynccontextmanager
-    async def queued_mutation(self) -> AsyncIterator[None]:
+    async def queued_mutation(self, *, allow_running: bool = True) -> AsyncIterator[None]:
         """Wait briefly for bookkeeping without waiting for model execution.
 
         Claiming inbox work and empty trash sweeps can briefly own the same
-        mutation guard as preference writes. Keep their exclusion intact, but
-        do not turn that internal bookkeeping into a user-visible conflict.
+        mutation guard as preference writes and session deletion. Keep their
+        exclusion intact without turning bookkeeping into a visible conflict.
+        Callers that require quiescence recheck active runs after waiting.
         """
         try:
             async with asyncio.timeout(MUTATION_WAIT_TIMEOUT):
                 while self.mutating:
                     await self.mutation_released.wait()
         except TimeoutError:
-            raise HTTPException(409, "Workspace update is still in progress. Try saving again shortly.") from None
+            raise HTTPException(409, "Workspace update is still in progress. Try again shortly.") from None
         if self.executions.closed:
             raise HTTPException(503, "The server is shutting down. Try again after it restarts.")
         # No await between checking the guard and acquiring it. A competing
         # waiter must observe the new owner before it can enter this block.
-        with self.idle(allow_running=True):
+        with self.idle(allow_running=allow_running):
             yield
 
     @asynccontextmanager
@@ -802,11 +804,12 @@ class WebState:
                                     "recoverable": event.recoverable,
                                 }
                             logger.warning(
-                                "Run error: session=%s run=%s reason=%s recoverable=%s",
+                                "Run error: session=%s run=%s reason=%s recoverable=%s diagnostic=%s",
                                 run.session_id,
                                 run.id,
                                 reason,
                                 event.recoverable,
+                                provider_error_diagnostic(event),
                             )
                             if not event.recoverable:
                                 run.outcome = "failed"

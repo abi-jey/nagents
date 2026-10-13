@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { contextPercent, contextSummary, contextUsage, contextUsageLabel, contextWindowSource } from "../context/controller.js";
-import { compactionWarning } from "./context.js";
+import { compactionMarker, compactionWarning } from "./context.js";
 import { agentAncestors, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
 import { profileTarget } from "./useTeam.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
@@ -24,18 +24,21 @@ export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: 
   agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; arrivalAt?: number;
 }) {
   const context = agent.context;
+  const marker = compactionMarker(agent);
   const warning = compactionWarning(agent);
   const provider = providerLabel(agent);
   const motion = useArrivalStyle(arrivalAt);
   return <article className={`team-agent-row${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
-    <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined}
+    <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={marker?.description}
       aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${provider ? `. ${provider} ${agent.model}` : ""}`}>
       <span className="team-agent-heading"><strong>{agent.name}</strong><AgentState agent={agent} /></span>
       <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
-      <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}` : undefined}>
+      <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
         {context ? contextSummary(context) : "Context unavailable"}
       </span>
-      {context?.context_window ? <span className="team-agent-meter" aria-hidden="true"><i style={{ width: `${contextPercent(context)}%` }} /></span> : null}
+      {context?.context_window ? <span className="team-agent-meter" aria-hidden="true"><i style={{ width: `${contextPercent(context)}%` }} />
+        {marker && <b className="team-agent-threshold" style={{ left: `${marker.percent}%` }} title={marker.description} />}
+      </span> : null}
       {warning && <span className="team-context-warning">{warning}</span>}
     </button>
     <button type="button" className="team-agent-settings" aria-label={`Settings for ${agent.name}`} onClick={settings}><Icon name="settings" size={14} /></button>
