@@ -214,8 +214,9 @@ def register(
     state: Callable[[], "WebState"],
 ) -> None:
     def assistant() -> dict[str, str]:
-        current = state().settings.values
-        return {"provider": current.provider, "model": current.model, "agent": current.agent}
+        host = state()
+        current = host.session_agents.target(host.selected_session_id)
+        return {"provider": current["provider_kind"], "model": current["model"], "agent": current["agent"]}
 
     @app.get("/api/live")
     async def discover() -> dict[str, object]:

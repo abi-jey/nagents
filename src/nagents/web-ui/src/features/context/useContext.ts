@@ -6,7 +6,7 @@ import { ContextRefresh } from "./controller";
 export function useContextStats(token: string, sessionId: string, options: {
   active: boolean; revision: number; configuration: string; enabled: boolean;
 }) {
-  const key = `${token}:${sessionId}`;
+  const key = `${token}:${sessionId}:${options.configuration}`;
   const [result, setResult] = useState<{ key: string; stats: ContextStats }>();
   const [failure, setFailure] = useState({ key: "", message: "" });
   const [loading, setLoading] = useState(false);
@@ -23,8 +23,8 @@ export function useContextStats(token: string, sessionId: string, options: {
     controller.current = refresh;
     refresh.refresh(true);
     return () => { refresh.dispose(); controller.current = undefined; };
-  }, [token, sessionId, options.enabled]);
-  useEffect(() => { controller.current?.refresh(); }, [options.revision, options.configuration, options.active]);
+  }, [token, sessionId, options.enabled, options.configuration]);
+  useEffect(() => { controller.current?.refresh(); }, [options.revision, options.active]);
   useEffect(() => {
     if (!options.active || !options.enabled) return;
     const timer = setInterval(() => controller.current?.refresh(), 1000);

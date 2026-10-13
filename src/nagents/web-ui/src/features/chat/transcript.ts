@@ -44,6 +44,7 @@ export type Entry = {
     | "context"
     | "delivery"
     | "live_caption"
+    | "agent_change"
     | "retained_tasks";
   delivery?: LocalDelivery;
   uploads?: Snapshot["history"][number]["uploads"];
@@ -106,6 +107,7 @@ export type Entry = {
   sourceVerified?: boolean;
   voice?: boolean;
   voiceSessionId?: string;
+  agentName?: string;
   liveCaption?: LiveCaption;
   // Local saved-row boundary, not an inferred run/task or source identity.
   historyTurn?: number;
@@ -193,6 +195,23 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     event = { ...event };
     for (const key of ["task_id", "activation", "followup", "generation_id", "index"])
       if (event[key] === undefined && extra[key] !== undefined) event[key] = extra[key];
+  }
+  if (event.event === "agent_changed") {
+    const historyId = text(event, "history_id"), agent = text(event, "agent");
+    if (!/^agent-change-[1-9]\d*$/.test(historyId) || !agent || text(event, "task_id")) return entries;
+    if (entries.some(entry => entry.kind === "agent_change" && entry.historyId === historyId)) return entries;
+    const marker: Entry = { id: historyId, kind: "agent_change", text: `Agent: ${agent}`, historyId, agentName: agent,
+      title: [text(event, "provider"), text(event, "model")].filter(Boolean).join(" · "),
+      ...(event.saved === true ? { recorded: true } : {}),
+      ...(typeof event.history_index === "number" ? { historyIndex: event.history_index } : {}),
+    };
+    if (event.saved !== true) {
+      const anchor = text(event, "anchor_history_id");
+      const position = entries.findLastIndex(entry => !!anchor && (entry.historyId === anchor || entry.resultHistoryId === anchor));
+      if (anchor === "0") return [marker, ...entries];
+      if (position >= 0) return [...entries.slice(0, position + 1), marker, ...entries.slice(position + 1)];
+    }
+    return [...entries, marker];
   }
   if (event.event === "live_caption") {
     const caption = liveCaptionEntry(event);
@@ -925,6 +944,10 @@ export function fromHistory({
     entries.push({ id: `delivery:${delivery.delivery_id}`, kind: "delivery", text: delivery.text, delivery });
   }
   for (const [historyIndex, message] of messages.entries()) {
+    if (message.role === "agent_changed") {
+      entries = appendEvent(entries, { ...message, event: "agent_changed", history_index: historyIndex, saved: true });
+      continue;
+    }
     if (message.role === "live_caption") {
       entries = appendEvent(entries, { ...message, event: "live_caption", text: message.content, history_index: historyIndex, saved: true });
       continue;

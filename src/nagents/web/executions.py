@@ -58,6 +58,7 @@ class Executions:
             return
         if self.closed or previous is not None or len(self.runs) >= MAX_PARALLEL_RUNS:
             raise HTTPException(409, "This chat is running or all execution slots are busy. Queue the message instead.")
+        run.agent = run.agent or self.state.session_agents.selected(run.session_id)
         self.runs[run.session_id] = run
 
     def release(self, run: Run) -> None:
@@ -190,7 +191,7 @@ class Executions:
                 primary = self.state.harness
                 harness = (
                     primary
-                    if primary not in self.owners.values() and not primary._busy
+                    if primary not in self.owners.values() and not primary._busy and primary.config.agent == run.agent
                     else self.factory(deepcopy(primary.config))
                 )
                 if harness in self.owners.values():
@@ -226,7 +227,9 @@ class Executions:
                 primary = self.state.harness
                 await harness.reconfigure_provider(deepcopy(primary.config))
                 if settings := getattr(self.state, "settings", None):
+                    harness._permission_ceiling = primary._permission_ceiling
                     settings.values.apply(harness)
+            await self.state.session_agents.apply(run, harness)
             yield harness
 
     async def dispose(self, session_id: str) -> None:

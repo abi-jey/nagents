@@ -4,7 +4,7 @@ import { WorkspaceHeader } from "./WorkspaceHeader";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { WorkspaceComposer } from "./WorkspaceComposer";
 import { WorkspaceDialogs } from "./WorkspaceDialogs";
-import { taskAgent, type TeamAgent } from "../features/team/model.js";
+import { taskAgent, conversationAgent } from "../features/team/model.js";
 import { useAgentArrivals } from "../features/team/TeamTree.js";
 import { AgentConfiguration } from "../features/team/TeamPane.js";
 import { TaskTimeline } from "../features/team/TaskTimeline.js";
@@ -20,20 +20,14 @@ export function App() {
   const [configuredAgent, setConfiguredAgent] = useState("");
   const closeNavigation = useCallback(() => setNavOpen(false), []);
   const composer = useRef<HTMLTextAreaElement>(null);
-  const root: TeamAgent = { id: "", parentId: "", name: client.sessions.config?.agent || "Assistant", prompt: "", reason: client.chat.approval.pending ? "Waiting for approval" : "",
-    phase: client.chat.approval.pending ? "waiting" : client.chat.runId ? "running" : "ready", provider: client.context.stats?.provider || client.sessions.config?.provider || "",
-    providerKind: client.context.stats?.provider || client.sessions.config?.provider || "", model: client.context.stats?.model || client.sessions.config?.model || "",
-    context: client.context.stats, compactTrigger: client.context.stats?.compaction?.trigger,
-    compactTokens: client.context.stats?.compaction?.token_budget, compactThreshold: client.context.stats?.compaction?.token_threshold,
-    compactMessages: client.context.stats?.compaction?.message_threshold,
-    startedAt: 0, updatedAt: 0, canMessage: true, messageReason: "" };
+  const root = conversationAgent(client.sessionAgent.selection, client.context.stats, !!client.chat.runId, !!client.chat.approval.pending);
   const agents = [root, ...client.team.tasks.map(task => {
     const agent = taskAgent(task);
     return client.chat.approval.pending?.task_id === task.id ? { ...agent, phase: "waiting" as const, reason: "Waiting for approval" } : agent;
   })];
   const arrivals = useAgentArrivals(client.team.tasks, client.sessions.sessionId, client.team.loaded);
   const configured = agents.find(agent => agent.id === configuredAgent);
-  function configure(id: string) { if (id) setConfiguredAgent(id); else client.settings.show(); }
+  function configure(id: string) { if (id) setConfiguredAgent(id); else client.sessionAgent.show(); }
   useEffect(() => {
     if (client.navigationRequest) { setNavOpen(true); setSidebarCollapsed(false); }
   }, [client.navigationRequest]);

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ExecutionRecord } from "./ExecutionRecord.js";
+import { TeamIcon } from "../team/TeamTree.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
@@ -140,7 +141,7 @@ export function TranscriptItems({
         data-run-id={entry.runId}
         tabIndex={-1}
       >
-        {entry.liveCaption ? <>
+        {entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><TeamIcon size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
           <div className="entry-label chat-live-caption-label">
             <span>{entry.liveCaption.speaker === "user" ? "You" : "ngn"}</span>
             <span className="chat-live-badge"><Icon name="wave" size={12} />Live</span>

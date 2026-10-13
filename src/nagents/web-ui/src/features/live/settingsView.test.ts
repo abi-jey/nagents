@@ -105,7 +105,8 @@ test("setup keeps unavailable saved connections visible and only shows hosted mo
     assert.equal(ui.label("Hosted backend model")?.querySelector("input")?.value, "hosted-model");
     await ui.change("Reasoning backend", "assistant");
     assert.equal(ui.label("Hosted backend model"), undefined);
-    assert.match(ui.container.textContent!, /selected chat's history/);
+    assert.match(ui.container.textContent!, /this chat's history/);
+    assert.match(ui.container.textContent!, /conversation's agent in the chat header/);
   } finally { await ui.close(); }
 });
 

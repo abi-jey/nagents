@@ -193,6 +193,17 @@ def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
     db.execute("INSERT INTO v2_sessions (id, user_id) VALUES (?, 'harness')", (target,))
     db.execute("INSERT INTO harness_sessions (id, title) VALUES (?, ?)", (target, title))
     db.execute("INSERT INTO ngn_session_forks VALUES (?, ?)", (target, source))
+    if "ngn_web_session_agents" in tables:
+        db.execute(
+            "INSERT INTO ngn_web_session_agents SELECT ?, agent, lower(hex(randomblob(32))), applied_agent "
+            "FROM ngn_web_session_agents WHERE session_id = ?",
+            (target, source),
+        )
+    if "ngn_design_sessions" in tables:
+        db.execute(
+            "INSERT INTO ngn_design_sessions SELECT ?, agent, source FROM ngn_design_sessions WHERE session_id = ?",
+            (target, source),
+        )
     if "ngn_web_group_members" in tables:
         copied_group = db.execute(
             "INSERT INTO ngn_web_group_members SELECT ?, group_id FROM ngn_web_group_members WHERE session_id = ?",
@@ -213,6 +224,17 @@ def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
         if int(boundary) not in ids:
             raise SessionForkError("Source context boundary has no matching conversation message.")
         db.execute("UPDATE v2_sessions SET compacted_at_message_id = ? WHERE id = ?", (ids[int(boundary)], target))
+    if "ngn_web_agent_changes" in tables:
+        for anchor, agent, previous, model, provider in db.execute(
+            "SELECT anchor_history_id, agent, previous_agent, model, provider FROM ngn_web_agent_changes "
+            "WHERE session_id = ? ORDER BY id",
+            (source,),
+        ):
+            db.execute(
+                "INSERT INTO ngn_web_agent_changes (session_id, anchor_history_id, agent, previous_agent, model, provider) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (target, ids.get(int(anchor), 0), agent, previous, model, provider),
+            )
     _web_annotations(db, source, target, ids, tables)
     _deliveries(db, source, target, ids)
     return target

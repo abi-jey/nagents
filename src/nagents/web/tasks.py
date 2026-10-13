@@ -112,35 +112,42 @@ class Tasks:
             for info in owner.tasks.list():
                 task = self.task(asdict(info), owner)
                 saved[info.id] = task
-        profile_owner = owner or self.state.harness
-        used = {task.get("profile") for task in saved.values()} | {profile_owner.config.agent}
-        profiles: list[dict[str, object]] = []
-        for name in profile_owner.config.profile_names:
-            profile = profile_owner.config.profile(name)
-            available = (
-                profile.user_invocable
-                and profile_owner.can_delegate
-                and name in profile_owner.delegatable_profile_names
-            )
-            profiles.append(
-                {
-                    "id": name,
-                    "name": name,
-                    "description": profile.description[:2000],
-                    "provider": profile.provider
-                    or profile_owner.config.provider
-                    or profile_owner.config.provider_profile().kind,
-                    "model": profile.model or profile_owner.agent.provider.model,
-                    "source": profile.source,
-                    "used": name in used,
-                    "available": available,
-                    "can_start": available,
-                    "unavailable_reason": ""
-                    if available
-                    else "This profile is not available for delegation from the current agent.",
-                }
-            )
-        return {"tasks": list(saved.values()), "profiles": profiles}
+        if (
+            self.state.session_agents.unavailable(self.state.session_agents.selected(root))
+            and self.state.run_for(root) is None
+        ):
+            # Keep saved conversations inspectable after an administrator removes
+            # a profile; the main picker can select a replacement before work.
+            return {"tasks": list(saved.values()), "profiles": []}
+        async with self.state.session_agents.view(root) as profile_owner:
+            used = {task.get("profile") for task in saved.values()} | {profile_owner.config.agent}
+            profiles: list[dict[str, object]] = []
+            for name in profile_owner.config.profile_names:
+                profile = profile_owner.config.profile(name)
+                available = (
+                    profile.user_invocable
+                    and profile_owner.can_delegate
+                    and name in profile_owner.delegatable_profile_names
+                )
+                profiles.append(
+                    {
+                        "id": name,
+                        "name": name,
+                        "description": profile.description[:2000],
+                        "provider": profile.provider
+                        or profile_owner.config.provider
+                        or profile_owner.config.provider_profile().kind,
+                        "model": profile.model or profile_owner.agent.provider.model,
+                        "source": profile.source,
+                        "used": name in used,
+                        "available": available,
+                        "can_start": available,
+                        "unavailable_reason": ""
+                        if available
+                        else "This profile is not available for delegation from the current agent.",
+                    }
+                )
+            return {"tasks": list(saved.values()), "profiles": profiles}
 
     @staticmethod
     def task(data: dict[str, object], owner: Harness) -> dict[str, object]:
@@ -407,13 +414,13 @@ class Tasks:
                 }
             if self.state.mutating or self.state.executions.closed:
                 raise HTTPException(409, "Server configuration is changing. Retry shortly.")
-            owner = self.state.executions.owners.get(root) or self.state.harness
-            if (
-                body.agent not in owner.delegatable_profile_names
-                or not owner.config.profile(body.agent).user_invocable
-                or not owner.can_delegate
-            ):
-                raise HTTPException(403, "This agent profile cannot be started here.")
+            async with self.state.session_agents.view(root) as current:
+                if (
+                    body.agent not in current.delegatable_profile_names
+                    or not current.config.profile(body.agent).user_invocable
+                    or not current.can_delegate
+                ):
+                    raise HTTPException(403, "This agent profile cannot be started here.")
             await self.store.insert(root, target, body.message_id, body.text)
             ready = self.created[body.message_id] = asyncio.Event()
             try:

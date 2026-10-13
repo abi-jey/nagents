@@ -117,6 +117,16 @@ def test_native_requests_follow_profile_depth_scheduler_and_workspace_selections
                     "/api/settings", headers=headers, json={"revision": current["revision"], "values": values}
                 )
                 assert response.status_code == 200, response.text
+                # Workspace defaults affect new chats; explicitly select the
+                # same profile for the conversation exercised by this fixture.
+                root = harness.session_id
+                choice = (await client.get(f"/api/sessions/{root}/agent", headers=headers)).json()
+                selected = await client.post(
+                    f"/api/sessions/{root}/agent",
+                    headers=headers,
+                    json={"revision": choice["revision"], "agent": agent},
+                )
+                assert selected.status_code == 200, selected.text
 
             assert "schedule_wakeup" in await capture()
             for agent, depth in (("reviewer", 0), ("assistant", 2), ("reviewer", 2), ("assistant", 0)):

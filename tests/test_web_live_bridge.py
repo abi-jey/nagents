@@ -666,10 +666,19 @@ def test_delegation_target_uses_resolved_agent_profile_model(tmp_path: Path) -> 
         ) -> AsyncIterator[Event]:
             yield TextDoneEvent(text="Profile answer")
 
-        async with client_app(tmp_path, config=configuration) as (app, _, _, _):
+        async with client_app(tmp_path, config=configuration) as (app, client, headers, _):
             state = app.state.web
-            await state.harness.set_agent("auditor")
-            assert state.settings.values.model != state.harness.agent.provider.model
+            root = state.selected_session_id
+            selection = (await client.get(f"/api/sessions/{root}/agent", headers=headers)).json()
+            changed = await client.post(
+                f"/api/sessions/{root}/agent",
+                headers=headers,
+                json={"revision": selection["revision"], "agent": "auditor"},
+            )
+            assert changed.status_code == 200
+            assert changed.json()["effective"]["model"] == "profile-model"
+            assert state.settings.values.agent == "assistant"
+            assert state.settings.values.model != changed.json()["effective"]["model"]
             with (
                 patch.object(ControlledHarness, "run", Harness.run),
                 patch.object(HarnessProvider, "verify_model", AsyncMock(return_value=True)),

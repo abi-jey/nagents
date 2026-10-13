@@ -167,7 +167,13 @@ class QueuedInputs:
         state = self.state
         # Channel-owned replies keep their existing delivery owner. Browser
         # inputs wait behind them rather than leaking into an external reply.
-        if state.active is not run or run.finished or run.source or state.channels.closed:
+        if (
+            state.active is not run
+            or run.finished
+            or run.source
+            or state.channels.closed
+            or run.agent != state.session_agents.selected(run.session_id)
+        ):
             return None
         while True:
             claim = asyncio.create_task(state.channels.store.claim_work(web_only=True, session_id=run.session_id))
@@ -184,7 +190,12 @@ class QueuedInputs:
                 raise
             if work is None:
                 return None
-            if state.active is not run or run.finished or state.channels.closed:
+            if (
+                state.active is not run
+                or run.finished
+                or state.channels.closed
+                or run.agent != state.session_agents.selected(run.session_id)
+            ):
                 await state.channels.store.release_work(work)
                 return None
             self.claimed.setdefault(run.id, []).append(work)

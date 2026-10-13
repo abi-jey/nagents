@@ -278,7 +278,7 @@ export function SettingsDialog({
                 <label className="settings-checkbox"><input id="settings-read_only" type="checkbox" aria-describedby="settings-read_only-help" checked={draft.read_only || !!snapshot.read_only_locked} disabled={disabled || !!confirmation || !!snapshot.read_only_locked} onChange={(event) => settings.update("read_only", event.target.checked)} />Read-only workspace</label>
                 <p id="settings-read_only-help">{snapshot.read_only_locked ? "Read-only operation is required by the startup configuration." : "Limit agents to inspection: file changes, shell, and custom tools remain blocked."}{!snapshot.read_only_locked && origin("read_only")}</p>
                 <div className="settings-field">
-                  <label htmlFor="settings-agent">Agent profile</label>
+                  <label htmlFor="settings-agent">Workspace default agent</label>
                   <select
                     id="settings-agent"
                     disabled={global}
@@ -302,7 +302,7 @@ export function SettingsDialog({
                       </option>
                     ))}
                   </select>
-                   <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Trusted agent profiles may set their own model or connection."}</p>
+                   <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Used for new chats. Existing conversations keep their selected agent. Profiles may set their own model or connection."}</p>
                   {snapshot.profiles.find(profile => profile.name === draft.agent)?.source && (
                     <p>Source: <code>{snapshot.profiles.find(profile => profile.name === draft.agent)?.source}</code></p>
                   )}

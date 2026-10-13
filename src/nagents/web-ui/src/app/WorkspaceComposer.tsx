@@ -60,6 +60,7 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
     {child && !team.canMessage && <p className="activity-warning">{team.task?.unavailable_reason || team.profile?.unavailable_reason || team.task?.message_unavailable_reason || "This agent is not available for messages."}</p>}
     {child && client.liveOpen && <p className="team-voice-notice">Voice remains in the main conversation.</p>}
     <div hidden={child} className="workspace-live-slot">{client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
+      assistant={client.sessionAgent.identity}
       targets={voiceTargets} visible={!child}
       autoStart={client.liveAutoStart}
       openSettingsInitially={client.liveIntent === "settings"} consumeStartIntent={client.consumeLiveStart}

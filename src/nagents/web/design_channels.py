@@ -134,6 +134,31 @@ class DesignedChannels:
 
         return await self.state.channels.store._transaction(read)
 
+    async def preview(self, session_id: str) -> tuple[str, str]:
+        """Resolve an upcoming pin without making a read-only request pin it."""
+
+        def read(db: sqlite3.Connection) -> tuple[str, str]:
+            store = self.state.channels.store
+            store.root(db, session_id)
+            previous = db.execute(
+                "SELECT agent, source FROM ngn_design_sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+            if previous is not None:
+                return str(previous[0]), str(previous[1])
+            owner = store._owner(db, session_id)
+            if (
+                owner is None
+                or owner.conflicted
+                or db.execute("SELECT 1 FROM v2_messages WHERE session_id = ? LIMIT 1", (session_id,)).fetchone()
+            ):
+                return "", ""
+            route = db.execute(
+                "SELECT agent, source FROM ngn_design_channels WHERE connection = ?", (owner.channel,)
+            ).fetchone()
+            return (str(route[0]), str(route[1])) if route else ("", "")
+
+        return await self.state.channels.store._transaction(read)
+
     def assemble(
         self, session_id: str, agent: str, source: str, recorder: Recorder
     ) -> tuple[DesignedHarness, list[ToolDefinition]]:
@@ -162,7 +187,8 @@ class DesignedChannels:
     async def context_stats(self, session_id: str) -> ContextStats:
         agent, source = await self.definition(session_id)
         if not source:
-            return await self.state.harness.agent.context_stats(session_id)
+            async with self.state.session_agents.view(session_id) as current:
+                return await current.agent.context_stats(session_id)
         harness, installed = self.assemble(session_id, agent, source, Recorder())
         try:
             # Pinned idle harnesses are ephemeral. Retain only bounded metadata,

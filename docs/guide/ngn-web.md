@@ -84,7 +84,7 @@ the settings icon beside **Voice**. Select a voice connection there or follow th
 chat connection. Every browser voice connection uses the same-origin ngn audio
 relay. The server owns ChatGPT/Codex media and control connections, or the Live
 WebSocket for supported API-key and Foundry connections. The **Main assistant**
-voice backend delegates reasoning to the selected workspace agent; **Separate hosted
+voice backend delegates reasoning to the selected conversation agent; **Separate hosted
 backend** uses a standalone model. No named-connection
 API key is stored in the web settings database. Provider connections never store
 a chat model; global/workspace model preferences are shared by web and terminal.
@@ -276,7 +276,9 @@ draft and display an error.
 | `/rename <title>` | Persist a name of 1–80 printable characters for the current conversation. |
 | `/sessions [session ID]`, `/resume [session ID]` | Browse conversations or select one. |
 | `/compact` | Queue compaction of the submitted conversation. |
-| `/model [model ID]`, `/agent [name]`, `/provider [name]` | Open settings or select a model, agent, or connection. |
+| `/model [model ID]`, `/provider [name]` | Open settings or select a model or connection. |
+| `/agent [name]` | Open the conversation agent picker, or choose the profile for this chat. |
+| `/agent --workspace <name>` | Change the default agent for new chats in this workspace. |
 | `/context` | Show the conversation's context estimate. |
 | `/settings`, `/tools`, `/channels`, `/voice` | Open the corresponding settings. |
 | `/stop` | Stop the active run. |
@@ -577,6 +579,8 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET settings/global` | Global defaults and their independent revision |
 | `POST settings/global` | `{revision, values}` saves defaults shared by workspaces in the same data directory; idle only |
 | `POST settings/global/reset` | `{revision}` removes global overrides; idle only |
+| `GET sessions/{session_id}/agent` | Conversation profile, revision, effective and active identities, pending state, and allowed profile choices |
+| `POST sessions/{session_id}/agent` | `{revision, agent}` selects this conversation’s next-run profile; supports active runs, rejects stale revisions and pinned designer routes |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
 | `GET sessions/{session_id}/context` | Read-only estimated token breakdown of the request that session would send; safe while idle and during a run |
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
@@ -1624,3 +1628,28 @@ Python distributions include those generated assets, not frontend dependencies.
 npm --prefix src/nagents/web-ui test
 npm --prefix src/nagents/web-ui run build
 ```
+
+
+### Conversation agent profiles
+
+The agent picker beside the chat composer selects who answers **this conversation**.
+Each chat stores its own choice. Reloading and `/resume` restore it, and `/fork`
+copies it with the conversation. **Settings → Agent profile** and
+`/agent --workspace <name>` set the default for new chats; they do not change the
+profiles saved in existing conversations. When upgrading an existing workspace,
+its existing chats capture the current workspace default once.
+
+A running response keeps its profile, model, provider, and instructions. A changed
+selection applies to the next run; queued messages and voice requests wait for that
+run instead of joining the old profile’s response. Selecting a read-only profile
+immediately tightens future tool permissions in the current execution and its
+children and denies pending approvals. Selecting a less restrictive profile does
+not loosen that execution. An already executing tool is not interrupted.
+
+The main row and context panel report the actual running agent while a change is
+pending. A small **Agent: name** marker records an applied change in the transcript.
+These markers are display metadata, excluded from model history and voice seeds.
+Profiles restricted to delegation cannot be selected as the main conversation agent.
+Administrator read-only restrictions remain effective for every profile. Chats
+pinned to Agent Designer routes keep their designed agent and explain that the
+picker is unavailable.

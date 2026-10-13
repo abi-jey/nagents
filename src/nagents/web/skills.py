@@ -35,7 +35,11 @@ async def skill_harness(state: WebState, session_id: str) -> AsyncIterator[Harne
     current = state.harness_for(session_id)
     active = state.run_for(session_id)
     agent, source = await state.designed_channels.definition(session_id)
-    if not source or (active is not None and active.harness is not None):
+    if not source:
+        async with state.session_agents.view(session_id, next_run=True) as harness:
+            yield harness
+        return
+    if active is not None and active.harness is not None:
         yield current
         return
     harness, installed = state.designed_channels.assemble(session_id, agent, source, Recorder())

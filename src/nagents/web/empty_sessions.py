@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     import sqlite3
 
     from .service import WebState
+    from .session_agents import Choice
 
 _ROOT = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")
 _REFERENCES = (
@@ -111,6 +112,7 @@ async def _invalidate(state: WebState, removed: list[str]) -> None:
         return
     state.session_revision += 1
     for session_id in removed:
+        state.session_agents.choices.pop(session_id, None)
         state.bus.delete_session(session_id)
         state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
         state.wakeups.forget_session(session_id)
@@ -176,15 +178,17 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
             in_use = _in_use(state)
             workers = bool(state.executions.runs) or any(not task.done() for task in harness.tasks._workers.values())
 
-            def select(db: sqlite3.Connection) -> tuple[str, list[str]]:
+            def select(db: sqlite3.Connection) -> tuple[str, list[str], Choice, bool]:
                 empty = _empty_roots(db, active_voice)
                 selected = state.selected_session_id
                 if selected not in empty or selected in protected:
                     selected = RoutingStore.new_root(db, "")
+                choice, changed = state.session_agents.reset_draft_in(db, selected)
                 removed = [] if workers else _remove(db, empty, protected | in_use | {selected})
-                return selected, removed
+                return selected, removed, choice, changed
 
-            selected, removed = await state.channels.store._transaction(select)
+            selected, removed, choice, changed = await state.channels.store._transaction(select)
+            state.session_agents.choices[selected] = choice
             state.selected_session_id = selected
             if not harness._busy and not state.executions.in_use(harness):
                 harness.session_id = selected
@@ -192,6 +196,8 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
                 harness.tools.read_hashes.clear()
             state.session_revision += 1
             await _invalidate(state, removed)
+            if changed:
+                await state.session_agents.notify(selected)
             return selected
 
     return await finish_on_cancel(finish())
