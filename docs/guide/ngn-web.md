@@ -471,10 +471,12 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   The first live tool-output chunk opens its tool card and selects **Output**,
   unless you already closed that card or explicitly selected another tab.
   Task branches remain collapsed until you open them.
-  Tool summaries show a readable tool name, a bounded plain-text target when
-  recognized, the observed state, and measured duration when available. Channel
-  sends show the channel and destination. On narrow screens the target moves
-  beneath the name. Full tool names and exact inputs remain in the inspector.
+  Tool summaries use compact rows on the conversation surface, with a readable
+  tool name, a bounded plain-text target when recognized, the observed state,
+  and measured duration when available. Channel sends show the channel and
+  destination. Narrow screens keep the name and target inline, truncate them
+  as needed, and leave approval metadata in **Details**. Full tool names and exact
+  inputs remain in the inspector, which uses a subtle inset for bounded output.
   Structured shell results show **Exit 7** (with the actual nonzero code) or
   **Timed out** when appropriate. These describe the command's outcome; the
   enclosing task can continue and recover. Saved result strings are not parsed

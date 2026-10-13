@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
+from nagents._async import finish_on_cancel
 from nagents.compaction import ModelCompaction
 from nagents.compaction import describe_compaction
 from nagents.events import CompactionDoneEvent
@@ -204,13 +205,21 @@ class ChildActivity(AgentPlugin):
         # Capture this watermark in the child's producer, before later writes
         # can race a delayed root observer. Viewers can combine only this saved
         # prefix with the activity that follows its ordered marker.
-        async with aiosqlite.connect(self.child.agent.session.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COALESCE(MAX(id), 0) FROM v2_messages WHERE session_id = ?",
-                (self.info.child_session_id,),
-            )
-            row = await cursor.fetchone()
-        await self.child.emit(ChildHistoryCommitted(history_id=int(row[0]) if row else 0))
+        async def read() -> int:
+            async with (
+                aiosqlite.connect(self.child.agent.session.db_path) as db,
+                db.execute(
+                    "SELECT COALESCE(MAX(id), 0) FROM v2_messages WHERE session_id = ?",
+                    (self.info.child_session_id,),
+                ) as cursor,
+            ):
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+
+        # Own the full connection/cursor lifetime, including repeated cancels.
+        # Emit only after the read succeeds without cancellation of its owner.
+        history_id = await finish_on_cancel(read())
+        await self.child.emit(ChildHistoryCommitted(history_id=history_id))
 
     async def before_model(self, context: RunContext, request: ModelRequest) -> ModelRequest:
         await self._history_committed()

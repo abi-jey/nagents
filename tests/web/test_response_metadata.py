@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 from typing import cast
@@ -21,6 +22,7 @@ from nagents.harness.tools import CodingTools
 from nagents.session import response_metadata as storage
 from nagents.session.response_metadata import response_write
 from nagents.types import Message
+from nagents.web.diagnostics import exception_diagnostic
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import ControlledHarness
 from tests.support.web import LiveStream
@@ -31,7 +33,6 @@ from tests.web.test_web_subscription_lifecycle import until
 from tests.web.test_web_wakeups import scheduled_app
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import AsyncIterator
     from pathlib import Path
 
@@ -116,6 +117,89 @@ def test_producer_diagnostics_include_only_exception_class_and_safe_code(
     expected = "BrokenCode" if broken_property else "RuntimeError"
     assert len(messages) == 1 and f"exception={expected} sqlite_code=unavailable" in messages[0]
     assert "SECRET" not in caplog.text and "test-provider-key" not in caplog.text
+
+
+def test_producer_diagnostics_report_nested_sqlite_codes_without_payloads(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken_run(harness: ControlledHarness, prompt: str | list[ContentPart]) -> AsyncIterator[HarnessEvent]:
+        yield TextChunkEvent(chunk="Working")
+        busy = sqlite3.OperationalError("SECRET SQL and database path")
+        busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        raise ExceptionGroup(
+            "SECRET outer payload",
+            [ValueError("SECRET prompt"), ExceptionGroup("SECRET inner payload", [busy])],
+        )
+
+    monkeypatch.setattr(ControlledHarness, "run", broken_run)
+
+    async def check() -> None:
+        async with client_app(tmp_path) as (app, _, headers, harnesses):
+            events = await submit_and_wait(app, headers, harnesses[0].session_id, "error")
+            assert any(event.get("event") == "run_finished" and event.get("status") == "failed" for event in events)
+
+    asyncio.run(check())
+    records = [record for record in caplog.records if "Run producer failed:" in record.message]
+    assert len(records) == 1 and records[0].exc_info is None
+    assert "exception=ExceptionGroup sqlite_code=unavailable" in records[0].message
+    assert "nested=ValueError:unavailable,ExceptionGroup:unavailable,OperationalError:5" in records[0].message
+    assert "SECRET" not in caplog.text and "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize("getter_error", [RuntimeError, asyncio.CancelledError, KeyboardInterrupt])
+def test_exception_diagnostics_ignore_failing_properties(getter_error: type[BaseException]) -> None:
+    class BrokenGroup(ExceptionGroup[Exception]):
+        @property
+        def sqlite_errorcode(self) -> int:
+            raise getter_error("SECRET diagnostic failure")
+
+        @property
+        def exceptions(self) -> tuple[Exception, ...]:
+            raise getter_error("SECRET group failure")
+
+    assert exception_diagnostic(BrokenGroup("SECRET original", [RuntimeError("SECRET child")])) == (
+        "BrokenGroup",
+        "unavailable",
+        "none",
+    )
+
+
+@pytest.mark.parametrize("code", [True, -1, 2**31, "SECRET code", object()])
+def test_exception_diagnostics_reject_non_numeric_or_out_of_range_codes(code: object) -> None:
+    class InvalidCode(RuntimeError):
+        sqlite_errorcode: object
+
+    error = InvalidCode("SECRET original")
+    error.sqlite_errorcode = code
+    assert exception_diagnostic(error) == ("InvalidCode", "unavailable", "none")
+
+
+@pytest.mark.parametrize("deep", [False, True])
+def test_exception_diagnostics_visit_at_most_eight_exceptions(deep: bool) -> None:
+    visited: list[bool] = []
+
+    class CountedError(RuntimeError):
+        @property
+        def sqlite_errorcode(self) -> int:
+            visited.append(True)
+            return sqlite3.SQLITE_BUSY
+
+    class CountedGroup(ExceptionGroup[Exception]):
+        @property
+        def sqlite_errorcode(self) -> int:
+            visited.append(True)
+            return sqlite3.SQLITE_BUSY
+
+    error: Exception = CountedError("SECRET leaf")
+    if deep:
+        for _ in range(12):
+            error = CountedGroup("SECRET group", [error])
+    else:
+        error = CountedGroup("SECRET group", [CountedError("SECRET leaf") for _ in range(12)])
+    name, code, nested = exception_diagnostic(error)
+    assert name == "CountedGroup" and code == sqlite3.SQLITE_BUSY
+    assert len(visited) == 8 and len(nested.split(",")) == 7
+    assert "SECRET" not in nested
 
 
 @pytest.mark.parametrize("hold_checkpoint", [False, True])

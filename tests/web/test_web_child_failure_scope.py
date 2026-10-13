@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import AsyncExitStack
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 from typing import cast
 
@@ -27,6 +29,7 @@ from tests.support.web import client_app
 from tests.support.web import submit_and_wait
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from nagents.web.service import Run
@@ -39,6 +42,65 @@ def fixture_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HarnessCo
     store = ScopedProviderRegistryStore(tmp_path).workspace_store
     store.save(ProviderRegistry(active="fixture", providers=selected), expected=store.load().revision)
     return HarnessConfig(tmp_path, data_dir=tmp_path / "state", provider="fixture", providers=selected)
+
+
+TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def terminal_reports(reports: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [report for report in reports if report.get("status") in TERMINAL_STATUSES]
+
+
+@asynccontextmanager
+async def voice_request(
+    state: WebState, session_id: str
+) -> AsyncIterator[tuple[list[dict[str, object]], asyncio.Task[str]]]:
+    reports: list[dict[str, object]] = []
+    bridge = MainAgentBridge(state, session_id, report=reports.append)
+
+    async def append(kind: str, content: str, identifier: str) -> str:
+        return f"session.{kind}.append"
+
+    bridge.attach(append)
+    speech = asyncio.create_task(bridge.handle_request(ClientDelegationRequest("root", "ROOT")))
+    try:
+        yield reports, speech
+    finally:
+        speech.cancel()
+        try:
+            await asyncio.gather(speech, return_exceptions=True)
+        finally:
+            await bridge.close()
+
+
+async def voice_terminal(reports: list[dict[str, object]]) -> dict[str, object]:
+    async with asyncio.timeout(HANG_GUARD):
+        while not (terminal := terminal_reports(reports)):
+            await asyncio.sleep(0.001)
+    return terminal[-1]
+
+
+async def voice_progress(
+    speech: asyncio.Task[str], reports: list[dict[str, object]], *milestones: asyncio.Event
+) -> None:
+    async with asyncio.timeout(HANG_GUARD):
+        while True:
+            if speech.done():
+                assert not speech.cancelled(), "Voice admission was cancelled before child progress"
+                error = speech.exception()
+                if error is not None:
+                    pytest.fail(f"Voice admission failed: exception={type(error).__name__[:80]}")
+            terminal = terminal_reports(reports)
+            if terminal:
+                statuses = [report["status"] for report in terminal]
+                reached = sum(milestone.is_set() for milestone in milestones)
+                pytest.fail(
+                    f"Voice run ended before child progress: statuses={statuses} "
+                    f"report_count={len(reports)} milestones_reached={reached}"
+                )
+            if all(milestone.is_set() for milestone in milestones):
+                return
+            await asyncio.sleep(0.001)
 
 
 @pytest.mark.asyncio
@@ -72,23 +134,15 @@ async def test_recovered_root_keeps_child_failures_and_safe_scope_in_chat_and_vo
         expected = "failed" if wrong_parent else "completed"
         async with asyncio.timeout(HANG_GUARD):
             if voice:
-                reports: list[dict[str, object]] = []
-                bridge = MainAgentBridge(state, harness.session_id, report=reports.append)
-
-                async def append(kind: str, content: str, identifier: str) -> str:
-                    return f"session.{kind}.append"
-
-                bridge.attach(append)
-                await bridge.handle_request(ClientDelegationRequest("root", "ROOT"))
-                async with asyncio.timeout(HANG_GUARD):
-                    while not any(report.get("status") == expected for report in reports):
-                        await asyncio.sleep(0.001)
-                await state.channels.join_claim_cleanup(harness.session_id)
-                terminal = next(report for report in reversed(reports) if report.get("status") == expected)
-                assert terminal["status"] == expected
-                assert "PRIVATE_UPSTREAM_DETAIL" not in str(terminal)
-                if not wrong_parent:
-                    assert terminal["result_text"] == "ROOT_RECOVERED"
+                async with voice_request(state, harness.session_id) as (reports, speech):
+                    await speech
+                    terminal = await voice_terminal(reports)
+                    status = terminal["status"]
+                    assert status == expected, {"status": status, "expected": expected, "report_count": len(reports)}
+                    await state.channels.join_claim_cleanup(harness.session_id)
+                    assert "PRIVATE_UPSTREAM_DETAIL" not in str(terminal)
+                    if not wrong_parent:
+                        assert terminal["result_text"] == "ROOT_RECOVERED"
             else:
                 wire = await submit_and_wait(app, headers, harness.session_id, "ROOT")
                 assert next(record for record in wire if record["event"] == "run_finished")["status"] == expected
@@ -169,36 +223,30 @@ async def test_stop_still_cancels_chat_and_voice_trees(
     async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, harnesses):
         harness = harnesses[0]
         state = cast("WebState", app.state.web)
-        reports: list[dict[str, object]] = []
-        async with asyncio.timeout(HANG_GUARD):
+        async with asyncio.timeout(HANG_GUARD), AsyncExitStack() as cleanup:
             if voice:
-                bridge = MainAgentBridge(state, harness.session_id, report=reports.append)
-
-                async def append(kind: str, content: str, identifier: str) -> str:
-                    return f"session.{kind}.append"
-
-                bridge.attach(append)
-                speech = asyncio.create_task(bridge.handle_request(ClientDelegationRequest("root", "ROOT")))
+                reports, speech = await cleanup.enter_async_context(voice_request(state, harness.session_id))
+                await voice_progress(speech, reports, scenario.grandchild_started, scenario.root_preview)
             else:
                 stream = LiveStream(app, headers, harness.session_id, "ROOT")
-            await scenario.grandchild_started.wait()
-            await scenario.root_preview.wait()
+                await scenario.grandchild_started.wait()
+                await scenario.root_preview.wait()
             assert state.active is not None
             response = await client.post("/api/cancel", headers=headers, json={"run_id": state.active.id})
             assert response.status_code == 200, response.text
             if voice:
                 await speech
-                async with asyncio.timeout(HANG_GUARD):
-                    while not any(report.get("status") == "cancelled" for report in reports):
-                        await asyncio.sleep(0.001)
-                assert reports[-1]["status"] == "cancelled" and "result_text" not in reports[-1]
+                terminal = await voice_terminal(reports)
+                status = terminal["status"]
+                assert status == "cancelled", {"status": status, "report_count": len(reports)}
+                assert "result_text" not in terminal
             else:
                 finished = await stream.event("run_finished")
                 records = [finished]
                 assert finished["status"] == "cancelled", {
-                    "events": records,
+                    "event_count": len(records),
                     "provider_requests": [len(provider.requests) for provider in scenario.providers],
-                    "tasks": [(info.status, info.error) for info in harness.tasks.list()],
+                    "task_statuses": [info.status for info in harness.tasks.list()],
                 }
         assert {info.status for info in harness.tasks.list()} == {"cancelled"}
         assert len(scenario.providers) == 3 and all(provider.closed for provider in scenario.providers[1:])

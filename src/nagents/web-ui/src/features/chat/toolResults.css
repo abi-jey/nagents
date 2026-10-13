@@ -7,19 +7,22 @@
 .tool-result-value .tool-token-string { color: var(--accent-teal); }
 .tool-result-value .tool-token-number { color: var(--accent-amber); }
 .tool-result-value .tool-token-literal { color: var(--accent-violet); }
-.tool-result-note, .tool-result-overflow { margin: 0; padding: 8px 14px 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
-.tool-result-indicators { display: flex; flex-wrap: wrap; gap: 6px; padding: 7px 14px; }
-.tool-result-indicators > span { padding: 3px 7px; border: 1px solid var(--border-group); border-radius: 5px; color: var(--text-secondary); font-size: 11px; }
+.tool-result-note, .tool-result-overflow { margin: 0; padding: 4px 10px 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.tool-result-indicators { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 10px; }
+.tool-result-indicators > span { padding: 2px 6px; border: 1px solid var(--border-group); border-radius: 4px; color: var(--text-secondary); font-size: 11px; }
 .tool-result-indicators > span[data-warning] { color: var(--state-error); border-color: color-mix(in srgb, var(--state-error) 40%, var(--border-group)); }
 .tool-result-sections { max-height: min(28rem, 55vh); overflow: auto; scrollbar-width: thin; }
 .tool-result-sections > section { min-width: 0; }
 .tool-result-sections > section + section { border-top: 1px solid color-mix(in srgb, var(--border-group) 45%, transparent); }
-.tool-result-sections h4 { margin: 0; padding: 7px 14px 0; color: var(--text-secondary); font-size: 11px; font-weight: 550; }
+.tool-result-sections h4 { margin: 0; padding: 5px 10px 0; color: var(--text-secondary); font-size: 11px; font-weight: 550; }
 .tool-result-value .tool-result-sections pre { max-height: none; }
 .tool-result-overflow { display: flex; align-items: center; gap: 12px; border-top: 1px solid color-mix(in srgb, var(--border-group) 45%, transparent); }
 .tool-result-overflow > span { flex: 1; min-width: 0; }
 .tool-result-overflow > button { flex-shrink: 0; min-height: 36px; padding: 6px 10px; font-size: 12px; }
 @media (max-width: 600px) {
-  .tool-result-value .tool-value-toolbar > button { min-height: 40px; }
+  .tool-result-value .tool-value-toolbar > button, .tool-result-overflow > button { min-height: 44px; }
   .tool-result-overflow { align-items: flex-start; flex-direction: column; gap: 6px; }
+}
+@media (pointer: coarse) {
+  .tool-result-value .tool-value-toolbar > button, .tool-result-overflow > button { min-height: 44px; }
 }
