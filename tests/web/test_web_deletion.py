@@ -34,11 +34,17 @@ if TYPE_CHECKING:
 
 
 async def quiet(state: WebState) -> None:
-    """Control queue claims and catalog polling without timer-based races."""
+    """Stop background maintenance while retaining explicit test-owned operations."""
     state.channels.closed = True
-    for task in state.channels.tasks:
+    tasks = [*state.channels.tasks]
+    if state.trash.task is not None:
+        # Manual expiry scans control their own cursor and repaired rows. The
+        # production timer must not compete after a slow fixture setup. Keep
+        # closed=False so explicit sweeps and polling lifecycle tests still run.
+        tasks.append(state.trash.task)
+    for task in tasks:
         task.cancel()
-    await asyncio.gather(*state.channels.tasks, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def rows(state: WebState, sql: str, *parameters: str) -> list[tuple[object, ...]]:

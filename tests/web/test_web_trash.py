@@ -758,6 +758,8 @@ def test_expiry_scan_moves_past_full_blocked_batch_and_revisits_repaired_rows(tm
         async with client_app(tmp_path) as (app, _, _, _):
             state = cast("WebState", app.state.web)
             await quiet(state)
+            assert state.trash.task is not None and state.trash.task.done()
+            assert not state.trash.closed, "Manual sweeps remain enabled after stopping background maintenance"
             foreign = await state.harness.new_session()
             foreign_messages = [
                 await state.history.add_message(foreign, Message(role="user", content=f"foreign history {index}"))
