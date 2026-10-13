@@ -177,6 +177,7 @@ class LiveStream:
         self.accepted = asyncio.Event()
         self.subscribed = asyncio.Event()
         self.admitted = asyncio.Event()
+        self.socket_closed = asyncio.Event()
         scope: Scope = {
             "type": "websocket",
             "asgi": {"version": "3.0", "spec_version": spec},
@@ -219,6 +220,7 @@ class LiveStream:
         elif kind == "websocket.close":
             self.disconnected = True
             self.close_code = message.get("code", 0)
+            self.socket_closed.set()
 
     async def wait_for_admission(self) -> None:
         """Expose a failed transport/worker instead of hiding it behind the watchdog."""
@@ -242,6 +244,26 @@ class LiveStream:
         finally:
             admitted.cancel()
             await asyncio.gather(admitted, return_exceptions=True)
+
+    async def wait_for_subscription(self) -> None:
+        """A closed socket cannot later deliver the initial snapshot."""
+        subscribed = asyncio.create_task(self.subscribed.wait())
+        closed = asyncio.create_task(self.socket_closed.wait())
+        try:
+            await asyncio.wait(
+                (subscribed, closed, self.socket_task), timeout=HANG_GUARD, return_when=asyncio.FIRST_COMPLETED
+            )
+            stopped = self.socket_closed.is_set() or self.socket_task.done()
+            if stopped or not self.subscribed.is_set():
+                reason = "subscription socket stopped" if stopped else "subscription watchdog expired"
+                raise AssertionError(await self.admission_diagnostics(reason))
+        except asyncio.CancelledError as error:
+            error.add_note(await self.admission_diagnostics("subscription cancelled by owner"))
+            raise
+        finally:
+            subscribed.cancel()
+            closed.cancel()
+            await asyncio.gather(subscribed, closed, return_exceptions=True)
 
     async def admission_diagnostics(self, reason: str) -> str:
         """Report bounded state only: no prompts, tokens, exception messages or paths."""
@@ -287,7 +309,7 @@ class LiveStream:
         await self.input.put(
             {"type": "websocket.receive", "text": json.dumps({"type": "subscribe", "session_id": self.session_id})}
         )
-        await asyncio.wait_for(self.subscribed.wait(), HANG_GUARD)
+        await self.wait_for_subscription()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=URL) as client:
             response = await client.post(
                 "/api/messages",

@@ -53,6 +53,49 @@ def test_output_consumer_cannot_steal_subscription_handshake(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("delayed_cleanup", [False, True])
+def test_subscription_failure_reports_closed_socket_before_submitting_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delayed_cleanup: bool
+) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (app, _, headers, harnesses):
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def failed_snapshot(session_id: str = "") -> dict[str, object]:
+                entered.set()
+                if delayed_cleanup:
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        await release.wait()
+                        raise
+                raise RuntimeError("SECRET-snapshot-error")
+
+            monkeypatch.setattr(app.state.web, "snapshot", failed_snapshot)
+            stream = LiveStream(app, headers, harnesses[0].session_id, "SECRET-prompt")
+            try:
+                async with asyncio.timeout(HANG_GUARD):
+                    await entered.wait()
+                    if delayed_cleanup:
+                        for subscriber in app.state.web.bus.subscribers:
+                            subscriber.close(1013)
+                    with pytest.raises(AssertionError, match="subscription socket stopped") as caught:
+                        await stream.start_task
+                diagnostic = str(caught.value)
+                assert "close_code=1013" in diagnostic
+                assert "queued=0,running=0,receipt=other" in diagnostic
+                assert "SECRET" not in diagnostic and headers["X-Ngn-Token"] not in diagnostic
+                assert str(tmp_path) not in diagnostic
+                assert not stream.subscribed.is_set() and not app.state.web.executions.runs
+                if delayed_cleanup:
+                    assert not release.is_set() and not stream.socket_task.done()
+            finally:
+                release.set()
+                await asyncio.wait_for(stream.socket_task, HANG_GUARD)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("failure", ["worker_error", "worker_complete", "socket_close", "watchdog", "outer_watchdog"])
 def test_admission_reports_owner_failure_and_queue_without_payloads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str

@@ -72,6 +72,7 @@ async def test_owned_run_cleanup_error_preserves_stop_without_hiding_other_failu
             await bridge.handle_request(ClientDelegationRequest("cleanup-request", "Work"))
         else:
             stream = LiveStream(app, headers, state.selected_session_id, "Work")
+            await stream.start_task
         await entered.wait()
         run = state.active
         assert run is not None

@@ -22,7 +22,9 @@ from nagents.session import response_metadata as storage
 from nagents.session.response_metadata import response_write
 from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD
+from tests.support.web import ControlledHarness
 from tests.support.web import LiveStream
+from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 from tests.support.web import submit_and_wait
 from tests.web.test_web_subscription_lifecycle import until
@@ -34,6 +36,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
+    from nagents.harness.types import HarnessEvent
+    from nagents.types import ContentPart
     from nagents.web.service import Run
     from nagents.web.service import WebState
     from tests.support.providers import FakeProvider
@@ -83,6 +87,35 @@ def object_record(value: object) -> dict[str, object]:
 def object_records(value: object) -> list[dict[str, object]]:
     assert isinstance(value, list)
     return [object_record(item) for item in value]
+
+
+@pytest.mark.parametrize("broken_property", [False, True])
+def test_producer_diagnostics_include_only_exception_class_and_safe_code(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch, broken_property: bool
+) -> None:
+    class BrokenCode(RuntimeError):
+        @property
+        def sqlite_errorcode(self) -> int:
+            raise RuntimeError("SECRET diagnostic failure")
+
+    async def broken_run(harness: ControlledHarness, prompt: str | list[ContentPart]) -> AsyncIterator[HarnessEvent]:
+        yield TextChunkEvent(chunk="Working")
+        raise BrokenCode("SECRET original error")
+
+    if broken_property:
+        monkeypatch.setattr(ControlledHarness, "run", broken_run)
+
+    async def check() -> None:
+        async with client_app(tmp_path) as (app, _, headers, harnesses):
+            events = await submit_and_wait(app, headers, harnesses[0].session_id, "error")
+            assert any(event.get("event") == "error" for event in events)
+            assert any(event.get("event") == "run_finished" and event.get("status") == "failed" for event in events)
+
+    asyncio.run(check())
+    messages = [record.message for record in caplog.records if "Run producer failed:" in record.message]
+    expected = "BrokenCode" if broken_property else "RuntimeError"
+    assert len(messages) == 1 and f"exception={expected} sqlite_code=unavailable" in messages[0]
+    assert "SECRET" not in caplog.text and "test-provider-key" not in caplog.text
 
 
 @pytest.mark.parametrize("hold_checkpoint", [False, True])
@@ -309,10 +342,13 @@ def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
             if hold_checkpoint:
                 delay_checkpoint_until_commit(state, monkeypatch, child=True)
             activity: list[dict[str, object]] = []
+            outcomes: list[str] = []
 
             def observe(run: Run | None, record: dict[str, object]) -> None:
                 if record.get("event") == "task_activity":
                     activity.append(record)
+                elif record.get("event") == "run_finished":
+                    outcomes.append(str(record.get("status", "")))
 
             state.run_observers.add(observe)
             root = state.selected_session_id
@@ -324,6 +360,8 @@ def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
             task = response.json()["task"]["id"]
             await until(lambda: state.run_for(root) is None)
             detail = (await client.get(f"{prefix}/{task}", headers=headers)).json()
+            assert outcomes == ["completed"], {"root_outcomes": outcomes}
+            assert detail["task"]["status"] == "completed", {"child_status": detail["task"]["status"]}
             rows = [row for row in detail["history"] if row.get("role") == "assistant"]
             assert len(rows) == 1
             metadata = object_record(rows[0]["response_metadata"])
