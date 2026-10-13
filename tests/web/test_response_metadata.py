@@ -16,11 +16,14 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.events import Usage
+from nagents.harness import Harness
+from nagents.harness.tools import CodingTools
 from nagents.session import response_metadata as storage
 from nagents.session.response_metadata import response_write
 from nagents.types import Message
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import LiveStream
+from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 from tests.support.web import submit_and_wait
 from tests.web.test_web_subscription_lifecycle import until
 from tests.web.test_web_wakeups import scheduled_app
@@ -31,7 +34,44 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nagents.events import Event
+    from nagents.web.service import Run
+    from nagents.web.service import WebState
     from tests.support.providers import FakeProvider
+
+
+@pytest.fixture(autouse=True)
+def metadata_without_workspace_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests exercise real provider loops and persistence, never workspace
+    # files. Keep those same paths covered on platforms without guarded file I/O.
+    monkeypatch.setattr(Harness, "load_project_instructions", lambda self: None)
+    monkeypatch.setattr(CodingTools, "discover_skills", lambda self: None)
+
+
+def delay_checkpoint_until_commit(state: WebState, monkeypatch: pytest.MonkeyPatch, *, child: bool = False) -> None:
+    committed = asyncio.Event()
+    original_capture = state.responses.capture
+    original_record = state.responses.record
+    held = False
+
+    def capture(run: Run, adapter: object, event: ResponseMetadataEvent) -> None:
+        original_capture(run, adapter, event)
+        if (event.response_session_id != run.session_id) == child and event.status == "completed" and event.history_id:
+            committed.set()
+
+    async def record(run: Run, frame: dict[str, object]) -> None:
+        nonlocal held
+        wrapped = frame.get("payload") if frame.get("event") == "task_activity" else None
+        payload = wrapped if isinstance(wrapped, dict) else frame
+        if not held and (wrapped is not None) == child and payload.get("status") == "thinking":
+            held = True
+            # The core has persisted the exact answer row, but its earlier
+            # thinking snapshot is still queued behind this observer barrier.
+            async with asyncio.timeout(HANG_GUARD):
+                await committed.wait()
+        await original_record(run, frame)
+
+    monkeypatch.setattr(state.responses, "capture", capture)
+    monkeypatch.setattr(state.responses, "record", record)
 
 
 def object_record(value: object) -> dict[str, object]:
@@ -45,7 +85,10 @@ def object_records(value: object) -> list[dict[str, object]]:
     return [object_record(item) for item in value]
 
 
-def test_root_round_metadata_reload_fork_and_totals_are_exact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("hold_checkpoint", [False, True])
+def test_root_round_metadata_reload_fork_and_totals_are_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hold_checkpoint: bool
+) -> None:
     async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
         assert "PRIVATE SUMMARY" not in str(messages)
         if not any(message.role == "tool" for message in messages):
@@ -79,6 +122,8 @@ def test_root_round_metadata_reload_fork_and_totals_are_exact(tmp_path: Path, mo
 
     async def scenario() -> None:
         async with scheduled_app(tmp_path, monkeypatch, script) as (app, client, headers, state, _, _):
+            if hold_checkpoint:
+                delay_checkpoint_until_commit(state, monkeypatch)
             root = state.selected_session_id
             events = await submit_and_wait(app, headers, root, "go")
             completed = [
@@ -234,9 +279,9 @@ def test_atomic_assistant_anchor_wins_cancel_and_retention_keeps_usage(
     asyncio.run(scenario())
 
 
-@pytest.mark.requires_posix
+@pytest.mark.parametrize("hold_checkpoint", [False, True])
 def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hold_checkpoint: bool
 ) -> None:
     async def scenario() -> None:
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
@@ -261,6 +306,15 @@ def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
                 )
 
         async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+            if hold_checkpoint:
+                delay_checkpoint_until_commit(state, monkeypatch, child=True)
+            activity: list[dict[str, object]] = []
+
+            def observe(run: Run | None, record: dict[str, object]) -> None:
+                if record.get("event") == "task_activity":
+                    activity.append(record)
+
+            state.run_observers.add(observe)
             root = state.selected_session_id
             prefix = f"/api/sessions/{root}/tasks"
             response = await client.post(
@@ -281,6 +335,18 @@ def test_child_metadata_does_not_attach_to_main_and_survives_detail_reload(
             assert "CHILD SUMMARY" not in str(root_rows)
             again = (await client.get(f"{prefix}/{task}", headers=headers)).json()
             assert again["history"] == detail["history"]
+            child_activity = [record for record in activity if record.get("task_id") == task]
+            completed = [
+                record
+                for record in child_activity
+                if object_record(record["payload"]).get("type") == "response_metadata"
+                and object_record(record["payload"]).get("status") == "completed"
+            ]
+            assert len(completed) == 1
+            sequences = [record["sequence"] for record in child_activity]
+            assert all(type(sequence) is int for sequence in sequences)
+            sequence_ids = cast("list[int]", sequences)
+            assert sequence_ids == sorted(set(sequence_ids))
 
     asyncio.run(scenario())
 
@@ -329,7 +395,6 @@ def test_parallel_roots_with_identical_answers_keep_independent_summaries(
     asyncio.run(scenario())
 
 
-@pytest.mark.requires_posix
 def test_child_cancel_before_observer_drain_keeps_scope_and_monotonic_sequence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -131,14 +131,22 @@ class Responses:
                 self.totals[(run.id, session)] = aggregate
         else:
             saved = {**canonical, "run_usage": self.totals.get((run.id, session), {})}
-        payload.update(saved)
+        # The producer may have committed an answer while this older snapshot
+        # waited in the Harness queue. Storage returns the newer durable record
+        # to protect it, but publishing that record here would announce completion
+        # again when the real terminal event arrives. Preserve the queued event's
+        # revision and phase; cancellation finalization still reads durable state.
+        published = {**canonical, "run_usage": saved.get("run_usage", {})}
+        payload.update(published)
         if child is not None:
             payload["type"] = "response_metadata"
-        if saved.get("status") in {"completed", "cancelled", "failed"}:
+        if published.get("status") in {"completed", "cancelled", "failed"}:
             pending.pop(response, None)
             self.checkpoints.pop(checkpoint_key, None)
             captured_responses = self.captured.get(run.id, {})
-            if int(str(captured_responses.get(response, {}).get("revision", 0))) <= int(str(saved.get("revision", 0))):
+            if int(str(captured_responses.get(response, {}).get("revision", 0))) <= int(
+                str(published.get("revision", 0))
+            ):
                 captured_responses.pop(response, None)
         else:
             pending[response] = {**record, "payload": dict(payload)} if child is not None else dict(payload)

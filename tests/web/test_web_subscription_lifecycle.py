@@ -283,9 +283,27 @@ def test_hydration_departure_retains_pending_decision_but_cannot_authorize_witho
                 if frame.get("record", {}).get("event") == "approval":
                     break
             approval = frame["record"]
+            approval_cursor, epoch = frame["cursor"], frame["epoch"]
             run = app.state.active
             assert run is not None and run.pending is not None
             answer = run.pending.answer
+            queued_notice: dict[str, object] = {
+                "session_id": app.main,
+                "event": "notice",
+                "text": "queued before same-root hydration",
+            }
+            if departure == "switch":
+                sent = ThreadEvent()
+                original_send = WebSocket.send_text
+
+                async def send_text(socket: WebSocket, data: str) -> None:
+                    await original_send(socket, data)
+                    if json.loads(data).get("record") == queued_notice:
+                        sent.set()
+
+                monkeypatch.setattr(WebSocket, "send_text", send_text)
+                app.client.portal.call(app.state.bus.event, queued_notice)
+                assert sent.wait(HANG_GUARD)
             reached = ThreadEvent()
             release = app.client.portal.call(asyncio.Event)
             cancelled = app.client.portal.call(asyncio.Event)
@@ -304,6 +322,7 @@ def test_hydration_departure_retains_pending_decision_but_cannot_authorize_witho
                 assert reached.wait(HANG_GUARD)
                 # Verified same-root hydration alone preserves the outstanding decision.
                 assert app.state.bus.listening(app.main) and not answer.done()
+                hydration_cursor = app.client.portal.call(lambda: app.state.bus.cursor)
                 if departure == "disconnect":
                     socket.close()
                 elif departure == "unsubscribe":
@@ -331,7 +350,21 @@ def test_hydration_departure_retains_pending_decision_but_cannot_authorize_witho
                 assert not app.channels[0].deliveries
                 app.client.portal.call(asyncio.wait_for, cancelled.wait(), 5)
                 if departure == "switch":
-                    assert socket.receive_json()["session_id"] == target
+                    # A sent frame survives the switch in the client buffer.
+                    # Only pre-hydration events may precede the new snapshot;
+                    # stale snapshots or later old-root events remain failures.
+                    cursor = approval_cursor
+                    notice_received = False
+                    frame = socket.receive_json()
+                    while frame["session_id"] == app.main:
+                        assert frame["type"] == "event" and frame["epoch"] == epoch
+                        assert cursor < frame["cursor"] <= hydration_cursor
+                        cursor = frame["cursor"]
+                        notice_received |= frame["record"] == queued_notice
+                        frame = socket.receive_json()
+                    assert notice_received
+                    assert frame["type"] == "snapshot" and frame["session_id"] == target
+                    assert frame["epoch"] == epoch and frame["cursor"] >= hydration_cursor
             finally:
                 app.client.portal.call(release.set)
 
