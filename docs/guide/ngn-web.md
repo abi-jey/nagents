@@ -491,6 +491,22 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   keyboard-scrollable region. Tab changes retain each output's reading position.
   Promoting an identical stream to a result preserves the mounted reading surface
   and focus; differing partial output remains selected when the final result arrives.
+  Native tool icons distinguish commands, file reads, edits, writes, file lists,
+  searches, skills, team requests, scheduling, history compaction, and channels.
+  MCP rows show their connection and method; **Details** retains the exact qualified
+  tool name. Unknown tools retain their original names and a generic icon.
+  Recognized file results show numbered content and line metadata, unified diffs
+  with addition/deletion styling, or path/search lists. Instructions, skipped-file
+  counts, and reported truncation remain visible when present; hashes and newline
+  information are available under **Result metadata**. Edit and
+  write **Inputs** label content as proposed; only the result reports changes.
+  Scheduling shows the requested delay and reason, then the returned due time and
+  wake-up ID. Its acknowledgement is separate from clock-marked wake-up activity
+  and never establishes that the wake-up fired.
+  **Raw** and **Copy** retain the exact input/result text. Unknown schemas, duplicate
+  keys, unsafe integer IDs, malformed JSON, and oversized payloads use the bounded
+  general view without dropping diagnostic fields. File paths and MCP results
+  remain inert text. Native result layouts do not replace a live reading surface.
   Updates never reopen an explicitly closed card or switch an explicitly selected tab.
   Focusing a tool pauses conversation
   following so incoming output cannot pull the card away; returning to the feed's

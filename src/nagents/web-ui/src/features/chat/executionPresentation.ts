@@ -1,4 +1,6 @@
 import type { Entry } from "./transcript.js";
+import { toolObject } from "./toolResultPresentation.js";
+import { toolPresentation } from "./toolPresentation.js";
 
 function summaryText(value: string): string {
   const text = value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
@@ -7,14 +9,16 @@ function summaryText(value: string): string {
 
 export function executionTarget(entry: Entry): string {
   if (entry.kind !== "tool" || !entry.inputs) return "";
-  let value: unknown;
-  try { value = JSON.parse(entry.inputs); } catch { return ""; }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
-  const inputs = value as Record<string, unknown>;
+  const inputs = toolObject(entry.inputs);
+  if (!inputs) return "";
   if (entry.title === "channel_send") {
     return summaryText([inputs.channel, inputs.destination].filter((item): item is string => typeof item === "string").join(" · "));
   }
-  for (const key of ["command", "cmd", "file_path", "path", "url", "pattern", "query", "task_id"]) {
+  const family = toolPresentation(entry.title || "").family;
+  const keys = family === "schedule" ? ["reason"] : family === "skill" ? ["name"]
+    : family === "search" || entry.title === "find" ? ["query", "pattern", "path"]
+    : ["command", "cmd", "file_path", "path", "url", "pattern", "query", "task_id"];
+  for (const key of keys) {
     if (typeof inputs[key] !== "string") continue;
     // Summaries are plain, single-line text; preserve the original in Inputs.
     const text = summaryText(inputs[key]);
@@ -24,12 +28,7 @@ export function executionTarget(entry: Entry): string {
 }
 
 export function executionName(name: string): string {
-  const names: Record<string, string> = {
-    channel_send: "Send to channel", read_file: "Read file", write_file: "Write file",
-    edit_file: "Edit file", run_shell_command: "Run command", shell: "Run command",
-    list_directory: "List directory", search_files: "Search files",
-  };
-  return Object.hasOwn(names, name) ? names[name] : name;
+  return toolPresentation(name).label;
 }
 
 export function executionStatus(entry: Entry): { label: string; tone: string } {

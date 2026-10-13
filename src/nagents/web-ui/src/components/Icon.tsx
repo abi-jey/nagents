@@ -1,6 +1,14 @@
-type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch" | "download" | "expand" | "image";
+export type IconName = "plus" | "chat" | "trash" | "settings" | "channels" | "folder" | "close" | "menu" | "chevron" | "more" | "tools" | "wave" | "mic" | "mic-off" | "volume" | "volume-off" | "stop" | "paperclip" | "search" | "edit" | "branch" | "download" | "expand" | "image" | "terminal" | "file-read" | "file-write" | "book" | "team" | "clock" | "compact" | "plug";
 
 const paths: Record<IconName, string> = {
+  terminal: "M2 3h16v14H2ZM5 7l3 3-3 3M10 13h5",
+  "file-read": "M4 2h8l4 4v12H4ZM12 2v5h4M7 10h6M7 13h6",
+  "file-write": "M4 2h8l4 4v12H4ZM12 2v5h4M7 12h6M10 9v6",
+  book: "M10 5C7 2 4 2 2 3v13c3-1 5-1 8 1 3-2 5-2 8-1V3c-2-1-5-1-8 2ZM10 5v12",
+  team: "M12.4 5.5a2.4 2.4 0 1 1-4.8 0 2.4 2.4 0 0 1 4.8 0ZM6 17v-1.8a4 4 0 0 1 8 0V17M4.2 5a2.2 2.2 0 0 0 0 4.4M15.8 5a2.2 2.2 0 0 1 0 4.4M2 16v-1.3a3 3 0 0 1 1.8-2.7M18 16v-1.3a3 3 0 0 0-1.8-2.7",
+  clock: "M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM10 5v5l3 2",
+  compact: "M3 3h14M3 17h14M6 6l4 3 4-3M6 14l4-3 4 3",
+  plug: "M7 2v4M13 2v4M5 6h10v3a5 5 0 0 1-10 0ZM10 14v4",
   download: "M10 2v10m-4-4 4 4 4-4M3 13v4h14v-4",
   expand: "M7 3H3v4M13 3h4v4M17 13v4h-4M7 17H3v-4",
   image: "M3 3h14v14H3ZM3 13l4-4 4 4 3-3 3 3M12 6h.01",

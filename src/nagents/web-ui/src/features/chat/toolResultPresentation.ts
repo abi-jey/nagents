@@ -6,7 +6,7 @@ const DEPTH_LIMIT = 32;
 const DISPLAY_LIMIT = 32 * 1024;
 const tokenPattern = /"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\],:]/g;
 
-export type ResultSection = { label: string; text: string };
+export type ResultSection = { label: string; text: string; kind?: "diff" | "list" };
 export type ResultPresentation = {
   format: string;
   text: string;
@@ -14,6 +14,8 @@ export type ResultPresentation = {
   note?: string;
   sections?: ResultSection[];
   indicators?: { text: string; warning: boolean }[];
+  metadata?: { label: string; text: string }[];
+  diagnostics?: { label: string; text: string }[];
 };
 
 function formatJSON(text: string): string | undefined {
@@ -44,20 +46,35 @@ function formatJSON(text: string): string | undefined {
   return output.join("");
 }
 
-function duplicateFields(text: string): boolean {
-  let depth = 0;
-  const keys = new Set<string>();
+function unsafeFields(text: string): boolean {
+  const containers: (Set<string> | undefined)[] = [];
   for (const match of text.matchAll(tokenPattern)) {
     const token = match[0];
-    if (token === "{" || token === "[") depth++;
-    else if (token === "}" || token === "]") depth--;
-    else if (depth === 1 && token.startsWith('"') && /^\s*:/.test(text.slice(match.index + token.length))) {
+    if (token === "{" || token === "[") containers.push(token === "{" ? new Set() : undefined);
+    else if (token === "}" || token === "]") containers.pop();
+    else if (token.startsWith('"') && /^\s*:/.test(text.slice(match.index + token.length))) {
       const key = JSON.parse(token) as string;
-      if (keys.has(key)) return true;
-      keys.add(key);
+      const keys = containers.at(-1);
+      if (keys?.has(key)) return true;
+      keys?.add(key);
+    } else if (/^-?\d/.test(token)) {
+      const number = Number(token);
+      if (!Number.isFinite(number) || (Number.isInteger(number) && !Number.isSafeInteger(number))) return true;
     }
   }
   return false;
+}
+
+// Native views must never reinterpret duplicate keys or rounded integer IDs.
+// The fallback formatter remains lexical, retaining every original token.
+export function toolObject(text: string): Record<string, unknown> | undefined {
+  if (text.length > FORMAT_LIMIT) return undefined;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || formatJSON(text) === undefined || unsafeFields(text)) return undefined;
+    return value as Record<string, unknown>;
+  } catch { return undefined; }
 }
 
 function commandPresentation(value: unknown, source: string): Pick<ResultPresentation, "sections" | "indicators"> | undefined {
@@ -76,7 +93,7 @@ function commandPresentation(value: unknown, source: string): Pick<ResultPresent
   for (const [key, label] of [["output", "Output"], ["stdout", "Standard output"], ["stderr", "Standard error"]])
     if (typeof record[key] === "string") sections.push({ label, text: record[key] });
   if (!sections.length) return undefined;
-  if (duplicateFields(source)) return undefined;
+  if (unsafeFields(source)) return undefined;
   const indicators = [];
   if (typeof record.exit_code === "number") indicators.push({ text: `Exit ${record.exit_code}`, warning: record.exit_code !== 0 });
   if (record.timed_out === true) indicators.push({ text: "Timed out", warning: true });
