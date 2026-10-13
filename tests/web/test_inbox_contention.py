@@ -19,6 +19,7 @@ from nagents.web.service import WebState
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
+from tests.support.web import stop_maintenance
 
 T = TypeVar("T")
 
@@ -41,6 +42,9 @@ def test_real_sqlite_busy_preserves_unstarted_work(
         monkeypatch.setattr(ChannelHost, "worker", gated_worker)
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
+            # The explicit blocker must determine BEGIN versus COMMIT failure;
+            # an unrelated catalog/trash writer cannot participate in this race.
+            await stop_maintenance(state)
             host = state.channels
             worker = host.tasks[0]
             root = state.selected_session_id

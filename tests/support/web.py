@@ -160,6 +160,16 @@ async def client_app(
     assert harnesses[0]._closed
 
 
+async def stop_maintenance(state: WebState) -> None:
+    """Leave the inbox worker intact while fixtures control database activity."""
+    tasks = [*state.channels.tasks[1:]]
+    if state.trash.task is not None:
+        tasks.append(state.trash.task)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 class LiveStream:
     """Subscribe to durable session events, then submit through the public message API."""
 

@@ -12,12 +12,16 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const id = useId();
   const tabs = useRef<HTMLDivElement>(null);
   const separateResult = useRef(false);
+  const revealedStream = useRef(false);
   const [chosen, choose] = useState("");
   const name = entry.title || "Tool call";
   const target = executionTarget(entry);
   const status = executionStatus(entry);
   const busy = status.tone === "active" && entry.result === undefined;
   const preparing = entry.state === "Preparing";
+  // Reveal the first live chunk, then keep that reading surface through the
+  // final result. Explicit disclosure and tab choices always take precedence.
+  if (busy && entry.text) revealedStream.current = true;
   // Promote a matching stream in place, but never remove an existing result
   // surface. Its reading position must survive late output and tab switches too.
   const matchingOutput = !!entry.text && entry.text === entry.result;
@@ -47,16 +51,12 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
     {["schedule_wakeup", "wake_up_in"].includes(name) && <p className="record-note">This is the scheduling request, not evidence that a wake-up fired.</p>}
     {metadata}
   </div> });
-  const selected = panels.some((panel) => panel.key === chosen) ? chosen : panels[0].key;
+  const selected = panels.some((panel) => panel.key === chosen) ? chosen
+    : revealedStream.current && entry.text ? "stream" : panels[0].key;
   return (
     <details className="execution-record tool-record" data-tone={status.tone} data-busy={busy || undefined}
-      data-preparing={preparing || undefined} data-disclosure-key={entry.id} open={open}
-      onToggle={(event) => {
-        // Opening begins an inspection. New evidence must not change the tab the
-        // reader is using; updates to a closed, untouched card may pick its result.
-        if (event.currentTarget.open) choose((current) => current || selected);
-        toggle?.(event.currentTarget.open);
-      }}>
+      data-preparing={preparing || undefined} data-disclosure-key={entry.id} open={open ?? revealedStream.current}
+      onToggle={(event) => toggle?.(event.currentTarget.open)}>
       <summary>
         <span className="tool-symbol"><Icon name={name === "channel_send" ? "channels" : "tools"} size={16} /></span>
         <span className="tool-heading">

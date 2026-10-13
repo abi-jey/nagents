@@ -182,7 +182,9 @@ test("mounted conversation preserves disclosure choices and nodes across progres
     await act(async () => navigate.click());
     assert.ok(navigated);
     assert.ok(branches.every((branch) => branch.open));
-    assert.equal(target.querySelector<HTMLDetailsElement>(".execution-record")!.open, false);
+    assert.equal(target.querySelector<HTMLDetailsElement>(".execution-record")!.open, true);
+    assert.equal(target.querySelector<HTMLElement>('[data-panel="stream"]')!.hidden, false,
+      "Revealing the child branch exposes its live output without another click");
     nested = nested.map((entry) => entry.id === "nested-tool" ? { ...entry, result: "done", state: "Completed" } : entry);
     await renderNested();
     assert.ok(branches.every((branch) => branch.open), "Explicit activity navigation choices survive completion");

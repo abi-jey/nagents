@@ -168,7 +168,7 @@ export function TranscriptItems({
         entry.kind === "context" ? (
           <ExecutionRecord
             entry={entry}
-            open={disclosures.get(entry.id) ?? false}
+            open={entry.kind === "tool" ? disclosures.get(entry.id) : disclosures.get(entry.id) ?? false}
             toggle={(open) => toggle(entry.id, open)}
             disclosures={disclosures}
             toggleDetail={toggle}
