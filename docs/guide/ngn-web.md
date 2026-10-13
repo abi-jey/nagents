@@ -468,6 +468,9 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   Tool calls, task branches, the retained registry, and notification payloads start collapsed
   to keep the conversation visible. Expand a record for its full identifiers,
   inputs, results, and errors; explicit expansion choices survive live updates.
+  The first live tool-output chunk opens its tool card and selects **Output**,
+  unless you already closed that card or explicitly selected another tab.
+  Task branches remain collapsed until you open them.
   Tool summaries show a readable tool name, a bounded plain-text target when
   recognized, the observed state, and measured duration when available. Channel
   sends show the channel and destination. On narrow screens the target moves
@@ -485,8 +488,9 @@ a later deletion of the same session. See the [Trash API contract](#trash-api-co
   text; results are not reparsed or rounded. Long output stays in a bounded,
   keyboard-scrollable region. Tab changes retain each output's reading position.
   Promoting an identical stream to a result preserves the mounted reading surface
-  and focus; differing partial output remains separately available. Updates never
-  open a closed card or switch an inspected tab. Focusing a tool pauses conversation
+  and focus; differing partial output remains selected when the final result arrives.
+  Updates never reopen an explicitly closed card or switch an explicitly selected tab.
+  Focusing a tool pauses conversation
   following so incoming output cannot pull the card away; returning to the feed's
   bottom resumes following. Backend output limits still apply.
 - Missing results are never inferred to be successful. Resumed history labels

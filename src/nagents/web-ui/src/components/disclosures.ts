@@ -1,5 +1,5 @@
 export function rememberDisclosure(current: Map<string, boolean>, key: string, open: boolean) {
-  if ((current.get(key) ?? false) === open) return current;
+  if (current.get(key) === open) return current;
   return new Map(current).set(key, open);
 }
 
