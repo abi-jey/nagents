@@ -66,6 +66,7 @@ def test_conversation_profile_survives_restart_resume_and_fork_and_freezes_defau
             assert selected["effective"] == {
                 "agent": "reviewer",
                 "model": "review-model",
+                "reasoning_effort": "",
                 "provider": "openai",
                 "provider_kind": "openai",
                 "mode": "reviewer",
@@ -175,6 +176,7 @@ def test_pending_profile_keeps_running_identity_and_queues_next_message_for_new_
                 assert changed["active"] == {
                     "agent": "assistant",
                     "model": "fake-model",
+                    "reasoning_effort": "",
                     "provider": "fixture",
                     "provider_kind": "openai",
                     "mode": "reviewer",
