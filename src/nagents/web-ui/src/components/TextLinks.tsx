@@ -1,13 +1,16 @@
 import type { ReactNode } from "react";
 
-function href(value: string): string {
-  const raw = value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1) : value;
-  const unescaped = raw.replace(/\\([\\()])/g, "$1");
-  if (/[\s\u0000-\u001f\u007f]/.test(unescaped)) return "";
+export function safeHttpHref(value: string): string {
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return "";
   try {
-    const url = new URL(unescaped);
+    const url = new URL(value);
     return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url.href : "";
   } catch { return ""; }
+}
+
+function href(value: string): string {
+  const raw = value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1) : value;
+  return safeHttpHref(raw.replace(/\\([\\()])/g, "$1"));
 }
 
 /** Small safe link renderer. Never interprets HTML or executable URL schemes. */
