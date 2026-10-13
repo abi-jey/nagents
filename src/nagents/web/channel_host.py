@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import contextmanager
 from contextlib import suppress
 from copy import deepcopy
@@ -34,6 +35,8 @@ from .executions import MAX_PARALLEL_RUNS
 from .local_delivery import WebChannel
 from .routing import RoutingStore
 from .upload_store import expire as expire_uploads
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import sqlite3
@@ -166,6 +169,19 @@ class ChannelHost:
             asyncio.create_task(self.worker(), name="ngn-web-inbox"),
             asyncio.create_task(self.poll(), name="ngn-web-sessions"),
         ]
+        for task in self.tasks:
+            task.add_done_callback(self._background_done)
+
+    def _background_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            # Worker exceptions are joined during shutdown. Report the failure
+            # immediately without logging database paths, credentials or payloads.
+            logger.error("Web background worker failed: role=%s exception=%s", task.get_name(), type(error).__name__)
+        elif not self.closed:
+            logger.error("Web background worker stopped unexpectedly: role=%s", task.get_name())
 
     def register_tools(self) -> None:
         registry = self.state.harness.agent.tool_registry

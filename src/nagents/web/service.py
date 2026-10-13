@@ -411,7 +411,7 @@ class WebState:
     @asynccontextmanager
     async def configure(self) -> AsyncIterator[None]:
         """Serialize preference writes while allowing existing runs to continue."""
-        with self.idle(allow_running=True):
+        async with self.queued_mutation():
             await _join(asyncio.create_task(self.executions.configuration_owner()))
             yield
 

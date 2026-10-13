@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import uuid
 from contextlib import asynccontextmanager
+from contextlib import closing
 from typing import TYPE_CHECKING
+from typing import cast
 from unittest.mock import patch
 
 import httpx
@@ -35,6 +38,7 @@ if TYPE_CHECKING:
 
     from nagents.harness.types import HarnessEvent
     from nagents.types import ContentPart
+    from nagents.web.service import WebState
 
 
 URL = "http://127.0.0.1:8765"
@@ -166,6 +170,7 @@ class LiveStream:
         self.prompt = prompt
         self.message_id = str(uuid.uuid4())
         self.disconnected = False
+        self.close_code = 0
         self.output: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self.input: asyncio.Queue[Message] = asyncio.Queue()
         self.input.put_nowait({"type": "websocket.connect"})
@@ -213,6 +218,69 @@ class LiveStream:
                     self.subscribed.set()
         elif kind == "websocket.close":
             self.disconnected = True
+            self.close_code = message.get("code", 0)
+
+    async def wait_for_admission(self) -> None:
+        """Expose a failed transport/worker instead of hiding it behind the watchdog."""
+        state = cast("WebState", self.app.state.web)
+        workers = state.channels.tasks[:1]
+        admitted = asyncio.create_task(self.admitted.wait())
+        try:
+            await asyncio.wait(
+                (admitted, self.socket_task, *workers), timeout=HANG_GUARD, return_when=asyncio.FIRST_COMPLETED
+            )
+            stopped = self.socket_task.done() or any(worker.done() for worker in workers)
+            if stopped or not self.admitted.is_set():
+                reason = "owner stopped" if stopped else "watchdog expired"
+                raise AssertionError(await self.admission_diagnostics(reason))
+        except asyncio.CancelledError as error:
+            # An enclosing test watchdog starts before HTTP/subscription setup
+            # and may expire first. Keep cancellation intact and annotate its
+            # cause so that wait_for's TimeoutError retains the same evidence.
+            error.add_note(await self.admission_diagnostics("cancelled by owner"))
+            raise
+        finally:
+            admitted.cancel()
+            await asyncio.gather(admitted, return_exceptions=True)
+
+    async def admission_diagnostics(self, reason: str) -> str:
+        """Report bounded state only: no prompts, tokens, exception messages or paths."""
+        state = cast("WebState", self.app.state.web)
+
+        def task_state(task: asyncio.Task[None]) -> str:
+            if task.cancelled():
+                return "cancelled"
+            if task.done():
+                error = task.exception()
+                return f"failed:{type(error).__name__}" if error is not None else "completed"
+            frames = task.get_stack(limit=1)
+            return f"pending:{frames[0].f_code.co_name}:{frames[0].f_lineno}" if frames else "pending"
+
+        def inbox_state() -> str:
+            with closing(sqlite3.connect(state.channels.store.db_path, timeout=0)) as db:
+                row = db.execute("SELECT SUM(status = 'queued'), SUM(status = 'running') FROM ngn_web_inbox").fetchone()
+                receipt = db.execute(
+                    "SELECT status FROM ngn_web_inbox WHERE channel = '' AND message_id = ?",
+                    (self.message_id,),
+                ).fetchone()
+            status = (
+                receipt[0]
+                if receipt and receipt[0] in {"queued", "running", "completed", "failed", "interrupted"}
+                else "other"
+            )
+            return f"queued={int(row[0] or 0)},running={int(row[1] or 0)},receipt={status}"
+
+        try:
+            inbox = await asyncio.wait_for(asyncio.to_thread(inbox_state), 1)
+        except Exception as error:
+            inbox = f"unavailable:{type(error).__name__}"
+        workers = ",".join(task_state(task) for task in state.channels.tasks[:1]) or "missing"
+        return (
+            f"Stream admission {reason}; socket={task_state(self.socket_task)}; close_code={self.close_code}; "
+            f"inbox_worker={workers}; inbox=({inbox}); active_runs={len(state.executions.runs)}; "
+            f"work_tasks={len(state.channels.work_tasks)}; work_cleanup={len(state.channels.work_cleanup)}; "
+            f"mutating={state.mutating}; output_frames={self.output.qsize()}"
+        )
 
     async def start(self) -> None:
         await self.accepted.wait()
@@ -231,7 +299,7 @@ class LiveStream:
                 },
             )
         assert response.status_code == 200, response.text
-        await asyncio.wait_for(self.admitted.wait(), HANG_GUARD)
+        await self.wait_for_admission()
         run = self.app.state.web.run_for(self.session_id)
         assert run is not None and run.message_id == self.message_id
         self._run_task = run.task
