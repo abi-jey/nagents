@@ -25,7 +25,8 @@ const tools: Record<string, ToolPresentation> = {
   channel_list: { label: "List channels", icon: "channels", family: "channel" },
   channel_send: { label: "Send to channel", icon: "channels", family: "channel" },
   channel_action: { label: "Channel action", icon: "channels", family: "channel" },
-  channel_configuration: { label: "Configure channels", icon: "channels", family: "channel" },
+  channel_configuration: { label: "Inspect channel configuration", icon: "channels", family: "channel" },
+  channel_configure: { label: "Queue channel configuration", icon: "channels", family: "channel" },
 };
 
 export function toolPresentation(name: string): ToolPresentation {

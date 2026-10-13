@@ -8,6 +8,7 @@ import { ExecutionRecord } from "./ExecutionRecord.js";
 import { ExecutionValue } from "./ExecutionValue.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { appendEvent } from "./transcript.js";
+import type { Entry } from "./transcript.js";
 import { presentToolValue, toolPresentation } from "./toolPresentation.js";
 
 const readResult = {
@@ -28,6 +29,8 @@ test("native tools and MCP methods have distinct labels, icons, and origin metad
     ["skill", "Load skill", "book", "skill"], ["delegate", "Delegate task", "team", "team"],
     ["compact_history", "Compact history", "compact", "compact"], ["channel_send", "Send to channel", "channels", "channel"],
     ["schedule_wakeup", "Schedule wake-up", "clock", "schedule"],
+    ["channel_configure", "Queue channel configuration", "channels", "channel"],
+    ["channel_configuration", "Inspect channel configuration", "channels", "channel"],
   ] as const;
   for (const [name, label, icon, family] of native)
     assert.deepEqual(toolPresentation(name), { label, icon, family });
@@ -266,6 +269,61 @@ test("native metadata disclosure toggles without closing the tool or changing it
     await act(async () => root.unmount());
     dom.window.close();
     for (const name of ["window", "document", "IS_REACT_ACT_ENVIRONMENT"]) {
+      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]); else Reflect.deleteProperty(globalThis, name);
+    }
+  }
+});
+
+
+test("Preparing file inputs stay plain through promotion and copy the complete current request", async () => {
+  const dom = new JSDOM("<div id='root'></div>");
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
+  let copied = "";
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async (value: string) => { copied = value; } } } });
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    const cases = [
+      { name: "read_file", partial: '{"path":', complete: '{ "path" : "notes.md", "start_line" : 4 }' },
+      { name: "edit_file", partial: '{"path":"notes.md","old":', complete: '{ "path" : "notes.md", "old" : "before", "new" : "after" }' },
+      { name: "write_file", partial: '{"path":"notes.md","content":', complete: '{ "path" : "notes.md", "content" : "draft" }' },
+    ];
+    for (const { name, partial, complete } of cases) {
+      let entry: Entry = { id: name, kind: "tool", title: name, state: "Preparing", text: "", inputs: partial };
+      const render = () => act(async () => root.render(createElement(ExecutionRecord, { key: name, entry, open: true })));
+      await render();
+      const inputTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((tab) => tab.textContent === "Inputs")!;
+      await act(async () => inputTab.click());
+      const pre = container.querySelector<HTMLElement>('[data-panel="inputs"] pre')!;
+      const code = pre.querySelector("code")!;
+      pre.focus();
+      pre.scrollTop = 19;
+      assert.equal(pre.textContent, partial);
+
+      entry = { ...entry, state: "Requested", inputs: complete };
+      await render();
+      assert.equal(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Inputs");
+      assert.equal(container.querySelector('[data-panel="inputs"] pre'), pre);
+      assert.equal(pre.querySelector("code"), code);
+      assert.equal(pre.textContent, complete);
+      assert.equal(dom.window.document.activeElement, pre);
+      assert.equal(pre.scrollTop, 19);
+
+      entry = { ...entry, state: "Completed", result: "done" };
+      await render();
+      assert.equal(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent, "Inputs");
+      assert.equal(container.querySelector('[data-panel="inputs"] pre'), pre);
+      assert.equal(pre.querySelector("code"), code);
+      assert.equal(pre.textContent, complete);
+      const copy = container.querySelector<HTMLButtonElement>('[data-panel="inputs"] [aria-label="Copy inputs"]')!;
+      await act(async () => copy.click());
+      assert.equal(copied, complete);
+    }
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    for (const name of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) {
       if (previous[name]) Object.defineProperty(globalThis, name, previous[name]); else Reflect.deleteProperty(globalThis, name);
     }
   }

@@ -14,6 +14,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const tabs = useRef<HTMLDivElement>(null);
   const separateResult = useRef(false);
   const revealedStream = useRef(false);
+  const streamedInputs = useRef(false);
   const [chosen, choose] = useState("");
   const name = entry.title || "Tool call";
   const presentation = toolPresentation(name);
@@ -21,6 +22,9 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const status = executionStatus(entry);
   const busy = status.tone === "active" && entry.result === undefined;
   const preparing = entry.state === "Preparing";
+  // Argument streaming is also a reading surface. Keep its plain pre/code
+  // after the call is ready instead of replacing it with a native input view.
+  if (preparing) streamedInputs.current = true;
   // Reveal the first live chunk, then keep that reading surface through the
   // final result. Explicit disclosure and tab choices always take precedence.
   if (busy && entry.text) revealedStream.current = true;
@@ -43,7 +47,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
       {entry.toolProgress === "abandoned" && <p className="tool-input-note">This proposed call was not executed.</p>}
       {entry.inputsTruncated && <p className="tool-input-note">Partial preview limited to 16,384 characters. Complete inputs appear when the call is ready.</p>}
       <ExecutionValue label={preparing ? "Arguments being received" : "Inputs"} text={entry.inputs}
-        formatInputs={!preparing && !entry.inputsTruncated} toolName={name}
+        formatInputs={!streamedInputs.current && !entry.inputsTruncated} toolName={name}
         emptyText={preparing ? "Waiting for arguments…" : undefined} />
     </>,
   });

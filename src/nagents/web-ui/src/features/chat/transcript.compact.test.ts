@@ -43,7 +43,7 @@ test("compact task branches start closed with names/states in summaries and full
 test("notification and wake-up payloads start collapsed with distinct delivery/firing labels and retained IDs", () => {
   const html = markup();
   for (const id of ["notification-entry", "wakeup-entry"]) {
-    const opening = new RegExp(`<details class="activity-record" data-disclosure-key="${id}"([^>]*)>`).exec(html);
+    const opening = new RegExp(`<details(?=[^>]*\\bclass="activity-record")(?=[^>]*\\bdata-disclosure-key="${id}")([^>]*)>`).exec(html);
     assert.ok(opening);
     assert.doesNotMatch(opening[1], /\bopen\b/);
   }
