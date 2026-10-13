@@ -55,6 +55,66 @@ async def rows(state: WebState, sql: str, *parameters: str) -> list[tuple[object
     return await finish_on_cancel(asyncio.to_thread(read))
 
 
+@pytest.mark.parametrize("permanent", [False, True])
+@pytest.mark.parametrize("admit_run", [False, True])
+def test_deletion_waits_for_bookkeeping_and_rechecks_run_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, permanent: bool, admit_run: bool
+) -> None:
+    async def check() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            root = state.selected_session_id
+            await state.history.add_message(root, Message(role="user", content="Retain until deletion wins"))
+            waiting = asyncio.Event()
+            original_wait = state.mutation_released.wait
+
+            async def observe_wait() -> bool:
+                waiting.set()
+                return await original_wait()
+
+            monkeypatch.setattr(state.mutation_released, "wait", observe_wait)
+            admitted = Run(root)
+            try:
+                # Trash bookkeeping owns both guards. Admission also owns the
+                # host guard and can reserve a run before giving up that guard.
+                with state.idle(allow_running=True), state.harness.operation("bookkeeping fixture"):
+                    request = asyncio.create_task(
+                        client.request(
+                            "DELETE",
+                            f"/api/sessions/{root}",
+                            headers=headers,
+                            json={"permanent": permanent},
+                        )
+                    )
+                    barrier = asyncio.create_task(waiting.wait())
+                    try:
+                        async with asyncio.timeout(HANG_GUARD):
+                            done, _ = await asyncio.wait((request, barrier), return_when=asyncio.FIRST_COMPLETED)
+                        assert barrier in done and not request.done(), "Deletion must wait for the bookkeeping owner"
+                        assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
+                        if admit_run:
+                            state.executions.reserve(admitted)
+                    finally:
+                        barrier.cancel()
+                        await asyncio.gather(barrier, return_exceptions=True)
+                response = await request
+                assert response.status_code == (409 if admit_run else 200), response.text
+                roots = await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
+                if admit_run:
+                    assert roots == [(root,)] and state.run_for(root) is admitted
+                    assert await rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", root) == [
+                        ("Retain until deletion wins",),
+                    ]
+                else:
+                    assert not roots and response.json()["deleted_session_id"] == root
+                assert not state.mutating and not state.harness._busy
+            finally:
+                state.executions.release(admitted)
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("selection", ["selected", "other", "last"])
 def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: str) -> None:
     async def run() -> None:

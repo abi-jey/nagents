@@ -196,7 +196,7 @@ def _repoint_mains(state: WebState, session_id: str, selected: str) -> None:
 
 
 async def delete_session(state: WebState, session_id: str, *, permanent: bool = False) -> dict[str, object]:
-    with state.idle():
+    async with state.queued_mutation(allow_running=False):
         harness = state.harness
         if harness._busy:
             raise HTTPException(409, "Harness busy. Finish the active operation before deleting.")

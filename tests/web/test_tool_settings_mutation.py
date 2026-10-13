@@ -183,7 +183,7 @@ def test_queued_save_times_out_without_writing(tmp_path: Path, monkeypatch: pyte
                     await asyncio.wait_for(queued.wait(), HANG_GUARD)
                     response = await asyncio.wait_for(request, HANG_GUARD)
                 assert response.status_code == 409
-                assert response.json() == {"detail": "Workspace update is still in progress. Try saving again shortly."}
+                assert response.json() == {"detail": "Workspace update is still in progress. Try again shortly."}
                 assert not (tmp_path / ".ngn" / "tools.yaml").exists()
             finally:
                 owner.__exit__(None, None, None)
