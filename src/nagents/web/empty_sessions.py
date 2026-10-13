@@ -173,7 +173,8 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
         if type(harness.agent.session) is not WebHistory:
             state.selected_session_id = await harness.new_session()
             return state.selected_session_id
-        with nullcontext() if harness._busy or state.executions.in_use(harness) else harness.operation("new session"):
+        owns_operation = not harness._busy and not state.executions.in_use(harness)
+        with harness.operation("new session") if owns_operation else nullcontext():
             protected = _protected(state)
             in_use = _in_use(state)
             workers = bool(state.executions.runs) or any(not task.done() for task in harness.tasks._workers.values())
@@ -190,7 +191,9 @@ async def new_session(state: WebState, active_voice: str = "") -> str:
             selected, removed, choice, changed = await state.channels.store._transaction(select)
             state.session_agents.choices[selected] = choice
             state.selected_session_id = selected
-            if not harness._busy and not state.executions.in_use(harness):
+            # Our own operation marks the idle harness busy. It must still
+            # follow the committed selection; another accepted run must not.
+            if (owns_operation or not harness._busy) and not state.executions.in_use(harness):
                 harness.session_id = selected
                 harness._session_created = True
                 harness.tools.read_hashes.clear()
