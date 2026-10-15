@@ -142,7 +142,8 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                             )
                             assert response.status_code == 201, response.text
                             created = response.json()
-                            assert set(created) == {"session_id", "model", "voice", "context"}
+                            assert set(created) == {"session_id", "model", "voice", "context", "playback_mode"}
+                            assert created["playback_mode"] == "realtime"
                             assert created["model"] == "gpt-live-1-codex" and created["voice"] == "sol"
                             assert SECRET not in response.text and "rtc_fixture" not in response.text
                             identifier = created["session_id"]

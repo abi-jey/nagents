@@ -5,6 +5,9 @@ const CAPACITY = PCM_RATE; // One second, independent of WebSocket packet size.
 const MIN_TARGET = 0.04;
 const MAX_TARGET = 0.16;
 const RESERVE_DECAY = 0.002; // Give back two milliseconds per second of clean delivery.
+const REALTIME_TARGET = .28;
+const REALTIME_DECAY = .00025;
+const REALTIME_LIMIT = PCM_RATE * .32;
 
 class LivePlayback extends AudioWorkletProcessor {
   constructor() {
@@ -54,13 +57,23 @@ class LivePlayback extends AudioWorkletProcessor {
     this.playedSamples = 0;
     this.underruns = 0;
     this.droppedSamples = 0;
+    this.interruptedSamples = 0;
     this.peakBufferedSamples = 0;
+    this.realtime = false;
+    this.latencyRecoveries = 0;
+    this.silenceRefills = 0;
+    this.quietFrames = 0;
+    this.lastUnderrunAt = this.lastRecoveryAt = -1;
     this.port.onmessage = ({ data }) => {
       if (data?.type === "reset") { this.reset(data.epoch); return; }
       if (data?.type === "barrier") { this.fenceReports(data.epoch); return; }
       if (data?.type === "played-ack" && data.epoch === this.epoch) { this.playedPending = false; return; }
       if (data?.type === "health") { this.health(true); return; }
       if (data?.type === "health-ack" && data.epoch === this.epoch) { this.healthPending = false; return; }
+      if (data?.type === "mode" && data.epoch === this.epoch && typeof data.realtime === "boolean") {
+        this.realtime = data.realtime;
+        return;
+      }
       if (data?.type !== "pcm" || !(data.buffer instanceof ArrayBuffer) || data.epoch !== this.epoch) return;
       const length = data.buffer.byteLength;
       if (!length || length > 48000 || length % 2) return;
@@ -70,12 +83,14 @@ class LivePlayback extends AudioWorkletProcessor {
 
   reset(epoch) {
     if (!Number.isSafeInteger(epoch)) return;
+    this.interruptedSamples += this.count;
     this.epoch = epoch;
     this.samples.fill(0); this.history.fill(0); this.filterIndex = 0; this.primed = false;
     this.count = this.read = this.phase = this.reportSize = 0;
     this.playing = false;
     this.firstArrival = this.lastArrival = -1;
     this.meanDepth = this.lastValue = this.fadeFrom = this.fade = 0;
+    this.quietFrames = 0;
     this.ratio = 1;
     this.healthPending = this.playedPending = false;
     this.health();
@@ -94,7 +109,7 @@ class LivePlayback extends AudioWorkletProcessor {
     const incoming = buffer.byteLength / 2;
     if (this.lastArrival >= 0) {
       const interval = now - this.lastArrival;
-      const relaxedTarget = Math.max(MIN_TARGET, this.target - interval * RESERVE_DECAY);
+      const relaxedTarget = Math.max(MIN_TARGET, this.target - interval * (this.realtime ? REALTIME_DECAY : RESERVE_DECAY));
       // Learn short transport/render-message variation. A pause between spoken
       // replies is not network jitter, nor is an unpaced API audio batch.
       if (interval < 0.25 && this.packetDuration <= 0.06) {
@@ -103,7 +118,7 @@ class LivePlayback extends AudioWorkletProcessor {
         // immediately so the next re-prime can absorb repeated delivery gaps.
         // This cannot recover audio already missing during the first stall.
         const late = Math.max(0, interval - this.packetDuration);
-        this.target = Math.min(MAX_TARGET, Math.max(relaxedTarget, MIN_TARGET + late, MIN_TARGET + 3 * this.jitter));
+        this.target = Math.min(this.realtime ? REALTIME_TARGET : MAX_TARGET, Math.max(relaxedTarget, MIN_TARGET + late, MIN_TARGET + 3 * this.jitter));
       } else {
         this.target = relaxedTarget;
       }
@@ -111,19 +126,26 @@ class LivePlayback extends AudioWorkletProcessor {
     this.lastArrival = now;
     this.packetDuration = incoming / PCM_RATE;
     if (!this.count) this.firstArrival = now;
-    const excess = Math.max(0, this.count + incoming - CAPACITY);
+    const recover = this.realtime && this.count + incoming > REALTIME_LIMIT;
+    const limit = recover ? Math.ceil(Math.max(.08, this.target) * PCM_RATE) : CAPACITY;
+    const excess = Math.max(0, this.count + incoming - limit);
+    let incomingOffset = 0;
     if (excess) {
-      this.read = (this.read + excess) % CAPACITY;
-      this.count -= excess;
+      const queued = Math.min(this.count, excess);
+      this.read = (this.read + queued) % CAPACITY;
+      this.count -= queued;
+      incomingOffset = excess - queued;
       this.droppedSamples += excess;
+      if (recover) { this.latencyRecoveries++; this.lastRecoveryAt = now; }
       this.phase = 0; this.primed = false;
+      this.quietFrames = 0;
       this.history.fill(0); this.filterIndex = 0;
       this.reportSize = 0;
       this.fadeFrom = this.lastValue; this.fade = 1;
     }
     const bytes = new DataView(buffer);
-    for (let i = 0; i < incoming; i++) this.samples[(this.read + this.count + i) % CAPACITY] = bytes.getInt16(i * 2, true);
-    this.count += incoming;
+    for (let i = incomingOffset; i < incoming; i++) this.samples[(this.read + this.count + i - incomingOffset) % CAPACITY] = bytes.getInt16(i * 2, true);
+    this.count += incoming - incomingOffset;
     this.receivedSamples += incoming;
     this.peakBufferedSamples = Math.max(this.peakBufferedSamples, this.count);
   }
@@ -144,7 +166,10 @@ class LivePlayback extends AudioWorkletProcessor {
       receivedSamples: this.receivedSamples, playedSamples: this.playedSamples,
       underruns: this.underruns, droppedSamples: this.droppedSamples,
       bufferedMs: this.count / PCM_RATE * 1000, peakBufferedMs: this.peakBufferedSamples / PCM_RATE * 1000,
-      targetMs: this.target * 1000, sampleRate, correctionPpm: (this.ratio - 1) * 1000000 });
+      targetMs: this.target * 1000, sampleRate, correctionPpm: (this.ratio - 1) * 1000000,
+      renderedAt: currentTime, lastUnderrunAt: this.lastUnderrunAt,
+      latencyRecoveries: this.latencyRecoveries, lastRecoveryAt: this.lastRecoveryAt,
+      interruptedSamples: this.interruptedSamples, silenceRefills: this.silenceRefills });
     this.nextHealth = currentTime + 1;
   }
 
@@ -169,6 +194,17 @@ class LivePlayback extends AudioWorkletProcessor {
   process(_inputs, outputs) {
     const output = outputs[0]?.[0];
     if (!output) return true;
+    // A learned target does not refill a stream whose producer runs slightly
+    // behind the speaker. Rebuild only after sustained digital silence; keep
+    // every queued sample, and bound the pause by the ordinary prime timeout.
+    // This leaves voiced PCM and its playback rate untouched.
+    if (this.realtime && this.playing && this.count > 0 &&
+        this.quietFrames >= sampleRate * .06 && this.target * PCM_RATE - this.count > PCM_RATE * .02) {
+      this.playing = false;
+      this.firstArrival = currentTime;
+      this.quietFrames = 0;
+      this.silenceRefills++;
+    }
     if (!this.playing && this.count > 0 &&
         (this.count >= this.target * PCM_RATE || currentTime - this.firstArrival >= this.target)) {
       this.playing = true;
@@ -208,6 +244,7 @@ class LivePlayback extends AudioWorkletProcessor {
         }
       } else if (this.playing) {
         this.playing = false; this.underruns++;
+        this.lastUnderrunAt = currentTime + i / sampleRate;
         this.firstArrival = -1;
         this.flushReport();
         this.phase = 0;
@@ -219,6 +256,7 @@ class LivePlayback extends AudioWorkletProcessor {
         this.fade = Math.max(0, this.fade - fadeStep);
       }
       output[i] = this.lastValue = value;
+      this.quietFrames = this.playing && Math.abs(value) <= 2 / 32768 ? this.quietFrames + 1 : 0;
     }
     // The node is mono. Extra requested channels receive the same playout.
     for (let channel = 1; channel < outputs[0].length; channel++) outputs[0][channel].set(output);

@@ -29,6 +29,8 @@ from .live_diagnostics import Timing
 from .live_diagnostics import log_live_failure
 from .live_diagnostics import voice_session_identity
 from .live_login import LoginVoiceError
+from .live_output import BrowserOutput
+from .live_realtime import MediaClock
 from .live_rtp_diagnostics import ReceiverAudioHealth
 
 if TYPE_CHECKING:
@@ -173,6 +175,8 @@ class ChatGPTMediaRelay:
 
     def __init__(self, source: AudioInput, output: AudioOutput) -> None:
         self._source, self._output = source, output
+        if isinstance(output, BrowserOutput):
+            output.use_realtime_clock()
         self._voice_session_id = voice_session_identity(getattr(output, "voice_session_id", ""))
         self._track = _MicrophoneTrack(self._voice_session_id)
         # Provider candidates are supplied by the native SDP answer. Avoid
@@ -196,6 +200,7 @@ class ChatGPTMediaRelay:
         self._output_samples = 0
         self._last_output_report = float("-inf")
         self._receiver_health = ReceiverAudioHealth(self._voice_session_id)
+        self._media_clock = MediaClock()
         self._peer.on("connectionstatechange", self._state_changed)
         self._peer.on("track", self._remote_track)
         self._channel.on("open", self._mark_ready)
@@ -276,6 +281,7 @@ class ChatGPTMediaRelay:
         resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
         previous = 0.0
         duration = 0.0
+        drained = 0
         while not self._closed:
             try:
                 self._receiver_health.receiving = True
@@ -290,6 +296,13 @@ class ChatGPTMediaRelay:
             self._receiver_health.frames += 1
             self._receiver_health.sample_rate = frame.sample_rate
             now = monotonic()
+            valid_clock = frame.pts is not None and frame.time_base is not None
+            media_time = (
+                float(frame.pts * frame.time_base) if frame.pts is not None and frame.time_base is not None else 0.0
+            )
+            # Source timestamps are not synchronized with the local clock.
+            # Keep offset drift visible, but never use it to discard fresh PCM.
+            self._media_clock.observe(now, media_time, valid=valid_clock)
             # This is observed decoded-frame spacing, not network-only jitter:
             # downstream write waits also delay the next recv(). The concurrent
             # RTP snapshot reports packet progress and receive/write wait flags.
@@ -304,13 +317,22 @@ class ChatGPTMediaRelay:
                     started = monotonic()
                     self._receiver_health.writing = True
                     try:
-                        await self._output.write(bytes(converted.planes[0])[: converted.samples * 2])
+                        pcm = bytes(converted.planes[0])[: converted.samples * 2]
+                        if isinstance(self._output, BrowserOutput):
+                            self._output.enqueue_realtime(pcm)
+                        else:
+                            await self._output.write(pcm)
                     finally:
                         self._receiver_health.writing = False
                     self._output_samples += converted.samples
                     self._receiver_health.output_samples += converted.samples
                     if self._output_wait.observe(monotonic() - started):
                         self._report_output()
+            # Public recv() can synchronously drain aiortc's accumulated frames.
+            # Yield fairly without downstream backpressure or one task/frame.
+            drained += 1
+            if drained % 8 == 0:
+                await asyncio.sleep(0)
 
     def _report_output(self, *, closing: bool = False) -> None:
         now = monotonic()
@@ -321,7 +343,8 @@ class ChatGPTMediaRelay:
         log(
             "Live provider audio timing: voice_session_id=%s closing=%d output_samples=%d frame_intervals=%d "
             "frame_gaps=%d frame_gap_ms=%.1f frame_gap_peak_ms=%.1f writes=%d "
-            "slow_writes=%d write_ms=%.1f write_peak_ms=%.1f",
+            "slow_writes=%d write_ms=%.1f write_peak_ms=%.1f "
+            "source_clock_offset_lag_ms=%.1f source_clock_offset_lag_peak_ms=%.1f source_clock_resets=%d source_clock_missing=%d",
             self._voice_session_id,
             int(closing),
             self._output_samples,
@@ -333,6 +356,10 @@ class ChatGPTMediaRelay:
             self._output_wait.delayed,
             self._output_wait.total_ms,
             self._output_wait.peak_ms,
+            self._media_clock.offset_lag_ms,
+            self._media_clock.offset_lag_peak_ms,
+            self._media_clock.resets,
+            self._media_clock.missing,
         )
 
     async def offer(self) -> str:

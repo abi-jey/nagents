@@ -66,7 +66,24 @@ def test_audio_health_rate_limits_anomalies_and_always_reports_final_totals(
     assert all(type(value) in {int, float} for value in final.args[1:])
 
 
-def test_owned_audio_heartbeat_observes_blocking_and_cancels_cleanly() -> None:
+def test_owned_audio_heartbeat_observes_blocking_and_cancels_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    # This test advances a virtual clock, so it must not drive real worker
+    # threads. Real watchdog sampling/joining has its own wall-clock test.
+    class Sampler:
+        def __init__(self, session_id: str) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def beat(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("nagents.web.live_diagnostics.LoopStallSampler", Sampler)
+
     async def scenario() -> None:
         health = BrowserAudioHealth()
         watch = asyncio.create_task(health.watch())

@@ -673,6 +673,7 @@ class LiveService:
                 "session_id": identifier,
                 "model": call.record.model,
                 "voice": call.record.voice,
+                "playback_mode": "realtime" if call.audio_out.realtime else "buffered",
                 **({"context": dict(call.record.context)} if call.record.context else {}),
             }
         except asyncio.CancelledError:

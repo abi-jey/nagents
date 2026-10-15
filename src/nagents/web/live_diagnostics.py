@@ -12,6 +12,8 @@ from typing import Literal
 
 from nagents.provider._diagnostics import exception_diagnostic
 
+from .live_loop_diagnostics import LoopStallSampler
+
 logger = logging.getLogger("uvicorn.error")
 FailureStage = Literal[
     "lifecycle",
@@ -102,10 +104,16 @@ class BrowserAudioHealth:
 
     async def watch(self) -> None:
         loop = asyncio.get_running_loop()
-        while True:
-            deadline = loop.time() + 0.05
-            await asyncio.sleep(0.05)
-            self.lag(loop.time() - deadline)
+        sampler = LoopStallSampler(self.session_id)
+        sampler.start()
+        try:
+            while True:
+                deadline = loop.time() + 0.05
+                sampler.beat()
+                await asyncio.sleep(0.05)
+                self.lag(loop.time() - deadline)
+        finally:
+            await sampler.close()
 
     def report(self, *, closing: bool = False) -> None:
         now = monotonic()

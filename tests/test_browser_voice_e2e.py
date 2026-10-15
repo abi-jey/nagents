@@ -4,10 +4,12 @@ import base64
 import copy
 import json
 import struct
+from functools import partial
 from typing import cast
 
 from examples.live.browser_e2e.artifacts import check_capture
 from examples.live.browser_e2e.artifacts import extract_report
+from examples.live.browser_e2e.artifacts import timing_metrics
 
 
 def block(frame: int = 0, *, silent: bool = False) -> dict[str, object]:
@@ -155,3 +157,81 @@ def test_devtools_pretty_fenced_and_enveloped_exports() -> None:
     envelope = json.dumps({"content": [{"type": "text", "text": fenced}]})
     for value in (pretty, fenced, envelope, copy.deepcopy(report)):
         assert extract_report(value) == report
+
+
+def test_timing_uses_audio_thread_clock_and_excludes_idle_queue_age() -> None:
+    report = baseline()
+    report["health"] = [
+        {
+            "contextId": 0,
+            "epoch": 0,
+            "monotonicMs": 500,
+            "audioTime": 0.5,
+            "renderedAt": 0.2,
+            "outputTimestamp": {"contextTime": 0.5, "performanceTime": 500},
+            "playedSamples": 2,
+            "bufferedMs": 40,
+            "targetMs": 40,
+        },
+        {"contextId": 0, "epoch": 0, "monotonicMs": 60500, "playedSamples": 4, "bufferedMs": 0},
+    ]
+    events = cast("list[dict[str, object]]", report["events"])
+    events[0]["receivedSamples"] = 2
+    events[1]["receivedSamples"] = 4
+    result = timing_metrics(report)
+    windows = cast("list[dict[str, object]]", result["minuteWindows"])
+    assert result["sampleAgeAvailable"] is True
+    assert windows[0]["sampleAgeMs"] == {"samples": 1, "p95": 100, "max": 100}
+    assert windows[1]["sampleAgeMs"] == {"samples": 0, "p95": 0, "max": 0}
+    cast("list[dict[str, object]]", report["health"])[0]["droppedSamples"] = 1
+    assert timing_metrics(report)["sampleAgeAvailable"] is False
+
+
+def test_long_run_contract_rejects_only_early_speech_and_detects_queue_growth() -> None:
+    report = baseline()
+    # A low-rate synthetic recorder avoids megabytes of PCM in this contract
+    # test while retaining exact samples, continuity, and an actual long clock.
+    outputs = [
+        {**block(index * 4), "sampleRate": 4, "monotonicMs": index * 1000, "contextTimeAtDelivery": index}
+        for index in range(306)
+    ]
+    report["output"] = outputs
+    report["input"] = [{**block(), "monotonicMs": 0}, {**block(), "monotonicMs": 300000}]
+    events = cast("list[dict[str, object]]", report["events"])
+    events[-1]["finalFrame"] = 306 * 4
+    events.extend(
+        [
+            {"type": "measurement.start", "monotonicMs": 0},
+            {"type": "fixture.start", "round": 1, "monotonicMs": 0, "duration": 1},
+            {"type": "fixture.start", "round": 2, "monotonicMs": 300000, "duration": 1},
+        ]
+    )
+    check = partial(
+        check_capture, mode="offline", reply_samples=4, min_rounds=2, min_active_span_seconds=300, max_buffered_ms=200
+    )
+    assert check(report)["passed"] is True
+    events[-1]["monotonicMs"] = 10000
+    checks = cast("dict[str, bool]", check(report)["checks"])
+    assert checks["longActiveSession"] is False
+    events[-1]["monotonicMs"] = 300000
+    cast("list[dict[str, object]]", report["health"])[0]["bufferedMs"] = 800
+    checks = cast("dict[str, bool]", check(report)["checks"])
+    assert checks["boundedBrowserPlaybackQueue"] is False
+    cast("list[dict[str, object]]", report["health"])[0].update({"bufferedMs": 40, "peakBufferedMs": 800})
+    checks = cast("dict[str, bool]", check(report)["checks"])
+    assert checks["boundedBrowserPlaybackQueue"] is False
+
+
+def test_round_requires_rendered_reply_before_next_fixture() -> None:
+    report = baseline()
+    events = cast("list[dict[str, object]]", report["events"])
+    events.extend(
+        [
+            {"type": "fixture.start", "round": 1, "monotonicMs": 10000, "duration": 1},
+            {"type": "fixture.start", "round": 2, "monotonicMs": 20000, "duration": 1},
+        ]
+    )
+    # Existing output is before either utterance. A long wall-clock wait or a
+    # successful initial reply cannot stand in for later audible responses.
+    checks = cast("dict[str, bool]", check_capture(report, mode="offline", reply_samples=4, min_rounds=2)["checks"])
+    assert checks["enoughSpokenRounds"] is False

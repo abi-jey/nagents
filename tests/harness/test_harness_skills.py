@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -13,10 +14,12 @@ from nagents.events import ToolCallEvent
 from nagents.harness import Harness
 from nagents.harness import HarnessConfig
 from nagents.harness import load_config
+from nagents.harness.tools import CodingTools
 from nagents.skills import Skill
 from tests.harness.test_harness import ScriptedProvider
 from tests.harness.test_harness import approve
 from tests.support.config import connection
+from tests.support.hang_guard import HANG_GUARD
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,6 +48,132 @@ def skill_file(config: HarnessConfig, name: str, body: str, *, description: str 
     path = folder / "SKILL.md"
     path.write_text(f"---\nname: {name}\ndescription: {description}\n---\n{body}")
     return path
+
+
+def test_skill_discovery_runs_offloop_and_publishes_only_a_complete_catalog(
+    config: HarnessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        skill_file(config, "fresh", "A new skill")
+        started = asyncio.Event()
+        release = threading.Event()
+        loop = asyncio.get_running_loop()
+        original = CodingTools.discover_skills
+        main_thread = threading.get_ident()
+        readers: list[CodingTools] = []
+
+        def slow_scan(reader: CodingTools) -> None:
+            assert threading.get_ident() != main_thread
+            readers.append(reader)
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(HANG_GUARD)
+            original(reader)
+
+        monkeypatch.setattr(CodingTools, "discover_skills", slow_scan)
+        task = asyncio.create_task(harness.agent.refresh_skills())
+        try:
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
+            # The event loop and audio heartbeat can continue while scanning.
+            await asyncio.sleep(0)
+            assert "fresh" not in harness.tools.skills
+            assert readers[0] is not harness.tools
+            assert readers[0]._storage_ids is not harness.tools._storage_ids
+            release.set()
+            await asyncio.wait_for(task, HANG_GUARD)
+            assert "fresh" in harness.tools.skills and "fresh" in harness.agent.skills
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_skill_discovery_joins_worker_without_publishing(
+    config: HarnessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        started = asyncio.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        loop = asyncio.get_running_loop()
+        original = CodingTools.discover_skills
+        await harness.agent.refresh_skills()
+        previous = dict(harness.agent.skills)
+        skill_file(config, "fresh", "A new skill")
+
+        def slow_scan(reader: CodingTools) -> None:
+            original(reader)
+            reader._storage_ids[123, 456] = "Protected test inode"
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(HANG_GUARD)
+            finished.set()
+
+        monkeypatch.setattr(CodingTools, "discover_skills", slow_scan)
+        task = asyncio.create_task(harness.agent.refresh_skills())
+        try:
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done() and not finished.is_set()
+            assert dict(harness.agent.skills) == previous
+            assert "fresh" not in harness.tools.skills
+            assert (123, 456) not in harness.tools._storage_ids
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, HANG_GUARD)
+            assert finished.is_set()
+            assert harness.tools._storage_ids[123, 456] == "Protected test inode"
+            assert dict(harness.agent.skills) == previous
+            assert "fresh" not in harness.tools.skills
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await harness.close()
+
+    asyncio.run(scenario())
+
+
+def test_discovery_rechecks_file_policy_after_worker_returns(
+    config: HarnessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        harness = Harness(config)
+        skill_file(config, "oversized", "x" * 2000)
+        started = asyncio.Event()
+        release = threading.Event()
+        loop = asyncio.get_running_loop()
+        original = CodingTools.discover_skills
+        scans = 0
+
+        def scan(reader: CodingTools) -> None:
+            nonlocal scans
+            scans += 1
+            original(reader)
+            if scans == 1:
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(HANG_GUARD)
+
+        monkeypatch.setattr(CodingTools, "discover_skills", scan)
+        task = asyncio.create_task(harness.agent.refresh_skills())
+        try:
+            await asyncio.wait_for(started.wait(), HANG_GUARD)
+            harness.config.max_file_bytes = 1024
+            release.set()
+            await asyncio.wait_for(task, HANG_GUARD)
+            assert scans == 2
+            assert "oversized" not in harness.tools.skills and "oversized" not in harness.agent.skills
+            assert any("ValueError" in line for line in harness.tools.skill_diagnostics)
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await harness.close()
+
+    asyncio.run(scenario())
 
 
 def test_bundled_skills_and_workspace_override_removal(config: HarnessConfig) -> None:
