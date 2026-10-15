@@ -18,7 +18,6 @@ export function availability(state: ClientActivity) {
     settings: navigate,
     channels: navigate,
     tools: navigate,
-    designer: navigate,
     live: free,
     trash: free,
   };

@@ -63,10 +63,6 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--model", "-m", help="Provider model ID")
     common.add_argument("--agent", "-a", help="Agent profile (default: assistant; other profiles must be configured)")
     common.add_argument(
-        "--design", type=Path, help="Load an experimental YAML agent design (requires the designer extra)"
-    )
-    common.add_argument("--design-agent", default="", help="Agent ID within --design (default: entrypoint)")
-    common.add_argument(
         "--max-subagent-depth",
         type=int,
         help="Delegation depth: 0 disables, 2 permits children and grandchildren (default)",
@@ -519,7 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides["plugins"] = tuple(plugins)
             overrides["cli_plugins"] = tuple(plugins[len(config.plugins) :])
         config = replace(config, **overrides)
-        if not getattr(args, "design", None) and not config.profile(config.agent).user_invocable:
+        if not config.profile(config.agent).user_invocable:
             raise ValueError(f"Agent {config.agent!r} is available only for delegation")
         if "model" in overrides:
             config.model_explicit = True
@@ -543,10 +539,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 model_explicit=True,
             )
         if args.command == "serve":
-            if getattr(args, "design", None):
-                raise ValueError(
-                    "Open agent designs from the web Agent Designer; --design is for terminal/headless execution."
-                )
             from .web import serve
 
             serve(
@@ -558,24 +550,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dev=args.dev,
             )
             return 0
-        if args.command == "run" and not config.demo and not config.provider and not getattr(args, "design", None):
+        if args.command == "run" and not config.demo and not config.provider:
             raise ValueError("Select a named provider connection before running a prompt.")
-        if getattr(args, "design", None):
-            try:
-                from .designer.runtime import DesignedHarness
-                from .designer.schema import parse
-            except ModuleNotFoundError as error:
-                if error.name not in {"yaml", "pydantic"}:
-                    raise
-                raise ValueError("YAML agent execution requires pip install 'nagents[designer]'.") from error
-
-            with args.design.open(encoding="utf-8") as source:
-                design = parse(source.read(49153)).resolved(workspace)
-            harness: Harness = DesignedHarness(config, design, args.design_agent)
-        else:
-            if getattr(args, "design_agent", ""):
-                raise ValueError("--design-agent requires --design")
-            harness = Harness(config)
+        harness = Harness(config)
         if args.command and args.command != "resume":
             return asyncio.run(_headless(harness, args))
         pick_session = False

@@ -36,7 +36,7 @@ export function SessionAgentPicker({ selection, loading, saving, error, choose, 
     };
   }, []);
   async function apply(name: string) {
-    if (busy || choosing.current || loading || selection?.locked_reason) return;
+    if (busy || choosing.current || loading) return;
     choosing.current = true; setApplying(name); setLocalError("");
     try {
       if (await choose(name)) { if (alive.current) close(); }
@@ -65,7 +65,6 @@ export function SessionAgentPicker({ selection, loading, saving, error, choose, 
         {active?.mode === "reviewer" && <p>The current run is read-only.</p>}
         {selection.effective.mode === "reviewer" && active?.mode !== "reviewer" && <p>Read-only restrictions apply now.</p>}
       </div>}
-      {selection?.locked_reason && <p className="session-agent-picker-notice" role="status">{selection.locked_reason}</p>}
       {profiles.length > 6 && <label className="session-agent-search" htmlFor={searchId}><Icon name="search" size={16} /><span className="sr-only">Search agent profiles</span>
         <input id={searchId} type="search" value={query} placeholder="Find an agent…" onInput={event => setQuery(event.currentTarget.value)} /></label>}
       <div className="session-agent-picker-status"><span role="status">{busy ? `Applying ${applying || "agent"}…` : loading ? "Loading agent profiles…" : `${profiles.length} profile${profiles.length === 1 ? "" : "s"}`}</span>
@@ -75,7 +74,7 @@ export function SessionAgentPicker({ selection, loading, saving, error, choose, 
         const selected = selection?.agent === profile.name;
         const reason = profile.disabled_reason;
         return <li key={profile.name}><button type="button" className={`session-agent-option${selected ? " is-selected" : ""}`} aria-pressed={selected}
-          disabled={busy || loading || !!reason || !!selection?.locked_reason} onClick={() => void apply(profile.name)}>
+          disabled={busy || loading || !!reason} onClick={() => void apply(profile.name)}>
           <span className="session-agent-option-heading"><strong>{profile.name}</strong>
             {selection?.workspace_default === profile.name && <span className="session-agent-default">Workspace default</span>}
             <span className="session-agent-choice" aria-hidden="true">{selected ? "✓" : ""}</span></span>

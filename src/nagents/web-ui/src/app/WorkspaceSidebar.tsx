@@ -57,7 +57,6 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
         openSession={(id) => void select(id)} blocked={client.busy} openDisabled={false} />}</>}
       settings={client.settings.show} settingsDisabled={!available.settings}
       tools={client.showTools} toolsDisabled={!available.tools}
-      designer={() => { close(); client.showDesigner(); }} designerDisabled={!available.designer}
       channels={client.channels.show} channelsDisabled={!available.channels} demo={!!sessions.config?.demo}
     />
     {renaming && <SessionTitleDialog key={renaming.id} session={renaming} error={client.error}

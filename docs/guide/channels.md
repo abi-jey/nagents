@@ -315,8 +315,7 @@ Switching conversations discards that conversation's attachment drafts.
 
 The host accepts up to **3 attachments, 8 MiB each**, from JPEG, PNG, GIF, WebP,
 and PDF. The available picker types are the intersection of this allowlist and
-the executing provider/adapter's declared input support, including pinned designed
-roots. For example, the Responses adapter accepts images but not PDFs. Unsupported
+the executing provider/adapter's declared input support. For example, the Responses adapter accepts images but not PDFs. Unsupported
 types fail before native input is sent; browser audio/video playback does not
 imply model support. Offline demo and custom persistence adapters do not expose
 upload admission.

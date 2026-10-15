@@ -42,7 +42,6 @@ from .channel_host import ChannelHost
 from .channel_notices import ChannelNotices
 from .channel_replies import automatic_reply
 from .delivery_transcript import DeliveryTranscript
-from .design_channels import DesignedChannels
 from .diagnostics import exception_diagnostic
 from .executions import MAX_PARALLEL_RUNS
 from .executions import Executions
@@ -296,7 +295,6 @@ class WebState:
             reserve=self.reserve_wakeup,
         )
         self.channels = ChannelHost(self)
-        self.designed_channels = DesignedChannels(self)
         self.session_agents = SessionAgents(self)
         self.responses = Responses(self)
         self.uploads = Uploads(self)
@@ -474,7 +472,8 @@ class WebState:
         if active is not None and self.harness_for(session_id).session_id == session_id:
             stats = await self.harness_for(session_id).agent.context_stats(session_id)
         else:
-            stats = await self.designed_channels.context_stats(session_id)
+            async with self.session_agents.view(session_id) as harness:
+                stats = await harness.agent.context_stats(session_id)
         if active is not None and self.run_for(session_id) is active and active.context_reply:
             tokens = estimate_tokens(active.context_reply) + 4
             stats = replace(
@@ -951,7 +950,7 @@ class WebState:
 
         async def execute_owned() -> None:
             run.executing = True
-            async with self.designed_channels.execution(run) as harness:
+            async with self.executions.harness(run) as harness:
                 self.running_harness = harness
                 await harness.resume(run.session_id)
                 async with self.queued_inputs.context(run, work):
@@ -986,7 +985,7 @@ class WebState:
             try:
                 run.executing = True
                 with self.executions.scope(run):
-                    async with self.designed_channels.execution(run) as harness:
+                    async with self.executions.harness(run) as harness:
                         self.running_harness = harness
                         await harness.resume(run.session_id)
                         done = await harness.compact()
@@ -1056,7 +1055,7 @@ class WebState:
     async def _wake(self, run: Run, wakeup: Wakeup) -> None:
         try:
             with self.executions.scope(run):
-                async with self.designed_channels.execution(run) as harness:
+                async with self.executions.harness(run) as harness:
                     self.running_harness = harness
                     await harness.resume(wakeup.session_id)
                     self.wakeups.lifecycle(wakeup, "fired", run_id=run.id)

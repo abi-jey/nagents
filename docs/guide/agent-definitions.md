@@ -46,8 +46,6 @@ when `name` is omitted; `research/agent.md` uses the directory name.
 
 Existing JSON `profiles` support the same fields, with `instructions` in the JSON
 object and arrays for tool/agent lists. JSON profiles may omit `description`.
-Designer YAML remains separate; `instructions.file` still reads literal prompt
-text and does not interpret Markdown frontmatter.
 
 ## Discovery and precedence
 

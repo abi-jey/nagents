@@ -16,7 +16,7 @@ const assistant = { agent: "assistant", mode: "build" as const, provider: "prima
 const reviewer = { agent: "reviewer", mode: "reviewer" as const, provider: "review-provider", provider_kind: "anthropic", model: "fixture-review" };
 function selection(overrides: Partial<SessionAgentSelection> = {}): SessionAgentSelection {
   return { session_id: "ngn-one", revision: "r1", agent: "assistant", workspace_default: "assistant", effective: assistant,
-    active: null, pending: false, locked_reason: "", profiles: [assistant, reviewer].map(({ agent, ...profile }) => ({
+    active: null, pending: false, profiles: [assistant, reviewer].map(({ agent, ...profile }) => ({
       ...profile, name: agent, description: `${agent} fixture profile`, disabled_reason: "",
     })), ...overrides };
 }
@@ -84,12 +84,9 @@ test("stale selection refreshes without silently retrying a write", async () => 
   h.controller.dispose();
 });
 
-test("locked, unavailable and unknown profiles never issue mutations", async () => {
+test("unavailable and unknown profiles never issue mutations", async () => {
   let writes = 0;
   const h = harness({ save: async () => { writes++; return selection(); } });
-  h.controller.accept(selection({ locked_reason: "Pinned Agent Designer route" }));
-  assert.equal(await h.controller.choose("reviewer"), false);
-  assert.match(h.error(), /Pinned/);
   h.controller.accept(selection({ profiles: selection().profiles.map(profile => ({ ...profile, disabled_reason: "Not user invocable" })) }));
   assert.equal(await h.controller.choose("reviewer"), false);
   assert.match(h.error(), /Not user invocable/);

@@ -71,8 +71,7 @@ loading, dispatch, delivery validation and sanitized failure semantics.
 
 - `ChannelRuntime` uses it while retaining its durable inbox, listener lifecycle
   and execution ownership guards.
-- The web host uses it through its existing tool wrappers, including those
-  copied into designed Harness instances.
+- The web host uses it through its existing tool wrappers.
 - The TUI installs owned tool definitions after trusted extension initialization
   and removes only those definitions on shutdown.
 - Hosts explicitly construct their built-in adapters. They are not third-party
@@ -203,7 +202,7 @@ multiple Agent turns. Capture the context at the real executor and verify its
 live owning task/call, rather than trusting an inherited context variable or a
 mutable reference alone. No public `ChannelSend` origin field is needed.
 
-Resolve the root from that execution context, including designed root Harnesses.
+Resolve the root from that execution context.
 Never route through mutable browser selection or model-supplied origin metadata.
 After an approval wait, validate live execution and the destination again.
 Switching the selected conversation must not redirect a pending send.
@@ -211,7 +210,7 @@ Switching the selected conversation must not redirect a pending send.
 Preserve existing child restrictions: ordinary subagents do not inherit channel
 tools/plugins and reject custom tools. Root and actor identities are distinct,
 but recording child provenance does not authorize child sends. Enabling sends
-from ordinary or designed children requires separate registration, authorization
+from children requires separate registration, authorization
 and persistence work.
 
 Initially expose the built-in web route only in ordinary, externally unowned web
@@ -375,7 +374,7 @@ Packages A–D are merged and package E is accepted for implementation.
 | [A: dispatch and capabilities (#42)](https://github.com/abi-jey/nagents/issues/42) | Listener-independent dispatcher, additive directional descriptor, catalog context, legacy connector compatibility | None |
 | [B: durable delivery journal (#43)](https://github.com/abi-jey/nagents/issues/43) | Atomic text/media storage, trusted anchors, receipts, cancellation, compaction and deletion lifecycle | A's identity/receipt contract |
 | [C: TUI channel (#44)](https://github.com/abi-jey/nagents/issues/44) | Real tool registration and text delivery, history restoration, whole-send media rejection, approvals/focus | A, B |
-| [D: web channel and playback (#45)](https://github.com/abi-jey/nagents/issues/45) | Real host integration, authenticated assets, transcript reconciliation, image/audio/video UI, designed Harness and ownership regressions | A, B |
+| [D: web channel and playback (#45)](https://github.com/abi-jey/nagents/issues/45) | Real host integration, authenticated assets, transcript reconciliation, image/audio/video UI and ownership regressions | A, B |
 | [E: browser upload/paste (#46)](https://github.com/abi-jey/nagents/issues/46) | Staged uploads, attachment-aware admission, composer UX and provider input compatibility | D and shared storage/admission contracts |
 
 The first coherent delivery milestone is **A–D**. Publishing two adapter classes
@@ -399,7 +398,7 @@ interface tests, not only direct calls to an adapter:
 - Reconnect, replay truncation, cold reload and two tabs show one delivery.
 - Approval denial creates no delivery; session switching cannot redirect it.
 - Cancellation before/around/after commit has defined receipt/outcome behavior.
-- Designed root Harnesses route correctly; child origin/ordering remains accurate
+- Executing root Harnesses route correctly; child origin/ordering remains accurate
   without accidental tool inheritance or newly authorized child sends.
 - Existing external ownership, in-chat approval and automatic-reply checks hold.
 - Authentication and production CSP permit legitimate media and reject invalid

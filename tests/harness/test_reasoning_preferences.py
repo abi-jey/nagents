@@ -6,11 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from nagents.designer.runtime import DesignedHarness
-from nagents.designer.schema import STARTER
-from nagents.designer.schema import AgentDefinition
-from nagents.designer.schema import Invocation
-from nagents.designer.schema import parse
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
@@ -58,36 +53,6 @@ def test_profile_precedence_and_summary_setting_are_independent(
                 assert generation is None
         finally:
             await harness.close()
-
-    asyncio.run(check())
-
-
-def test_designer_inheritance_default_and_retained_override(tmp_path: Path) -> None:
-    async def check() -> None:
-        design = parse(STARTER)
-        design.agents["worker"] = AgentDefinition()
-        design.agents[design.entrypoint].invokes = [Invocation(agent="worker")]
-        parent = DesignedHarness(HarnessConfig(workspace=tmp_path, demo=True, reasoning_effort="high"), design)
-        children: list[Harness] = []
-        try:
-            assert parent.generation_config().reasoning_effort == "high"
-            parent.definition.generation.reasoning_effort = "default"
-            assert parent.generation_config().reasoning_effort == ""
-            parent.definition.generation.reasoning_effort = "high"
-            info = TaskInfo("child", "Child", session_id=parent.session_id, child_session_id="ngn-child")
-            parent.tasks._options[info.id] = TaskOptions(reasoning_effort="default")
-            first = parent.tasks._create_child("worker", info)
-            children.append(first)
-            parent.tasks._children[info.id] = first
-            assert first.reasoning_effort() == ""
-            parent.tasks._options[info.id] = TaskOptions()
-            continued = parent.tasks._create_child("worker", info, continuing=True)
-            children.append(continued)
-            assert continued.reasoning_effort() == ""
-        finally:
-            for child in children:
-                await child.close()
-            await parent.close()
 
     asyncio.run(check())
 

@@ -12,9 +12,6 @@ from typing import cast
 import pytest
 from fastapi import HTTPException
 
-from nagents.designer.schema import STARTER
-from nagents.designer.schema import parse
-from nagents.designer.schema import serialize
 from nagents.media import MediaCapabilities
 from nagents.session import SessionManager
 from nagents.types import DocumentContent
@@ -28,7 +25,6 @@ from tests.web.test_web_deletion import quiet
 from tests.web.test_web_deletion import rows
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import AsyncIterator
     from pathlib import Path
 
@@ -317,7 +313,7 @@ def test_queued_attachment_and_retry_identity_survive_restart(tmp_path: Path, mo
         assert history[0]["uploads"] and not history[0]["parts"]
 
 
-def test_pinned_design_capabilities_and_custom_adapter_gate(tmp_path: Path) -> None:
+def test_custom_adapter_has_no_upload_admission_but_retains_text_route(tmp_path: Path) -> None:
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
@@ -325,23 +321,6 @@ def test_pinned_design_capabilities_and_custom_adapter_gate(tmp_path: Path) -> N
             state.harness.config.demo = False
             root = state.selected_session_id
             assert "application/pdf" not in await state.uploads.capabilities(root)
-            definition = parse(STARTER)
-            definition.providers["primary"].type = "anthropic"
-            definition.providers["primary"].api = "messages"
-            source = serialize(definition)
-
-            def pin(db: sqlite3.Connection) -> None:
-                db.execute("INSERT OR REPLACE INTO ngn_design_sessions VALUES (?, ?, ?)", (root, "assistant", source))
-
-            await state.channels.store._transaction(pin)
-            assert "application/pdf" in await state.uploads.capabilities(root)
-            response = await client.post(
-                f"/api/sessions/{root}/uploads/{uuid.uuid4()}",
-                headers={**headers, "Content-Type": "application/pdf"},
-                content=b"%PDF-1.7",
-            )
-            assert response.status_code == 200, response.text
-            await state.channels.store._transaction(lambda db: db.execute("DELETE FROM ngn_design_sessions").close())
             state.harness.agent.session = SessionManager(state.history.db_path)
             assert await state.uploads.capabilities(root) == ()
             # The ordinary adapter and text route are still usable.

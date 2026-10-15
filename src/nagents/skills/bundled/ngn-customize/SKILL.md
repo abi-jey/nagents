@@ -95,8 +95,7 @@ unknown tool names require an explicit `tool_map` to installed ngn tools.
 Unsupported restrictions, hooks and MCP declarations reject that definition and
 produce a source diagnostic. Importing a definition never starts its foreign
 runtime. Inspect `config.agent_diagnostics` or web settings before claiming it
-loaded, and restart ngn after changing definitions. JSON profiles and Designer
-YAML remain distinct; Designer `instructions.file` is literal prompt text.
+loaded, and restart ngn after changing definitions.
 
 JSON plugin paths and `data_dir` resolve relative to the config file. CLI
 `--plugin` paths resolve relative to the invoking directory. JSON plugin lists

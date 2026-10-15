@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from fastapi import Query
 
-from nagents.designer.store import Recorder
 from nagents.harness.commands import split_command
-
-from ._async import join_owned
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -32,24 +28,8 @@ WEB_RESERVED = frozenset({"settings", "tools", "channels", "voice", "stop"})
 async def skill_harness(state: WebState, session_id: str) -> AsyncIterator[Harness]:
     """Inspect the specified root without selecting it or initializing plugins."""
     await state.channels.store._transaction(lambda db: state.channels.store.execution_root(db, session_id))
-    current = state.harness_for(session_id)
-    active = state.run_for(session_id)
-    agent, source = await state.designed_channels.definition(session_id)
-    if not source:
-        async with state.session_agents.view(session_id, next_run=True) as harness:
-            yield harness
-        return
-    if active is not None and active.harness is not None:
-        yield current
-        return
-    harness, installed = state.designed_channels.assemble(session_id, agent, source, Recorder())
-    try:
+    async with state.session_agents.view(session_id, next_run=True) as harness:
         yield harness
-    finally:
-        try:
-            await join_owned(asyncio.create_task(harness.close()))
-        finally:
-            state.channels.unregister_runtime(harness, installed)
 
 
 async def catalog(state: WebState, session_id: str) -> dict[str, object]:

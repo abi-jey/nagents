@@ -9,10 +9,6 @@ from unittest.mock import patch
 import pytest
 
 from nagents.adapters.responses import format_request
-from nagents.designer.runtime import DesignProvider
-from nagents.designer.schema import STARTER
-from nagents.designer.schema import parse
-from nagents.designer.store import Recorder
 from nagents.events import ErrorEvent
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
@@ -26,7 +22,6 @@ from nagents.provider.reasoning import catalog_reasoning_efforts
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.provider.reasoning import validate_reasoning_effort
 from nagents.types import GenerationConfig
-from nagents.types import ToolDefinition
 from tests.providers.test_gateway_provider import payload
 from tests.providers.test_provider_reliability import candidate
 from tests.support.config import connection
@@ -252,27 +247,7 @@ async def test_harness_auto_routes_gpt6_tools_to_responses_and_preserves_explici
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"])
-async def test_designer_and_framework_share_native_gpt6_auto_routing(model: str) -> None:
-    design = parse(STARTER)
-    design.providers["primary"].model = model
-    async with DesignProvider(design, "primary", Recorder(), demo=False) as provider:
-        assert provider.api == "responses"
-        # Exercise actual Provider dispatch while isolating credentials and HTTP.
-        tools = [ToolDefinition("read_file", "Read workspace text", {"type": "object", "properties": {}})]
-        with patch.object(provider._http, "post_json", AsyncMock(return_value=payload("responses"))) as request:
-            events = [
-                event
-                async for event in Provider.generate(
-                    provider, [], tools=tools, config=GenerationConfig(reasoning_effort="high"), stream=False
-                )
-            ]
-        assert not any(isinstance(event, ErrorEvent) for event in events)
-        assert request.call_args.args[0].endswith("/responses")
-        assert request.call_args.args[1]["reasoning"] == {"effort": "high"}
-        assert request.call_args.args[1]["tools"][0]["name"] == "read_file"
-    design.providers["primary"].api = "chat_completions"
-    async with DesignProvider(design, "primary", Recorder(), demo=False) as provider:
-        assert provider.api == "chat_completions"
+async def test_custom_openai_compatible_gpt6_keeps_chat_completions(model: str) -> None:
     async with Provider(
         ProviderType.OPENAI_COMPATIBLE, "offline", model, base_url="https://gateway.example/v1"
     ) as provider:

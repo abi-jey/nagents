@@ -33,7 +33,7 @@ export function useClient() {
   const operations = useOperations();
   const team = useTeam(sessions.config?.token || "", sessions.sessionId, chat.taskRevision, !!chat.runId, chat.taskActivity);
   const { operating, error, setError } = operations;
-  const [panel, setPanel] = useState<"none" | "tools" | "designer">("none");
+  const [panel, setPanel] = useState<"none" | "tools">("none");
   const voice = useVoicePresence();
   const [commandHelp, setCommandHelp] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -270,7 +270,6 @@ export function useClient() {
     liveAutoStart: voice.shouldStart(token, sessions.sessionId),
     consumeLiveStart: () => voice.consumeStart(voice.request),
     showTools: () => { if (access().tools) setPanel("tools"); },
-    showDesigner: () => { if (access().designer) { voice.close(); setPanel("designer"); } },
     showLive: (intent: "start" | "settings" = "start") => { if (access().live) voice.show(intent, token, sessions.sessionId); },
     closeLive: voice.close,
     closePanel: () => { setPanel("none"); void connect(); },

@@ -21,7 +21,6 @@ export type SessionAgentSelection = {
   effective: SessionAgentIdentity;
   active: SessionAgentIdentity | null;
   pending: boolean;
-  locked_reason: string;
   profiles: SessionAgentProfile[];
 };
 
@@ -33,7 +32,7 @@ function identity(value: unknown): value is SessionAgentIdentity {
     (value.mode === "build" || value.mode === "reviewer");
 }
 export function validSessionAgent(value: unknown): value is SessionAgentSelection {
-  return object(value) && ["session_id", "revision", "agent", "workspace_default", "locked_reason"].every(key => typeof value[key] === "string") &&
+  return object(value) && ["session_id", "revision", "agent", "workspace_default"].every(key => typeof value[key] === "string") &&
     !!value.session_id && !!value.revision && !!value.agent && identity(value.effective) &&
     (value.active === null || identity(value.active)) && typeof value.pending === "boolean" &&
     Array.isArray(value.profiles) && value.profiles.every(profile => object(profile) &&
@@ -104,7 +103,7 @@ export class SessionAgentController {
     const current = this.current;
     if (this.disposed || this.writer || !current) return false;
     const profile = current.profiles.find(profile => profile.name === agent);
-    const reason = current.locked_reason || profile?.disabled_reason || (!profile ? `Agent profile not found: ${agent}.` : "");
+    const reason = profile?.disabled_reason || (!profile ? `Agent profile not found: ${agent}.` : "");
     if (reason) { this.options.error(reason); return false; }
     const writer = this.writer = new AbortController(), epoch = this.epoch;
     this.options.saving(true); this.options.error("");

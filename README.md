@@ -104,12 +104,6 @@ remains an optional dependency. See the [ngn usage guide](docs/guide/ngn.md),
 
 ## Web Client and HTTP API
 
-The current checkout includes a web-only **Agent Designer**: a YAML-backed agent
-canvas with per-agent providers, instructions, selected tools/MCPs, delegation,
-chat, and persisted context/request inspection. See the
-[Agent Designer guide](docs/guide/agent-designer.md) for configuration and terminal
-execution with `ngn --design`.
-
 `ngn serve` runs the React client and HTTP API for the ngn coding harness,
 sharing its workspace sessions, tools, and approvals. It is also the Docker
 image's default command. Install `nagents[web]` for a published wheel with built

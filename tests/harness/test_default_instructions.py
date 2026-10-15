@@ -7,10 +7,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from nagents.designer.runtime import DesignedHarness
-from nagents.designer.schema import STARTER
-from nagents.designer.schema import parse
-from nagents.harness import runtime
 from nagents.harness.config import HarnessConfig
 from nagents.harness.default_instructions import load_default_instructions
 from nagents.harness.runtime import Harness
@@ -91,24 +87,3 @@ def test_missing_or_invalid_bundled_instructions_fail_actionably(
     with pytest.raises(RuntimeError, match="Reinstall nagents or restore") as failure:
         load_default_instructions()
     assert "nagents/harness/instructions/AGENTS.md" in str(failure.value)
-
-
-@pytest.mark.asyncio
-async def test_designer_retains_explicit_instructions_without_loading_the_coding_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def unexpected_defaults() -> str:
-        raise AssertionError("Designer definitions own their instruction policy")
-
-    monkeypatch.setattr(runtime, "load_default_instructions", unexpected_defaults)
-    (tmp_path / "AGENTS.md").write_text("Implicit workspace guidance", encoding="utf-8")
-    design = parse(STARTER)
-    design.agents["assistant"].instructions.text = "Only the explicitly configured design instructions."
-    harness = DesignedHarness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True), design)
-    try:
-        await harness.initialize(create_session=False)
-        harness.refresh_instructions()
-        assert harness.agent.system_prompt == design.agents["assistant"].instructions.text
-        assert not harness.instructions
-    finally:
-        await harness.close()

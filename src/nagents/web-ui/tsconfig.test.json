@@ -16,7 +16,6 @@
     "src/features/chat/uploads*.ts",
     "src/features/context/*.ts",
     "src/features/settings/*.ts",
-    "src/features/designer/*.ts",
     "src/features/live/*.ts"
   ]
 }

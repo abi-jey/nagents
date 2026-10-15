@@ -200,11 +200,6 @@ def fork_in(db: sqlite3.Connection, source: str, title: str = "") -> str:
             "FROM ngn_web_session_agents WHERE session_id = ?",
             (target, source),
         )
-    if "ngn_design_sessions" in tables:
-        db.execute(
-            "INSERT INTO ngn_design_sessions SELECT ?, agent, source FROM ngn_design_sessions WHERE session_id = ?",
-            (target, source),
-        )
     if "ngn_web_group_members" in tables:
         copied_group = db.execute(
             "INSERT INTO ngn_web_group_members SELECT ?, group_id FROM ngn_web_group_members WHERE session_id = ?",

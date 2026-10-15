@@ -388,7 +388,7 @@ def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
     tmp_path: Path, services: list[FakeLiveService]
 ) -> None:
     async def check() -> None:
-        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             before = (await client.get("/api/live/settings?scope=workspace", headers=headers)).json()
             assert before["values"]["backend_mode"] == "assistant"
             revision = await configure(client, headers)
@@ -408,16 +408,6 @@ def test_main_assistant_mode_binds_selected_chat_and_exposes_current_provider(
             )
             assert wrong.status_code == 409 and not services[0].creates
             selected = harnesses[0].session_id
-            with patch.object(app.state.web.designed_channels, "pin", AsyncMock(return_value=("designed", "source"))):
-                pinned = await client.post(
-                    "/api/live/sessions",
-                    headers=headers,
-                    json={
-                        "revision": revision,
-                        "session_id": selected,
-                    },
-                )
-                assert pinned.status_code == 409 and not services[0].creates
             started = await client.post(
                 "/api/live/sessions",
                 headers=headers,

@@ -8,7 +8,6 @@ import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
 import { TrashDialog } from "../features/sessions/TrashDialog";
-import { Designer } from "../features/designer/Designer";
 import { ToolsDialog } from "../features/tools/ToolsDialog";
 import "../features/sessions/trash.css";
 import "../features/settings/settings.css";
@@ -29,7 +28,6 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
       requestAnimationFrame(() => document.getElementById("composer")?.focus());
     }} />}
     {client.loginOpen && config && <LoginDialog token={config.token} close={client.closeLogin} applied={client.connect} />}
-    {client.panel === "designer" && config && <Designer token={config.token} configureChannels={client.channels.show} close={closePanel} />}
     {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={false} close={closePanel} />}
     {client.settings.open && <SettingsDialog settings={client.settings} />}
     {client.sessionAgent.open && <SessionAgentPicker {...client.sessionAgent} />}

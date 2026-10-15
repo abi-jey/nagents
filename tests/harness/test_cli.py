@@ -25,6 +25,16 @@ def test_options_work_before_and_after_subcommand() -> None:
     assert args.prompt == ["hello"]
 
 
+@pytest.mark.parametrize("flag", ["--design", "--design-agent"])
+def test_removed_designer_flags_are_rejected(flag: str, capsys: pytest.CaptureFixture[str]) -> None:
+    parser = _parser()
+    assert flag not in parser.format_help()
+    with pytest.raises(SystemExit) as failure:
+        parser.parse_args(["serve", flag, "old-definition"])
+    assert failure.value.code == 2
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
 def test_output_does_not_execute_terminal_controls() -> None:
     assert _plain("hello\x1b]52;c;payload\x07\nworld\x9b") == "hello]52;c;payload\nworld"
 

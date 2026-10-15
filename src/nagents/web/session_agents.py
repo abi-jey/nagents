@@ -258,23 +258,12 @@ class SessionAgents:
 
     async def snapshot(self, session_id: str) -> dict[str, object]:
         choice = await self.ensure(session_id)
-        pinned_agent, source = await self.state.designed_channels.preview(session_id)
-        locked = "This conversation uses a pinned Agent Designer route." if source else ""
         active = self.state.run_for(session_id)
         identity = (
             self.identity(choice.agent)
             if not self.unavailable(choice.agent)
             else {"agent": choice.agent, "model": "", "provider": "", "provider_kind": "", "mode": "reviewer"}
         )
-        if source:
-            from nagents.designer.store import Recorder
-
-            harness, installed = self.state.designed_channels.assemble(session_id, pinned_agent, source, Recorder())
-            try:
-                identity = self.actual(harness)
-            finally:
-                await harness.close()
-                self.state.channels.unregister_runtime(harness, installed)
         return {
             "session_id": session_id,
             "revision": choice.revision,
@@ -283,13 +272,12 @@ class SessionAgents:
             "effective": identity,
             "active": self.target(session_id) if active is not None else None,
             "pending": bool(active is not None and (active.agent or choice.agent) != choice.agent),
-            "locked_reason": locked,
             "profiles": [
                 {
                     "name": name,
                     "description": self.state.harness.config.profile(name).description,
                     **{key: value for key, value in self.identity(name).items() if key != "agent"},
-                    "disabled_reason": locked or self.unavailable(name),
+                    "disabled_reason": self.unavailable(name),
                 }
                 for name in self.state.harness.config.profile_names
             ],
@@ -297,9 +285,7 @@ class SessionAgents:
 
     async def change(self, session_id: str, body: AgentInput) -> dict[str, object]:
         async with self.state.queued_mutation():
-            previous = await self.snapshot(session_id)
-            if previous["locked_reason"]:
-                raise HTTPException(409, str(previous["locked_reason"]))
+            await self.ensure(session_id)
             if reason := self.unavailable(body.agent):
                 raise HTTPException(422, reason)
             choice = Choice(body.agent, secrets.token_hex(32))
@@ -392,18 +378,6 @@ class SessionAgents:
         active = self.state.run_for(session_id)
         if not next_run and active is not None and active.harness is not None:
             yield active.harness
-            return
-        design_agent, source = await self.state.designed_channels.preview(session_id)
-        if source:
-            from nagents.designer.store import Recorder
-
-            designed, installed = self.state.designed_channels.assemble(session_id, design_agent, source, Recorder())
-            try:
-                await self.state.executions.borrow_auth(designed)
-                yield designed
-            finally:
-                await join_owned(asyncio.create_task(designed.close()))
-                self.state.channels.unregister_runtime(designed, installed)
             return
         name = active.agent if active is not None and active.agent and not next_run else choice.agent
         if reason := self.unavailable(name):

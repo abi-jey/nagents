@@ -364,36 +364,34 @@ class WebSettings:
         scope: str = "workspace",
         provider: str = "",
         model: str = "",
-        kind: str = "",
-        api: str = "auto",
-        auth: str = "",
-        base_url: str = "",
     ) -> dict[str, object]:
-        """Read-only capability lookup; draft routing never opens a provider client."""
+        """Read-only capability lookup for a configured provider connection."""
         source = "Known model support"
-        descriptor = bool(kind)
-        same_route = False
         selected_model = model or (self.defaults.model if scope == "global" else self.values.model)
-        if not kind:
-            registry = (
-                self.harness.provider_store.load_scope("global")
-                if scope == "global"
-                else self.harness.provider_store.load()
-            )
-            selected = provider or registry.active
-            profile = registry.providers.get(selected)
-            if selected and profile is None:
-                raise ValueError("Provider connection is unavailable in this scope")
-            if profile is None:
-                profile = self._provider_admin.provider_profile()
-            same_route = profile == self.harness._built_provider_profile
-            kind, api, auth, base_url = profile.kind, profile.api, profile.auth, profile.base_url
-        choices = reasoning_effort_options(kind, selected_model, api=api, auth=auth, base_url=base_url)
-        if not descriptor and same_route:
+        registry = (
+            self.harness.provider_store.load_scope("global")
+            if scope == "global"
+            else self.harness.provider_store.load()
+        )
+        selected = provider or registry.active
+        profile = registry.providers.get(selected)
+        if selected and profile is None:
+            raise ValueError("Provider connection is unavailable in this scope")
+        if profile is None:
+            profile = self._provider_admin.provider_profile()
+        choices = reasoning_effort_options(
+            profile.kind, selected_model, api=profile.api, auth=profile.auth, base_url=profile.base_url
+        )
+        if profile == self.harness._built_provider_profile:
             cached = self.harness.agent.provider.cached_reasoning_efforts(selected_model)
             if cached != choices:
                 choices, source = cached, "Provider metadata"
-        return {"options": list(choices), "source": source, "provider": provider or kind, "model": selected_model}
+        return {
+            "options": list(choices),
+            "source": source,
+            "provider": provider or profile.kind,
+            "model": selected_model,
+        }
 
     def validate_reasoning(self, values: SettingsValues, *, scope: str = "workspace") -> None:
         if not values.reasoning_effort or self.harness.config.demo:

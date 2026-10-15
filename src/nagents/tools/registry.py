@@ -72,7 +72,7 @@ class ToolRegistry:
         param_schema = parameters if parameters is not None else self._extract_parameters(func)
 
         # Explicit descriptions are model-facing instructions supplied by the
-        # caller (including MCP/Designer metadata), not docstrings to summarize.
+        # caller (including MCP metadata), not docstrings to summarize.
         # Keep the existing empty-string fallback while preserving all explicit
         # paragraphs, hard line breaks and Markdown whitespace.
         tool_description = description

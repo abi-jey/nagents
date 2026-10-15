@@ -166,13 +166,12 @@ class LocalOnly:
                 query = scope["query_string"].decode("ascii")
                 if re.search(r"%(?![0-9a-fA-F]{2})", query):
                     raise ValueError("Invalid query encoding")
-                pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=7, errors="strict")
+                pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3, errors="strict")
                 reasoning_query = (
                     bool(pairs)
                     and len({key for key, _ in pairs}) == len(pairs)
                     and all(
-                        key in {"scope", "provider", "model", "kind", "api", "auth", "base_url"}
-                        and (not value or value.isprintable())
+                        key in {"scope", "provider", "model"} and (not value or value.isprintable())
                         for key, value in pairs
                     )
                 )
