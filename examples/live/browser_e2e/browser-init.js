@@ -56,6 +56,14 @@
     return Object.fromEntries(fields.filter(key => ["string", "number", "boolean"].includes(typeof value[key]))
       .map(key => [key, typeof value[key] === "string" ? value[key].slice(0, 4000) : value[key]]));
   };
+  const verifySoftwareSink = (context, role) => {
+    if (context.sinkId?.type !== "none") {
+      record("harness.error", { message: "Browser did not honor the required software audio sink", role });
+      void NativeContext.prototype.close.call(context);
+      throw new Error("Voice E2E requires AudioContext sinkId: { type: 'none' }; no physical-device fallback");
+    }
+    record("audio.virtual-sink", { role, sinkType: context.sinkId.type });
+  };
   const stopRecorder = async entry => {
     await entry.ready;
     if (!entry.stopPromise) entry.stopPromise = new Promise((resolve, reject) => {
@@ -70,8 +78,9 @@
   };
   globalThis.AudioContext = class extends NativeContext {
     constructor(options) {
-      super(options);
+      super({ ...options, sinkId: { type: "none" } });
       const context = this;
+      verifySoftwareSink(context, "speaker");
       const entry = { context, id: contexts.length, recorder: undefined, ready: undefined,
         armed: false, armPromise: undefined, acknowledgeStart: undefined,
         stopPromise: undefined, acknowledgeStop: undefined };
@@ -109,7 +118,7 @@
             sampleRate: data.sampleRate, contextTimeAtDelivery: context.currentTime,
             outputTimestamp: context.getOutputTimestamp?.(), ...stamp(), ...stats(bytes), pcm16: base64(bytes) });
         };
-        record("speaker.ready", { contextId: entry.id, sampleRate: context.sampleRate });
+        record("speaker.ready", { contextId: entry.id, sampleRate: context.sampleRate, sinkType: context.sinkId.type });
       }).catch(error => { record("harness.error", { message: String(error) }); throw error; });
       context.audioWorklet.addModule = async (...args) => {
         await entry.ready;
@@ -118,6 +127,14 @@
       context.addEventListener("statechange", () => record("audio.state", {
         contextId: entry.id, state: context.state, audioTime: context.currentTime,
       }));
+    }
+    async setSinkId(sinkId) {
+      if (sinkId?.type !== "none") {
+        record("harness.error", { message: "Physical speaker selection is unavailable in a virtual audio test" });
+        throw new Error("Voice E2E keeps its software speaker sink for the entire test");
+      }
+      await NativeContext.prototype.setSinkId.call(this, sinkId);
+      verifySoftwareSink(this, "speaker");
     }
     async close() {
       const entry = contexts.find(item => item.context === this);
@@ -164,7 +181,8 @@
   navigator.mediaDevices.getUserMedia = async constraints => {
     if (!constraints?.audio || constraints.video) throw new Error("Voice E2E supports audio-only capture");
     if (!microphone) {
-      const context = new NativeContext({ sampleRate: 24000 });
+      const context = new NativeContext({ sampleRate: 24000, sinkId: { type: "none" } });
+      verifySoftwareSink(context, "microphone");
       const resumed = context.resume();
       const destination = context.createMediaStreamDestination();
       const response = await nativeFetch(config.wavPath);
@@ -181,6 +199,7 @@
       microphone = { context, destination, buffer, sources: [] };
       await resumed;
       record("microphone.ready", { sampleRate: context.sampleRate, fixtureDuration: buffer.duration,
+        sinkType: context.sinkId.type,
         fixtureText: config.fixtureText, fixtureSha256: config.fixtureSha256 });
     }
     return microphone.destination.stream.clone();
@@ -316,6 +335,8 @@
       return { mode: config.mode, stopped, microphone: !!microphone,
         measurementElapsedMs: measurementStarted === undefined ? 0 : performance.now() - measurementStarted,
         maxSeconds: limit,
+        voiceClosed: events.some(event => event.type === "live.status" && event.status === "closed"),
+        providerFinalized: events.some(event => `${event.text || ""}${event.message || ""}`.includes("Finalization confirmed.")),
         outputArmed: contexts.length > 0 && contexts.every(entry => entry.armed), outputBlocks: capture.length,
         inputFrames: input.length, events: events.length, health: health.at(-1), omitted };
     },
@@ -331,7 +352,7 @@
         clock: { performanceTimeOriginMs: origin, installedMonotonicMs: installed,
           measurementStartedMonotonicMs: measurementStarted,
           note: "Audio frames are context-relative; callback wall/monotonic timestamps record delivery, not acoustic time." },
-        contexts: contexts.map(({ context, id }) => ({ id, sampleRate: context.sampleRate,
+        contexts: contexts.map(({ context, id }) => ({ id, sampleRate: context.sampleRate, sinkType: context.sinkId?.type,
           state: context.state, currentTime: context.currentTime, outputTimestamp: context.getOutputTimestamp?.() })),
         stopped, omitted, events, health, input, output: capture };
     },

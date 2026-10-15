@@ -90,8 +90,13 @@ async () => {
 
 The virtual microphone keeps sending silence before/after the scheduled phrase;
 it does not call app internals or send invented VAD/turn/response events. The
-normal capture worklet converts its real `MediaStream` to PCM frames. Speaker
-output feeds a silent virtual sink, so it cannot feed back into a physical mic.
+normal capture worklet converts its real `MediaStream` to PCM frames. Both
+microphone and speaker AudioContexts use the browser's software sink
+`sinkId: { type: "none" }`, verified through `context.sinkId.type`. This avoids
+depending on the host's physical output-device clock. Unsupported browsers fail
+explicitly; there is no fallback to a muted physical device. The trace records
+`audio.virtual-sink` for each role. Physical speaker selection is unavailable
+during this dedicated test. Speaker output cannot feed back into a physical mic.
 The recorder receives actual post-volume audio; it does not construct a WAV by
 concatenating incoming WebSocket data.
 
@@ -106,7 +111,11 @@ Observe real captions and, in authenticated mode, the delegation status via
 snapshots. Open Request & events through normal clicks if inspecting a failure.
 Use `() => globalThis.__voiceE2E.status()` for bounded progress reads. Add a
 timestamped operator marker with `() => globalThis.__voiceE2E.mark("opened request inspector")`.
-Allow the spoken answer to finish, then end voice via the UI. Finally run:
+Allow the spoken answer to finish, then end voice via the UI. Wait for the UI's
+ended state and, for authenticated runs, **Finalization confirmed**. Poll
+`__voiceE2E.status()` until `voiceClosed` and `providerFinalized` are true;
+offline scripted runs require only `voiceClosed`. A click on End is not proof
+that the asynchronous close/finalization completed. Only then run:
 
 ```javascript
 async () => {
@@ -298,4 +307,5 @@ enveloped exports, and render-clock jumps inside an accumulated worklet block:
 ```bash
 poetry run pytest tests/test_browser_voice_e2e.py
 node --test examples/live/browser_e2e/capture-worklet.test.mjs
+node --test examples/live/browser_e2e/browser-init.test.mjs
 ```
