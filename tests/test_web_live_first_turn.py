@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_effective_client_policy_delegates_first_greeting_once_without_history_replay(native: bool) -> None:
+def test_effective_client_policy_delegates_first_utterance_silently_once_without_history_replay(native: bool) -> None:
     async def scenario() -> None:
         async def handler(request: ClientDelegationRequest) -> str:
             raise AssertionError("Constructing voice settings must not run the backend")
@@ -71,7 +71,12 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
             finally:
                 await agent.close()
         assert "first utterance" in instructions and "exactly once" in instructions
-        assert "Hello, Hey" in instructions and "brief greeting" in instructions
+        assert "Hello, Hey" in instructions and "audio check such as Do you hear me?" in instructions
+        assert "Make this first delegation silently" in instructions
+        assert "Do not announce the handoff, context loading, or waiting" in instructions
+        assert "do not say One moment or Let me check" in instructions
+        assert "one brief natural acknowledgement when the backend returns" in instructions
+        assert "Do not repeat an acknowledgement already spoken" in instructions
         assert "project instructions, user profile" in instructions
         assert "do not resume or repeat actions from saved chat history" in instructions
         assert "substantive request" in instructions and "same delegation" in instructions
@@ -83,7 +88,7 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
 
 @pytest.mark.requires_posix
 @pytest.mark.parametrize("native", [False, True])
-@pytest.mark.parametrize("first_text", ["Hello", "Please explain the current project"])
+@pytest.mark.parametrize("first_text", ["Hello", "Do you hear me?", "Please explain the current project"])
 def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_relayed(
     tmp_path: Path, native: bool, first_text: str
 ) -> None:
@@ -200,7 +205,9 @@ def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_
                     await spoken.wait()
                     drain()
                     assert model_inputs[0] == first_text and not transport_results
-                    assert voice_updates.count(("commentary", answer, "first")) == 1
+                    assert [update for update in voice_updates if update[0] == "commentary"] == [
+                        ("commentary", answer, "first")
+                    ]
                     await bridge.close()
                     worker.cancel()
                     await asyncio.gather(worker, return_exceptions=True)
