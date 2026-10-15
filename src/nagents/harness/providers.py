@@ -60,14 +60,12 @@ class _WindowsLock(Protocol):
 
 @contextmanager
 def _exclusive_lock(stream: BinaryIO) -> Iterator[None]:
-    """Lock the same sentinel byte on Windows, or the whole file on POSIX."""
+    """Lock byte zero on Windows (even beyond EOF), or the whole file on POSIX."""
     if os.name == "nt":
         windows = cast("_WindowsLock", importlib.import_module("msvcrt"))
 
-        stream.seek(0, os.SEEK_END)
-        if stream.tell() == 0:
-            stream.write(b"\0")
-            stream.flush()
+        # Windows permits locking past EOF. A sentinel write before acquiring
+        # the lock would race with another writer that has already locked it.
         stream.seek(0)
         windows.locking(stream.fileno(), windows.LK_LOCK, 1)
         try:

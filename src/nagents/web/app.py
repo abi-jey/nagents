@@ -674,6 +674,33 @@ def create_app(
         logger.info("Model catalog completed: connection=%s count=%d", name, len(models))
         return {"models": models, "source": name}
 
+    @app.get("/api/provider-scopes/{scope}/providers/{name}/models")
+    async def scoped_provider_models(
+        scope: Literal["workspace", "global"],
+        name: Annotated[str, PathParameter(pattern=r"^[a-z][a-z0-9_-]{0,63}$")],
+    ) -> dict[str, object]:
+        logger.info("Model catalog requested: scope=%s connection=%s", scope, name)
+        if state.harness.config.demo:
+            raise HTTPException(501, "Model discovery is unavailable in offline demo mode.")
+        try:
+            with catalog_logging(logger):
+                catalog = await state.settings.model_catalog(name, scope=scope)
+        except NotImplementedError:
+            logger.info("Model catalog unsupported: scope=%s connection=%s", scope, name)
+            raise HTTPException(
+                501, "This provider does not expose a model catalog; enter a model ID manually."
+            ) from None
+        except ValueError:
+            logger.warning("Model catalog unavailable: scope=%s connection=%s", scope, name)
+            raise HTTPException(422, "Provider connection is unavailable; check its environment and login.") from None
+        except Exception:
+            logger.warning("Model catalog failed: scope=%s connection=%s", scope, name)
+            raise HTTPException(
+                502, "Model discovery failed; check provider access or enter a model ID manually."
+            ) from None
+        logger.info("Model catalog completed: scope=%s connection=%s count=%d", scope, name, len(catalog.models))
+        return {"models": catalog.models, "metadata": catalog.metadata, "source": name, "scope": scope}
+
     @app.post("/api/settings")
     async def save_settings(body: SettingsInput) -> dict[str, object]:
         async with state.configure():

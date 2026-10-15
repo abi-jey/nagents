@@ -16,7 +16,7 @@ test("global model catalog selection changes only the model draft", async (t) =>
   t.mock.method(globalThis, "fetch", async (path: string) => {
     requested.push(path);
     if (path === "/api/provider-scopes/global/providers") return Response.json({ active: "codex" });
-    if (path === "/api/providers/codex/models") return Response.json({ models: ["gpt-new"] });
+    if (path === "/api/provider-scopes/global/providers/codex/models") return Response.json({ models: ["gpt-new"] });
     throw new Error(`Unexpected request: ${path}`);
   });
   try {
@@ -25,10 +25,9 @@ test("global model catalog selection changes only the model draft", async (t) =>
       update: (model: string) => chosen.push(model),
     })));
     await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
-    const catalog = container.querySelector<HTMLSelectElement>("select")!;
-    await act(async () => { catalog.value = "gpt-new"; catalog.dispatchEvent(new dom.window.Event("change", { bubbles: true })); });
+    await act(async () => container.querySelector<HTMLButtonElement>(".model-catalog-list button")!.click());
     assert.deepEqual(chosen, ["gpt-new"]);
-    assert.deepEqual(requested, ["/api/provider-scopes/global/providers", "/api/providers/codex/models"]);
+    assert.deepEqual(requested, ["/api/provider-scopes/global/providers", "/api/provider-scopes/global/providers/codex/models"]);
   } finally {
     await act(async () => root.unmount()); dom.window.close();
     for (const key of ["window", "document", "IS_REACT_ACT_ENVIRONMENT"]) {

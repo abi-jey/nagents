@@ -8,12 +8,14 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
 
+from nagents.harness import providers as providers_module
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
@@ -108,6 +110,40 @@ def test_registry_is_shared_revisioned_and_contains_no_secret(tmp_path: Path, mo
         expected=selected.revision,
     )
     assert ProviderRegistryStore().load() == second
+
+
+@pytest.mark.parametrize("contents", [b"", b"\0"])
+def test_windows_registry_lock_does_not_write_sentinel(contents: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = BytesIO(contents)
+    calls: list[tuple[int, int, int, int]] = []
+
+    def reject_write(_data: bytes) -> int:
+        pytest.fail("Acquiring a registry lock must not write a sentinel")
+
+    def reject_flush() -> None:
+        pytest.fail("Acquiring a registry lock must not flush buffered data")
+
+    def locking(fd: int, mode: int, nbytes: int) -> None:
+        calls.append((fd, mode, nbytes, stream.tell()))
+
+    windows = SimpleNamespace(LK_LOCK=1, LK_UNLCK=0, locking=locking)
+
+    def import_windows(name: str) -> SimpleNamespace:
+        assert name == "msvcrt"
+        return windows
+
+    monkeypatch.setattr(providers_module, "os", SimpleNamespace(name="nt", SEEK_END=os.SEEK_END))
+    monkeypatch.setattr(providers_module, "importlib", SimpleNamespace(import_module=import_windows))
+    monkeypatch.setattr(stream, "fileno", lambda: 42)
+    monkeypatch.setattr(stream, "write", reject_write)
+    monkeypatch.setattr(stream, "flush", reject_flush)
+    stream.seek(9)
+    with pytest.raises(RuntimeError, match="protected work failed"), providers_module._exclusive_lock(stream):
+        assert calls == [(42, windows.LK_LOCK, 1, 0)]
+        stream.seek(23)
+        raise RuntimeError("protected work failed")
+    assert calls == [(42, windows.LK_LOCK, 1, 0), (42, windows.LK_UNLCK, 1, 0)]
+    assert stream.getvalue() == contents
 
 
 def test_concurrent_provider_saves_reject_stale_revision(tmp_path: Path) -> None:

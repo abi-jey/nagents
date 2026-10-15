@@ -11,6 +11,7 @@ import { TrashDialog } from "../features/sessions/TrashDialog";
 import { ToolsDialog } from "../features/tools/ToolsDialog";
 import "../features/sessions/trash.css";
 import "../features/settings/settings.css";
+import "../features/settings/workspacePanel.css";
 import "../features/channels/channels.css";
 import type { Client } from "./useClient";
 import { SessionAgentPicker } from "../features/sessions/SessionAgentPicker.js";

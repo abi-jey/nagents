@@ -174,7 +174,7 @@ test("provider connections stay accessible in both scopes and unsaved connection
   try {
     await act(async () => view.root.render(createElement(Harness)));
     await act(async () => button("Settings").click());
-    await act(async () => button("main (active)").click());
+    await act(async () => view.container.querySelector<HTMLButtonElement>('[aria-label="Edit main connection"]')!.click());
     assert.match(view.container.textContent!, /Edit this connection in Global settings/);
     await act(async () => button("Switch to Global settings").click());
     assert.equal(view.container.querySelector('[data-settings-scope="global"]')?.getAttribute("aria-pressed"), "true");
