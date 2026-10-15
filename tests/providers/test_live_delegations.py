@@ -118,7 +118,7 @@ def test_saturated_workers_observe_every_request_immediately_with_frozen_context
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("send_failure", [False, True])
 def test_worker_shutdown_cancels_every_handler_without_sending_cleanup_results(
-    native: bool, send_failure: bool
+    native: bool, send_failure: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     async def scenario() -> None:
         second_started = asyncio.Event()
@@ -165,6 +165,7 @@ def test_worker_shutdown_cancels_every_handler_without_sending_cleanup_results(
             await asyncio.gather(worker, return_exceptions=True)
 
     asyncio.run(scenario())
+    assert not caplog.records, "Owned worker cleanup must not emit unhandled shield cancellation errors"
 
 
 def test_typed_handler_rejects_application_input_before_admission_instead_of_discarding_it() -> None:
