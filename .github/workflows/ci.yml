@@ -320,6 +320,9 @@ jobs:
         working-directory: src/nagents/web-ui
         run: npm test
 
+      - name: Test browser voice E2E recorder
+        run: node --test examples/live/browser_e2e/capture-worklet.test.mjs
+
       - name: Check subagent interaction demos
         working-directory: src/nagents/web-ui
         run: |

@@ -446,46 +446,51 @@ def test_nonstream_decoding_errors_are_categorized_without_response_contents(rou
     asyncio.run(scenario())
 
 
-def test_real_connector_failures_log_errno_cause_and_distinct_concurrent_attempts(
+def test_traced_connector_failures_log_errno_cause_and_distinct_concurrent_attempts(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     async def scenario() -> None:
-        # Reserve a local port without listening: exercise aiohttp's real
-        # ClientConnectorError wrapping and trace callbacks, with no remote I/O.
-        with socket.socket() as reserved:
-            reserved.bind(("127.0.0.1", 0))
-            url = f"http://127.0.0.1:{reserved.getsockname()[1]}/{PRIVATE}"
-            monkeypatch.setattr(openai, "CODEX_ENDPOINT", url)
+        # A bound, non-listening port may time out or return EINVAL on Windows
+        # and macOS. Inject the OS failure at sock_connect instead, retaining
+        # aiohttp's real exception wrapping and per-request trace callbacks.
+        async def refused(sock: socket.socket, address: tuple[str, int]) -> None:
+            assert address == ("127.0.0.1", 9)
+            await asyncio.sleep(0)  # Both requests own simultaneous trace scopes.
+            raise ConnectionRefusedError(errno.ECONNREFUSED, PRIVATE)
 
-            async def fail(route: str, call_id: str) -> tuple[str, str]:
-                token = scope.set({"model_call_id": call_id})
-                try:
-                    async with provider(route, url=url, timeout=2) as client:
-                        events = [event async for event in client.generate([Message(role="user", content=PRIVATE)])]
-                    assert len(events) == 1 and isinstance(events[0], ErrorEvent)
-                    record = details(events[0])
-                    assert record["category"] == "connect" and record["phase"] == "request"
-                    assert record["exception"] == "ClientConnectorError"
-                    assert record["errno"] == errno.ECONNREFUSED
-                    assert record["causes"] == [{"exception": "ConnectionRefusedError", "errno": errno.ECONNREFUSED}]
-                    assert record["model_call_id"] == call_id
-                    attempt_id = record["http_attempt_id"]
-                    assert isinstance(attempt_id, str) and attempt_id == http_attempt.get().id
-                    elapsed = record["http_attempt_elapsed_ms"]
-                    assert isinstance(elapsed, (int, float)) and elapsed >= 0
-                    return call_id, attempt_id
-                finally:
-                    scope.reset(token)
+        monkeypatch.setattr(asyncio.get_running_loop(), "sock_connect", refused)
+        url = f"http://127.0.0.1:9/{PRIVATE}"
+        monkeypatch.setattr(openai, "CODEX_ENDPOINT", url)
 
-            pairs = await asyncio.gather(fail("codex", "a" * 32), fail("responses", "b" * 32))
-            assert pairs[0][1] != pairs[1][1]
-            logs = [record.getMessage() for record in caplog.records if "Provider generation failed" in record.message]
-            assert len(logs) == 2
-            for call_id, attempt_id in pairs:
-                matching = [line for line in logs if f"model_call_id={call_id}" in line]
-                assert len(matching) == 1 and f"http_attempt_id={attempt_id}" in matching[0]
-                assert f"ClientConnectorError(errno={errno.ECONNREFUSED})" in matching[0]
-                assert f"causes=ConnectionRefusedError(errno={errno.ECONNREFUSED})" in matching[0]
+        async def fail(route: str, call_id: str) -> tuple[str, str]:
+            token = scope.set({"model_call_id": call_id})
+            try:
+                async with provider(route, url=url, timeout=HANG_GUARD) as client:
+                    events = [event async for event in client.generate([Message(role="user", content=PRIVATE)])]
+                assert len(events) == 1 and isinstance(events[0], ErrorEvent)
+                record = details(events[0])
+                assert record["category"] == "connect" and record["phase"] == "request"
+                assert record["exception"] == "ClientConnectorError"
+                assert record["errno"] == errno.ECONNREFUSED
+                assert record["causes"] == [{"exception": "ConnectionRefusedError", "errno": errno.ECONNREFUSED}]
+                assert record["model_call_id"] == call_id
+                attempt_id = record["http_attempt_id"]
+                assert isinstance(attempt_id, str) and attempt_id == http_attempt.get().id
+                elapsed = record["http_attempt_elapsed_ms"]
+                assert isinstance(elapsed, (int, float)) and elapsed >= 0
+                return call_id, attempt_id
+            finally:
+                scope.reset(token)
+
+        pairs = await asyncio.gather(fail("codex", "a" * 32), fail("responses", "b" * 32))
+        assert pairs[0][1] != pairs[1][1]
+        logs = [record.getMessage() for record in caplog.records if "Provider generation failed" in record.message]
+        assert len(logs) == 2
+        for call_id, attempt_id in pairs:
+            matching = [line for line in logs if f"model_call_id={call_id}" in line]
+            assert len(matching) == 1 and f"http_attempt_id={attempt_id}" in matching[0]
+            assert f"ClientConnectorError(errno={errno.ECONNREFUSED})" in matching[0]
+            assert f"causes=ConnectionRefusedError(errno={errno.ECONNREFUSED})" in matching[0]
 
     asyncio.run(scenario())
     assert PRIVATE not in caplog.text

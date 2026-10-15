@@ -207,6 +207,23 @@ def transport_diagnostic(extra: object) -> str:
         return ""
 
 
+def exception_diagnostic(error: BaseException) -> str:
+    """Format only safe exception structure, without generation scope or logging."""
+    try:
+        details: dict[str, object] = {
+            "category": _category(error, protocol=False) if isinstance(error, Exception) else "unknown",
+            "phase": "unknown",
+            **_exception_details(error),
+        }
+        if causes := _causes(error):
+            details["causes"] = causes
+        return transport_diagnostic({"transport": details})
+    except Exception:
+        # A diagnostic must not replace the original failure even if a plugin's
+        # exception overrides class inspection or another classification getter.
+        return "transport=unknown phase=unknown"
+
+
 def _transport_diagnostic(extra: object) -> str:
     if type(extra) is not dict:
         return ""

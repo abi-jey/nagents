@@ -38,6 +38,7 @@ from nagents.live import LiveEvent
 from ._async import join_owned
 from .live_context import LiveSeed
 from .live_diagnostics import BrowserAudioHealth
+from .live_diagnostics import log_live_failure
 from .live_inspection import MAX_MODEL_BYTES
 from .live_inspection import MAX_MODEL_PAYLOAD
 from .live_inspection import MAX_MODEL_REQUESTS
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     from nagents.live.delegation import LiveAppendKind
 
     from .live_bridge import MainAgentBridge
+    from .live_diagnostics import FailureStage
     from .live_login import LoginVoiceConfig
     from .live_relay import ChatGPTMediaRelay
 
@@ -391,8 +393,11 @@ class _Call:
     bridge: MainAgentBridge | None = field(default=None, repr=False)
     last_speech: float = field(default_factory=monotonic, repr=False)
 
-    def fail(self, message: str, status: int = 502) -> None:
+    def fail(
+        self, message: str, status: int = 502, *, stage: FailureStage = "lifecycle", error: BaseException | str = ""
+    ) -> None:
         if not self.failure:
+            log_live_failure(self.record.identifier, stage, error, status=status)
             self.failure, self.http_status = message, status
             self.record.append("error", message)
 
@@ -781,8 +786,13 @@ class LiveService:
             if self._caption_factory is not None:
                 call.captions = await self._caption_factory(call.record.identifier)
             login = self._login_factory(voice) if self._login_factory is not None else None
-        except Exception:
-            call.fail("ChatGPT voice configuration is unavailable. Check your selected connection.", 503)
+        except Exception as error:
+            call.fail(
+                "ChatGPT voice configuration is unavailable. Check your selected connection.",
+                503,
+                stage="configuration",
+                error=error,
+            )
             call.record.transition("error", call.failure)
             self._active.pop(call.record.identifier, None)
             self._prune_records()
@@ -848,10 +858,20 @@ class LiveService:
             # instead use the input's single PCM/silence playout clock.
             call.audio_in.fill_gaps = False
             media = ChatGPTMediaRelay(call.audio_in, call.audio_out)
-        except ImportError:
-            call.fail("Install nagents[web] on the server to enable ChatGPT voice audio.", 503)
-        except Exception:
-            call.fail("ChatGPT voice configuration is unavailable. Check your selected connection.", 503)
+        except ImportError as error:
+            call.fail(
+                "Install nagents[web] on the server to enable ChatGPT voice audio.",
+                503,
+                stage="configuration",
+                error=error,
+            )
+        except Exception as error:
+            call.fail(
+                "ChatGPT voice configuration is unavailable. Check your selected connection.",
+                503,
+                stage="configuration",
+                error=error,
+            )
         else:
             await self._run_login(call, "", replace(login, history=call.seed.history), media)
             return
@@ -863,7 +883,7 @@ class LiveService:
     async def _run_login(
         self, call: _Call, sdp: str, config: LoginVoiceConfig, media: ChatGPTMediaRelay | None = None
     ) -> None:
-        connection = ChatGPTLiveConnection(config)
+        connection = ChatGPTLiveConnection(config, voice_session_id=call.record.identifier)
         if call.bridge is not None:
             self._attach_bridge(call, connection.append)
         observers: list[asyncio.Task[None]] = []
@@ -877,9 +897,9 @@ class LiveService:
                         if await self._capture_event(call, event, connection.identifier, ""):
                             return
             except LoginVoiceError as error:
-                call.fail(str(error))
-            except Exception:
-                call.fail("The ChatGPT voice control connection was interrupted.")
+                call.fail(str(error), stage="login_control", error=error)
+            except Exception as error:
+                call.fail("The ChatGPT voice control connection was interrupted.", stage="login_control", error=error)
             finally:
                 call.finalized = connection.finalized
 
@@ -893,9 +913,9 @@ class LiveService:
                 for worker in done:
                     worker.result()
             except LoginVoiceError as error:
-                call.fail(str(error))
-            except Exception:
-                call.fail("The ChatGPT voice connection was interrupted.")
+                call.fail(str(error), stage="login_control", error=error)
+            except Exception as error:
+                call.fail("The ChatGPT voice connection was interrupted.", stage="login_control", error=error)
             finally:
                 for worker in workers:
                     worker.cancel()
@@ -939,9 +959,9 @@ class LiveService:
             await setup
             await self._connected(call, observers[0])
         except LoginVoiceError as error:
-            call.fail(str(error))
-        except Exception:
-            call.fail("The ChatGPT voice connection could not be established.")
+            call.fail(str(error), stage="login_setup", error=error)
+        except Exception as error:
+            call.fail("The ChatGPT voice connection could not be established.", stage="login_setup", error=error)
         finally:
             for pending in preparing:
                 pending.cancel()
@@ -970,8 +990,8 @@ class LiveService:
                 try:
                     async with asyncio.timeout(CLEANUP_SECONDS):
                         await media.aclose()
-                except Exception:
-                    call.fail("ChatGPT voice audio cleanup could not be confirmed.")
+                except Exception as error:
+                    call.fail("ChatGPT voice audio cleanup could not be confirmed.", stage="cleanup", error=error)
             call.finalized = connection.finalized
             if connection.identifier and not call.finalized:
                 call.fail("ChatGPT voice finalization could not be confirmed.")
@@ -1182,9 +1202,9 @@ class LiveService:
                 call.fail("Live connection ended before finalization.")
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             if not call.finalized:
-                call.fail("Live connection was interrupted.")
+                call.fail("Live connection was interrupted.", stage="provider_stream", error=error)
 
     async def _capture_event(self, call: _Call, event: Event, identifier: str, secret: str) -> bool:
         if isinstance(event, (InputTranscriptDeltaEvent, AudioTranscriptDeltaEvent)) or (

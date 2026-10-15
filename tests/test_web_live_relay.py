@@ -506,8 +506,9 @@ def test_login_stream_owns_media_until_finalization_and_cleans_cancelled_setup(
                 timeline.append("peer-closed")
 
         class Connection:
-            def __init__(self, config: LoginVoiceConfig) -> None:
+            def __init__(self, config: LoginVoiceConfig, *, voice_session_id: str) -> None:
                 assert config.model == "gpt-live-1-codex"
+                assert len(voice_session_id) == 32
                 self.identifier = ""
                 self.finalized = False
 

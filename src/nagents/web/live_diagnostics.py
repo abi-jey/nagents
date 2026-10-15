@@ -8,12 +8,58 @@ import re
 from dataclasses import dataclass
 from dataclasses import field
 from time import monotonic
+from typing import Literal
+
+from nagents.provider._diagnostics import exception_diagnostic
 
 logger = logging.getLogger("uvicorn.error")
+FailureStage = Literal[
+    "lifecycle",
+    "configuration",
+    "login_provision",
+    "login_control",
+    "login_setup",
+    "cleanup",
+    "provider_stream",
+    "media_worker",
+    "media_input",
+    "media_output",
+    "media_stats",
+]
+_FAILURE_STAGES = frozenset(
+    {
+        "lifecycle",
+        "configuration",
+        "login_provision",
+        "login_control",
+        "login_setup",
+        "cleanup",
+        "provider_stream",
+        "media_worker",
+        "media_input",
+        "media_output",
+        "media_stats",
+    }
+)
 
 
 def voice_session_identity(value: object) -> str:
     return value if type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value) else "unavailable"
+
+
+def log_live_failure(session_id: str, stage: FailureStage, error: BaseException | str = "", *, status: int = 0) -> None:
+    """Preserve failure causes without exception text, provider payloads or credentials."""
+    if issubclass(type(error), asyncio.CancelledError):
+        return
+    safe_stage = stage if type(stage) is str and stage in _FAILURE_STAGES else "lifecycle"
+    diagnostic = exception_diagnostic(error) if isinstance(error, BaseException) else "none"
+    logger.error(
+        "Live failure: voice_session_id=%s stage=%s status=%d diagnostic=%s",
+        voice_session_identity(session_id),
+        safe_stage,
+        status if type(status) is int and 100 <= status <= 599 else 0,
+        diagnostic,
+    )
 
 
 @dataclass

@@ -1242,6 +1242,9 @@ React rendering and per-packet main-thread scheduling. PCM remains mono 24 kHz
 on the wire; the worklet resamples continuously to the AudioContext's actual
 sample rate, including an anti-alias filter for lower-rate outputs. Its startup
 queue target follows measured short delivery variation between 40 and 160 ms.
+Short late arrivals raise the next startup target immediately; clean delivery
+reduces it slowly. This helps absorb repeated jitter after re-priming, but cannot
+recover audio missing during the first unexpected gap or a long upstream pause.
 A one-second sample capacity bounds memory and latency; exceptional overflow
 trims stale samples with a short fade instead of stopping every queued source.
 The server paces unpaced provider bursts into 20 ms frames and backpressures the
@@ -1265,8 +1268,33 @@ starvation count, dropped samples, target depth, device rate and clock correctio
 Starvation also includes intentional gaps between replies; counters alone do not
 prove network loss. Played-PCM and health reports each allow only one message in
 flight; a busy UI skips old visualization frames without dropping audible PCM.
-The server also logs numeric output queue/backpressure counters on close. No audio,
-transcript, session identifier, provider URL or credentials are logged.
+While connected, the composer control stays labelled **Live**. Speaking and
+listening activity animate the sphere without changing that label; microphone
+and speaker mute states remain on their separate controls.
+
+Browser playback warnings and server audio timing logs include a validated voice
+session identifier, so reconnects can be distinguished. Rate-limited anomaly
+logs and final summaries separate microphone drops, event-loop lateness,
+provider frame gaps, output queue waits, and WebSocket send delays. A provider
+frame gap can include downstream backpressure: compare it with the write-wait
+counter before attributing it to the network. The server also samples inbound
+RTP packet/loss/jitter counters alongside decoded frames and receive/write wait
+states, so packet arrival can be distinguished from decoder or output stalls.
+Saved-permission database reads
+run outside the audio event loop; their results are rechecked against current
+run ownership, tool binding, and permission changes.
+
+Fatal provider run failures log at **ERROR**; recoverable failures remain
+warnings. The diagnostic includes an allowlisted transport category, exception
+and cause types, numeric OS error codes, request phase and elapsed time, plus
+model-call and HTTP-attempt identifiers when available. The existing run and
+session identifiers join this to tool/delegation activity. Raw exception text,
+provider URLs, headers, credentials, audio, and conversation content are not
+included in these diagnostics. Full payload observation is not enabled by them.
+Fatal voice lifecycle failures also produce an **ERROR** with the voice session
+identifier and a fixed operation stage. Login transport failures are logged
+before they become a generic user-facing error, preserving safe cause and OS
+error details. Ordinary cancellation does not produce a failure log.
 
 In **Main assistant** mode, GPT-Live delegates requests through the normal
 Harness run for the chat selected when voice connects. The assistant retains
@@ -1702,6 +1730,14 @@ The endpoint and library method are included in v0.15.0. Older installations
 may need an update; consult the release notes for your selected distribution.
 
 ## Development Checks
+
+For a spoken browser round trip, use the
+[browser voice E2E harness](../../examples/live/browser_e2e/README.md). It feeds a
+known clip through a virtual microphone and records the rendered speaker graph,
+with socket, caption, delegation, UI, and audio-frame timestamps. An offline
+baseline and an injected-gap case validate playback and the recorder; an opt-in
+authenticated mode exercises the normal ngn provider and real delegation. These
+test assets are never mounted by the production application.
 
 The frontend is organized by responsibility within `src/nagents/web-ui/src/`:
 
