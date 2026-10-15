@@ -747,10 +747,8 @@ class SubagentManager:
             else parent.delegation_model_binding(agent, model=options.model, provider=options.provider)
         )
         config = replace(
-            parent.config,
+            parent.clone_configuration(),
             agent=agent,
-            provider=parent._default_provider_name,
-            model=parent._selected_model,
             model_explicit=bool(options.model) or parent.config.model_explicit,
             reasoning_effort=resolve_effort(options.reasoning_effort, parent.reasoning_effort()),
             profiles=profiles,

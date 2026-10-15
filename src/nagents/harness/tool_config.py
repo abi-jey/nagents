@@ -139,7 +139,15 @@ class HarnessToolRegistry(ToolRegistry):
         when a profile, depth limit, scheduler or workspace selection changes.
         """
         self.harness.refresh_tool_policy()
-        tools = [tool for tool in super().get_all() if self.harness.tool_enabled(tool.name) and self._available(tool)]
+        return [tool for tool in self.get_catalog() if self.harness.tool_enabled(tool.name) and self._available(tool)]
+
+    def get_catalog(self) -> list[ToolDefinition]:
+        """Describe all registered tools with the same current delegation schema.
+
+        Disabled tools remain inspectable. Copies keep catalog reads from
+        mutating a schema already accepted by a model generation.
+        """
+        tools = super().get_all()
         for index, tool in enumerate(tools):
             if tool.func == self.harness.tasks.delegate:
                 tool = replace(tool, parameters=deepcopy(tool.parameters))

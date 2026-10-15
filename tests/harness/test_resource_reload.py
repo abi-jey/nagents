@@ -307,6 +307,9 @@ async def test_serve_exposes_mcp_tools_and_reloads_after_final_response(
     profile = harness.config.provider_profile()
     harness.config.provider = "fixture"
     harness.config.providers = {"fixture": profile}
+    # This fixture installs a named transport after constructing the runtime.
+    # Keep its default routing identity consistent with that accepted client.
+    harness._default_provider_name = "fixture"
     harness._built_provider_profile = profile
     harness._built_provider_name = "fixture"
     harness.provider_store.workspace_store.save(

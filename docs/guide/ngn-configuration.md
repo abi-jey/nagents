@@ -297,7 +297,7 @@ or authentication-route selection. String choices are case-sensitive.
 | --- | --- | --- | --- |
 | `provider_id` | string | `""` | Optional named connection from `providers.json`; otherwise the registry's active connection is used. |
 | `providers` | string or object | omitted | Relative `.json` file reference for this scope, or `{"global": "path.json", "workspace": "path.json"}`. Omitted scopes use their default `providers.json`. The web UI saves the selected file. |
-| `model` | string | `"gpt-6-astra"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
+| `model` | string or `{provider, id}` reference | `"gpt-6-astra"` | A model ID supported by the endpoint/account, or an Azure deployment name. A reference selects its named connection and model together. No model-catalog validation occurs at startup. |
 
 Connection details—`kind`, `api`, `base_url`, `api_key_env`, `auth`, and
 `api_version`—belong only to entries under `providers.json` → `providers.NAME`.
@@ -461,14 +461,17 @@ Custom profile names match `[A-Za-z0-9_-]{1,128}`. Each profile accepts these fi
 | --- | --- | --- |
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
-| `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
-| `provider` | `""` | Optional named connection ID in `providers.json`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
+| `model` | omitted | Optional `{provider, id}` model reference on profile activation. Omission inherits workspace, then global defaults. Older string overrides remain readable. |
 | `description` | `""` | Description shown to the model and agent picker. |
 | `tools` | omitted | Tool-name array; omission inherits, `[]` permits no tools. |
 | `denied_tools` | `[]` | Additional tool-name denials. |
 | `allowed_agents` | omitted | Delegation target-name array; `[]` disables delegation. |
 | `user_invocable` | `true` | Boolean controlling user selection. |
 | `subagent_available` | `true` | Boolean controlling delegation eligibility. |
+
+A model reference names an existing global or workspace connection; the agent
+does not define credentials or its own provider. Older scalar model definitions
+with a separate provider connection ID remain readable.
 
 ```json
 {

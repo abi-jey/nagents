@@ -230,7 +230,8 @@ class SettingsValues(_SettingsValuesV1):
         config.submit_mode = self.submit_mode
         config.reasoning_effort = self.reasoning_effort
         config.read_only = self.read_only or harness._permission_ceiling == "reviewer"
-        harness.agent.provider.model = config.model
+        if harness.agent.provider.model != config.model:
+            harness.agent.provider.model = config.model
         harness.agent.max_tool_rounds = self.max_tool_rounds
         _apply_compaction(harness, self.compact_trigger, self.compact_tokens, self.compact_messages)
         harness.refresh_instructions()
@@ -376,7 +377,11 @@ class WebSettings:
         }
 
     def provider_config(
-        self, values: SettingsValues, *, model_binding: ModelBinding = _INHERIT_MODEL
+        self,
+        values: SettingsValues,
+        *,
+        model_binding: ModelBinding = _INHERIT_MODEL,
+        allow_unavailable: bool = False,
     ) -> "HarnessConfig":
         """Validated candidate configuration with allowlisted overrides applied."""
         candidate = copy.deepcopy(self._provider_admin)
@@ -399,10 +404,12 @@ class WebSettings:
                 binding = preference.binding
         elif profile.model or profile.provider:
             binding = ModelBinding(profile.provider or binding.provider, profile.model or binding.id)
-        if binding.provider and binding.provider not in registry.providers:
+        unavailable = bool(binding.provider and binding.provider not in registry.providers)
+        if unavailable and not allow_unavailable:
             raise ValueError(f"Model references unavailable provider connection {binding.provider!r}")
         candidate.providers.update(registry.providers)
-        candidate.provider = binding.provider
+        candidate.provider = "" if unavailable else binding.provider
+        candidate.unavailable_model_binding = binding if unavailable else _INHERIT_MODEL
         candidate.model = binding.id
         candidate.reasoning_effort = values.reasoning_effort
         candidate.agent = values.agent
@@ -425,10 +432,10 @@ class WebSettings:
             }
         )
 
-    async def _apply_values(self, values: SettingsValues) -> None:
+    async def _apply_values(self, values: SettingsValues, *, allow_unavailable: bool = False) -> None:
         """Apply the accepted default and agent pair without rereading old preferences."""
         default = ModelBinding(self._scope_binding("workspace")[0].provider, values.model)
-        candidate = self.provider_config(values, model_binding=default)
+        candidate = self.provider_config(values, model_binding=default, allow_unavailable=allow_unavailable)
         await self.harness.reconfigure_provider(candidate)
         values.apply(
             self.harness,
@@ -773,8 +780,14 @@ class WebSettings:
                     local_model = model_store.load()
                     if version == 5 and local_model:
                         differences["model"] = local_model
-                unavailable = self.harness.config.unavailable_model_binding.configured
-                effective_defaults = self.defaults if unavailable else self._effective_values(self.defaults)
+                # The persisted default agent can differ from the startup
+                # agent. Resolve its actual model before deciding whether the
+                # runtime needs an unavailable-connection placeholder.
+                unavailable = self.provider_config(values, allow_unavailable=True).unavailable_model_binding.configured
+                default_unavailable = self.provider_config(
+                    self.defaults, allow_unavailable=True
+                ).unavailable_model_binding.configured
+                effective_defaults = self.defaults if default_unavailable else self._effective_values(self.defaults)
                 self.workspace_overrides = (
                     {
                         key: value
@@ -791,14 +804,7 @@ class WebSettings:
                     values = self._effective_values(values)
                     self.validate(values)
                 with self.harness.operation("load web settings"):
-                    if unavailable:
-                        values.apply(
-                            self.harness,
-                            model_binding=ModelBinding("", values.model),
-                            default_model_binding=self._scope_binding("workspace")[0],
-                        )
-                    else:
-                        await self._apply_values(values)
+                    await self._apply_values(values, allow_unavailable=True)
                 self.values = values
                 self.effective_mode = self.harness.mode
                 self.revision = revision
@@ -815,14 +821,7 @@ class WebSettings:
                 )
                 effective = self.defaults.model_copy(update={"model": selected_model})
                 with self.harness.operation("load global defaults"):
-                    if unavailable:
-                        effective.apply(
-                            self.harness,
-                            model_binding=ModelBinding("", effective.model),
-                            default_model_binding=self._scope_binding("workspace")[0],
-                        )
-                    else:
-                        await self._apply_values(effective)
+                    await self._apply_values(effective, allow_unavailable=True)
                 self.values = effective
                 self.effective_mode = self.harness.mode
             if self.harness.config.provider:

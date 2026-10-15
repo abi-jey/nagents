@@ -22,6 +22,7 @@ from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.harness.subagents import TaskInfo
+from nagents.harness.task_activity import TaskOptions
 from nagents.harness.types import TaskCompleted
 from tests.support.config import connection
 from tests.support.providers import FakeProvider
@@ -158,6 +159,7 @@ async def test_create_rename_and_delegate_without_restart_with_trusted_directory
         await harness.close()
 
 
+@pytest.mark.requires_posix
 @pytest.mark.asyncio
 async def test_catalog_refresh_does_not_mutate_advertised_schema_or_selected_profile(tmp_path: Path) -> None:
     root = tmp_path / ".ngn/agents"
@@ -276,6 +278,44 @@ async def test_untrusted_workspace_stays_untrusted_and_programmatic_profiles_sur
         await harness.close()
 
 
+@pytest.mark.asyncio
+async def test_clones_and_explicit_children_preserve_unavailable_default_identity(tmp_path: Path) -> None:
+    store = ScopedProviderRegistryStore(tmp_path)
+    home = ProviderProfile(kind="openai", auth="api-key")
+    store.global_store.save(ProviderRegistry(active="home", providers={"home": home}), expected="0" * 64)
+    source = tmp_path / "operator.json"
+    source.write_text(
+        json.dumps(
+            {
+                "model": {"provider": "removed", "id": "missing-default"},
+                "agent": "mini",
+                "profiles": {"mini": {"model": {"provider": "home", "id": "mini-model"}}},
+            }
+        )
+    )
+    config = load_config(tmp_path, source)
+    config.demo = True
+    config.data_dir = tmp_path / "state"
+    parent = Harness(config)
+    clone = Harness(parent.clone_configuration())
+    info = TaskInfo("explicit-child", "Explicit child", profile="assistant", child_session_id="child-session")
+    parent.tasks._options[info.id] = TaskOptions(provider="home", model="child-model")
+    child = parent.tasks._create_child("assistant", info)
+    try:
+        for runtime_owner in (parent, clone, child):
+            assert runtime_owner._default_provider_name == "removed"
+            with pytest.raises(ValueError, match="unavailable provider connection 'removed'"):
+                runtime_owner.default_model_binding()
+        assert (parent.config.provider, parent.agent.provider.model) == ("home", "mini-model")
+        assert (clone.config.provider, clone.agent.provider.model) == ("home", "mini-model")
+        assert (child.config.provider, child.agent.provider.model) == ("home", "child-model")
+    finally:
+        await child.close()
+        await clone.close()
+        await parent.close()
+
+
+@pytest.mark.requires_posix
 @pytest.mark.asyncio
 async def test_child_refreshes_definitions_and_inherits_permission_ceiling(tmp_path: Path) -> None:
     root = tmp_path / ".ngn/agents"

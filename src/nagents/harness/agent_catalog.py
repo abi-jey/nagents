@@ -53,7 +53,9 @@ class AgentCatalog:
         # Construct a profile-only accumulator: never reread providers, model
         # preferences, environment flags, endpoints, plugins or approval policy.
         candidate = HarnessConfig(config.workspace)
-        diagnostics: list[str] = []
+        # A programmatic catalog without reloadable sources owns its supplied
+        # diagnostics too; there is no discovery pass that can replace them.
+        diagnostics: list[str] = [] if self.sources else list(config.agent_diagnostics)
         for source in self.sources:
             before = dict(candidate.profiles)
             notes_before = len(diagnostics)

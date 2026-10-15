@@ -315,8 +315,12 @@ class Harness:
     def clone_configuration(self) -> "HarnessConfig":
         """Copy host defaults without promoting this runtime's agent override."""
         config = copy.deepcopy(self.config)
-        config.provider = self._default_provider_name if self._default_provider_name in config.providers else ""
+        missing = bool(self._default_provider_name and self._default_provider_name not in config.providers)
+        config.provider = "" if missing else self._default_provider_name
         config.model = self._selected_model
+        config.unavailable_model_binding = (
+            ModelBinding(self._default_provider_name, self._selected_model) if missing else ModelBinding()
+        )
         return config
 
     def _default_model_choices(self) -> tuple[ModelBinding, ModelBinding, ModelBinding]:
@@ -1154,6 +1158,9 @@ class Harness:
         config.validate()
         if config.demo is not self.config.demo:
             raise ValueError("Provider overrides cannot change demo mode")
+        unavailable = config.unavailable_model_binding if not config.provider else _INHERIT_MODEL
+        if unavailable.configured and unavailable.id != config.model:
+            raise ValueError("The unavailable model reference must match the requested model")
         profile = config.provider_profile()
         if config.provider:
             selected = self.provider_store.load().providers.get(config.provider)
@@ -1164,12 +1171,16 @@ class Harness:
         # mutable config can therefore already describe the new connection while
         # the running client still uses the old auth/endpoint. Compare against
         # the immutable profile that actually constructed that client.
-        changing = isinstance(self.agent.provider, UnavailableModelProvider) or (
-            (config.provider, profile) != (self._built_provider_name, self._built_provider_profile)
+        changing = (
+            unavailable.configured
+            or isinstance(self.agent.provider, UnavailableModelProvider)
+            or ((config.provider, profile) != (self._built_provider_name, self._built_provider_profile))
         )
         if changing:
             replacement: Provider
-            if config.provider:
+            if unavailable.configured:
+                replacement = UnavailableModelProvider(unavailable)
+            elif config.provider:
                 replacement = build_provider(profile, config, self.openai_auth)
             elif config.provider_profile().auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
@@ -1186,9 +1197,10 @@ class Harness:
         self.config.provider = config.provider
         self.config.providers = dict(config.providers)
         self.config.model = config.model
-        self.config.unavailable_model_binding = ModelBinding()
+        self.config.unavailable_model_binding = unavailable
         self.config.model_explicit = True
-        self.agent.provider.model = config.model
+        if self.agent.provider.model != config.model:
+            self.agent.provider.model = config.model
 
     async def _select_provider(self, name: str, *, model: str = "") -> None:
         registry = self.provider_store.load()
