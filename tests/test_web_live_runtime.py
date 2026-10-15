@@ -986,7 +986,8 @@ def test_relay_streams_pcm_in_both_directions_and_disconnect_finalizes(
         service = LiveService(factory)
         try:
             created = await service.create_stream()
-            assert set(created) == {"session_id", "model", "voice"}
+            assert set(created) == {"session_id", "model", "voice", "playback_mode"}
+            assert created["playback_mode"] == "buffered"
             identifier = str(created["session_id"])
             browser = Browser()
             relay = asyncio.create_task(service.serve_audio(identifier, cast("WebSocket", browser)))

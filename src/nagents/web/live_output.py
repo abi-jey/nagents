@@ -75,7 +75,7 @@ class BrowserOutput:
         self.buffered_bytes = self._live.buffered_bytes
         self.peak_buffered_bytes = self._live.peak_buffered_bytes
 
-    def enqueue_realtime(self, chunk: bytes, *, age: float = 0.0) -> None:
+    def enqueue_realtime(self, chunk: bytes) -> None:
         """Ingest without an await so browser delays cannot fill aiortc's queue."""
         if not self.realtime:
             raise RuntimeError("Real-time output has not been selected")
@@ -86,7 +86,7 @@ class BrowserOutput:
         now = asyncio.get_running_loop().time()
         dropped = self._live.dropped_samples
         for offset in range(0, len(chunk), FRAME_BYTES):
-            self._live.append(chunk[offset : offset + FRAME_BYTES], now, age)
+            self._live.append(chunk[offset : offset + FRAME_BYTES], now)
         self._sync_live()
         self._live_changed.set()
         if self._live.dropped_samples != dropped:
@@ -102,7 +102,7 @@ class BrowserOutput:
             "Live audio output timing: voice_session_id=%s closing=%d buffered_bytes=%d peak_buffered_bytes=%d "
             "queue_waits=%d queue_wait_ms=%.1f queue_wait_peak_ms=%.1f "
             "pacing_delays=%d pacing_late_ms=%.1f pacing_peak_ms=%.1f "
-            "realtime=%d dropped_samples=%d recoveries=%d source_age_peak_ms=%.1f",
+            "realtime=%d dropped_samples=%d recoveries=%d",
             voice_session_identity(self.voice_session_id),
             int(closing),
             self.buffered_bytes,
@@ -116,7 +116,6 @@ class BrowserOutput:
             int(self.realtime),
             self._live.dropped_samples,
             self._live.recoveries,
-            self._live.age_peak_ms,
         )
 
     async def write(self, chunk: bytes) -> None:

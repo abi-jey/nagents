@@ -300,7 +300,9 @@ class ChatGPTMediaRelay:
             media_time = (
                 float(frame.pts * frame.time_base) if frame.pts is not None and frame.time_base is not None else 0.0
             )
-            age = self._media_clock.observe(now, media_time, valid=valid_clock)
+            # Source timestamps are not synchronized with the local clock.
+            # Keep offset drift visible, but never use it to discard fresh PCM.
+            self._media_clock.observe(now, media_time, valid=valid_clock)
             # This is observed decoded-frame spacing, not network-only jitter:
             # downstream write waits also delay the next recv(). The concurrent
             # RTP snapshot reports packet progress and receive/write wait flags.
@@ -317,7 +319,7 @@ class ChatGPTMediaRelay:
                     try:
                         pcm = bytes(converted.planes[0])[: converted.samples * 2]
                         if isinstance(self._output, BrowserOutput):
-                            self._output.enqueue_realtime(pcm, age=age)
+                            self._output.enqueue_realtime(pcm)
                         else:
                             await self._output.write(pcm)
                     finally:
@@ -342,7 +344,7 @@ class ChatGPTMediaRelay:
             "Live provider audio timing: voice_session_id=%s closing=%d output_samples=%d frame_intervals=%d "
             "frame_gaps=%d frame_gap_ms=%.1f frame_gap_peak_ms=%.1f writes=%d "
             "slow_writes=%d write_ms=%.1f write_peak_ms=%.1f "
-            "source_age_ms=%.1f source_age_peak_ms=%.1f source_clock_resets=%d source_clock_missing=%d",
+            "source_clock_offset_lag_ms=%.1f source_clock_offset_lag_peak_ms=%.1f source_clock_resets=%d source_clock_missing=%d",
             self._voice_session_id,
             int(closing),
             self._output_samples,
@@ -354,8 +356,8 @@ class ChatGPTMediaRelay:
             self._output_wait.delayed,
             self._output_wait.total_ms,
             self._output_wait.peak_ms,
-            self._media_clock.age_ms,
-            self._media_clock.age_peak_ms,
+            self._media_clock.offset_lag_ms,
+            self._media_clock.offset_lag_peak_ms,
             self._media_clock.resets,
             self._media_clock.missing,
         )

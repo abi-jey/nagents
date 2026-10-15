@@ -1,4 +1,4 @@
-"""Real-time playback recovers clock age, not merely the size of one queue."""
+"""Real-time playback bounds local queues without trusting a remote media clock."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def test_reservoir_keeps_recent_whole_frames_and_accounts_for_every_dropped_samp
     assert not reservoir.frames and reservoir.dropped_samples == 13 * 480
 
 
-def test_media_age_handles_dtx_missing_and_restarted_timestamps_and_clock_drift() -> None:
+def test_source_offset_diagnostics_handle_dtx_missing_and_restarted_timestamps_and_clock_drift() -> None:
     clock = MediaClock()
     assert clock.observe(10, 0) == 0
     assert clock.observe(10.2, 0.02) == pytest.approx(0.1798)
@@ -60,13 +60,12 @@ def test_media_age_handles_dtx_missing_and_restarted_timestamps_and_clock_drift(
 
 
 @pytest.mark.parametrize("stall", [0.15, 0.25, 0.35])
-def test_three_minute_call_with_repeated_processing_stalls_has_bounded_audio_age(stall: float) -> None:
+def test_three_minute_call_with_repeated_processing_stalls_bounds_local_backlog(stall: float) -> None:
     async def scenario() -> None:
         loop = asyncio.get_running_loop()
         assert isinstance(loop, ClockLoop)
         output = BrowserOutput()
         output.use_realtime_clock()
-        clock = MediaClock()
         index = 0
         delivered: list[int] = []
         resets = 0
@@ -76,8 +75,7 @@ def test_three_minute_call_with_repeated_processing_stalls_has_bounded_audio_age
                 # Each batch is what the public remote-track recv now releases.
                 loop.now = second + stall
                 while index * 0.02 <= loop.time():
-                    age = clock.observe(loop.time(), index * 0.02)
-                    output.enqueue_realtime(pcm(index), age=age)
+                    output.enqueue_realtime(pcm(index))
                     index += 1
                 while output.buffered_bytes or output._live.reset_pending:
                     packet = await anext(packets)
@@ -91,7 +89,7 @@ def test_three_minute_call_with_repeated_processing_stalls_has_bounded_audio_age
                 # pacing clock carrying latency into the next exchange.
                 while index * 0.02 < second + 1:
                     loop.now = index * 0.02
-                    output.enqueue_realtime(pcm(index), age=clock.observe(loop.time(), loop.time()))
+                    output.enqueue_realtime(pcm(index))
                     assert (await anext(packets)).data == pcm(index)
                     delivered.append(index)
                     index += 1
@@ -194,11 +192,60 @@ def test_public_receiver_drains_without_browser_backpressure_and_yields_fairly(m
             assert track.frames.empty(), "a browser that is not reading must not block remote-track draining"
             assert output.buffered_bytes <= LIVE_BUFFER_BYTES and output._live.dropped_samples > 0
             assert output.blocked_writes == 0
-            assert relay._media_clock.age_peak_ms > 300
+            assert relay._media_clock.offset_lag_peak_ms > 300
             await relay.quiet()
             track.add(21)
             await asyncio.sleep(0)
             assert output.buffered_bytes == 0
+        finally:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+            await relay.aclose()
+
+    run(scenario())
+
+
+def test_paced_audio_survives_persistent_remote_timestamp_rate_difference(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Track(MediaStreamTrack):
+        kind = "audio"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.frames: asyncio.Queue[AudioFrame] = asyncio.Queue()
+
+        async def recv(self) -> AudioFrame:
+            return await self.frames.get()
+
+        def add(self, index: int) -> None:
+            frame = AudioFrame(format="s16", layout="mono", samples=480)
+            frame.planes[0].update(pcm(index))
+            frame.sample_rate = 24000
+            frame.time_base = Fraction(1, 24000)
+            # Delivery and PCM duration are 20ms. Source timestamps progress
+            # 1% more slowly, recreating the measured false-age growth without
+            # creating any actual queue or event-loop backlog.
+            frame.pts = index * 480 * 99 // 100
+            self.frames.put_nowait(frame)
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        assert isinstance(loop, ClockLoop)
+        monkeypatch.setattr("nagents.web.live_relay.monotonic", loop.time)
+        output, track = BrowserOutput(), Track()
+        relay = ChatGPTMediaRelay(Source(), output)
+        worker = asyncio.create_task(relay._playback(track))
+        try:
+            async with aclosing(cast("AsyncGenerator[OutputPacket, None]", output.packets())) as packets:
+                for index in range(9000):
+                    loop.now = index * 0.02
+                    track.add(index)
+                    packet = await anext(packets)
+                    assert not packet.interrupted, "source timestamp drift cannot trigger a playback reset"
+                    assert packet.data == pcm(index), "every on-time PCM frame must survive in order"
+            assert relay._media_clock.offset_lag_peak_ms > 1500
+            assert output.sent_samples == 9000 * 480
+            assert output._live.dropped_samples == 0 and output._live.recoveries == 0
+            assert output.blocked_writes == 0 and output.clock_rebases == 0
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
