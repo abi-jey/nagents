@@ -71,6 +71,7 @@ def test_effective_client_policy_delegates_first_utterance_silently_once_without
             finally:
                 await agent.close()
         assert "first utterance" in instructions and "exactly once" in instructions
+        assert "Before speaking your first reply, delegate" in instructions
         assert "Hello, Hey" in instructions and "audio check such as Do you hear me?" in instructions
         assert "Make this first delegation silently" in instructions
         assert "Do not announce the handoff, context loading, or waiting" in instructions
