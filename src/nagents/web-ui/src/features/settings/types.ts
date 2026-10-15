@@ -1,4 +1,6 @@
 
+export type ModelBinding = { provider: string; id: string };
+
 export type SettingsValues = {
   model: string;
   reasoning_effort: string;
@@ -43,6 +45,12 @@ export type SettingsConnection = {
 };
 
 export type SettingsReply = {
+  model_binding?: ModelBinding;
+  default_model_binding?: ModelBinding;
+  model_binding_source?: "workspace" | "global" | "startup";
+  provider_origin?: "workspace" | "global" | "";
+  model_binding_available?: boolean;
+  model_binding_unavailable_reason?: string;
   agent_diagnostics?: string[];
   read_only_locked?: boolean;
   values: SettingsValues;

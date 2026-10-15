@@ -36,25 +36,27 @@ const registry = { revision: "connections-v1", active: "primary", providers: { p
 };
 const values = settingsValues({ model: "old-model" });
 const settingsReply = { values, defaults: values, revision: "settings-v1", persisted: false,
+  model_binding: { provider: "primary", id: values.model }, default_model_binding: { provider: "primary", id: values.model },
   profiles: [{ name: "assistant", mode: "build" as const, model: "" }], effective_mode: "build" as const,
   providers: ["openai", "anthropic"], apis: ["auto"], auths: ["codex", "api-key"],
   connection: { provider_id: "primary", provider: "openai", api: "auto", auth: "codex", base_url: "", api_key_env: "OPENAI_API_KEY", key_configured: false, auth_status: "configured" },
 };
 
-test("workspace panel previews a connection without mutation and guards activation against an unsaved settings draft", async t => {
+test("workspace panel previews without activation and saves provider and model together with other edits", async t => {
   const view = browser(), writes: string[] = [];
-  let active = "primary", revision = "connections-v1";
   t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
     if (init.method !== "GET") writes.push(path);
-    if (path === "/api/settings") return Response.json({ ...settingsReply, connection: { ...settingsReply.connection, provider_id: active } });
-    if (path === "/api/provider-scopes/workspace/providers") return Response.json({ ...registry, active, revision });
+    if (path === "/api/settings" && init.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      assert.deepEqual(body.model_binding, { provider: "second", id: "second-model" });
+      assert.equal(body.values.model, "second-model");
+      assert.equal(body.values.submit_mode, "interrupt");
+      return Response.json({ ...settingsReply, values: body.values, model_binding: body.model_binding, revision: "saved" });
+    }
+    if (path === "/api/settings") return Response.json(settingsReply);
+    if (path === "/api/provider-scopes/workspace/providers") return Response.json(registry);
     if (path.endsWith("/models")) return Response.json({ models: [path.includes("second") ? "second-model" : "old-model"], metadata: {} });
     if (path.startsWith("/api/reasoning-options")) return Response.json({ options: [] });
-    if (path === "/api/provider-scopes/workspace/providers/second/activate") {
-      assert.deepEqual(JSON.parse(String(init.body)), { revision: "connections-v1" });
-      active = "second"; revision = "connections-v2";
-      return Response.json({ ...registry, active, revision });
-    }
     throw new Error(`Unexpected request: ${path}`);
   });
   function Harness() {
@@ -68,20 +70,17 @@ test("workspace panel previews a connection without mutation and guards activati
     await act(async () => { mode.value = "interrupt"; mode.dispatchEvent(new view.dom.window.Event("change", { bubbles: true })); });
     await act(async () => [...view.container.querySelectorAll<HTMLButtonElement>(".provider-connection-select")].find(item => item.textContent?.includes("second"))!.click());
     assert.deepEqual(writes, [], "browsing never activates a provider");
-    assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.disabled, true);
-    assert.equal(view.container.querySelector<HTMLButtonElement>(".settings-actions [type=submit]")!.disabled, true);
-    assert.match(view.container.textContent!, /second-model/);
-    await act(async () => view.button("Use connection").click());
-    assert.match(view.container.textContent!, /Discard settings draft and use connection/);
-    await act(async () => view.button("Keep editing").click());
-    assert.deepEqual(writes, []);
-    assert.equal(view.container.querySelector<HTMLSelectElement>("#settings-submit_mode")!.value, "interrupt");
-    await act(async () => view.button("Use connection").click());
-    await act(async () => view.button("Discard draft and use connection").click());
-    assert.deepEqual(writes, ["/api/provider-scopes/workspace/providers/second/activate"]);
-    assert.equal(view.container.querySelector<HTMLSelectElement>("#settings-submit_mode")!.value, "queue");
     assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.disabled, false);
-    assert.match(view.container.textContent!, /Using second in this workspace/);
+    assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.value, "", "A previous provider's model is not silently reused");
+    assert.match(view.container.textContent!, /second-model/);
+    assert.equal(view.button("Use connection"), undefined);
+    await act(async () => view.container.querySelector<HTMLButtonElement>(".model-catalog-list button")!.click());
+    assert.deepEqual(writes, [], "Selecting a pair edits only the local draft");
+    assert.equal(view.container.querySelector<HTMLSelectElement>("#settings-submit_mode")!.value, "interrupt");
+    await act(async () => view.button("Save workspace settings").click());
+    assert.deepEqual(writes, ["/api/settings"]);
+    assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.value, "second-model");
+    assert.match(view.container.textContent!, /Workspace settings saved/);
   } finally { await view.cleanup(); }
 });
 
@@ -170,5 +169,39 @@ test("sign-in is offered only for the saved active workspace connection, includi
     await render("global");
     await act(async () => [...view.container.querySelectorAll<HTMLButtonElement>(".provider-connection-select")].find(item => item.textContent?.includes("primary"))!.click());
     assert.equal(view.button("Sign in with ChatGPT"), undefined);
+  } finally { await view.cleanup(); }
+});
+
+test("global model defaults may bind a workspace connection without activating it", async t => {
+  const view = browser(), writes: string[] = [], catalogs: string[] = [];
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (init.method !== "GET") writes.push(path);
+    if (path === "/api/settings/global" && init.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      assert.deepEqual(body.model_binding, { provider: "second", id: "workspace-model" });
+      return Response.json({ ...settingsReply, model_binding: body.model_binding, values: body.values, revision: "global-saved" });
+    }
+    if (path === "/api/settings/global" || path === "/api/settings") return Response.json(settingsReply);
+    if (path === "/api/provider-scopes/global/providers") return Response.json({ ...registry, scope: "global", providers: { primary: profile } });
+    if (path === "/api/provider-scopes/workspace/providers") return Response.json(registry);
+    if (path.endsWith("/models")) { catalogs.push(path); return Response.json({ models: [path.includes("second") ? "workspace-model" : "old-model"] }); }
+    if (path.startsWith("/api/reasoning-options")) return Response.json({ options: [] });
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  function Harness() {
+    const settings = useSettings({ token: "token", blocked: false, operate: async action => { await action(); return true; }, accept() {} });
+    return createElement("div", null, createElement("button", { onClick: settings.showGlobal }, "Open"), settings.open && createElement(SettingsDialog, { settings }));
+  }
+  try {
+    await act(async () => view.root.render(createElement(Harness)));
+    await act(async () => view.button("Open").click());
+    await act(async () => [...view.container.querySelectorAll<HTMLButtonElement>(".provider-connection-select")].find(item => item.textContent?.includes("second"))!.click());
+    assert.equal(view.container.querySelector<HTMLButtonElement>('[aria-label="Edit second connection"]')!.disabled, true, "Global scope cannot edit a workspace connection");
+    await act(async () => view.container.querySelector<HTMLButtonElement>(".model-catalog-list button")!.click());
+    assert.deepEqual(writes, []);
+    await act(async () => view.button("Save global settings").click());
+    assert.deepEqual(writes, ["/api/settings/global"]);
+    assert.ok(catalogs.includes("/api/provider-scopes/workspace/providers/second/models"));
+    assert.ok(catalogs.every(path => path.startsWith("/api/provider-scopes/workspace/")));
   } finally { await view.cleanup(); }
 });

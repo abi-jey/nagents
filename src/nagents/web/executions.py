@@ -231,6 +231,7 @@ class Executions:
                     # defaults and independent chats remain available.
                     await released.wait()
                 primary = self.state.harness
+                harness.providers = deepcopy(primary.providers)
                 await harness.reconfigure_provider(deepcopy(primary.config))
                 if settings := getattr(self.state, "settings", None):
                     harness._permission_ceiling = primary._permission_ceiling

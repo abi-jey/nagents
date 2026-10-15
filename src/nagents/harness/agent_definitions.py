@@ -17,6 +17,7 @@ from typing import cast
 
 import yaml
 
+from .model_bindings import ModelBinding
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 
@@ -342,8 +343,15 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         raise ValueError("name must use letters, numbers, underscores or hyphens and must not replace assistant")
     description = _text(data.get("description", ""), "description", optional=fmt in {"cursor", "copilot"})
     body = _text(body, "instructions", limit=MAX_AGENT_BYTES)
-    model = _text(data.get("model", ""), "model", optional=True, limit=256)
-    provider = _text(data.get("provider", ""), "provider", optional=True, limit=64)
+    raw_model = data.get("model", "")
+    if fmt == "native" and isinstance(raw_model, dict):
+        if "provider" in data:
+            raise ValueError("Put the provider inside model; do not also set an agent provider")
+        binding = ModelBinding.parse(raw_model)
+        model, provider = binding.id, binding.provider
+    else:
+        model = _text(raw_model, "model", optional=True, limit=256)
+        provider = _text(data.get("provider", ""), "provider", optional=True, limit=64)
     if fmt != "native":
         if model and model != "inherit" and not options.model:
             raise ValueError(
@@ -512,7 +520,7 @@ def discover_agents(base: Path, *, personal: bool = False) -> DefinitionBatch:
 
 
 def import_agents(value: object, directory: Path) -> DefinitionBatch:
-    """Import explicitly selected local files beside a trusted configuration.
+    """Import explicitly selected files or definition directories.
 
     Absolute paths and ../ selections are intentional trusted choices. Relative
     paths resolve beside the configuration; neither imports nor discovery follow
@@ -522,6 +530,7 @@ def import_agents(value: object, directory: Path) -> DefinitionBatch:
         return DefinitionBatch(diagnostics=(f"agent_imports must be a list of at most {MAX_AGENT_FILES} imports",))
     profiles: list[ParsedAgent] = []
     diagnostics: list[str] = []
+    scanned = 0
     for index, item in enumerate(value):
         label = f"agent_imports[{index}]"
         try:
@@ -550,7 +559,19 @@ def import_agents(value: object, directory: Path) -> DefinitionBatch:
             for name, targets in tool_map:
                 if not name or len(name) > 128 or not targets:
                     raise ValueError("tool_map must map nonempty tool names to nonempty lists of ngn tool names")
-            profiles.append(_parse(path, _Import(fmt, model, provider, tool_map)))
+            paths = _paths(path, fmt, diagnostics) if path.is_dir() else [path]
+            options = _Import(fmt, model, provider, tool_map)
+            for source in paths:
+                scanned += 1
+                if scanned > MAX_AGENT_FILES:
+                    diagnostics.append(
+                        f"{source}: agent imports exceeded {MAX_AGENT_FILES} files; remaining sources skipped"
+                    )
+                    return DefinitionBatch(tuple(profiles), tuple(diagnostics))
+                try:
+                    profiles.append(_parse(source, options))
+                except (OSError, ValueError, yaml.YAMLError) as exc:
+                    diagnostics.append(f"{source}: {exc}")
         except (OSError, ValueError, yaml.YAMLError) as exc:
             diagnostics.append(f"{label}: {exc}")
     return DefinitionBatch(tuple(profiles), tuple(diagnostics))

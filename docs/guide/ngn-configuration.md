@@ -226,6 +226,7 @@ the provider editor does not offer an API-key-value field.
 | Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.json`; defaults to `~/.config/ngn/providers.json` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
 | Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json` | Workspace-only connections and selection; inherits global connections and default. |
 | Workspace chat-model preference | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/config.json` | The workspace `model` field overrides the global model preference; no credentials. |
+| Agent model overrides | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agent-models/<name>.md` | Model-only Markdown references saved from Team settings, including `assistant`; no instruction or permission overrides. |
 | Project JSON | `<workspace>/.ngn/config.json` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
 | Explicit JSON | `--config /any/path/settings.json` | Any filename/location ending in `.json` is accepted. Selecting it explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
@@ -252,6 +253,21 @@ project file.
 Review trusted configuration **and its referenced Python code**. It can redirect
 requests and select executable plugins. There is no safe-settings subset loaded
 from an untrusted project file: the entire file is skipped.
+
+Model preferences store a complete reference, for example
+`"model": {"provider": "openai", "id": "gpt-6.1-sol"}`. Resolution uses the
+agent's model, then the workspace default, then the global default. Each layer
+selects a connection and model together from the merged global/workspace
+registry. A missing named connection is an error, not a fallback to a different
+provider. Existing string model preferences remain readable. Native agent
+frontmatter accepts the same map; see [agent definitions](agent-definitions.md).
+
+Agent definitions refresh before each model call, while already issued calls
+keep their accepted definitions. Team refreshes newly discovered and renamed
+profiles independently of chat execution. A trusted `agent_imports` entry may
+name a definition directory to enable these updates without trusting the entire
+project. This refresh does not reload endpoints, credentials, host permission
+ceilings, or arbitrary project code.
 
 ### Relative paths
 

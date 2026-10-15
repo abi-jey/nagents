@@ -55,6 +55,10 @@ class AgentPlugin:
     async def before_model(self, context: RunContext, request: ModelRequest) -> ModelRequest:
         return request
 
+    async def before_generation(self, context: RunContext) -> None:
+        """Refresh local capabilities before the next prompt and tools are assembled."""
+        pass
+
     async def after_model(self, context: RunContext) -> None:
         """A completed text response, before its calls execute (including final replies)."""
         pass

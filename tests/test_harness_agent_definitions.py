@@ -423,7 +423,7 @@ def test_discovery_file_count_is_bounded(tmp_path: Path, monkeypatch: pytest.Mon
     assert "exceeded 2 files" in batch.diagnostics[0]
 
 
-def test_oversized_binary_and_directory_sources_are_rejected(tmp_path: Path) -> None:
+def test_oversized_and_binary_sources_are_rejected_in_directory_imports(tmp_path: Path) -> None:
     _write(tmp_path, ".ngn/agents/large.md", "x" * (agent_definitions.MAX_AGENT_BYTES + 1))
     binary = _write(tmp_path, ".ngn/agents/binary.md", "")
     binary.write_bytes(b"\xff\xfe\x80")
@@ -432,7 +432,10 @@ def test_oversized_binary_and_directory_sources_are_rejected(tmp_path: Path) -> 
     assert len(batch.diagnostics) == 2
     assert any("256 KiB" in item for item in batch.diagnostics)
     imported = import_agents([{"path": ".ngn/agents", "format": "native"}], tmp_path)
-    assert "regular file" in imported.diagnostics[0]
+    assert not imported.profiles
+    assert len(imported.diagnostics) == 2
+    assert any("256 KiB" in item for item in imported.diagnostics)
+    assert any("utf-8" in item for item in imported.diagnostics)
 
 
 def test_oversized_frontmatter_does_not_hide_valid_neighbors(tmp_path: Path) -> None:

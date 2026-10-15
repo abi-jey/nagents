@@ -55,6 +55,10 @@
 .team-profile > span > span { font-size: 9px; color: var(--text-secondary); }
 .team-profile small { display: block; color: var(--text-secondary); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 .team-profile.is-selected { background: color-mix(in srgb, var(--accent-blue) 8%, transparent); border-color: color-mix(in srgb, var(--accent-blue) 20%, transparent); }
+.team-profile-row { display: flex; align-items: center; min-width: 0; }
+.team-profile-row .team-profile { flex: 1; min-width: 0; }
+.team-profile-settings { flex: none; display: grid; place-items: center; padding: 6px; border-color: transparent; background: transparent; color: var(--text-secondary); }
+.team-profile-settings:hover { color: var(--text-reading); background: var(--surface-hover); }
 .team-load-error { font-size: 11px; line-height: 1.6; padding: 8px; overflow-wrap: anywhere; color: var(--accent-amber); }
 .team-load-error button { display: block; font-size: 11px; min-height: 28px; margin-top: 4px; }
 .task-timeline, .task-timeline ol { list-style: none; margin: 12px 0; padding: 0 0 0 10px; }
@@ -115,6 +119,16 @@
 .agent-configuration-dialog dt { color: var(--text-secondary); }
 .agent-configuration-dialog dd { margin: 0; overflow-wrap: anywhere; }
 .agent-configuration-hint { line-height: 1.6; }
+.agent-model-dialog { width: min(560px, calc(100vw - 28px)); }
+.agent-model-mode { display: grid; gap: 10px; margin: 18px 0; padding: 12px; border: 1px solid var(--border-group); border-radius: 8px; }
+.agent-model-mode legend { color: var(--text-secondary); font-size: 12px; }
+.agent-model-mode label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 12px; }
+.agent-model-mode small { width: 100%; margin-left: 21px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.agent-model-source { margin: 16px 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.agent-model-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-group); }
+.model-binding-picker > label { display: grid; gap: 7px; margin-bottom: 12px; font-size: 12px; }
+.model-binding-picker select { width: 100%; min-width: 0; padding: 8px; }
+.model-binding-picker .model-catalog-list { max-height: 220px; }
 .agent-next-settings { border-top: 1px solid var(--border-group); padding-top: 14px; }
 .agent-next-settings h3 { margin: 0; font-size: 13px; }
 .agent-next-settings p { font-size: 11px; line-height: 1.6; color: var(--text-secondary); }

@@ -7,6 +7,8 @@ import { WorkspaceDialogs } from "./WorkspaceDialogs";
 import { taskAgent, conversationAgent } from "../features/team/model.js";
 import { useAgentArrivals } from "../features/team/TeamTree.js";
 import { AgentConfiguration } from "../features/team/TeamPane.js";
+import { AgentModelDialog } from "../features/team/AgentModelDialog.js";
+import { isProfileTarget, profileTarget } from "../features/team/useTeam.js";
 import { TaskTimeline } from "../features/team/TaskTimeline.js";
 import { TaskConversation } from "../features/team/TaskConversation.js";
 import { WorkspaceActivity } from "./WorkspaceActivity.js";
@@ -27,7 +29,8 @@ export function App() {
   })];
   const arrivals = useAgentArrivals(client.team.tasks, client.sessions.sessionId, client.team.loaded);
   const configured = agents.find(agent => agent.id === configuredAgent);
-  function configure(id: string) { if (id) setConfiguredAgent(id); else client.sessionAgent.show(); }
+  const configuredProfile = isProfileTarget(configuredAgent) ? configuredAgent.slice("profile:".length) : "";
+  function configure(id: string) { setConfiguredAgent(id || profileTarget(client.sessionAgent.selection?.agent || "assistant")); }
   useEffect(() => {
     if (client.navigationRequest) { setNavOpen(true); setSidebarCollapsed(false); }
   }, [client.navigationRequest]);
@@ -60,7 +63,10 @@ export function App() {
           composer={<WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select} />}
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />
       </main>
-      {configuredAgent && configured && <AgentConfiguration key={`${client.sessions.sessionId}:${configuredAgent}`} agent={configured} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} changed={client.team.refresh} close={() => setConfiguredAgent("")} />}
+      {configuredAgent && configured && <AgentConfiguration key={`${client.sessions.sessionId}:${configuredAgent}`} agent={configured} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} changed={client.team.refresh} close={() => setConfiguredAgent("")}
+        configureDefinition={() => setConfiguredAgent(profileTarget(configured.task?.profile || configured.name))} />}
+      {configuredProfile && <AgentModelDialog key={configuredProfile} agent={configuredProfile} token={client.sessions.config?.token || ""}
+        changed={() => { client.team.refresh(); void client.sessionAgent.refresh(); }} close={() => setConfiguredAgent("")} />}
       <WorkspaceDialogs client={client} select={select} closePanel={client.closePanel} />
     </div>
   );

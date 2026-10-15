@@ -6,6 +6,8 @@ import hashlib
 import os
 import re
 import uuid
+from copy import deepcopy
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import yaml
@@ -138,8 +140,10 @@ class HarnessToolRegistry(ToolRegistry):
         """
         self.harness.refresh_tool_policy()
         tools = [tool for tool in super().get_all() if self.harness.tool_enabled(tool.name) and self._available(tool)]
-        for tool in tools:
+        for index, tool in enumerate(tools):
             if tool.func == self.harness.tasks.delegate:
+                tool = replace(tool, parameters=deepcopy(tool.parameters))
+                tools[index] = tool
                 parameter = tool.parameters.get("properties", {}).get("agent")
                 if parameter is not None:
                     parameter["description"] = "Select an available agent. " + self.harness.delegation_catalog()

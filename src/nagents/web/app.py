@@ -31,6 +31,7 @@ from starlette.staticfiles import StaticFiles
 
 from nagents.agent import Agent
 from nagents.harness import Harness
+from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import validate_request_timeout
 from nagents.provider import OpenAIProvider
@@ -396,6 +397,9 @@ def create_app(
     register_session_groups(app, lambda: session_groups)
     register_session_actions(app, lambda: state, lambda: live)
     session_agents.register(app, lambda: state)
+    from .agent_models import register as register_agent_models
+
+    register_agent_models(app, lambda: state)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 
@@ -515,6 +519,7 @@ def create_app(
 
     @app.get("/api/settings")
     async def settings() -> dict[str, object]:
+        state.harness.refresh_agent_definitions()
         return state.settings.snapshot()
 
     @app.get("/api/reasoning-options")
@@ -705,7 +710,11 @@ def create_app(
     async def save_settings(body: SettingsInput) -> dict[str, object]:
         async with state.configure():
             await state.session_agents.initialize()
-            await state.settings.change(body.revision, body.values)
+            await state.settings.change(
+                body.revision,
+                body.values,
+                model_binding=body.model_binding.binding() if body.model_binding else ModelBinding(),
+            )
             logger.info(
                 "Workspace settings saved: provider=%s agent=%s model=%s",
                 state.harness.config.provider or state.harness.config.provider_profile().kind,
@@ -725,6 +734,7 @@ def create_app(
 
     @app.get("/api/settings/global")
     async def global_settings() -> dict[str, object]:
+        state.harness.refresh_agent_definitions()
         await state.settings.load_global()
         return state.settings.global_snapshot()
 
@@ -732,7 +742,13 @@ def create_app(
     async def save_global_settings(body: SettingsInput) -> dict[str, object]:
         async with state.configure():
             try:
-                await finish_on_cancel(state.settings.change_global(body.revision, body.values))
+                await finish_on_cancel(
+                    state.settings.change_global(
+                        body.revision,
+                        body.values,
+                        model_binding=body.model_binding.binding() if body.model_binding else ModelBinding(),
+                    )
+                )
             except ValueError:
                 raise HTTPException(422, "Invalid global settings.") from None
             logger.info("Global settings saved: path=%s", state.settings.global_path)

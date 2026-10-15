@@ -1505,6 +1505,9 @@ class Agent:
             context.round_number = round_num
             logger.debug(f"Generation round {round_num + 1}/{self.max_tool_rounds}")
 
+            for plugin in plugins:
+                await plugin.before_generation(context)
+
             # Get current history
             history = await self.session.get_history(session_id)
 

@@ -1,5 +1,5 @@
 import { RequestError, request } from "../../api/client.js";
-import type { SettingsReply, SettingsValues } from "./types.js";
+import type { ModelBinding, SettingsReply, SettingsValues } from "./types.js";
 
 export type SettingsScope = "workspace" | "global";
 const settingsPath = (scope: SettingsScope) => scope === "global" ? "settings/global" : "settings";
@@ -19,11 +19,13 @@ export async function saveSettings(
   revision: string,
   values: SettingsValues,
   scope: SettingsScope = "workspace",
+  modelBinding?: ModelBinding,
 ): Promise<SettingsReply> {
   return (await (
     await request(settingsPath(scope), token, {
       revision,
       values,
+      ...(modelBinding ? { model_binding: modelBinding } : {}),
     })
   ).json()) as SettingsReply;
 }

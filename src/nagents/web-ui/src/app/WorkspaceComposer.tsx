@@ -4,6 +4,7 @@ import { Composer } from "../features/chat/Composer";
 import { UploadPreviews } from "../features/chat/UploadPreviews";
 import { DraftRecoveryNotice } from "../features/chat/DraftRecoveryNotice.js";
 import { LiveDialog } from "../features/live/LiveDialog.js";
+import { isProfileTarget } from "../features/team/useTeam.js";
 import type { LiveComposerTargets } from "../features/live/LiveComposer.js";
 import "../features/live/live.css";
 import "../features/live/composer.css";
@@ -31,7 +32,7 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
     return { presence: bind("presence"), caption: bind("caption"), controls: bind("controls"), details: bind("details") };
   }, []);
   const child = !!team.selected;
-  const recipient = team.task?.name || team.profile?.name || "agent";
+  const recipient = team.task?.name || team.profile?.name || (isProfileTarget(team.selected) ? team.selected.slice("profile:".length) : "agent");
   const activeTitle = sessions.sessions.find((session) => session.id === sessions.activeSessionId)?.title || "another session";
   const runStatus = chat.status + (chat.pendingWakeups
     ? `; ${chat.pendingWakeups} scheduled wake-up${chat.pendingWakeups === 1 ? "" : "s"}` : "");
@@ -78,7 +79,7 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
       skills={client.skills.items} skillsLoading={client.skills.loading} skillsError={client.skills.error}
       refreshSkills={() => void client.skills.refresh()}
       voiceControl={!child && !client.liveOpen && <div className="voice-entry"><button type="button" id="live-launch" className="live-launch" aria-label="Start voice" title="Talk in this chat" disabled={!client.available.live} onClick={() => client.showLive()}><Icon name="wave" size={17} /><span>Voice</span></button><button type="button" className="voice-entry-settings" aria-label="Voice settings" title="Voice settings" aria-haspopup="dialog" aria-controls="voice-settings-dialog" disabled={!client.available.live} onClick={() => client.showLive("settings")}><Icon name="settings" size={16} /></button></div>}
-      status={child ? <span className="run-status" role="status">{team.submitting ? "Sending…" : team.profile ? "Starts this agent" : "Joins the next response"}</span> : <span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>{runStatus}</span>}
+      status={child ? <span className="run-status" role="status">{team.submitting ? "Sending…" : !team.canMessage ? "Unavailable" : team.profile ? "Starts this agent" : "Joins the next response"}</span> : <span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>{runStatus}</span>}
     />
   </footer>;
 }

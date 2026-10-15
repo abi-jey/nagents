@@ -33,7 +33,7 @@ export function useSessionAgent(token: string, sessionId: string) {
     if ((frame.type !== "snapshot" && frame.type !== "event") || frame.session_id !== sessionId) return;
     if (frame.type === "snapshot") owner.current?.accept(frame.snapshot.agent_selection);
     else if (frame.record.event === "agent_selection_changed") owner.current?.accept(frame.record.agent_selection);
-    else if (["run_started", "run_finished", "agent_changed"].includes(frame.record.event)) refresh();
+    else if (["run_started", "run_finished", "agent_changed", "agent_profiles_changed"].includes(frame.record.event)) refresh();
   }
   const current = state.key === key ? state : { loading: !!token && !!sessionId, saving: false, error: "", selection: undefined };
   return { ...current, open, show, close: () => setOpen(false), refresh, choose, receive,
