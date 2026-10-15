@@ -73,15 +73,23 @@ def test_effective_client_policy_delegates_first_utterance_silently_once_without
         assert "first utterance" in instructions and "exactly once" in instructions
         assert "Before speaking your first reply, delegate" in instructions
         assert "Hello, Hey" in instructions and "audio check such as Do you hear me?" in instructions
-        assert "Make this first delegation silently" in instructions
+        assert "Backchannel policy: Make the first delegation silently" in instructions
         assert "Do not announce the handoff, context loading, or waiting" in instructions
         assert "do not say One moment or Let me check" in instructions
         assert "one brief natural acknowledgement when the backend returns" in instructions
         assert "Do not repeat an acknowledgement already spoken" in instructions
         assert "project instructions, user profile" in instructions
-        assert "do not resume or repeat actions from saved chat history" in instructions
+        assert "Do not resume or repeat actions from saved chat history" in instructions
         assert "substantive request" in instructions and "same delegation" in instructions
         assert "Do not send a second context-only delegation" in instructions
+        for heading in (
+            "Interruption policy:",
+            "Delegation policy:",
+            "Backend tools:",
+            "Delegate to the backend when:",
+            "Do not delegate to the backend when:",
+        ):
+            assert heading in instructions
         assert "Speak concisely in English." in instructions
 
     asyncio.run(scenario())
