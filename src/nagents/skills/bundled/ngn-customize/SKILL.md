@@ -239,6 +239,7 @@ native child agents do not automatically inherit parent MCP servers.
 | Hook | Contract |
 | --- | --- |
 | `before_run(context, message) -> Message` | Transform incoming message. |
+| `before_generation(context) -> None` | Refresh local capabilities before the next prompt and tool schemas are assembled. |
 | `before_model(context, request) -> ModelRequest` | Transform next-request messages, tools, and generation config; does not rewrite history. |
 | `before_tool(context, call) -> ToolCall` | Transform arguments before executor authorization; preserve name and call ID. |
 | `after_tool(context, result) -> ToolResultEvent` | Transform result; preserve name and call ID. |

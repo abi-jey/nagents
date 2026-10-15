@@ -97,9 +97,7 @@ class HarnessConfig:
     provider: str = ""
     providers: dict[str, ProviderProfile] = field(default_factory=dict)
     model: str = DEFAULT_HARNESS_MODEL
-    # Runtime-only inheritance baseline. Effective agent routing must never
-    # become the default when a host clones an already constructed harness.
-    runtime_model_default: ModelBinding = field(default_factory=ModelBinding, repr=False, compare=False)
+    unavailable_model_binding: ModelBinding = field(default_factory=ModelBinding, repr=False, compare=False)
     global_model_default: str = ""  # Loader-only baseline for global web defaults.
     agent: str = "assistant"
     read_only: bool = False
@@ -285,7 +283,16 @@ def _provider_defaults(config: HarnessConfig, store: ScopedProviderRegistryStore
     selected = binding.provider or registry.active
     if selected:
         if selected not in registry.providers:
-            raise ValueError(f"Unknown provider connection {selected!r}")
+            return (
+                replace(
+                    config,
+                    provider="",
+                    providers=dict(registry.providers),
+                    model=binding.id,
+                    unavailable_model_binding=binding,
+                ),
+                f"Model provider connection {selected!r} is unavailable. Choose an available model connection in Settings.",
+            )
         return (
             replace(
                 config,
@@ -360,6 +367,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     fallback_model = defaults.model
     config, login_note = _provider_defaults(defaults, store)
     selected_name = config.provider
+    selected_model_reference = config.unavailable_model_binding
     config.provider_paths = provider_paths
     config.providers = dict(store.load().providers)
     global_model = store.model_store("global").load() or fallback_model
@@ -448,6 +456,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                     continue
                 if model_provider:
                     selected_name = model_provider
+                    selected_model_reference = ModelBinding(model_provider, value)
             if key in strings | {"data_dir"}:
                 if not isinstance(value, str):
                     raise ValueError(f"{path}: {key} must be a string")
@@ -523,8 +532,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     if selected_name:
         registry = store.load()
         if selected_name not in registry.providers:
-            raise ValueError(f"Unknown provider connection {selected_name!r}")
-        config.provider = selected_name
+            if selected_model_reference.provider != selected_name:
+                raise ValueError(f"Unknown provider connection {selected_name!r}")
+            config.unavailable_model_binding = ModelBinding(selected_name, config.model)
+            config.provider = ""
+        else:
+            config.provider = selected_name
+            config.unavailable_model_binding = ModelBinding()
     else:
         config.provider = ""
     config.model_explicit = (

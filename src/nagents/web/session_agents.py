@@ -422,7 +422,7 @@ class SessionAgents:
         if self.actual(current) == expected and current_connection and (active is None or not next_run):
             yield current
             return
-        harness = self.state.executions.factory(deepcopy(self.state.harness.config))
+        harness = self.state.executions.factory(self.state.harness.clone_configuration())
         if harness is self.state.harness or harness in self.state.executions.owners.values():
             raise RuntimeError("Session inspection requires an independent runtime")
         try:

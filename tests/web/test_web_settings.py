@@ -153,7 +153,17 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "apis",
                     "auths",
                     "read_only_locked",
+                    "model_binding",
+                    "default_model_binding",
+                    "model_binding_source",
+                    "provider_origin",
+                    "model_binding_available",
+                    "model_binding_unavailable_reason",
                 }
+                assert set(body["model_binding"]) == {"provider", "id"}
+                assert body["model_binding"]["id"] == body["values"]["model"]
+                assert body["model_binding_available"] is True
+                assert body["model_binding_unavailable_reason"] == ""
                 assert body["values"] == body["defaults"] == SettingsValues.current(harness).model_dump()
                 assert (
                     set(body["values"])
@@ -342,7 +352,8 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
             bootstrap = (await client.get("/api/bootstrap")).json()
             assert bootstrap["model"] == "profile-model" and bootstrap["agent"] == "audit"
             new_child = harness.tasks._create_child("assistant")
-            assert new_child.agent.provider.model == "profile-model"
+            # An unbound child inherits workspace defaults, not its parent's agent override.
+            assert new_child.agent.provider.model == values["model"]
             assert old_child.agent.provider.model == before["values"]["model"]
             await old_child.close()
             await new_child.close()

@@ -89,6 +89,7 @@ def resolve_model_binding(
     builtin: ModelBinding = _EMPTY_BINDING,
     origins: Mapping[str, str] = _EMPTY_MAPPING,
     sources: Mapping[str, str] = _EMPTY_MAPPING,
+    require_available: bool = True,
 ) -> ResolvedModelBinding:
     """Select one complete pair; an unavailable reference never falls through."""
     layers: tuple[tuple[ModelLayer, ModelBinding], ...] = (
@@ -100,7 +101,11 @@ def resolve_model_binding(
     )
     for layer, binding in layers:
         if binding.configured:
-            if binding.provider not in providers and (binding.provider or layer in {"invocation", "agent"}):
+            if (
+                require_available
+                and binding.provider not in providers
+                and (binding.provider or layer in {"invocation", "agent"})
+            ):
                 raise ValueError(f"Model references unavailable provider connection {binding.provider!r}")
             return ResolvedModelBinding(binding, layer, sources.get(layer, ""), origins.get(binding.provider, ""))
     return ResolvedModelBinding(ModelBinding(), "builtin", sources.get("builtin", ""))

@@ -175,8 +175,14 @@ class SettingsValues(_SettingsValuesV1):
     def current(cls, harness: "Harness") -> "SettingsValues":
         config = harness.config
         trigger, tokens, messages = _current_compaction(harness)
+        try:
+            model = harness.default_model_binding().binding.id or harness._selected_model
+        except ValueError as error:
+            if not config.unavailable_model_binding.configured and "unavailable provider connection" not in str(error):
+                raise
+            model = harness._selected_model
         return cls(
-            model=harness.default_model_binding().binding.id or harness._selected_model,
+            model=model,
             agent=config.agent,
             shell_timeout=config.shell_timeout,
             max_output=config.max_output,
@@ -214,7 +220,6 @@ class SettingsValues(_SettingsValuesV1):
         )
         harness._selected_model = default.id
         harness._default_provider_name = default.provider
-        config.runtime_model_default = default
         binding = model_binding if model_binding.configured else harness.resolved_model_binding(self.agent).binding
         config.model = binding.id or self.model
         config.shell_timeout = self.shell_timeout
@@ -270,17 +275,23 @@ class WebSettings:
         # Each restart captures the current trusted configuration anew; saved
         # overrides never mutate the administrator's ceiling or storage.
         self._provider_admin = copy.deepcopy(harness.config)
-        self.defaults = SettingsValues.current(harness)
+        startup_model = harness._selected_model
+        self.defaults = SettingsValues.current(harness).model_copy(
+            update={"model": harness.config.global_model_default or startup_model}
+        )
         self.startup_defaults = self.defaults
         self._startup_global_model = harness.provider_store.model_store("global").load()
         self._global_startup_model = (
             harness.config.global_model_default or self._startup_global_model or self.defaults.model
         )
         self._pinned_startup_model = harness.config.model_config_explicit
-        self._startup_model = harness.config.model
+        self._startup_model = startup_model
         self._startup_global_binding = harness.provider_store.model_binding("global")
         self._startup_binding = ModelBinding(
-            harness._default_provider_name or harness.providers.active, self.defaults.model
+            harness._default_provider_name
+            if "" in harness.config.providers
+            else harness._default_provider_name or harness.providers.active,
+            self.defaults.model,
         )
         self._published_bindings: dict[str, tuple[ModelBinding, str]] = {}
         self._publish_bindings()
@@ -301,16 +312,23 @@ class WebSettings:
         self._applied_key_env = ""
 
     def _scope_binding(self, scope: str) -> tuple[ModelBinding, str]:
+        if self._pinned_startup_model:
+            return self._startup_binding, "startup"
         store = self.harness.provider_store
+        unnamed = not self.harness._default_provider_name and "" in self.harness.config.providers
         if scope == "workspace":
-            local = store.model_binding("workspace")
+            local = store.model_store("workspace").load_binding() if unnamed else store.model_binding("workspace")
             if local.configured:
                 return local, "workspace"
-        global_binding = store.model_binding(
-            "global",
-            legacy_provider=(self.harness._default_provider_name or self.harness.providers.active)
-            if scope == "workspace"
-            else "",
+        global_binding = (
+            store.model_store("global").load_binding()
+            if unnamed and scope == "workspace"
+            else store.model_binding(
+                "global",
+                legacy_provider=(self.harness._default_provider_name or self.harness.providers.active)
+                if scope == "workspace"
+                else "",
+            )
         )
         if global_binding.configured:
             return global_binding, "global"
@@ -368,7 +386,13 @@ class WebSettings:
         candidate.agent_source_profiles = copy.deepcopy(self.harness.config.agent_source_profiles)
         profile = candidate.profile(values.agent)
         registry = self.harness.provider_store.load()
-        binding = self._requested_binding("workspace", values, model_binding)
+        binding = (
+            model_binding
+            if model_binding.configured
+            else ModelBinding(self._scope_binding("workspace")[0].provider, values.model)
+        )
+        if binding.id != values.model:
+            raise ValueError("The selected model reference must match values.model")
         preference = self.harness.provider_store.agent_models.load(values.agent)
         if preference.revision != "0" * 64:
             if preference.binding.configured:
@@ -401,8 +425,22 @@ class WebSettings:
             }
         )
 
+    async def _apply_values(self, values: SettingsValues) -> None:
+        """Apply the accepted default and agent pair without rereading old preferences."""
+        default = ModelBinding(self._scope_binding("workspace")[0].provider, values.model)
+        candidate = self.provider_config(values, model_binding=default)
+        await self.harness.reconfigure_provider(candidate)
+        values.apply(
+            self.harness,
+            model_binding=ModelBinding(candidate.provider, candidate.model),
+            default_model_binding=default,
+        )
+
     def sync_provider(self) -> None:
         """Project a shared provider selection into the existing web settings view."""
+        if self.harness.config.unavailable_model_binding.configured:
+            self._publish_bindings()
+            return
         if self.harness.config.provider:
             # A key entered for an unnamed web override must never become the
             # credential of a subsequently selected named connection.
@@ -443,9 +481,12 @@ class WebSettings:
             if self.values.agent in config.profile_names
             else config.profile("assistant")
         )
-        try:
-            effective_model = self.harness.resolved_model_binding(self.values.agent).binding.id
-        except ValueError:
+        # Model transactions apply their candidate to the runtime before commit.
+        # The settings projection must keep its previously committed selection.
+        preference = self.harness.provider_store.agent_models.load(self.values.agent)
+        if preference.revision != "0" * 64:
+            effective_model = preference.binding.id or self.values.model
+        else:
             effective_model = profile.model or self.values.model
         return {
             "scope": "workspace",
@@ -555,31 +596,45 @@ class WebSettings:
         }
 
     async def validate_reasoning(
-        self, values: SettingsValues, *, scope: str = "workspace", model_binding: ModelBinding = _INHERIT_MODEL
+        self,
+        values: SettingsValues,
+        *,
+        scope: str = "workspace",
+        model_binding: ModelBinding = _INHERIT_MODEL,
+        catalog_scope: str = "",
     ) -> None:
         if not values.reasoning_effort or self.harness.config.demo:
             return
         binding = self._requested_binding(scope, values, model_binding)
-        reply = self.reasoning_options(scope="workspace", provider=binding.provider, model=binding.id)
+        lookup_scope = catalog_scope or scope
+        reply = self.reasoning_options(scope=lookup_scope, provider=binding.provider, model=binding.id)
         options = reply["options"]
         refresh = bool(reply["refresh_required"])
         if isinstance(options, list) and values.reasoning_effort in options and not refresh:
             return
         if reply["source"] == "Provider metadata" and not refresh:
             raise ValueError("This reasoning effort is not supported by the selected provider and model")
-        registry = self.harness.provider_store.load()
+        registry = (
+            self.harness.provider_store.load_scope("global")
+            if lookup_scope == "global"
+            else self.harness.provider_store.load()
+        )
         if not binding.provider:
             raise ValueError("This reasoning effort is not supported by the selected provider and model")
         try:
             # Save may verify an expired catalog or opaque credential source.
             # Read-only options never initiate an authentication or network call.
             async with asyncio.timeout(10):
-                catalog = await self.model_catalog(binding.provider, scope="workspace")
+                catalog = await self.model_catalog(binding.provider, scope=lookup_scope)
         except Exception:
             raise HTTPException(
                 422, "Reasoning options could not be refreshed. Refresh the model catalog or choose Provider default."
             ) from None
-        current = self.harness.provider_store.load()
+        current = (
+            self.harness.provider_store.load_scope("global")
+            if lookup_scope == "global"
+            else self.harness.provider_store.load()
+        )
         if current.providers.get(binding.provider) != registry.providers.get(binding.provider):
             raise HTTPException(422, "Provider connection changed. Refresh the model catalog before saving.")
         details = catalog.metadata.get(values.model, {})
@@ -718,7 +773,8 @@ class WebSettings:
                     local_model = model_store.load()
                     if version == 5 and local_model:
                         differences["model"] = local_model
-                effective_defaults = self._effective_values(self.defaults)
+                unavailable = self.harness.config.unavailable_model_binding.configured
+                effective_defaults = self.defaults if unavailable else self._effective_values(self.defaults)
                 self.workspace_overrides = (
                     {
                         key: value
@@ -728,18 +784,30 @@ class WebSettings:
                     if version < 5
                     else differences
                 )
-                values = self._effective_values(values)
-                self.validate(values)
+                if unavailable:
+                    if not self.harness.config.profile(values.agent).user_invocable:
+                        raise ValueError("The saved agent is not available for direct selection")
+                else:
+                    values = self._effective_values(values)
+                    self.validate(values)
                 with self.harness.operation("load web settings"):
-                    await self.harness.reconfigure_provider(self.provider_config(values))
-                    values.apply(self.harness)
+                    if unavailable:
+                        values.apply(
+                            self.harness,
+                            model_binding=ModelBinding("", values.model),
+                            default_model_binding=self._scope_binding("workspace")[0],
+                        )
+                    else:
+                        await self._apply_values(values)
                 self.values = values
                 self.effective_mode = self.harness.mode
                 self.revision = revision
                 self.stored_revision = revision
                 self.persisted = True
             elif self.global_persisted or self.harness.provider_store.model():
-                self.defaults = self._effective_values(self.defaults)
+                unavailable = self.harness.config.unavailable_model_binding.configured
+                if not unavailable:
+                    self.defaults = self._effective_values(self.defaults)
                 selected_model = (
                     self._startup_model
                     if self._pinned_startup_model
@@ -747,8 +815,14 @@ class WebSettings:
                 )
                 effective = self.defaults.model_copy(update={"model": selected_model})
                 with self.harness.operation("load global defaults"):
-                    await self.harness.reconfigure_provider(self.provider_config(effective))
-                    effective.apply(self.harness)
+                    if unavailable:
+                        effective.apply(
+                            self.harness,
+                            model_binding=ModelBinding("", effective.model),
+                            default_model_binding=self._scope_binding("workspace")[0],
+                        )
+                    else:
+                        await self._apply_values(effective)
                 self.values = effective
                 self.effective_mode = self.harness.mode
             if self.harness.config.provider:
@@ -856,7 +930,15 @@ class WebSettings:
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         self.validate(values, model_binding=binding)
-        await self.validate_reasoning(values, scope="global", model_binding=binding)
+        merged_catalog = model_binding.configured or bool(
+            self.harness.provider_store.model_store("global").load_binding().provider
+        )
+        await self.validate_reasoning(
+            values,
+            scope="global",
+            model_binding=binding,
+            catalog_scope="workspace" if merged_catalog else "global",
+        )
         payload = values.model_dump_json(exclude={"agent", *_CONNECTION_FIELDS})
         next_revision = secrets.token_hex(32)
         self.global_path.parent.mkdir(parents=True, exist_ok=True)
@@ -880,25 +962,25 @@ class WebSettings:
         global_model_store = self.harness.provider_store.model_store("global")
         if model_binding.configured:
             self._pinned_startup_model = False
+            self.harness.config.model_config_explicit = False
+            self._provider_admin.model_config_explicit = False
         if not self._pinned_startup_model:
             if reset:
                 if self._startup_global_binding.provider:
                     global_model_store.save_binding(self._startup_global_binding)
                 else:
                     global_model_store.save(self._startup_global_model)
+            elif model_binding.configured:
+                global_model_store.save_binding(binding)
             else:
-                if binding.provider:
-                    global_model_store.save_binding(binding)
-                else:
-                    global_model_store.save(values.model)
+                global_model_store.save(values.model)
         await self.load_global()
         if self.persisted:
             inherited = SettingsValues.model_validate({**self.defaults.model_dump(), **self.workspace_overrides})
             inherited = inherited.model_copy(update={"model": self._scope_binding("workspace")[0].id})
             inherited = self._effective_values(inherited)
             with self.harness.operation("apply inherited global defaults"):
-                await self.harness.reconfigure_provider(self.provider_config(inherited))
-                inherited.apply(self.harness)
+                await self._apply_values(inherited)
             self.values = inherited
             self.effective_mode = self.harness.mode
             self.revision = secrets.token_hex(32)
@@ -906,8 +988,7 @@ class WebSettings:
             effective = self.defaults.model_copy(update={"model": self._scope_binding("workspace")[0].id})
             effective = self._effective_values(effective)
             with self.harness.operation("apply global defaults"):
-                await self.harness.reconfigure_provider(self.provider_config(effective))
-                effective.apply(self.harness)
+                await self._apply_values(effective)
             self.values = effective
             self.effective_mode = self.harness.mode
             self.revision = secrets.token_hex(32)
@@ -940,7 +1021,11 @@ class WebSettings:
             values = self._effective_values(values, model_binding=binding)
             self.validate(values, model_binding=binding)
             await self.validate_reasoning(values, model_binding=binding)
-            base = self._effective_values(self.defaults).model_dump()
+            base = (
+                self.defaults
+                if self.harness.config.unavailable_model_binding.configured
+                else self._effective_values(self.defaults)
+            ).model_dump()
             overrides = {key: value for key, value in values.model_dump().items() if base[key] != value}
             payload = json.dumps(overrides, separators=(",", ":"))
         except ValueError as error:
@@ -1011,7 +1096,6 @@ class WebSettings:
                     config.reasoning_effort,
                     harness._selected_model,
                     harness._default_provider_name,
-                    config.runtime_model_default,
                 )
                 previous_keys = dict(self.keys)
                 previous_secret = previous_keys.get(config.provider_profile().kind, "")
@@ -1047,7 +1131,6 @@ class WebSettings:
                         config.reasoning_effort,
                         harness._selected_model,
                         harness._default_provider_name,
-                        config.runtime_model_default,
                     ) = previous
                     harness.agent.provider.model = model
                     harness.agent.max_tool_rounds = rounds
@@ -1068,12 +1151,14 @@ class WebSettings:
         try:
             if explicit_binding:
                 self._pinned_startup_model = False
+                harness.config.model_config_explicit = False
+                self._provider_admin.model_config_explicit = False
             if not self._pinned_startup_model:
                 store = harness.provider_store.model_store("workspace")
                 if reset:
                     store.save_binding(ModelBinding())
                 elif explicit_binding or "model" in overrides or store.load():
-                    if model_binding.provider:
+                    if explicit_binding:
                         store.save_binding(model_binding)
                     else:
                         store.save(values.model)

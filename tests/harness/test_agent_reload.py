@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -473,7 +472,7 @@ async def test_runtime_clone_keeps_authoritative_default_after_agent_override_an
     original = Harness(config)
     assert (original.config.provider, original.agent.provider.model) == ("special", "special-model")
     store.agent_models.save("mini", ModelBinding(), expected="0" * 64)
-    clone = Harness(deepcopy(original.config))
+    clone = Harness(original.clone_configuration())
     try:
         assert clone.default_model_binding().binding == ModelBinding("home", "startup-model")
         assert (clone.config.provider, clone.agent.provider.model) == ("home", "startup-model")
@@ -481,3 +480,42 @@ async def test_runtime_clone_keeps_authoritative_default_after_agent_override_an
     finally:
         await clone.close()
         await original.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_activation_preserves_model_references_but_updates_legacy_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ScopedProviderRegistryStore(tmp_path)
+    providers = {name: ProviderProfile(kind="openai", auth="api-key") for name in ("home", "work")}
+    store.global_store.save(ProviderRegistry(active="home", providers=providers), expected="0" * 64)
+    store.model_store("global").save_binding(ModelBinding("home", "paired-model"))
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Done")
+
+    def factory(profile: ProviderProfile, config: HarnessConfig, auth: object) -> FakeProvider:
+        return FakeProvider(config, 0, script)
+
+    monkeypatch.setattr(runtime, "build_provider", factory)
+    harness = Harness(
+        HarnessConfig(
+            tmp_path, data_dir=tmp_path / "state", provider="home", providers=providers, model="fallback-model"
+        )
+    )
+    try:
+        await harness.activate_provider("work", store.workspace_store.load().revision)
+        assert store.load().active == "work"
+        assert (harness.config.provider, harness.agent.provider.model) == ("home", "paired-model")
+        store.agent_models.save("assistant", ModelBinding("work", "agent-model"), expected="0" * 64)
+        await harness.set_agent("assistant")
+        await harness.activate_provider("home", store.workspace_store.load().revision)
+        assert (harness.config.provider, harness.agent.provider.model) == ("work", "agent-model")
+        preference = store.agent_models.load("assistant")
+        store.agent_models.reset("assistant", expected=preference.revision)
+        store.model_store("global").save_binding(ModelBinding())
+        await harness.activate_provider("work", store.workspace_store.load().revision)
+        assert (harness.config.provider, harness.agent.provider.model) == ("work", "fallback-model")
+        assert harness.default_model_binding().binding == ModelBinding("work", "fallback-model")
+    finally:
+        await harness.close()

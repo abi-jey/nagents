@@ -102,6 +102,10 @@ for `assistant` or any unused profile. **Inherit** removes its explicit model
 choice; **Restore definition** restores the model declared in its source file.
 Accepted executions keep their connection and model until the next activation.
 New trusted agent definitions appear in Team without restarting the server.
+If a global model references a workspace-only connection that is absent in
+another workspace, Settings shows that selection as unavailable. Choose an
+available connection and model there to repair it; ngn does not send the request
+through a substitute provider.
 
 `ngn serve` logs resolved trusted config paths, provider registry path and
 connection names/types, settings storage paths, session/run and tool lifecycle,

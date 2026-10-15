@@ -148,7 +148,7 @@ class Executions:
         primary = self.state.harness
         if primary not in self.owners.values() and primary not in self._leases:
             return
-        replacement = self.factory(deepcopy(primary.config))
+        replacement = self.factory(primary.clone_configuration())
         if replacement is primary or replacement in self.owners.values():
             raise RuntimeError("The harness factory must provide an independent configuration runtime")
         installed: list[ToolDefinition] = []
@@ -194,7 +194,7 @@ class Executions:
                 harness = (
                     primary
                     if primary not in self.owners.values() and not primary._busy and primary.config.agent == run.agent
-                    else self.factory(deepcopy(primary.config))
+                    else self.factory(primary.clone_configuration())
                 )
                 if harness in self.owners.values():
                     raise RuntimeError("The harness factory must provide an independent runtime for another chat")

@@ -32,7 +32,6 @@ from nagents.provider.reasoning import validate_reasoning_choice
 from .execution import ExecutionBridge
 from .followups import RunInput
 from .followups import RunTurn
-from .model_bindings import ModelBinding
 from .provider import HarnessProvider
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
@@ -56,6 +55,7 @@ if TYPE_CHECKING:
     from nagents.types import ReasoningEffort
 
     from .config import AgentProfile
+    from .model_bindings import ModelBinding
     from .providers import ProviderProfile
     from .runtime import Harness
 
@@ -751,7 +751,6 @@ class SubagentManager:
             agent=agent,
             provider=parent._default_provider_name,
             model=parent._selected_model,
-            runtime_model_default=ModelBinding(parent._default_provider_name, parent._selected_model),
             model_explicit=bool(options.model) or parent.config.model_explicit,
             reasoning_effort=resolve_effort(options.reasoning_effort, parent.reasoning_effort()),
             profiles=profiles,

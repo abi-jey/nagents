@@ -823,6 +823,7 @@ from `nagents`. They do not depend on the coding harness or TUI.
 | Interface | Purpose |
 | --- | --- |
 | `AgentPlugin.before_run` | Transform an incoming message |
+| `AgentPlugin.before_generation` | Refresh local capabilities before the next prompt and tool list are assembled |
 | `AgentPlugin.before_model` | Transform request-local messages, tools, and generation configuration |
 | `AgentPlugin.after_model` | Observe each completed response, including final text, before calls execute |
 | `AgentPlugin.after_tools` | Observe the completed tool batch before building the next request |
