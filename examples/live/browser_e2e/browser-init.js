@@ -13,16 +13,19 @@
   const input = [];
   const events = [];
   const health = [];
-  const limit = Math.min(config.maxSeconds || 120, 180);
+  const limit = Math.max(30, Math.min(config.maxSeconds || 120, 900));
+  const eventLimit = Math.ceil(limit * 160 + 6000);
   const origin = performance.timeOrigin;
   const installed = performance.now();
   let microphone;
   let stopped = false;
   let stopPromise;
+  let measurementStarted;
+  let receivedSamples = 0;
   let omitted = 0;
   const stamp = () => ({ monotonicMs: performance.now(), wallMs: Date.now() });
   const record = (type, detail = {}) => {
-    if (events.length < 24000) events.push({ type, ...stamp(), ...detail });
+    if (events.length < eventLimit) events.push({ type, ...stamp(), ...detail });
     else omitted++;
   };
   const base64 = (bytes) => {
@@ -100,7 +103,7 @@
               contextTimeAtDelivery: context.currentTime });
             return;
           }
-          if (stopped || data.frame / data.sampleRate > limit) return;
+          if (stopped) return;
           const bytes = pcm(data.samples);
           capture.push({ contextId: entry.id, frame: data.frame, audioTime: data.frame / data.sampleRate,
             sampleRate: data.sampleRate, contextTimeAtDelivery: context.currentTime,
@@ -144,8 +147,9 @@
       record("worklet.created", { name, sampleRate: context.sampleRate });
       if (name === "ngn-live-playback") {
         this.port.addEventListener("message", ({ data }) => {
-          if (!stopped && data?.type === "health" && health.length < 12000) {
+          if (!stopped && data?.type === "health" && health.length < limit * 4 + 1000) {
             const item = { ...stamp(), audioTime: context.currentTime,
+              outputTimestamp: context.getOutputTimestamp?.(),
               contextId: contexts.find(entry => entry.context === context)?.id };
             for (const [key, value] of Object.entries(data))
               if (typeof value === "number" || key === "type") item[key] = value;
@@ -191,7 +195,10 @@
       this.addEventListener("close", event => record("socket.close", { path, code: event.code, clean: event.wasClean }));
       this.addEventListener("error", () => record("socket.error", { path }));
       this.addEventListener("message", ({ data }) => {
-        if (data instanceof ArrayBuffer) record("socket.receive", { path, bytes: data.byteLength, ...stats(new Uint8Array(data)) });
+        if (data instanceof ArrayBuffer) {
+          receivedSamples += data.byteLength / 2;
+          record("socket.receive", { path, bytes: data.byteLength, receivedSamples, ...stats(new Uint8Array(data)) });
+        }
         else if (typeof data === "string") record("socket.control", { path, text: data.slice(0, 256) });
       });
       const send = this.send.bind(this);
@@ -200,7 +207,7 @@
           const bytes = new Uint8Array(data);
           const item = { ...stamp(), ...stats(bytes), bytes: bytes.length };
           record("socket.send", item);
-          if (performance.now() - installed <= limit * 1000) input.push({ ...item, pcm16: base64(bytes) });
+          if (measurementStarted !== undefined) input.push({ ...item, pcm16: base64(bytes) });
         }
         send(data);
       };
@@ -237,7 +244,10 @@
     const now = performance.now(), gap = now - previousTick;
     if (gap > 80) record("main-thread.gap", { gapMs: gap });
     previousTick = now;
-    if (now - installed > limit * 1000 && !stopped) void api.stop();
+    if (measurementStarted !== undefined && now - measurementStarted > limit * 1000 && !stopPromise) {
+      record("measurement.limit", { elapsedMs: now - measurementStarted, maxSeconds: limit });
+      void api.stop();
+    }
   }, 20);
   addEventListener("error", event => record("window.error", { message: event.message }));
   addEventListener("unhandledrejection", event => record("window.rejection", { message: String(event.reason).slice(0, 1000) }));
@@ -270,14 +280,19 @@
         });
         return await entry.armPromise;
       }));
+      if (measurementStarted === undefined) {
+        measurementStarted = performance.now();
+        record("measurement.start", { maxSeconds: limit });
+      }
       const source = microphone.context.createBufferSource();
       source.buffer = microphone.buffer;
       nativeConnect.call(source, microphone.destination);
       const audioTime = microphone.context.currentTime + delayMs / 1000;
       source.start(audioTime);
       microphone.sources.push(source);
-      record("fixture.start", { audioTime, duration: source.buffer.duration, delayMs, outputStarts });
-      source.addEventListener("ended", () => record("fixture.ended", { audioTime: microphone.context.currentTime }));
+      const round = microphone.sources.length;
+      record("fixture.start", { round, audioTime, duration: source.buffer.duration, delayMs, outputStarts });
+      source.addEventListener("ended", () => record("fixture.ended", { round, audioTime: microphone.context.currentTime }));
       return { audioTime, duration: source.buffer.duration, outputStarts };
     },
     mark(label) { record("operator.mark", { label: String(label).slice(0, 200) }); },
@@ -299,6 +314,8 @@
     },
     status() {
       return { mode: config.mode, stopped, microphone: !!microphone,
+        measurementElapsedMs: measurementStarted === undefined ? 0 : performance.now() - measurementStarted,
+        maxSeconds: limit,
         outputArmed: contexts.length > 0 && contexts.every(entry => entry.armed), outputBlocks: capture.length,
         inputFrames: input.length, events: events.length, health: health.at(-1), omitted };
     },
@@ -312,6 +329,7 @@
             .map(url => url.pathname.slice(0, 256)).slice(0, 8) },
         fixture: { text: config.fixtureText, sha256: config.fixtureSha256 },
         clock: { performanceTimeOriginMs: origin, installedMonotonicMs: installed,
+          measurementStartedMonotonicMs: measurementStarted,
           note: "Audio frames are context-relative; callback wall/monotonic timestamps record delivery, not acoustic time." },
         contexts: contexts.map(({ context, id }) => ({ id, sampleRate: context.sampleRate,
           state: context.state, currentTime: context.currentTime, outputTimestamp: context.getOutputTimestamp?.() })),

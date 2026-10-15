@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import wave
+from bisect import bisect_left
 from itertools import pairwise
 from pathlib import Path
 from typing import cast
@@ -107,6 +108,166 @@ def objects(value: object) -> list[dict[str, object]]:
 
 def number(value: object, default: float = 0) -> float:
     return float(value) if isinstance(value, (float, int)) else default
+
+
+def percentile(values: list[float], fraction: float = 0.95) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))] if ordered else 0
+
+
+def render_monotonic_ms(block: dict[str, object], sample_offset: int = 0) -> float:
+    """Audio-frame position, aligned with the browser's output clock when available."""
+    rate = number(block.get("sampleRate"))
+    if rate <= 0:
+        return number(block.get("monotonicMs"))
+    audio_time = (number(block.get("frame")) + sample_offset) / rate
+    timestamp = block.get("outputTimestamp")
+    if isinstance(timestamp, dict) and number(timestamp.get("performanceTime")) > 0:
+        return number(timestamp.get("performanceTime")) + (audio_time - number(timestamp.get("contextTime"))) * 1000
+    return number(block.get("monotonicMs")) + (audio_time - number(block.get("contextTimeAtDelivery"))) * 1000
+
+
+def timing_metrics(report: dict[str, object]) -> dict[str, object]:
+    """Separate rendered speech timing, sampled browser queue age and network gaps."""
+    events = objects(report.get("events"))
+    health = objects(report.get("health"))
+    starts = [event for event in events if event.get("type") == "fixture.start"]
+    output = objects(report.get("output"))
+    measurement = [number(event.get("monotonicMs")) for event in events if event.get("type") == "measurement.start"]
+    beginning = min(measurement, default=min((number(item.get("monotonicMs")) for item in starts), default=0))
+    voiced_times: list[float] = []
+    for block in output:
+        data = pcm_bytes(block)
+        if len(data) % 2:
+            continue
+        samples = array.array("h")
+        samples.frombytes(data)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        for offset, sample in enumerate(samples):
+            if abs(sample) > 327:
+                voiced_times.append(render_monotonic_ms(block, offset))
+                break
+    voiced_times.sort()
+    transmitted_times = sorted(
+        number(block.get("monotonicMs")) for block in objects(report.get("input")) if captured_signal([block])
+    )
+    rounds: list[dict[str, object]] = []
+    for index, start in enumerate(starts):
+        scheduled_start = number(start.get("monotonicMs")) + number(start.get("delayMs"))
+        scheduled_end = scheduled_start + number(start.get("duration")) * 1000
+        next_start = number(starts[index + 1].get("monotonicMs")) if index + 1 < len(starts) else float("inf")
+        audible_index = bisect_left(voiced_times, scheduled_end)
+        heard = audible_index < len(voiced_times) and voiced_times[audible_index] < next_start
+        microphone_index = bisect_left(transmitted_times, scheduled_start)
+        sent = microphone_index < len(transmitted_times) and transmitted_times[microphone_index] < next_start
+        rounds.append(
+            {
+                "round": start.get("round", index + 1),
+                "fixtureStartMs": scheduled_start,
+                "fixtureEndMs": scheduled_end,
+                "renderedSpeechAfterFixture": heard,
+                "microphoneSpeechAfterFixture": sent,
+                "firstMicrophoneTransmitAfterFixtureStartMs": transmitted_times[microphone_index] - scheduled_start
+                if sent
+                else None,
+                "firstAudibleAfterFixtureEndMs": voiced_times[audible_index] - scheduled_end if heard else None,
+            }
+        )
+    receives = [event for event in events if event.get("type") == "socket.receive"]
+    cumulative = [number(event.get("receivedSamples")) for event in receives]
+    # Cumulative counters can only identify the consumed packet when the run
+    # has exactly one socket, no dropped samples and no resets/mute epochs.
+    mapping_valid = (
+        bool(receives)
+        and all(left < right for left, right in pairwise(cumulative))
+        and len({event.get("path") for event in receives}) == 1
+        and len({item.get("epoch") for item in health}) <= 1
+        and len({item.get("contextId") for item in health}) <= 1
+        and all(number(item.get("droppedSamples")) == 0 for item in health)
+        and all(
+            number(left.get("playedSamples")) <= number(right.get("playedSamples")) for left, right in pairwise(health)
+        )
+    )
+    windows: dict[int, dict[str, object]] = {}
+    for item in health:
+        elapsed = number(item.get("monotonicMs")) - beginning
+        if elapsed < 0:
+            continue
+        minute = int(elapsed // 60000)
+        window = windows.setdefault(
+            minute, {"minute": minute, "bufferedMs": [], "targetMs": [], "sampleAgeMs": [], "health": []}
+        )
+        for name in ("bufferedMs", "targetMs"):
+            cast("list[float]", window[name]).append(number(item.get(name)))
+        cast("list[dict[str, object]]", window["health"]).append(item)
+        played = number(item.get("playedSamples"))
+        consumed = bisect_left(cumulative, played)
+        # Empty queues and inter-utterance silence are not accumulating latency.
+        if mapping_valid and played > 0 and number(item.get("bufferedMs")) > 0 and consumed < len(receives):
+            rendered = number(item.get("monotonicMs"))
+            if "renderedAt" in item:
+                timestamp = item.get("outputTimestamp")
+                if isinstance(timestamp, dict) and number(timestamp.get("performanceTime")) > 0:
+                    rendered = (
+                        number(timestamp.get("performanceTime"))
+                        + (number(item["renderedAt"]) - number(timestamp.get("contextTime"))) * 1000
+                    )
+                else:
+                    rendered += (number(item["renderedAt"]) - number(item.get("audioTime"))) * 1000
+            age = rendered - number(receives[consumed].get("monotonicMs"))
+            cast("list[float]", window["sampleAgeMs"]).append(max(0, age))
+    summaries: list[dict[str, object]] = []
+    previous_underruns = previous_drops = 0.0
+    for minute, window in sorted(windows.items()):
+        observations = cast("list[dict[str, object]]", window["health"])
+        last = observations[-1]
+        underruns, drops = number(last.get("underruns")), number(last.get("droppedSamples"))
+        values: dict[str, object] = {
+            "minute": minute,
+            "healthSamples": len(observations),
+            "underruns": max(0, underruns - previous_underruns),
+            "droppedSamples": max(0, drops - previous_drops),
+        }
+        previous_underruns, previous_drops = underruns, drops
+        for name in ("bufferedMs", "targetMs", "sampleAgeMs"):
+            observations_ms = cast("list[float]", window[name])
+            values[name] = {
+                "samples": len(observations_ms),
+                "p95": percentile(observations_ms),
+                "max": max(observations_ms, default=0),
+            }
+        packet_gaps = [
+            number(right.get("monotonicMs")) - number(left.get("monotonicMs"))
+            for left, right in pairwise(receives)
+            if int((number(right.get("monotonicMs")) - beginning) // 60000) == minute
+        ]
+        values["receiveIntervalsIncludingNaturalPausesMs"] = {
+            "p95": percentile(packet_gaps),
+            "max": max(packet_gaps, default=0),
+        }
+        summaries.append(values)
+    lengths = []
+    for context_id in {number(block.get("contextId")) for block in output}:
+        blocks = [block for block in output if number(block.get("contextId")) == context_id]
+        rate = number(blocks[0].get("sampleRate"))
+        if rate > 0:
+            lengths.append(
+                (number(blocks[-1].get("frame")) + number(blocks[-1].get("samples")) - number(blocks[0].get("frame")))
+                / rate
+            )
+    return {
+        "recordedDurationSeconds": max(lengths, default=0),
+        "fixtureSpanSeconds": (number(starts[-1].get("monotonicMs")) - number(starts[0].get("monotonicMs"))) / 1000
+        if starts
+        else 0,
+        "rounds": rounds,
+        "minuteWindows": summaries,
+        "sampleAgeAvailable": mapping_valid,
+        "sampleAgeMeaning": "Received packet to audio-thread renderedAt (when present), otherwise health callback, while audio is queued. Callback fallback includes scheduling delay. Not provider or acoustic latency.",
+        "audioThreadHealthClockPresent": bool(health) and all("renderedAt" in item for item in health),
+        "replyTimingMeaning": "First rendered non-silent sample after the known utterance ends; speech is observed, not causally assigned to a delegation.",
+    }
 
 
 def write_wave(path: Path, data: bytes, rate: int) -> None:
@@ -235,6 +396,7 @@ def unpack(source: Path, directory: Path) -> None:
             "p95Ms": gaps[min(len(gaps) - 1, int(len(gaps) * 0.95))] if gaps else 0,
         }
     metrics["socketIntervalsIncludingNaturalPauses"] = intervals
+    metrics["timing"] = timing_metrics(report)
     metrics["checks"] = {
         "captureStopped": report.get("stopped") is True,
         "transmittedSpeech": any(number(item.get("rms")) > 0.01 for item in inputs),
@@ -347,7 +509,15 @@ def captured_signal(blocks: list[dict[str, object]]) -> bool:
 
 
 def check_capture(
-    report: dict[str, object], *, mode: str, reply_samples: int = 0, expect_gap_ms: int = 0, expect_text: str = ""
+    report: dict[str, object],
+    *,
+    mode: str,
+    reply_samples: int = 0,
+    expect_gap_ms: int = 0,
+    expect_text: str = "",
+    min_rounds: int = 0,
+    min_active_span_seconds: float = 0,
+    max_buffered_ms: float = 0,
 ) -> dict[str, object]:
     """Validate observed behavior; natural speech silence alone never fails a run."""
     events = objects(report.get("events"))
@@ -425,6 +595,25 @@ def check_capture(
         ],
         "recordingClockDiscontinuities": recording_jumps,
     }
+    timing = timing_metrics(report)
+    details["timing"] = timing
+    rounds = objects(timing["rounds"])
+    if min_rounds:
+        checks["enoughSpokenRounds"] = len(rounds) >= min_rounds and all(
+            item["renderedSpeechAfterFixture"] and item["microphoneSpeechAfterFixture"] for item in rounds
+        )
+    if min_active_span_seconds:
+        checks["longActiveSession"] = (
+            number(timing["recordedDurationSeconds"]) >= min_active_span_seconds
+            and number(timing["fixtureSpanSeconds"]) >= min_active_span_seconds
+            and len(rounds) >= 2
+            and all(item["renderedSpeechAfterFixture"] and item["microphoneSpeechAfterFixture"] for item in rounds)
+        )
+    if max_buffered_ms:
+        checks["boundedBrowserPlaybackQueue"] = bool(health) and all(
+            max(number(item.get("bufferedMs")), number(item.get("peakBufferedMs"))) <= max_buffered_ms
+            for item in health
+        )
     if expect_text:
         spoken = " ".join(
             str(event.get("text", ""))
@@ -487,7 +676,9 @@ def main() -> None:
     prepare_parser.add_argument("--wav", default="")
     prepare_parser.add_argument("--reply-wav", default="")
     prepare_parser.add_argument("--mode", choices=("offline", "authenticated"), default="offline")
-    prepare_parser.add_argument("--max-seconds", type=int, default=120, help="Capture window cap, 30 to 180 seconds")
+    prepare_parser.add_argument(
+        "--max-seconds", type=int, default=120, help="Capture window cap after arming, 30 to 900 seconds"
+    )
     export_parser = commands.add_parser("unpack")
     export_parser.add_argument("source", type=Path)
     export_parser.add_argument("directory", type=Path)
@@ -497,10 +688,22 @@ def main() -> None:
     check_parser.add_argument("--reply-wav", type=Path)
     check_parser.add_argument("--expect-gap-ms", type=int, default=0)
     check_parser.add_argument("--expect-text", default="")
+    check_parser.add_argument(
+        "--min-rounds", type=int, default=0, help="Require this many spoken fixtures with audible output after each"
+    )
+    check_parser.add_argument(
+        "--min-active-span-seconds",
+        type=float,
+        default=0,
+        help="Minimum time between first and last spoken fixtures, with real PCM capture",
+    )
+    check_parser.add_argument(
+        "--max-buffered-ms", type=float, default=0, help="Fail when sampled browser playout queue exceeds this bound"
+    )
     args = parser.parse_args()
     if args.command == "prepare":
-        if not 30 <= args.max_seconds <= 180:
-            parser.error("--max-seconds must be between 30 and 180")
+        if not 30 <= args.max_seconds <= 900:
+            parser.error("--max-seconds must be between 30 and 900")
         prepare(args.directory.resolve(), args.text, args.wav, args.reply_wav, args.mode, args.max_seconds)
     elif args.command == "unpack":
         unpack(args.source, args.directory)
@@ -521,6 +724,9 @@ def main() -> None:
             reply_samples=reply_samples,
             expect_gap_ms=args.expect_gap_ms,
             expect_text=args.expect_text,
+            min_rounds=args.min_rounds,
+            min_active_span_seconds=args.min_active_span_seconds,
+            max_buffered_ms=args.max_buffered_ms,
         )
         print(json.dumps(result, indent=2))
         raise SystemExit(0 if result["passed"] else 1)

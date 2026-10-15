@@ -9,11 +9,17 @@ export type PlaybackHealth = {
   targetMs: number;
   sampleRate: number;
   correctionPpm: number;
+  renderedAt?: number;
+  lastUnderrunAt?: number;
+  lastRecoveryAt?: number;
+  latencyRecoveries?: number;
 };
 const fields = ["receivedSamples", "playedSamples", "underruns", "droppedSamples", "bufferedMs", "peakBufferedMs", "targetMs", "sampleRate", "correctionPpm"] as const;
+const timingFields = ["renderedAt", "lastUnderrunAt", "lastRecoveryAt", "latencyRecoveries"] as const;
 export interface PcmPlayback {
   readonly node: AudioWorkletNode;
   identify(sessionId: string): void;
+  realtime(enabled: boolean): void;
   write(buffer: ArrayBuffer): void;
   reset(): void;
   fenceReports(): void;
@@ -43,6 +49,7 @@ export function pcmPlayback(context: AudioContext, played: (bytes: Uint8Array, a
     } else if (value.type === "health" && fields.every(field => typeof value[field] === "number" && Number.isFinite(value[field]))) {
       const next = { ...stats };
       for (const field of fields) next[field] = value[field] as number;
+      for (const field of timingFields) if (typeof value[field] === "number" && Number.isFinite(value[field])) next[field] = value[field];
       if ((next.underruns > stats.underruns || next.droppedSamples > stats.droppedSamples) && context.currentTime - lastWarning >= 5) {
         lastWarning = context.currentTime;
         console.warn("ngn voice playback buffer event", { voiceSessionId, ...next });
@@ -60,6 +67,7 @@ export function pcmPlayback(context: AudioContext, played: (bytes: Uint8Array, a
   return {
     node,
     identify(sessionId) { voiceSessionId = /^[0-9a-f]{32}$/.test(sessionId) ? sessionId : "unavailable"; },
+    realtime(enabled) { if (!closed) node.port.postMessage({ type: "mode", epoch, realtime: enabled }); },
     // Transfer ownership; the worklet copies into its fixed-capacity sample ring.
     write(buffer) { if (!closed && !muted && context.state === "running") node.port.postMessage({ type: "pcm", epoch, buffer }, [buffer]); },
     reset,

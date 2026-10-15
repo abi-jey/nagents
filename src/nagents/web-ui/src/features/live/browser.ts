@@ -159,10 +159,11 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
         meter?.input(source);
       } catch (error) { close(); throw error; }
     },
-    async connect(sessionId, token) {
+    async connect(sessionId, token, playbackMode = "buffered") {
       if (closed || !context) throw new DOMException("Cancelled", "AbortError");
       playback?.identify(sessionId);
       resetInput(); stopPlayback();
+      playback?.realtime(playbackMode === "realtime");
       const channel = new WebSocket(serverSocketUrl(`/api/live/sessions/${encodeURIComponent(sessionId)}/audio`), ["ngn.live.v2", `ngn.token.${token}`]);
       socket = channel; channel.binaryType = "arraybuffer";
       channel.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {

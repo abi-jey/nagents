@@ -224,7 +224,7 @@ export class LiveController {
       this.connectionTimer = setTimeout(() => {
         if (epoch === this.epoch) this.fail("The voice connection timed out. Check your network, then try again.");
       }, 25_000);
-      await media.connect(session.session_id, this.deps.token);
+      await media.connect(session.session_id, this.deps.token, session.playback_mode === "realtime" ? "realtime" : "buffered");
       if (epoch !== this.epoch) return;
       void this.poll(epoch, abort.signal);
     } catch (cause) {

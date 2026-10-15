@@ -20,6 +20,9 @@ Two modes serve different evidence:
   establish evidence about actual delegation, provider failures, or the
   Processing label during a real run.
 
+Authenticated tests can also use the optional deployment bridge described below
+to exercise the real public ingress and deployed ngn process.
+
 ## Prepare and launch
 
 Use the repository virtual environment. Build the frontend first with
@@ -159,8 +162,9 @@ network interruption. Natural pauses in the waveform are never failures by
 themselves. This fixed-response policy is not applied blindly to live providers.
 
 Stop the owned test server and close only the test tab/context when finished.
-The harness stops recording after 120 seconds; it does not silently end the
-application's voice session. Use `prepare --max-seconds 180` for two delegated
+The harness stops recording after 120 seconds **from arming**; setup time does
+not consume the measurement window. It does not silently end the application's
+voice session. Use `prepare --max-seconds 180` for two delegated
 requests in one voice session, and call
 `play()` again only after the first result has finished speaking. Mark each round
 with `mark("round1")`/`mark("round2")`. End the session explicitly through the UI.
@@ -169,6 +173,69 @@ before the application's AudioContext actually closes. The acknowledgement's
 final frame must equal the last captured block's end, including a partial tail.
 An absent acknowledgement or missing tail fails validation; a timed sleep is
 never used as proof that capture has finished.
+
+## Deployment and long-session tests
+
+`deployed.py` is an explicitly launched test bridge bound only to
+`127.0.0.1`. It serves the recorder and caller WAV locally, while streaming all
+other allowed ngn requests to one HTTPS origin configured at startup. This
+loads the deployment's actual HTML, JavaScript, WebSocket, backend, and selected
+server credentials. Nothing is installed into the pod or production frontend.
+The local same-origin assets are necessary because ngn's CSP disallows blob
+AudioWorklet modules; a direct injected script alone cannot load the recorder.
+
+```bash
+umask 077
+poetry run python examples/live/browser_e2e/artifacts.py prepare \
+  /tmp/ngn-voice-e2e-deployed --mode authenticated --max-seconds 660
+poetry run python -m examples.live.browser_e2e.deployed \
+  --origin https://ngn.example.net --fixtures /tmp/ngn-voice-e2e-deployed --port 8880
+```
+
+Use the same Chrome DevTools procedure, navigating the owned isolated tab to
+`http://127.0.0.1:8880` with the generated `init.js`. The bridge rejects other
+Host/Origin values, foreign fetch metadata, non-ngn paths, and redirects. It
+does not forward browser cookies/Authorization or use ambient proxy credentials.
+The existing ngn process token is forwarded only to the configured HTTPS origin;
+it is never logged. If the deployment requires separate cookie-based ingress
+authentication, this bridge deliberately does not bypass or import it.
+
+**This is the real deployment and its real session storage.** Check that it is
+idle, create a clearly named test session through the normal UI, and select no
+saved context. Do not select an existing user conversation. It uses the
+deployment's normal approvals and may incur provider usage. End voice explicitly,
+retain the artifacts privately, then remove only the owned test session if
+appropriate. Do not delete or reset production state to prepare a test.
+
+Run at least three spoken turns spanning five minutes or longer. Call `play()`
+only after the previous response has finished speaking, mark each round, and
+place the last utterance at least 300 seconds after the first. A successful
+first answer followed by several minutes of silence does **not** pass the
+long-session contract:
+
+```bash
+poetry run python examples/live/browser_e2e/artifacts.py check \
+  /tmp/ngn-voice-e2e-deployed/capture.json --mode authenticated \
+  --min-rounds 3 --min-active-span-seconds 300 --max-buffered-ms 250
+```
+
+Capture windows are capped at 900 seconds, with bounded event counts. Full PCM
+for a long session can produce a large private artifact; save the export to a
+file rather than rendering it in the MCP conversation. Minute summaries expose
+queue depth, target reserve, underrun/drop deltas and receive intervals. They
+also align known-utterance ends with the first rendered audible output before
+the next utterance. This is observed timing, not proof that a particular output
+belongs to a particular delegation.
+
+While no samples are dropped/reset and only one socket/epoch is present, the
+analyzer maps cumulative consumed samples back to their received packet. New
+builds' audio-thread `renderedAt` timestamp excludes delayed main-thread health
+delivery; older builds fall back to callback time and say so. This estimates
+browser receive-to-consumption age, not provider generation time. A server-side
+backlog can exist while the browser queue stays small, so correlate these
+metrics with pod RTP/relay/output timings. The bridge adds a loopback hop;
+its final numeric send/receive wait summary records that hop's peak forwarding
+cost. A clean bridged run does not prove a phone's physical speaker is clean.
 
 ## Evidence and interpretation
 

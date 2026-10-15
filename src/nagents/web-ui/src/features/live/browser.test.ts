@@ -46,7 +46,7 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
   const failures: string[] = [], sources: { stops: number; starts: number[]; onended(): void }[] = [];
   const constraints: MediaStreamConstraints[] = [], sinks: string[] = [];
   const levels: [number, number][] = [];
-  const playbackCommands: { type: string; epoch: number; buffer?: ArrayBuffer }[] = [];
+  const playbackCommands: { type: string; epoch: number; buffer?: ArrayBuffer; realtime?: boolean }[] = [];
   let inputError: Error | undefined, outputError: Error | undefined, sinkResult = Promise.resolve();
   let inputResult = Promise.resolve(stream), graphError = false, resumeAllowed = true;
   const captureSources: { node: Node; stream: object }[] = [];
@@ -147,6 +147,21 @@ function pcmFrame(value: number, samples = 480): ArrayBuffer {
   for (let i = 0; i < samples; i++) view.setInt16(i * 2, value, true);
   return bytes;
 }
+
+test("server-selected RTP mode is applied after the connection reset and before audio", async t => {
+  const f = browserFixture(); t.after(f.restore);
+  await f.media.prepare(new AbortController().signal);
+  const opening = f.media.connect("voice-id", "web-token", "realtime");
+  const mode = f.playbackCommands.at(-1);
+  assert.deepEqual(mode, { type: "mode", epoch: f.epoch(), realtime: true });
+  assert.equal(f.playbackCommands.at(-2)?.type, "reset");
+  f.socket().onopen(); await opening;
+  f.socket().onmessage({ data: pcmFrame(8192) } as MessageEvent<ArrayBuffer>);
+  assert.equal(f.packets()[0].epoch, mode.epoch);
+  const next = f.media.connect("next-voice", "web-token");
+  assert.deepEqual(f.playbackCommands.at(-1), { type: "mode", epoch: f.epoch(), realtime: false });
+  f.socket().onopen(); await next;
+});
 
 test("sphere PCM samples only sent capture and actual worklet playback, copying each source buffer", async (t) => {
   const f = browserFixture(); t.after(f.restore);
@@ -531,10 +546,14 @@ test("playback health accepts numeric counters only and never logs worklet paylo
   const logs: unknown[][] = []; t.mock.method(console, "info", (...args: unknown[]) => { logs.push(args); });
   const f = browserFixture(); t.after(f.restore); await f.open();
   const health = { receivedSamples: 480, playedSamples: 300, underruns: 0, droppedSamples: 0, bufferedMs: 7.5,
-    peakBufferedMs: 40, targetMs: 40, sampleRate: 48000, correctionPpm: 10 };
+    peakBufferedMs: 40, targetMs: 40, sampleRate: 48000, correctionPpm: 10,
+    renderedAt: 1.25, lastUnderrunAt: -1, lastRecoveryAt: -1, latencyRecoveries: 0 };
   f.speaker().port.onmessage({ data: { type: "health", epoch: f.epoch(), ...health, transcript: "never-log-this", provider: "private" } } as unknown as MessageEvent<ArrayBuffer>);
   assert.deepEqual(f.media.audioHealth!(), health);
   assert.equal(f.playbackCommands.at(-1)?.type, "health-ack");
+  f.speaker().port.onmessage({ data: { type: "health", epoch: f.epoch(), ...health,
+    renderedAt: "private", lastUnderrunAt: NaN, lastRecoveryAt: Infinity, latencyRecoveries: {} } } as unknown as MessageEvent<ArrayBuffer>);
+  assert.deepEqual(f.media.audioHealth!(), health, "invalid optional timestamps cannot enter diagnostics");
   const snapshot = f.media.audioHealth!(); snapshot.receivedSamples = 999;
   assert.equal(f.media.audioHealth!().receivedSamples, 480);
   f.media.close();

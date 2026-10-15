@@ -32,6 +32,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextlib import suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING
@@ -263,6 +264,13 @@ class HarnessExecutor(ToolExecutor):
             self.tools.call_id.reset(token)
 
 
+@dataclass(frozen=True)
+class _ReadPolicy:
+    data_dir: Path
+    auth_dir: Path
+    max_file_bytes: int
+
+
 class CodingTools:
     def __init__(self, harness: "Harness") -> None:
         self.harness = harness
@@ -275,6 +283,44 @@ class CodingTools:
         self.workspace_skills: dict[str, tuple[str, str]] = {}
         self.skill_diagnostics: tuple[str, ...] = ()
         self._storage_ids: dict[tuple[int, int], str] = {}
+        self._discovery_policy: _ReadPolicy | None = None
+
+    def _read_policy(self) -> _ReadPolicy:
+        if self._discovery_policy is not None:
+            return self._discovery_policy
+        return _ReadPolicy(
+            self.harness.config.data_dir,
+            (Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth").expanduser(),
+            self.harness.config.max_file_bytes,
+        )
+
+    def discovery_reader(self) -> "CodingTools":
+        """Detach the read policy and writable scan state before worker I/O.
+
+        The scanner uses only root, the frozen read policy, and its private
+        storage-identity map. Runtime, registry and approval state stay on the
+        event loop; discovery cannot run tools or load instructions.
+        """
+        reader = copy.copy(self)
+        reader._discovery_policy = self._read_policy()
+        reader._storage_ids = dict(self._storage_ids)
+        reader.workspace_skills = {}
+        reader.skills = {}
+        reader.skill_diagnostics = ()
+        return reader
+
+    def retain_discovery_guards(self, reader: "CodingTools") -> None:
+        """Keep observed protected inodes after a joined scan, including failures."""
+        self._storage_ids.update(reader._storage_ids)
+
+    def accept_discovery(self, reader: "CodingTools") -> bool:
+        """Publish one complete scan only while its file policy is still current."""
+        if self.root != reader.root or self._read_policy() != reader._discovery_policy:
+            return False
+        self.workspace_skills = reader.workspace_skills
+        self.skills = reader.skills
+        self.skill_diagnostics = reader.skill_diagnostics
+        return True
 
     def register(self) -> None:
         for function in (
@@ -402,10 +448,10 @@ class CodingTools:
         return result
 
     def _check_storage(self, info: os.stat_result) -> None:
-        auth_directory = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth"
+        policy = self._read_policy()
         for path, reason in (
-            (self.harness.config.data_dir, "Harness session storage is not accessible to file tools"),
-            (auth_directory.expanduser(), "OAuth credential storage is not accessible to file tools"),
+            (policy.data_dir, "Harness session storage is not accessible to file tools"),
+            (policy.auth_dir, "OAuth credential storage is not accessible to file tools"),
         ):
             try:
                 storage = path.stat()
@@ -436,10 +482,10 @@ class CodingTools:
                 or name.endswith((".pem", ".key", ".p12", ".pfx", ".tfstate"))
             ):
                 raise PermissionError(f"Protected path component: {part}")
-        if absolute.is_relative_to(self.harness.config.data_dir):
+        policy = self._read_policy()
+        if absolute.is_relative_to(policy.data_dir):
             raise PermissionError("Harness session storage is not accessible to file tools")
-        auth_directory = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ngn/auth"
-        if absolute.is_relative_to(auth_directory.expanduser().resolve()):
+        if absolute.is_relative_to(policy.auth_dir.resolve()):
             raise PermissionError("OAuth credential storage is not accessible to file tools")
         for ancestor in self.root.parents:
             self._check_storage(ancestor.stat())
@@ -482,10 +528,11 @@ class CodingTools:
                 info = os.fstat(source.fileno())
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise PermissionError("Only regular, single-link files are allowed")
-                data = source.read(self.harness.config.max_file_bytes + 1)
-                if len(data) > self.harness.config.max_file_bytes:
+                limit = self._read_policy().max_file_bytes
+                data = source.read(limit + 1)
+                if len(data) > limit:
                     raise ValueError(
-                        f"File exceeds {self.harness.config.max_file_bytes} byte limit. "
+                        f"File exceeds {limit} byte limit. "
                         "The limit applies to the entire file; requesting fewer lines will not reduce its size."
                     )
                 if b"\x00" in data:

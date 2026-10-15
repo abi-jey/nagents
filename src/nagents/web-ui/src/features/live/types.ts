@@ -46,6 +46,7 @@ export interface LiveCreated {
   session_id: string;
   model: string;
   voice: string;
+  playback_mode?: "realtime" | "buffered";
   context?: VoiceContext;
 }
 
@@ -252,7 +253,7 @@ export interface LiveMedia {
   audioHealth?(): PlaybackHealth;
   sampleAudio?(): AudioFrame;
   prepare(signal: AbortSignal): Promise<void>;
-  connect(sessionId: string, token: string): Promise<void>;
+  connect(sessionId: string, token: string, playbackMode?: "realtime" | "buffered"): Promise<void>;
   muteInput(muted: boolean): void;
   muteOutput(muted: boolean): void;
   setInputDevice(deviceId: string): Promise<void>;

@@ -5,6 +5,7 @@ const CAPACITY = PCM_RATE; // One second, independent of WebSocket packet size.
 const MIN_TARGET = 0.04;
 const MAX_TARGET = 0.16;
 const RESERVE_DECAY = 0.002; // Give back two milliseconds per second of clean delivery.
+const REALTIME_LIMIT = PCM_RATE * .24;
 
 class LivePlayback extends AudioWorkletProcessor {
   constructor() {
@@ -55,12 +56,19 @@ class LivePlayback extends AudioWorkletProcessor {
     this.underruns = 0;
     this.droppedSamples = 0;
     this.peakBufferedSamples = 0;
+    this.realtime = false;
+    this.latencyRecoveries = 0;
+    this.lastUnderrunAt = this.lastRecoveryAt = -1;
     this.port.onmessage = ({ data }) => {
       if (data?.type === "reset") { this.reset(data.epoch); return; }
       if (data?.type === "barrier") { this.fenceReports(data.epoch); return; }
       if (data?.type === "played-ack" && data.epoch === this.epoch) { this.playedPending = false; return; }
       if (data?.type === "health") { this.health(true); return; }
       if (data?.type === "health-ack" && data.epoch === this.epoch) { this.healthPending = false; return; }
+      if (data?.type === "mode" && data.epoch === this.epoch && typeof data.realtime === "boolean") {
+        this.realtime = data.realtime;
+        return;
+      }
       if (data?.type !== "pcm" || !(data.buffer instanceof ArrayBuffer) || data.epoch !== this.epoch) return;
       const length = data.buffer.byteLength;
       if (!length || length > 48000 || length % 2) return;
@@ -111,19 +119,25 @@ class LivePlayback extends AudioWorkletProcessor {
     this.lastArrival = now;
     this.packetDuration = incoming / PCM_RATE;
     if (!this.count) this.firstArrival = now;
-    const excess = Math.max(0, this.count + incoming - CAPACITY);
+    const recover = this.realtime && this.count + incoming > REALTIME_LIMIT;
+    const limit = recover ? Math.ceil(Math.max(.08, this.target) * PCM_RATE) : CAPACITY;
+    const excess = Math.max(0, this.count + incoming - limit);
+    let incomingOffset = 0;
     if (excess) {
-      this.read = (this.read + excess) % CAPACITY;
-      this.count -= excess;
+      const queued = Math.min(this.count, excess);
+      this.read = (this.read + queued) % CAPACITY;
+      this.count -= queued;
+      incomingOffset = excess - queued;
       this.droppedSamples += excess;
+      if (recover) { this.latencyRecoveries++; this.lastRecoveryAt = now; }
       this.phase = 0; this.primed = false;
       this.history.fill(0); this.filterIndex = 0;
       this.reportSize = 0;
       this.fadeFrom = this.lastValue; this.fade = 1;
     }
     const bytes = new DataView(buffer);
-    for (let i = 0; i < incoming; i++) this.samples[(this.read + this.count + i) % CAPACITY] = bytes.getInt16(i * 2, true);
-    this.count += incoming;
+    for (let i = incomingOffset; i < incoming; i++) this.samples[(this.read + this.count + i - incomingOffset) % CAPACITY] = bytes.getInt16(i * 2, true);
+    this.count += incoming - incomingOffset;
     this.receivedSamples += incoming;
     this.peakBufferedSamples = Math.max(this.peakBufferedSamples, this.count);
   }
@@ -144,7 +158,9 @@ class LivePlayback extends AudioWorkletProcessor {
       receivedSamples: this.receivedSamples, playedSamples: this.playedSamples,
       underruns: this.underruns, droppedSamples: this.droppedSamples,
       bufferedMs: this.count / PCM_RATE * 1000, peakBufferedMs: this.peakBufferedSamples / PCM_RATE * 1000,
-      targetMs: this.target * 1000, sampleRate, correctionPpm: (this.ratio - 1) * 1000000 });
+      targetMs: this.target * 1000, sampleRate, correctionPpm: (this.ratio - 1) * 1000000,
+      renderedAt: currentTime, lastUnderrunAt: this.lastUnderrunAt,
+      latencyRecoveries: this.latencyRecoveries, lastRecoveryAt: this.lastRecoveryAt });
     this.nextHealth = currentTime + 1;
   }
 
@@ -208,6 +224,7 @@ class LivePlayback extends AudioWorkletProcessor {
         }
       } else if (this.playing) {
         this.playing = false; this.underruns++;
+        this.lastUnderrunAt = currentTime + i / sampleRate;
         this.firstArrival = -1;
         this.flushReport();
         this.phase = 0;

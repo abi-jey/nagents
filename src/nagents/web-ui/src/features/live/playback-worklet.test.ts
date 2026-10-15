@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 
-type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number };
+type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number };
 type Played = { type: "played"; epoch: number; at: number; buffer: ArrayBuffer };
 function fixture(rate = 48000) {
   let Processor!: new () => { port: { onmessage(event: { data: object }): void }; process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean };
@@ -22,6 +22,7 @@ function fixture(rate = 48000) {
     return output;
   };
   return { health, played, render, acknowledge: (value: boolean) => { acknowledge = value; },
+    realtime(value = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "mode", epoch: suppliedEpoch, realtime: value } }); },
     barrier() { epoch++; processor.port.onmessage({ data: { type: "barrier", epoch } }); },
     get time() { return position / rate; },
     push(buffer: ArrayBuffer, suppliedEpoch = epoch) { globals.currentTime = position / rate; processor.port.onmessage({ data: { type: "pcm", buffer, epoch: suppliedEpoch } }); },
@@ -147,6 +148,58 @@ test("reset epochs discard stale queued PCM and stale post-reset transfers", () 
   assert.equal(f.stats().bufferedMs, 0);
   f.push(pcm(960)); for (let i = 0; i < 12; i++) f.render();
   assert(f.played.some(frame => frame.epoch === 1));
+});
+
+test("real-time playback bounds age through six minutes of repeated delivery stalls", () => {
+  const f = fixture(); f.realtime();
+  let packet = 0, checked = 0, oldest = 0;
+  // Each sample encodes its source frame. The audio thread keeps rendering
+  // while a blocked UI delivers several old packets together every four seconds.
+  const arrival = (index: number) => {
+    const nominal = index * .02, boundary = Math.floor(nominal / 4) * 4;
+    return boundary ? Math.max(nominal, boundary + .35) : nominal;
+  };
+  while (f.time < 360) {
+    while (arrival(packet) <= f.time) { f.push(pcm(480, packet + 1000)); packet++; }
+    const output = f.render();
+    const stats = f.stats();
+    assert(stats.bufferedMs <= 240 && stats.peakBufferedMs <= 240);
+    // Ignore the short recovery fade and silence during the forced outage.
+    if (stats.playedSamples > 480 && output.at(-1)! > .02 &&
+        f.time - stats.lastRecoveryAt > .012 && f.time - stats.lastUnderrunAt > .012) {
+      const sourceFrame = output.at(-1)! * 32768 - 1000;
+      const age = f.time - sourceFrame * .02;
+      oldest = Math.max(oldest, age); checked++;
+      assert(age < .29, `real-time speech fell ${age}s behind at ${f.time}s`);
+    }
+    f.played.length = 0; f.health.length = 0;
+  }
+  const stats = f.stats();
+  assert(checked > 1000 && oldest > .04);
+  assert(stats.latencyRecoveries > 50 && stats.droppedSamples > 0);
+  assert.equal(stats.receivedSamples, stats.playedSamples + stats.droppedSamples + Math.round(stats.bufferedMs * 24));
+});
+
+test("only explicitly selected real-time mode discards a stale incoming burst", () => {
+  const buffered = fixture(); buffered.push(pcm(12000));
+  assert.equal(buffered.stats().bufferedMs, 500); assert.equal(buffered.stats().droppedSamples, 0);
+  const realtime = fixture(); realtime.realtime(true, 8); realtime.push(pcm(12000));
+  assert.equal(realtime.stats().bufferedMs, 500, "stale mode commands cannot reconfigure playback");
+  realtime.reset(); realtime.realtime(); realtime.push(pcm(24000));
+  const stats = realtime.stats();
+  assert.equal(stats.bufferedMs, 80); assert.equal(stats.latencyRecoveries, 1);
+  assert.equal(stats.droppedSamples, 22080); assert.equal(stats.lastRecoveryAt, 0);
+});
+
+test("audio-thread health carries the actual starvation time", () => {
+  const f = fixture(); f.push(pcm(2400));
+  while (f.time < .3) f.render();
+  const stats = f.stats();
+  assert.equal(stats.underruns, 1);
+  assert(stats.lastUnderrunAt >= .1 && stats.lastUnderrunAt < .2);
+  assert(stats.renderedAt <= f.time && f.time - stats.renderedAt < .003);
+  while (f.time < .8) f.render();
+  assert.equal(f.stats().lastUnderrunAt, stats.lastUnderrunAt, "polling must not move an event timestamp");
 });
 
 for (const speed of [.9997, 1.0003]) test(`independent ${speed} source and device clocks stay bounded for a 190-second call`, () => {

@@ -553,7 +553,12 @@ def test_login_stream_owns_media_until_finalization_and_cleans_cancelled_setup(
                 await creating
         else:
             result = await creating
-            assert result == {"session_id": service.active_session_id, "model": config.model, "voice": config.voice}
+            assert result == {
+                "session_id": service.active_session_id,
+                "model": config.model,
+                "voice": config.voice,
+                "playback_mode": "buffered",
+            }
             snapshot = await service.close(cast("str", result["session_id"]))
             assert snapshot["status"] == "closed" and "confirmed" in str(snapshot["message"])
         await service.shutdown()
