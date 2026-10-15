@@ -10,6 +10,7 @@ import socket
 import ssl
 from time import monotonic
 from typing import Literal
+from typing import cast
 
 import aiohttp
 
@@ -225,8 +226,8 @@ def _transport_diagnostic(extra: object) -> str:
             fields.append("causes=" + ">".join(labels))
     for key in ("generation_elapsed_ms", "http_attempt_elapsed_ms"):
         elapsed = details.get(key)
-        if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
-            elapsed_ms = float(elapsed)
+        if type(elapsed) in (int, float):
+            elapsed_ms = cast("int | float", elapsed)
             if 0 <= elapsed_ms <= _MAX_ELAPSED_MS and math.isfinite(elapsed_ms):
                 fields.append(f"{key}={elapsed_ms:.3f}")
     for key in ("model_call_id", "http_attempt_id"):

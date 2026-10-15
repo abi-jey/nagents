@@ -148,6 +148,27 @@ class HostileString(str):
         raise AssertionError(PRIVATE)
 
 
+def test_transport_timing_rejects_numeric_subclasses_without_running_conversion() -> None:
+    class HostileFloat(float):
+        def __float__(self) -> float:
+            raise AssertionError(PRIVATE)
+
+        def __format__(self, format_spec: str) -> str:
+            raise AssertionError(PRIVATE)
+
+    event = ErrorEvent(
+        code="CODEX_CONNECTION",
+        extra={
+            "transport": {
+                "category": "connect",
+                "phase": "request",
+                "generation_elapsed_ms": HostileFloat(1),
+            }
+        },
+    )
+    assert provider_error_diagnostic(event) == "transport=connect phase=request"
+
+
 @pytest.mark.parametrize(
     "field",
     [
