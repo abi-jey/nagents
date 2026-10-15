@@ -43,16 +43,11 @@ export function App() {
     if (client.team.selected) await client.team.submit();
     else await client.submit(value);
   }
-  function closePanel() {
-    const fromDesigner = client.panel === "designer";
-    client.closePanel();
-    if (fromDesigner) requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }));
-  }
 
   return (
     <div className={`app-shell${sidebarCollapsed ? " rail-collapsed" : ""}`}>
       <a className="skip-link" href="#composer">Skip to prompt</a>
-      <main inert={client.panel === "designer"} className={[sidebarCollapsed && "sidebar-collapsed", client.liveOpen && "voice-open", teamOpen && "team-open"].filter(Boolean).join(" ")}>
+      <main className={[sidebarCollapsed && "sidebar-collapsed", client.liveOpen && "voice-open", teamOpen && "team-open"].filter(Boolean).join(" ")}>
         <WorkspaceHeader client={client} navOpen={navOpen} toggleNavigation={() => setNavOpen(!navOpen)} teamOpen={teamOpen} toggleTeam={() => setTeamOpen(value => !value)} />
         <WorkspaceSidebar client={client} composer={composer} open={navOpen} close={closeNavigation}
           select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />
@@ -66,7 +61,7 @@ export function App() {
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />
       </main>
       {configuredAgent && configured && <AgentConfiguration key={`${client.sessions.sessionId}:${configuredAgent}`} agent={configured} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} changed={client.team.refresh} close={() => setConfiguredAgent("")} />}
-      <WorkspaceDialogs client={client} select={select} closePanel={closePanel} />
+      <WorkspaceDialogs client={client} select={select} closePanel={client.closePanel} />
     </div>
   );
 }

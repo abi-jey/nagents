@@ -49,8 +49,6 @@ from ._async import join_owned as _join
 from .catalog import ChannelRevision
 from .catalog import ConnectionInput
 from .deletion import delete_session
-from .designer import Designer
-from .designer import register as register_designer
 from .live import create_agent as create_live_agent
 from .live import create_login_config
 from .live import register as register_live
@@ -180,7 +178,6 @@ def create_app(
     directory = built_assets() if assets is None else assets
     token = secrets.token_urlsafe(32)
     state: WebState
-    designer: Designer
     live: LiveService
     live_settings: LiveSettings
     provider_login: ProviderLogin
@@ -188,7 +185,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal state, designer, live, live_settings, provider_login, session_groups
+        nonlocal state, live, live_settings, provider_login, session_groups
         harness = harness_factory(copy.deepcopy(config))
         harness.resources.logger = logger
         logger.info(
@@ -295,8 +292,6 @@ def create_app(
         try:
             await harness.initialize(create_session=not (resume_session or continue_session))
             await live_settings.load()
-            designer = Designer(state)
-            await designer.traces.initialize()
             await state.history.initialize()
             await state.responses.initialize()
             await session_groups.initialize()
@@ -393,7 +388,6 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(LocalOnly, authority=authority, token=token, enforce_authority=enforce_authority)
-    register_designer(app, lambda: designer)
     register_tool_settings(app, lambda: state)
     from .tasks import register as register_tasks
 
@@ -528,15 +522,9 @@ def create_app(
         scope: Literal["workspace", "global"] = "workspace",
         provider: Annotated[str, Query(max_length=64)] = "",
         model: Annotated[str, Query(max_length=200)] = "",
-        kind: Annotated[str, Query(max_length=40)] = "",
-        api: Annotated[str, Query(max_length=20)] = "auto",
-        auth: Annotated[str, Query(max_length=20)] = "",
-        base_url: Annotated[str, Query(max_length=300)] = "",
     ) -> dict[str, object]:
         try:
-            return state.settings.reasoning_options(
-                scope=scope, provider=provider, model=model, kind=kind, api=api, auth=auth, base_url=base_url
-            )
+            return state.settings.reasoning_options(scope=scope, provider=provider, model=model)
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 

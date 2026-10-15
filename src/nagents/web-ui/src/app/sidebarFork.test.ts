@@ -38,13 +38,13 @@ for (const outcome of ["success", "failure", "rename"] as const) {
     const source = { id: "source", title: "Original", updated_at: "today" };
     const client = stub<Client>({
       sessions: stub<Client["sessions"]>({ config: undefined, sessions: [source], sessionId: source.id }),
-      available: { navigate: true, create: true, submit: true, settings: true, tools: true, channels: true, designer: true, live: true, trash: true },
+      available: { navigate: true, create: true, submit: true, settings: true, tools: true, channels: true, live: true, trash: true },
       busy: false, error: "", deletion: { pending: false, error: "" },
       deletionController: stub<Client["deletionController"]>({ show() {} }),
       trash: { open: false, pending: "", loading: false, error: "", draftDays: "30" },
       trashController: stub<Client["trashController"]>({ show() {} }),
       settings: stub<Client["settings"]>({ show() {} }), channels: stub<Client["channels"]>({ show() {} }),
-      showTools() {}, showDesigner() {}, canDeleteSession: () => true, canForkSession: () => true,
+      showTools() {}, canDeleteSession: () => true, canForkSession: () => true,
       dismissError: () => { client.error = ""; },
       forkSession: async (...args) => { calls.push(args); return pending; },
       renameSession: async (...args) => { renamed.push(args); return true; },
@@ -61,6 +61,8 @@ for (const outcome of ["success", "failure", "rename"] as const) {
     }
     try {
       await act(async () => root.render(createElement(Probe)));
+      assert.deepEqual([...document.querySelectorAll(".sidebar-utilities button")].map(button => button.getAttribute("aria-label")),
+        ["Trash", "Settings", "Channels", "Tools"]);
       await click('[aria-label="More actions: Original"]');
       const items = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
       const item = items.find(button => button.textContent?.trim() === (outcome === "rename" ? "Rename chat…" : "Fork chat"));

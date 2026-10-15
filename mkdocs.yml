@@ -90,7 +90,6 @@ nav:
       - Agent Definitions: guide/agent-definitions.md
       - ngn Local Web Client: guide/ngn-web.md
       - Inspecting Delegated Agents: guide/task-inspection.md
-      - Agent Designer: guide/agent-designer.md
       - Private Web Deployment: guide/ngn-web-deployment.md
       - Providers: guide/providers.md
       - Foundry Authentication: guide/foundry-authentication.md

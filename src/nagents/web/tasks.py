@@ -507,7 +507,7 @@ class Tasks:
             try:
                 run.executing = True
                 with self.state.executions.scope(run):
-                    async with self.state.designed_channels.execution(run) as owner:
+                    async with self.state.executions.harness(run) as owner:
                         self.state.running_harness = owner
                         await owner.resume(root)
                         await self.state.produce(

@@ -30,8 +30,6 @@ export function SessionSidebar({
   settingsDisabled,
   tools = () => {},
   toolsDisabled = settingsDisabled,
-  designer,
-  designerDisabled = settingsDisabled,
   channels,
   channelsDisabled,
   demo,
@@ -58,8 +56,6 @@ export function SessionSidebar({
   settings: () => void;
   tools?: () => void;
   toolsDisabled?: boolean;
-  designer?: () => void;
-  designerDisabled?: boolean;
   settingsDisabled: boolean;
   channels: () => void;
   channelsDisabled: boolean;
@@ -156,9 +152,6 @@ export function SessionSidebar({
           <button className="sidebar-utility tools-trigger" title="Tools" aria-label="Tools" disabled={toolsDisabled} onClick={tools} aria-haspopup="dialog">
             <Icon name="tools" /><span>Tools</span><Icon name="chevron" size={13} />
           </button>
-          {designer && <button className="sidebar-utility designer-trigger" title="Experimental agent designer" aria-label="Agent Designer" disabled={designerDisabled} onClick={designer}>
-            <Icon name="channels" /><span>Agent Designer</span><Icon name="chevron" size={13} />
-          </button>}
         </nav>
         <div className="workspace-info">
           <button type="button" className="workspace-trigger" title={workspace || "Workspace information"}

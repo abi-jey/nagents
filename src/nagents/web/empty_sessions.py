@@ -31,7 +31,6 @@ _REFERENCES = (
     ("ngn_web_session_owners", "session_id = ?"),
     ("ngn_web_bindings", "session_id = ? OR default_session_id = ?"),
     ("ngn_web_session_trash", "id = ?"),
-    ("ngn_design_sessions", "session_id = ? AND (agent != '' OR source != '')"),
 )
 
 
@@ -99,9 +98,6 @@ def _remove(db: sqlite3.Connection, candidates: list[str], protected: set[str]) 
             continue
         RoutingStore.root(db, session_id)
         tables = _guard_rows(db, session_id)
-        # A checked but unconfigured main-assistant pin contains no user data.
-        if "ngn_design_sessions" in tables:
-            db.execute("DELETE FROM ngn_design_sessions WHERE session_id = ?", (session_id,))
         _remove_content(db, session_id, tables)
         removed.append(session_id)
     return removed

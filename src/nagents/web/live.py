@@ -266,11 +266,6 @@ def register(
                             409, "The selected assistant conversation changed. Reconnect before using voice."
                         )
                     await host.channels.store._transaction(lambda db: RoutingStore.execution_root(db, body.session_id))
-                    if (await host.designed_channels.pin(body.session_id))[1]:
-                        raise HTTPException(
-                            409,
-                            "This chat uses a pinned designed agent. Select a main assistant chat for voice.",
-                        )
                 result = await service().create_stream(body.voice)
                 logger.info("Live connection created: session=%s", result.get("session_id", ""))
                 return result

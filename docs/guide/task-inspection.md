@@ -81,8 +81,7 @@ Task settings accept `provider`, `model`, `compact_trigger`, `compact_tokens`,
 and `compact_messages`. They appear as `next_settings` until the next idle
 activation. A message queued into an active child keeps that activation's
 accepted settings. Empty provider, model, or compaction trigger retains the
-accepted choice. A provider must name a configured connection. Compiled Agent
-Designer definitions keep their provider and model controlled by the definition.
+accepted choice. A provider must name a configured connection.
 
 Task workers are process-local. After restart, recorded task history and
 receipts remain readable, but old workers cannot be resumed through the web

@@ -359,8 +359,7 @@ and applicable instruction context, not a copy of the full parent conversation.
 Plugins are not re-imported in children. Children inherit the active model and
 provider unless their profile or delegation supplies an explicit selection.
 The `delegate` tool accepts `model`, a configured `provider` connection, and
-`compact_trigger`, `compact_tokens`, and `compact_messages` choices. Compiled
-Agent Designer definitions retain control of their provider and model.
+`compact_trigger`, `compact_tokens`, and `compact_messages` choices.
 
 Tasks are process-local, not durable jobs or persistent Bot identities. Cancelling
 or closing a run cancels and awaits its children; undelivered notifications are
@@ -718,9 +717,6 @@ their paths. Nested guidance takes precedence within its subtree. These files
 provide task context and cannot grant tools, bypass approvals, or change project
 configuration trust. Ordinary delegated children receive the defaults once and
 retain the applicable workspace guidance.
-
-Agent Designer definitions keep their explicitly configured instructions and do
-not implicitly load either coding-harness defaults or workspace `AGENTS.md`.
 
 ## Skills
 

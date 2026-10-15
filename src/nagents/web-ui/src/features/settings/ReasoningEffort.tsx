@@ -10,11 +10,10 @@ const labels: Record<string, string> = {
 };
 export const effortLabel = (value = "") => labels[value] || value;
 
-export function ReasoningEffort({ token, scope = "workspace", provider = "", model, descriptor,
+export function ReasoningEffort({ token, scope = "workspace", provider = "", model,
   value, update, disabled = false, error = "", defaultLabel = "Provider default", allowReset = false, children, id: suppliedId,
 }: {
   token: string; scope?: SettingsScope; provider?: string; model: string;
-  descriptor?: { kind: string; api: string; auth: string; base_url: string };
   value: string; update: (value: string) => void; disabled?: boolean; error?: string;
   defaultLabel?: string; allowReset?: boolean; children?: ReactNode; id?: string;
 }) {
@@ -22,7 +21,7 @@ export function ReasoningEffort({ token, scope = "workspace", provider = "", mod
   const [result, setResult] = useState<OptionsReply>();
   const [failure, setFailure] = useState("");
   const [loading, setLoading] = useState(true);
-  const query = new URLSearchParams({ scope, provider, model, ...(descriptor || {}) }).toString();
+  const query = new URLSearchParams({ scope, provider, model }).toString();
   useEffect(() => {
     const controller = new AbortController();
     setResult(undefined); setFailure(""); setLoading(true);

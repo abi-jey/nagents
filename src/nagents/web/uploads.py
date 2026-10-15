@@ -15,12 +15,10 @@ from fastapi import Response
 
 from nagents.channels.runtime import MAX_INLINE_ATTACHMENTS
 from nagents.channels.runtime import MAX_INLINE_ATTACHMENT_BYTES
-from nagents.designer.store import Recorder
 from nagents.types import DocumentContent
 from nagents.types import ImageContent
 from nagents.types import TextContent
 
-from ._async import join_owned
 from .history import WebHistory
 from .local_delivery import valid_media
 from .upload_store import TYPES
@@ -59,17 +57,10 @@ class Uploads:
 
     async def capabilities(self, root: str) -> tuple[str, ...]:
         await self.state.channels.store._transaction(lambda db: self.state.channels.store.execution_root(db, root))
-        agent, source = await self.state.designed_channels.definition(root)
-        if not source:
-            if type(self.state.harness.agent.session) is not WebHistory:
-                return ()
-            async with self.state.session_agents.view(root, next_run=True) as current:
-                return supported(current)
-        harness, _ = self.state.designed_channels.assemble(root, agent, source, Recorder())
-        try:
-            return supported(harness)
-        finally:
-            await join_owned(asyncio.create_task(harness.close()))
+        if type(self.state.harness.agent.session) is not WebHistory:
+            return ()
+        async with self.state.session_agents.view(root, next_run=True) as current:
+            return supported(current)
 
     async def content(self, work: Work, harness: Harness) -> str | list[ContentPart]:
         def read(db: sqlite3.Connection) -> list[tuple[str, str, bytes]]:

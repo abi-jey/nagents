@@ -371,43 +371,6 @@ def test_idle_profile_context_includes_workspace_instructions_and_skills_without
     asyncio.run(scenario())
 
 
-def test_upcoming_and_pinned_designer_route_rejects_profile_change_without_pinning_on_get(tmp_path: Path) -> None:
-    from nagents.designer.schema import STARTER
-
-    async def scenario() -> None:
-        async with client_app(tmp_path, config=config(tmp_path)) as (app, client, headers, _):
-            state = app.state.web
-            root = state.selected_session_id
-            await state.channels.store.assign_owner(root, "routed", "chat")
-            await state.channels.store._transaction(
-                lambda db: db.execute(
-                    "INSERT INTO ngn_design_channels VALUES (?, ?, ?, ?)",
-                    ("routed", "design", "assistant", STARTER),
-                ).close()
-            )
-            before = await state.designed_channels.definition(root)
-            assert before == ("", "")
-            for pinned in (False, True):
-                if pinned:
-                    await state.designed_channels.pin(root)
-                selection = (await client.get(f"/api/sessions/{root}/agent", headers=headers)).json()
-                assert "Agent Designer" in selection["locked_reason"]
-                assert all(item["disabled_reason"] for item in selection["profiles"])
-                denied = await client.post(
-                    f"/api/sessions/{root}/agent",
-                    headers=headers,
-                    json={
-                        "revision": selection["revision"],
-                        "agent": "reviewer",
-                    },
-                )
-                assert denied.status_code == 409
-                if not pinned:
-                    assert await state.designed_channels.definition(root) == before
-
-    asyncio.run(scenario())
-
-
 @pytest.mark.requires_posix
 def test_read_only_switch_restricts_pending_child_and_does_not_loosen_it_on_later_parent_run(
     tmp_path: Path,

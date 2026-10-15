@@ -5,14 +5,14 @@ import { availability } from "./availability.js";
 const idle = { ready: true, operating: false, running: false,
   modal: false, approval: false, uploadsReady: true };
 
-test("a running conversation permits follow-ups, navigation, settings, tools and designer", () => {
+test("a running conversation permits follow-ups, navigation, settings and tools", () => {
   const access = availability({ ...idle, running: true });
   assert.equal(access.submit, true);
   assert.equal(access.navigate, true);
   assert.equal(access.channels, true);
   assert.equal(access.create, true);
   assert.equal(access.settings, true);
-  assert.equal(access.designer, true);
+  assert.equal(access.tools, true);
   assert.equal(access.live, true);
 });
 

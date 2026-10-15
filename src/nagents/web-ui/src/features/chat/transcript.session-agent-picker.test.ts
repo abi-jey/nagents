@@ -11,7 +11,7 @@ function selection(): SessionAgentSelection {
   return {
     session_id: "fixture-conversation", revision: "fixture-revision", agent: "assistant", workspace_default: "assistant",
     effective: { agent: "assistant", model: "fixture-fast-model", provider: "Fixture OpenAI", provider_kind: "openai", mode: "build" },
-    active: null, pending: false, locked_reason: "",
+    active: null, pending: false,
     profiles: [
       { name: "assistant", description: "General workspace work", model: "fixture-fast-model", provider: "Fixture OpenAI", provider_kind: "openai", mode: "build", disabled_reason: "" },
       { name: "reviewer", description: "Review changes without writing files", model: "fixture-review-model", provider: "Fixture Anthropic", provider_kind: "anthropic", mode: "reviewer", disabled_reason: "" },
@@ -106,14 +106,14 @@ test("pending profile shows current and next-run identities without suggesting a
   assert.equal(ui.option("assistant").getAttribute("aria-pressed"), "false");
 });
 
-test("locked conversations retain profile information while disabling every change", async t => {
+test("a read-only active run keeps eligible profiles selectable for the next run", async t => {
   const data = selection();
-  data.locked_reason = "This conversation uses a saved agent design.";
   data.active = { ...data.effective, mode: "reviewer" };
   const ui = await view(t, data);
-  assert.match(ui.document.querySelector("dialog")!.textContent!, /uses a saved agent design/);
   assert.match(ui.document.querySelector(".session-agent-current")!.textContent!, /current run is read-only/);
-  for (const button of ui.document.querySelectorAll<HTMLButtonElement>(".session-agent-option")) assert.equal(button.disabled, true);
+  assert.equal(ui.option("assistant").disabled, false);
+  assert.equal(ui.option("reviewer").disabled, false);
+  assert.equal(ui.option("builder").disabled, true);
   await ui.cancel();
   assert.equal(ui.dismissals(), 1);
   assert.equal(ui.document.activeElement, ui.trigger);

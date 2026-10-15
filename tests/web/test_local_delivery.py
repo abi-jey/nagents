@@ -9,8 +9,6 @@ from typing import cast
 import pytest
 
 from nagents.channels.types import ChannelError
-from nagents.designer.runtime import DesignProvider
-from nagents.designer.schema import STARTER
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
@@ -20,7 +18,6 @@ from nagents.web.local_delivery import valid_media
 from tests.support.channels import site
 
 if TYPE_CHECKING:
-    import sqlite3
     from collections.abc import AsyncIterator
     from pathlib import Path
 
@@ -185,43 +182,12 @@ def test_active_bytes_never_pass_declared_media(media_type: str) -> None:
     assert not valid_media(media_type, b"<svg onload='alert(1)'/>")
 
 
-@pytest.mark.parametrize("designed", [False, True])
-def test_executing_root_survives_selection_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, designed: bool
-) -> None:
+def test_executing_root_survives_selection_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with site(tmp_path, monkeypatch) as app:
         root = app.main
         assert app.client.portal is not None
         app.client.portal.call(app.state.history.add_message, root, Message(role="user", content="Existing chat"))
         other = app.client.post("/api/sessions/new", headers=app.headers, json={}).json()["session_id"]
-        if designed:
-            assert app.client.portal is not None
-
-            async def pin() -> None:
-                def save(db: sqlite3.Connection) -> None:
-                    db.execute(
-                        "INSERT OR REPLACE INTO ngn_design_sessions VALUES (?, ?, ?)", (root, "assistant", STARTER)
-                    )
-
-                await app.state.channels.store._transaction(save)
-
-            app.client.portal.call(pin)
-
-            async def generate(self: DesignProvider, messages: list[Message], **kwargs: object) -> AsyncIterator[Event]:
-                if messages[-1].role != "tool":
-                    yield ToolCallEvent(
-                        id="designed",
-                        name="channel_send",
-                        arguments={
-                            "channel": "builtin.web",
-                            "destination": root,
-                            "text": "designed delivery",
-                        },
-                    )
-                else:
-                    yield TextDoneEvent(text="ordinary answer")
-
-            monkeypatch.setattr(DesignProvider, "generate", generate)
         events = send(app, switch_to=other)
         assert events[-1]["status"] == "completed"
         assert len(deliveries(app, root)) == 1

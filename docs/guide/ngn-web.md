@@ -203,7 +203,7 @@ queued input, task activity, or other session references. A draft open in anothe
 browser is protected. `--continue` prefers meaningful history over an abandoned
 blank draft; an explicit session ID is still honored. Used conversations and
 named sessions remain available.
-**Settings**, **Channels**, **Tools**, **Agent Designer**, **Trash**, and the workspace information overlay stay
+**Settings**, **Channels**, **Tools**, **Trash**, and the workspace information overlay stay
 in the bottom section, so they remain reachable with a long conversation history. On narrow
 screens, **Toggle sessions** opens a drawer; Escape or its close button dismisses
 it and returns focus to the navigation toggle. Dialogs opened from the drawer
@@ -613,7 +613,7 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `POST settings/global` | `{revision, values}` saves defaults shared by workspaces in the same data directory; idle only |
 | `POST settings/global/reset` | `{revision}` removes global overrides; idle only |
 | `GET sessions/{session_id}/agent` | Conversation profile, revision, effective and active identities, pending state, and allowed profile choices |
-| `POST sessions/{session_id}/agent` | `{revision, agent}` selects this conversation’s next-run profile; supports active runs, rejects stale revisions and pinned designer routes |
+| `POST sessions/{session_id}/agent` | `{revision, agent}` selects this conversation’s next-run profile; supports active runs and rejects stale revisions |
 | `GET sessions` | Selected session ID/history and this workspace's session list; idle only |
 | `GET sessions/{session_id}/context` | Read-only estimated token breakdown of the request that session would send; safe while idle and during a run |
 | `GET activity/{session_id}/{after}` | Read bounded, session-scoped wakeup/background activity after a cursor; does not start a run |
@@ -1022,7 +1022,7 @@ draft; **Send** or Enter explicitly admits a message. Image-only messages are
 supported. Choose up to three files of at most 8 MiB each: JPEG, PNG, GIF, WebP,
 or PDF, subject to the active provider/adapter's declared input support. The
 picker omits unsupported formats, and the backend checks again at admission and
-execution. This applies to the root's pinned designed provider as well.
+execution.
 
 The authenticated API is:
 
@@ -1530,23 +1530,20 @@ are created only by choosing **Always allow this tool** on a live, exact pending
 approval, never by enabling tools or editing `.ngn/tools.yaml`.
 
 Grants live in `tool-approvals.db`, beside this workspace's private `sessions.db`,
-and apply to normal chat, voice, queued work, and Agent Designer runs in this
+and apply to normal chat, voice, and queued work in this
 workspace. They are not shared with another workspace or the terminal harness.
 Built-in and inspectable plain-function grants survive server restarts and are
 invalidated when their definition changes. Extension closures and bound objects
 can hide server or destination identity, so their grants are restricted to the
 current registration: reloading or replacing one asks again. The approval dialog
 and saved-permissions list show that distinction. A tool with the same name but a
-different definition never inherits a grant. Designer connection setup requests
-such as starting an MCP subprocess are not registered tools; their **Always allow**
-button is disabled with an explanation, and **Allow once** remains available.
+different definition never inherits a grant.
 
 The built-in **`compact_history`** requests compaction of the current conversation.
 The agent finishes pending tool calls, persists their results, then compacts before
 the next model round. It uses the configured compaction strategy and emits normal
 compaction events; it does not start a nested run. A cancelled or finished run
-discards any unprocessed session-scoped request. The tool is also selectable in
-Agent Designer.
+discards any unprocessed session-scoped request.
 
 #### Global and Workspace Preferences
 
@@ -1572,9 +1569,8 @@ the next independent run or child activation uses the saved choice.
 
 `GET /api/reasoning-options` returns `{options, source, provider, model}` for
 `scope=workspace|global`, a saved connection `provider`, and a draft `model`.
-Options exclude the empty default. Optional `kind`, `api`, `auth`, and `base_url`
-select an offline descriptor lookup for an unsaved Designer definition. The route
-does not open a provider connection or alter an active model.
+Options exclude the empty default. The route uses the saved provider connection;
+it does not open a provider connection or alter an active model.
 
 **Message submission** selects what happens when another web message arrives in
 the same active conversation. **Queue** is the default: finish the current run,
@@ -1787,6 +1783,4 @@ The main row and context panel report the actual running agent while a change is
 pending. A small **Agent: name** marker records an applied change in the transcript.
 These markers are display metadata, excluded from model history and voice seeds.
 Profiles restricted to delegation cannot be selected as the main conversation agent.
-Administrator read-only restrictions remain effective for every profile. Chats
-pinned to Agent Designer routes keep their designed agent and explain that the
-picker is unavailable.
+Administrator read-only restrictions remain effective for every profile.

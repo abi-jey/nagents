@@ -221,12 +221,10 @@ def test_active_voice_protects_an_empty_root_but_closed_empty_voice_does_not(tmp
             state = cast("WebState", app.state.web)
             spoken = state.selected_session_id
             await state.bind_live_captions(spoken, "active-empty-call")
-            # Voice admission pins even a main assistant that has no custom design.
-            await state.designed_channels.pin(spoken)
             with patch.object(
                 type(app.state.live), "active_session_id", new_callable=PropertyMock, return_value="active-empty-call"
             ):
-                # Exercise pruning with an admitted voice pin. HTTP navigation
+                # Exercise pruning with an admitted voice session. HTTP navigation
                 # now deliberately closes voice before changing the selection.
                 with state.idle():
                     selected = await empty_sessions.new_session(state, app.state.live.active_session_id)
@@ -249,7 +247,7 @@ def test_active_voice_protects_an_empty_root_but_closed_empty_voice_does_not(tmp
 
 
 @pytest.mark.parametrize(
-    "reference", ["task", "wakeup", "subscriber", "main", "owner", "binding", "design", "upload", "delivery"]
+    "reference", ["task", "wakeup", "subscriber", "main", "owner", "binding", "upload", "delivery"]
 )
 def test_referenced_empty_roots_are_preserved(tmp_path: Path, reference: str) -> None:
     async def scenario() -> None:
@@ -278,10 +276,6 @@ def test_referenced_empty_roots_are_preserved(tmp_path: Path, reference: str) ->
                     elif reference == "binding":
                         db.execute(
                             "INSERT INTO ngn_web_bindings VALUES ('fixture', 'chat', ?, ?)", (protected, protected)
-                        )
-                    elif reference == "design":
-                        db.execute(
-                            "INSERT INTO ngn_design_sessions VALUES (?, 'custom', 'saved definition')", (protected,)
                         )
                     elif reference == "upload":
                         db.execute(
