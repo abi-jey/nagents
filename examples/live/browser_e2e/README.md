@@ -225,7 +225,7 @@ long-session contract:
 ```bash
 poetry run python examples/live/browser_e2e/artifacts.py check \
   /tmp/ngn-voice-e2e-deployed/capture.json --mode authenticated \
-  --min-rounds 3 --min-active-span-seconds 300 --max-buffered-ms 250
+  --min-rounds 3 --min-active-span-seconds 300 --max-buffered-ms 320
 ```
 
 Capture windows are capped at 900 seconds, with bounded event counts. Full PCM
@@ -243,8 +243,11 @@ ordered playback interrupt. The browser's separate `interruptedSamples` counter
 includes queued audio cleared by interruptions, mute, and closing; correlate it
 with those actions rather than treating every reset as an audio fault.
 
-Real-time output limits each local reservoir to 240 ms and explicitly discards
-stale audio only on overload. This prevents a local queue from accumulating
+Real-time output limits the server reservoir to 240 ms and browser playback to
+320 ms, and explicitly discards stale audio only on overload. The browser learns
+up to 280 ms of reserve and replenishes it during sustained digital silence,
+preserving all queued samples and the existing speech playback rate. This
+prevents a local queue from accumulating
 seconds of delay; it is not an end-to-end latency guarantee for provider,
 network, kernel, or physical speaker buffering. Recovery fault tests must report
 their discarded samples separately from normal runs, which require zero drops.

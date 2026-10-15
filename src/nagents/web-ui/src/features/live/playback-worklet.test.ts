@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 
-type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number; interruptedSamples: number };
+type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number; interruptedSamples: number; silenceRefills: number };
 type Played = { type: "played"; epoch: number; at: number; buffer: ArrayBuffer };
 function fixture(rate = 48000) {
   let Processor!: new () => { port: { onmessage(event: { data: object }): void }; process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean };
@@ -163,14 +163,14 @@ test("real-time playback bounds age through six minutes of repeated delivery sta
     while (arrival(packet) <= f.time) { f.push(pcm(480, packet + 1000)); packet++; }
     const output = f.render();
     const stats = f.stats();
-    assert(stats.bufferedMs <= 240 && stats.peakBufferedMs <= 240);
+    assert(stats.bufferedMs <= 320 && stats.peakBufferedMs <= 320);
     // Ignore the short recovery fade and silence during the forced outage.
     if (stats.playedSamples > 480 && output.at(-1)! > .02 &&
         f.time - stats.lastRecoveryAt > .012 && f.time - stats.lastUnderrunAt > .012) {
       const sourceFrame = output.at(-1)! * 32768 - 1000;
       const age = f.time - sourceFrame * .02;
       oldest = Math.max(oldest, age); checked++;
-      assert(age < .29, `real-time speech fell ${age}s behind at ${f.time}s`);
+      assert(age < .37, `real-time speech fell ${age}s behind at ${f.time}s`);
     }
     f.played.length = 0; f.health.length = 0;
   }
@@ -178,6 +178,31 @@ test("real-time playback bounds age through six minutes of repeated delivery sta
   assert(checked > 1000 && oldest > .04);
   assert(stats.latencyRecoveries > 50 && stats.droppedSamples > 0);
   assert.equal(stats.receivedSamples, stats.playedSamples + stats.droppedSamples + Math.round(stats.bufferedMs * 24));
+});
+
+test("real-time silence replenishes a learned reserve before speech without discarding or stretching it", () => {
+  const f = fixture(); f.realtime();
+  const rendered: number[] = [];
+  let packet = 0;
+  // A 1% delivery shortfall and two permanent transport delays: learn the
+  // observed 217ms gap in silence, then absorb a smaller gap during speech.
+  const arrival = (index: number) => index * .0202 + (index >= 100 ? .217 : 0) + (index >= 500 ? .14 : 0);
+  while (f.time < 19) {
+    while (packet < 900 && arrival(packet) <= f.time) {
+      f.push(pcm(480, packet >= 300 && packet < 700 ? 8192 : 0)); packet++;
+    }
+    rendered.push(...f.render());
+  }
+  const first = rendered.findIndex(value => value > .1);
+  const last = rendered.findLastIndex(value => value > .1);
+  assert(first > 0 && last > first);
+  assert(rendered.slice(first, last).every(value => value > .1), "a learned delivery gap must not cut silence into voiced PCM");
+  assert(Math.abs((last - first) / 48000 - 8) < .02, "voiced duration is preserved; silence refill does not stretch speech");
+  const stats = f.stats();
+  assert(stats.silenceRefills > 0);
+  assert.equal(stats.droppedSamples, 0); assert.equal(stats.latencyRecoveries, 0);
+  assert(stats.peakBufferedMs <= 320);
+  assert.equal(stats.receivedSamples, stats.playedSamples + Math.round(stats.bufferedMs * 24));
 });
 
 test("only explicitly selected real-time mode discards a stale incoming burst", () => {
