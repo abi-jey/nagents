@@ -132,7 +132,7 @@ function browserFixture(devices: AudioDeviceSelection = { inputId: "", outputId:
     newMicrophone: () => { const track = makeTrack(); return { track, stream: { getTracks: () => [track], getAudioTracks: () => [track] } }; },
     withoutOutputRouting: () => { Object.defineProperty(Context.prototype, "setSinkId", { value: undefined }); },
     context: () => context, socket: () => socket, node: () => node, connected: () => connected, ended: () => ended,
-    open: async () => { await media.prepare(new AbortController().signal); const opening = media.connect("voice-id", "web-token"); socket.onopen(); await opening; },
+    open: async (sessionId = "voice-id") => { await media.prepare(new AbortController().signal); const opening = media.connect(sessionId, "web-token"); socket.onopen(); await opening; },
     restore: () => {
     media.close();
     for (const [name, descriptor] of saved) {
@@ -540,6 +540,27 @@ test("playback health accepts numeric counters only and never logs worklet paylo
   f.media.close();
   assert.equal(logs.length, 1); assert.equal(logs[0][0], "ngn voice playback health");
   assert.doesNotMatch(JSON.stringify(logs), /never-log-this|private|transcript|provider/);
+});
+
+test("playback buffer warnings are rate limited and correlate only with validated voice IDs", async t => {
+  const warnings: unknown[][] = [], summaries: unknown[][] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => { warnings.push(args); });
+  t.mock.method(console, "info", (...args: unknown[]) => { summaries.push(args); });
+  const f = browserFixture(); t.after(f.restore);
+  const voiceSessionId = "a".repeat(32); await f.open(voiceSessionId);
+  const health = { receivedSamples: 4800, playedSamples: 4000, underruns: 1, droppedSamples: 0,
+    bufferedMs: 0, peakBufferedMs: 40, targetMs: 40, sampleRate: 48000, correctionPpm: 10 };
+  const report = (underruns: number) => f.speaker().port.onmessage({ data: {
+    type: "health", epoch: f.epoch(), ...health, underruns, token: "never-log-secret", transcript: "private-speech",
+  } } as unknown as MessageEvent<ArrayBuffer>);
+  report(1); report(2); report(3);
+  assert.equal(warnings.length, 1);
+  f.context().currentTime = 5; report(4);
+  assert.equal(warnings.length, 2);
+  assert.equal((warnings[1][1] as { voiceSessionId: string }).voiceSessionId, voiceSessionId);
+  f.media.close();
+  assert.equal(summaries.length, 1);
+  assert.doesNotMatch(JSON.stringify([...warnings, ...summaries]), /never-log-secret|private-speech|web-token|transcript|token/);
 });
 
 test("an open audio socket stays connecting until the capture context is running", async t => {

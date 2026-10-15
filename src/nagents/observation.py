@@ -11,11 +11,14 @@ import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import asdict
+from dataclasses import dataclass
 from dataclasses import is_dataclass
 from datetime import datetime
 from enum import Enum
+from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING
+from typing import Literal
 
 import aiohttp
 
@@ -27,6 +30,18 @@ Observer = Callable[[str, dict[str, object]], None]
 observer: ContextVar[Observer | None] = ContextVar("nagents_observer", default=None)
 scope: ContextVar[Mapping[str, object]] = ContextVar("nagents_observation_scope", default=MappingProxyType({}))
 attempt: ContextVar[str] = ContextVar("nagents_http_attempt", default="")
+
+
+@dataclass
+class HTTPAttempt:
+    """Payload-free state shared only with callbacks for this HTTP attempt."""
+
+    id: str
+    started: float
+    phase: Literal["request", "response"] = "request"
+
+
+http_attempt: ContextVar[HTTPAttempt] = ContextVar("nagents_http_attempt_state")
 
 
 def json_default(value: object) -> object:
@@ -58,6 +73,8 @@ def trace_config() -> aiohttp.TraceConfig:
     ) -> None:
         context.attempt_id = uuid.uuid4().hex
         attempt.set(context.attempt_id)
+        context.http_attempt = HTTPAttempt(context.attempt_id, monotonic())
+        http_attempt.set(context.http_attempt)
         observe(
             "http_request",
             attempt_id=context.attempt_id,
@@ -80,6 +97,7 @@ def trace_config() -> aiohttp.TraceConfig:
     async def end(
         session: aiohttp.ClientSession, context: SimpleNamespace, params: aiohttp.TraceRequestEndParams
     ) -> None:
+        context.http_attempt.phase = "response"
         observe(
             "http_response",
             attempt_id=context.attempt_id,

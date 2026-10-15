@@ -161,6 +161,7 @@ function relayMedia(handlers: MediaHandlers, devices: AudioDeviceSelection): Liv
     },
     async connect(sessionId, token) {
       if (closed || !context) throw new DOMException("Cancelled", "AbortError");
+      playback?.identify(sessionId);
       resetInput(); stopPlayback();
       const channel = new WebSocket(serverSocketUrl(`/api/live/sessions/${encodeURIComponent(sessionId)}/audio`), ["ngn.live.v2", `ngn.token.${token}`]);
       socket = channel; channel.binaryType = "arraybuffer";

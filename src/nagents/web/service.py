@@ -554,11 +554,22 @@ class WebState:
             and 0 <= index < 1024
         ):
             identity = {"generation_id": generation, "index": index}
-        binding = self.tool_approvals.requested_binding(self.running_harness, request)
+        harness = self.running_harness
+        binding = self.tool_approvals.requested_binding(harness, request)
         try:
-            allowed = binding is not None and self.tool_approvals.allowed(binding)
+            allowed = binding is not None and await self.tool_approvals.check_allowed(binding)
         except sqlite3.Error:
             allowed = False  # Unreadable saved policy requires an explicit decision.
+        if (
+            self.active is not run
+            or self.running_harness is not harness
+            or run.pending is not None
+            or run.finished
+            or run.task.done()
+            or run.task.cancelling()
+            or self.tool_approvals.requested_binding(harness, request) != binding
+        ):
+            return False
         if allowed:
             await self.send(
                 run,
@@ -804,7 +815,8 @@ class WebState:
                                     "message": message,
                                     "recoverable": event.recoverable,
                                 }
-                            logger.warning(
+                            log_error = logger.warning if event.recoverable else logger.error
+                            log_error(
                                 "Run error: session=%s run=%s reason=%s recoverable=%s diagnostic=%s",
                                 run.session_id,
                                 run.id,

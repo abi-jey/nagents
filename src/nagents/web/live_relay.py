@@ -25,6 +25,8 @@ from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame
 from av import AudioResampler
 
+from .live_diagnostics import Timing
+from .live_diagnostics import voice_session_identity
 from .live_login import LoginVoiceError
 
 if TYPE_CHECKING:
@@ -54,8 +56,9 @@ def _correct_drift(pcm: bytes) -> bytes:
 class _MicrophoneTrack(AudioStreamTrack):
     """A monotonic 20 ms PCM clock, including silence before browser attachment."""
 
-    def __init__(self) -> None:
+    def __init__(self, voice_session_id: str = "") -> None:
         super().__init__()
+        self.voice_session_id = voice_session_identity(voice_session_id)
         self.buffer = bytearray()
         self.silent = False
         self._started = 0.0
@@ -77,7 +80,8 @@ class _MicrophoneTrack(AudioStreamTrack):
         if now - self._last_report >= 5:
             self._last_report = now
             logger.warning(
-                "Live microphone backlog recovered: dropped_samples=%d buffered_samples=%d clock_rebases=%d late_ms=%.0f recoveries=%d",
+                "Live microphone backlog recovered: voice_session_id=%s dropped_samples=%d buffered_samples=%d clock_rebases=%d late_ms=%.0f recoveries=%d",
+                self.voice_session_id,
                 self.dropped_samples,
                 len(self.buffer) // 2,
                 self.clock_rebases,
@@ -163,7 +167,8 @@ class ChatGPTMediaRelay:
 
     def __init__(self, source: AudioInput, output: AudioOutput) -> None:
         self._source, self._output = source, output
-        self._track = _MicrophoneTrack()
+        self._voice_session_id = voice_session_identity(getattr(output, "voice_session_id", ""))
+        self._track = _MicrophoneTrack(self._voice_session_id)
         # Provider candidates are supplied by the native SDP answer. Avoid
         # aiortc's default third-party STUN service; browser egress is never used.
         # Gather separate transports, then let the answer select the BUNDLE
@@ -180,6 +185,10 @@ class ChatGPTMediaRelay:
         self._closed = False
         self._receiving = False
         self._workers: list[asyncio.Task[None]] = []
+        self._upstream_gap = Timing()
+        self._output_wait = Timing()
+        self._output_samples = 0
+        self._last_output_report = float("-inf")
         self._peer.on("connectionstatechange", self._state_changed)
         self._peer.on("track", self._remote_track)
         self._channel.on("open", self._mark_ready)
@@ -235,6 +244,8 @@ class ChatGPTMediaRelay:
 
     async def _playback(self, track: MediaStreamTrack) -> None:
         resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+        previous = 0.0
+        duration = 0.0
         while not self._closed:
             try:
                 frame = await track.recv()
@@ -243,11 +254,43 @@ class ChatGPTMediaRelay:
                 return
             if not isinstance(frame, AudioFrame):
                 raise LoginVoiceError("ChatGPT voice returned an invalid audio frame.")
+            now = monotonic()
+            if previous and self._upstream_gap.observe(now - previous - duration):
+                self._report_output()
+            previous = now
+            duration = frame.samples / frame.sample_rate if frame.sample_rate else 0.0
             for converted in resampler.resample(frame):
                 if not self._quiet:
                     # PyAV planes may include alignment padding, which is not
                     # audio and must not be sent to the browser's sample clock.
+                    started = monotonic()
                     await self._output.write(bytes(converted.planes[0])[: converted.samples * 2])
+                    self._output_samples += converted.samples
+                    if self._output_wait.observe(monotonic() - started):
+                        self._report_output()
+
+    def _report_output(self, *, closing: bool = False) -> None:
+        now = monotonic()
+        if not closing and now - self._last_output_report < 5:
+            return
+        self._last_output_report = now
+        log = logger.info if closing else logger.warning
+        log(
+            "Live provider audio timing: voice_session_id=%s closing=%d output_samples=%d frame_intervals=%d "
+            "frame_gaps=%d frame_gap_ms=%.1f frame_gap_peak_ms=%.1f writes=%d "
+            "slow_writes=%d write_ms=%.1f write_peak_ms=%.1f",
+            self._voice_session_id,
+            int(closing),
+            self._output_samples,
+            self._upstream_gap.count,
+            self._upstream_gap.delayed,
+            self._upstream_gap.total_ms,
+            self._upstream_gap.peak_ms,
+            self._output_wait.count,
+            self._output_wait.delayed,
+            self._output_wait.total_ms,
+            self._output_wait.peak_ms,
+        )
 
     async def offer(self) -> str:
         self._worker(asyncio.create_task(self._microphone(), name="web-chatgpt-media-input"))
@@ -292,8 +335,10 @@ class ChatGPTMediaRelay:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._track.stop()
         await self._peer.close()
+        self._report_output(closing=True)
         logger.info(
-            "Live microphone relay closed: input_samples=%d dropped_samples=%d adjusted_samples=%d silence_samples=%d peak_buffered_bytes=%d clock_rebases=%d late_ms=%.0f recoveries=%d",
+            "Live microphone relay closed: voice_session_id=%s input_samples=%d dropped_samples=%d adjusted_samples=%d silence_samples=%d peak_buffered_bytes=%d clock_rebases=%d late_ms=%.0f recoveries=%d",
+            self._voice_session_id,
             self._track.input_samples,
             self._track.dropped_samples,
             self._track.adjusted_samples,

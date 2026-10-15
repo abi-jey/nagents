@@ -37,6 +37,7 @@ from nagents.live import LiveEvent
 
 from ._async import join_owned
 from .live_context import LiveSeed
+from .live_diagnostics import BrowserAudioHealth
 from .live_inspection import MAX_MODEL_BYTES
 from .live_inspection import MAX_MODEL_PAYLOAD
 from .live_inspection import MAX_MODEL_REQUESTS
@@ -652,6 +653,8 @@ class LiveService:
             raise HTTPException(422, "Invalid Live voice.")
         call = _Call(stream=True, audio_in=_BrowserInput(), audio_out=_BrowserOutput())
         identifier = call.record.identifier
+        assert call.audio_out is not None
+        call.audio_out.voice_session_id = identifier
         self._active[identifier] = call
         self._records[identifier] = call.record
         call.record.append("status", call.record.message)
@@ -684,15 +687,27 @@ class LiveService:
         protocol = "ngn.live.v2"
         await socket.accept(subprotocol=protocol)
         source.connected.set()
+        health = BrowserAudioHealth(session_id)
 
         async def playback() -> None:
             async for packet in sink.packets():
-                if packet.interrupted:
-                    await socket.send_json({"type": "interrupt"})
-                else:
-                    await socket.send_bytes(packet.data)
+                started = asyncio.get_running_loop().time()
+                completed = False
+                try:
+                    if packet.interrupted:
+                        await socket.send_json({"type": "interrupt"})
+                    else:
+                        await socket.send_bytes(packet.data)
+                    completed = True
+                finally:
+                    health.sent(
+                        asyncio.get_running_loop().time() - started,
+                        len(packet.data) // 2 if completed else 0,
+                        completed=completed,
+                    )
 
         sender = asyncio.create_task(playback(), name="web-live-playback")
+        heartbeat = asyncio.create_task(health.watch(), name="web-live-audio-timing")
         stopped = asyncio.create_task(call.stop.wait())
         try:
             while not call.stop.is_set() and not sender.done():
@@ -719,7 +734,9 @@ class LiveService:
             await sink.close()
             sender.cancel()
             stopped.cancel()
-            await asyncio.gather(sender, stopped, return_exceptions=True)
+            heartbeat.cancel()
+            await asyncio.gather(sender, stopped, heartbeat, return_exceptions=True)
+            health.report(closing=True)
             await join_owned(call.task)
             with suppress(Exception):
                 await socket.close()

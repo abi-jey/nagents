@@ -13,6 +13,7 @@ export type PlaybackHealth = {
 const fields = ["receivedSamples", "playedSamples", "underruns", "droppedSamples", "bufferedMs", "peakBufferedMs", "targetMs", "sampleRate", "correctionPpm"] as const;
 export interface PcmPlayback {
   readonly node: AudioWorkletNode;
+  identify(sessionId: string): void;
   write(buffer: ArrayBuffer): void;
   reset(): void;
   fenceReports(): void;
@@ -26,6 +27,7 @@ export function pcmPlayback(context: AudioContext, played: (bytes: Uint8Array, a
   const volume = context.createGain();
   node.connect(volume).connect(context.destination);
   let closed = false, muted = false, epoch = 0;
+  let voiceSessionId = "unavailable", lastWarning = -Infinity;
   let stats: PlaybackHealth = { receivedSamples: 0, playedSamples: 0, underruns: 0, droppedSamples: 0,
     bufferedMs: 0, peakBufferedMs: 0, targetMs: 40, sampleRate: context.sampleRate, correctionPpm: 0 };
   node.onprocessorerror = () => { if (!closed) failed(); };
@@ -41,6 +43,10 @@ export function pcmPlayback(context: AudioContext, played: (bytes: Uint8Array, a
     } else if (value.type === "health" && fields.every(field => typeof value[field] === "number" && Number.isFinite(value[field]))) {
       const next = { ...stats };
       for (const field of fields) next[field] = value[field] as number;
+      if ((next.underruns > stats.underruns || next.droppedSamples > stats.droppedSamples) && context.currentTime - lastWarning >= 5) {
+        lastWarning = context.currentTime;
+        console.warn("ngn voice playback buffer event", { voiceSessionId, ...next });
+      }
       stats = next;
       node.port.postMessage({ type: "health-ack", epoch });
     }
@@ -53,6 +59,7 @@ export function pcmPlayback(context: AudioContext, played: (bytes: Uint8Array, a
   };
   return {
     node,
+    identify(sessionId) { voiceSessionId = /^[0-9a-f]{32}$/.test(sessionId) ? sessionId : "unavailable"; },
     // Transfer ownership; the worklet copies into its fixed-capacity sample ring.
     write(buffer) { if (!closed && !muted && context.state === "running") node.port.postMessage({ type: "pcm", epoch, buffer }, [buffer]); },
     reset,
@@ -64,8 +71,8 @@ export function pcmPlayback(context: AudioContext, played: (bytes: Uint8Array, a
       reset(); closed = true; volume.gain.value = 0;
       node.port.onmessage = null; node.onprocessorerror = null;
       node.disconnect(); volume.disconnect(); node.port.close();
-      // Fixed numeric counters only: no PCM, transcript, provider or identifiers.
-      if (stats.receivedSamples) console.info("ngn voice playback health", { ...stats });
+      // Numeric counters and a validated application ID; no PCM, tokens or text.
+      if (stats.receivedSamples) console.info("ngn voice playback health", { voiceSessionId, ...stats });
     },
   };
 }

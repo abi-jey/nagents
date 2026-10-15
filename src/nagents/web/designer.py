@@ -282,9 +282,18 @@ class Designer:
         async def approve(request: ApprovalRequest) -> bool:
             binding = self.state.tool_approvals.requested_binding(harness, request)
             try:
-                allowed = binding is not None and self.state.tool_approvals.allowed(binding)
+                allowed = binding is not None and await self.state.tool_approvals.check_allowed(binding)
             except sqlite3.Error:
                 allowed = False
+            if (
+                self.state.active is not run
+                or run.pending is not None
+                or run.finished
+                or run.task.done()
+                or run.task.cancelling()
+                or self.state.tool_approvals.requested_binding(harness, request) != binding
+            ):
+                return False
             if allowed:
                 recorder(
                     "approval_automatic",

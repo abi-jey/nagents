@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 from nagents.audio import AudioFormat
 
 from ._async import finish_on_cancel
+from .live_diagnostics import Timing
+from .live_diagnostics import voice_session_identity
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -51,6 +53,32 @@ class BrowserOutput:
         self.sent_samples = 0
         self.interrupted_samples = 0
         self.clock_rebases = 0
+        self.voice_session_id = ""
+        self.queue_wait = Timing()
+        self.pacing_late = Timing()
+        self._last_report = float("-inf")
+
+    def _report(self, *, closing: bool = False) -> None:
+        now = asyncio.get_running_loop().time()
+        if not closing and now - self._last_report < 5:
+            return
+        self._last_report = now
+        log = logger.info if closing else logger.warning
+        log(
+            "Live audio output timing: voice_session_id=%s closing=%d buffered_bytes=%d peak_buffered_bytes=%d "
+            "queue_waits=%d queue_wait_ms=%.1f queue_wait_peak_ms=%.1f "
+            "pacing_delays=%d pacing_late_ms=%.1f pacing_peak_ms=%.1f",
+            voice_session_identity(self.voice_session_id),
+            int(closing),
+            self.buffered_bytes,
+            self.peak_buffered_bytes,
+            self.queue_wait.count,
+            self.queue_wait.total_ms,
+            self.queue_wait.peak_ms,
+            self.pacing_late.delayed,
+            self.pacing_late.total_ms,
+            self.pacing_late.peak_ms,
+        )
 
     async def write(self, chunk: bytes) -> None:
         if len(chunk) % 2:
@@ -62,7 +90,12 @@ class BrowserOutput:
                 async with self._condition:
                     while not self._closed and epoch == self._epoch and self.buffered_bytes + len(part) > BUFFER_BYTES:
                         self.blocked_writes += 1
-                        await self._condition.wait()
+                        started = asyncio.get_running_loop().time()
+                        try:
+                            await self._condition.wait()
+                        finally:
+                            if self.queue_wait.observe(asyncio.get_running_loop().time() - started):
+                                self._report()
                     if self._closed or epoch != self._epoch:
                         return
                     self._frames.append(part)
@@ -100,6 +133,8 @@ class BrowserOutput:
                         await changed.wait()
                 except TimeoutError:
                     pass
+                if self.pacing_late.observe(loop.time() - deadline):
+                    self._report()
             if self._closed or epoch != self._epoch:
                 continue
             # An event-loop stall must not grant a burst of old timing credit.
@@ -124,8 +159,10 @@ class BrowserOutput:
             self._changed = asyncio.Event()
             self._condition.notify_all()
         if closing:
+            self._report(closing=True)
             logger.info(
-                "Live audio output closed: sent_samples=%d interrupted_samples=%d peak_buffered_bytes=%d blocked_writes=%d clock_rebases=%d",
+                "Live audio output closed: voice_session_id=%s sent_samples=%d interrupted_samples=%d peak_buffered_bytes=%d blocked_writes=%d clock_rebases=%d",
+                voice_session_identity(self.voice_session_id),
                 self.sent_samples,
                 self.interrupted_samples,
                 self.peak_buffered_bytes,

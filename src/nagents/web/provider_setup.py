@@ -14,6 +14,7 @@ from nagents.error_presentation import transport_error_message
 from nagents.harness.provider import HarnessProvider
 from nagents.provider import OpenAIProvider
 from nagents.provider._codex_diagnostics import codex_protocol_reason
+from nagents.provider._diagnostics import transport_diagnostic
 
 if TYPE_CHECKING:
     from nagents.events import ErrorEvent
@@ -63,12 +64,13 @@ def provider_setup(harness: Harness) -> ProviderSetup:
 
 
 def provider_error_diagnostic(event: ErrorEvent) -> str:
-    """Log only fixed request/stream labels and known local failure reason tokens."""
+    """Log fixed reason tokens and validated payload-free transport details."""
+    protocol = ""
     if event.code == "CODEX_REQUEST_INVALID":
-        return "codex_request_invalid:" + codex_protocol_reason(event.message)
-    if event.code == "CODEX_STREAM_INVALID":
-        return "codex_stream_invalid:" + codex_protocol_reason(event.message)
-    return "none"
+        protocol = "codex_request_invalid:" + codex_protocol_reason(event.message)
+    elif event.code == "CODEX_STREAM_INVALID":
+        protocol = "codex_stream_invalid:" + codex_protocol_reason(event.message)
+    return " ".join(value for value in (protocol, transport_diagnostic(event.extra)) if value) or "none"
 
 
 def provider_error(event: ErrorEvent) -> tuple[str, str]:
