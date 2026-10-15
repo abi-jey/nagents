@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_effective_client_policy_delegates_first_utterance_silently_once_without_history_replay(native: bool) -> None:
+def test_effective_client_policy_delegates_first_greeting_once_without_history_replay(native: bool) -> None:
     async def scenario() -> None:
         async def handler(request: ClientDelegationRequest) -> str:
             raise AssertionError("Constructing voice settings must not run the backend")
@@ -71,25 +71,11 @@ def test_effective_client_policy_delegates_first_utterance_silently_once_without
             finally:
                 await agent.close()
         assert "first utterance" in instructions and "exactly once" in instructions
-        assert "Before speaking your first reply, delegate" in instructions
-        assert "Hello, Hey" in instructions and "audio check such as Do you hear me?" in instructions
-        assert "Backchannel policy: Make the first delegation silently" in instructions
-        assert "Do not announce the handoff, context loading, or waiting" in instructions
-        assert "do not say One moment or Let me check" in instructions
-        assert "one brief natural acknowledgement when the backend returns" in instructions
-        assert "Do not repeat an acknowledgement already spoken" in instructions
+        assert "Hello, Hey" in instructions and "brief greeting" in instructions
         assert "project instructions, user profile" in instructions
-        assert "Do not resume or repeat actions from saved chat history" in instructions
+        assert "do not resume or repeat actions from saved chat history" in instructions
         assert "substantive request" in instructions and "same delegation" in instructions
         assert "Do not send a second context-only delegation" in instructions
-        for heading in (
-            "Interruption policy:",
-            "Delegation policy:",
-            "Backend tools:",
-            "Delegate to the backend when:",
-            "Do not delegate to the backend when:",
-        ):
-            assert heading in instructions
         assert "Speak concisely in English." in instructions
 
     asyncio.run(scenario())

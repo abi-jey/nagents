@@ -197,7 +197,7 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                     raise
             assert len(set(ids)) == 2
             assert commands == ["session.close", "session.close"]
-            assert all(session["delegation"] == {"type": "client"} for session in sessions)
+            assert all(session["delegation"] == {"type": "client", "ack_filler": False} for session in sessions)
             assert not [task for task in asyncio.all_tasks() if task.get_name().startswith("web-chatgpt-")]
         finally:
             for peer in peers:
