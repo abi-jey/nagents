@@ -30,6 +30,15 @@ function fixture(rate = 48000) {
   };
 }
 function pcm(size = 480, value = 8192) { const samples = new Int16Array(size); samples.fill(value); return samples.buffer; }
+function voicedPcm(offset: number, size = 480) {
+  const samples = new Int16Array(size);
+  for (let i = 0; i < size; i++) {
+    const time = (offset + i) / 24000;
+    const envelope = .45 + .2 * Math.sin(2 * Math.PI * 3 * time);
+    samples[i] = Math.round(16384 * envelope * (Math.sin(2 * Math.PI * 167 * time) + .25 * Math.sin(2 * Math.PI * 835 * time)));
+  }
+  return samples.buffer;
+}
 
 for (const rate of [16000, 24000, 44100, 48000, 96000]) test(`continuous PCM playout resamples 24kHz at ${rate}Hz without packet-boundary gaps`, () => {
   const f = fixture(rate);
@@ -64,6 +73,59 @@ test("a delayed main-thread delivery batch does not create holes when the audio 
   }
   assert.equal(holes, 0); assert.equal(f.stats().underruns, 0);
   assert(f.stats().targetMs >= 40 && f.stats().targetMs <= 160);
+});
+
+for (const rate of [44100, 48000]) for (const gapMs of [70, 108, 150]) test(`repeated ${gapMs}ms delivery gaps re-prime voiced audio once at ${rate}Hz`, () => {
+  const f = fixture(rate), gap = gapMs / 1000;
+  let packet = 0, laterSilentBlocks = 0, firstAudible = -1;
+  // Six seconds of continuous voiced PCM: each one-second boundary stalls a
+  // batch, which then catches up without deleting, duplicating or reordering it.
+  const arrival = (index: number) => {
+    const nominal = index * .02, second = Math.floor(index / 50);
+    return second >= 1 ? Math.max(nominal, second + gap - .02) : nominal;
+  };
+  while (f.time < 5.8) {
+    while (packet < 300 && arrival(packet) <= f.time) { f.push(voicedPcm(packet * 480)); packet++; }
+    const output = f.render();
+    if (firstAudible < 0 && output.some(value => Math.abs(value) > .01)) firstAudible = f.time;
+    if (f.time > 1.6 && output.every(value => value === 0)) laterSilentBlocks++;
+  }
+  const active = f.stats();
+  assert(firstAudible > 0 && firstAudible < .05, "clean initial audio must retain its small startup reserve");
+  assert.equal(active.underruns, 1, "the first unexpected gap may starve; subsequent identical gaps must be absorbed");
+  assert.equal(laterSilentBlocks, 0, "voiced samples must stay continuous after the first recovery, before EOF");
+  assert(active.targetMs >= gapMs && active.targetMs <= 160, "reserve must learn the peak quickly within the latency cap");
+  assert(active.peakBufferedMs < 190); assert.equal(active.droppedSamples, 0);
+  while (f.time < 7) {
+    while (packet < 300 && arrival(packet) <= f.time) { f.push(voicedPcm(packet * 480)); packet++; }
+    f.render();
+  }
+  const ended = f.stats();
+  assert.equal(ended.underruns, 2, "EOF is separate from the one initial delivery starvation");
+  assert.equal(ended.receivedSamples, 300 * 480);
+  assert.equal(ended.playedSamples, ended.receivedSamples, "re-priming must preserve the entire voiced burst and final tail");
+  assert.equal(ended.droppedSamples, 0);
+});
+
+test("a learned jitter reserve falls slowly and ignores a long pause between replies", () => {
+  const f = fixture(); f.push(voicedPcm(0));
+  while (f.time < .14) f.render();
+  f.push(voicedPcm(480));
+  const learned = f.stats().targetMs;
+  assert(learned >= 155 && learned <= 160);
+  let packet = 2;
+  while (f.time < 3) {
+    while (.14 + (packet - 1) * .02 <= f.time) { f.push(voicedPcm(packet * 480)); packet++; }
+    f.render();
+  }
+  const relaxed = f.stats().targetMs;
+  assert(relaxed < learned && relaxed > learned - 7, "a few clean packets must not erase the learned reserve");
+  while (f.time < 7) f.render();
+  const before = f.stats();
+  f.push(pcm());
+  assert(f.stats().targetMs < before.targetMs, "a long conversational pause must not inflate jitter reserve");
+  while (f.time < 7.2) f.render();
+  assert.equal(f.stats().playedSamples, f.stats().receivedSamples, "a short final packet still plays within the bounded deadline");
 });
 
 test("starvation and overload are bounded and fade discontinuities instead of stopping queued nodes", () => {

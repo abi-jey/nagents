@@ -21,6 +21,8 @@ import aiohttp
 from nagents.live.runtime import _no_redirects
 from nagents.live.runtime import result_chunks
 
+from .live_diagnostics import log_live_failure
+from .live_diagnostics import voice_session_identity
 from .live_handoff import LoginDelegations
 from .live_handoff import handoff_offset
 
@@ -118,8 +120,9 @@ def normalize_event(event: Payload) -> Payload:
 class ChatGPTLiveConnection:
     """Own one login call and its authenticated native sideband."""
 
-    def __init__(self, config: LoginVoiceConfig) -> None:
+    def __init__(self, config: LoginVoiceConfig, *, voice_session_id: str = "") -> None:
         self.config = config
+        self._voice_session_id = voice_session_identity(voice_session_id)
         self.identifier = ""
         self.finalized = False
         self.closing = False
@@ -168,6 +171,7 @@ class ChatGPTLiveConnection:
                 ) as response,
             ):
                 if response.status != 201:
+                    log_live_failure(self._voice_session_id, "login_provision", status=response.status)
                     raise _failure(response.status)
                 identifier = response.headers.get("Location", "").split("?", 1)[0].rsplit("/", 1)[-1]
                 if not _CALL_ID.fullmatch(identifier):
@@ -182,7 +186,8 @@ class ChatGPTLiveConnection:
                 if not answer.startswith(("v=0\r\n", "v=0\n")):
                     raise LoginVoiceError("ChatGPT voice returned an invalid audio answer.")
                 return answer
-        except (aiohttp.ClientError, TimeoutError, UnicodeError):
+        except (aiohttp.ClientError, TimeoutError, UnicodeError) as error:
+            log_live_failure(self._voice_session_id, "login_provision", error)
             raise LoginVoiceError("The ChatGPT voice connection could not be established.") from None
 
     async def _send(self, event: Payload) -> bool:
@@ -291,8 +296,10 @@ class ChatGPTLiveConnection:
                     if self.finalized:
                         return
         except aiohttp.WSServerHandshakeError as error:
+            log_live_failure(self._voice_session_id, "login_control", error, status=error.status)
             raise _failure(error.status) from None
-        except (aiohttp.ClientError, TimeoutError, ValueError):
+        except (aiohttp.ClientError, TimeoutError, ValueError) as error:
+            log_live_failure(self._voice_session_id, "login_control", error)
             raise LoginVoiceError("The ChatGPT voice control connection was interrupted.") from None
         finally:
             delegations.closed = True

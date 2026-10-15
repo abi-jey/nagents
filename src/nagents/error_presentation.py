@@ -30,15 +30,15 @@ def transport_error_message(event: ErrorEvent) -> str:
     Only known generation transport codes and fixed category/phase strings are
     considered. Never render other metadata, raw exceptions, or provider data.
     """
-    if not isinstance(event.code, str) or event.code not in {"CODEX_CONNECTION", "PROVIDER_REQUEST_FAILED"}:
+    if type(event.code) is not str or event.code not in {"CODEX_CONNECTION", "PROVIDER_REQUEST_FAILED"}:
         return ""
-    if not isinstance(event.extra, dict):
+    if type(event.extra) is not dict:
         return ""
     details = event.extra.get("transport")
-    if not isinstance(details, dict):
+    if type(details) is not dict:
         return ""
     category, phase = details.get("category"), details.get("phase")
-    if not isinstance(category, str) or not isinstance(phase, str) or phase not in _TIMEOUT_MESSAGES:
+    if type(category) is not str or type(phase) is not str or phase not in _TIMEOUT_MESSAGES:
         return ""
     if category == "timeout":
         return _TIMEOUT_MESSAGES[phase]

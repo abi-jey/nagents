@@ -68,14 +68,14 @@ test("connected microphone and speaker states stay separate and update without r
   try {
     await ui.render();
     const trigger = ui.trigger();
-    assert.match(trigger.getAttribute("aria-label")!, /Listening/);
-    assert.equal(trigger.title, "Listening · Sol · 01:23");
+    assert.match(trigger.getAttribute("aria-label")!, /Live/);
+    assert.equal(trigger.title, "Live · Sol · 01:23");
     await ui.click(".voice-controls-trigger");
     await ui.click(".voice-mic"); await ui.click(".voice-speaker");
     assert.equal(ui.calls.input, 1); assert.equal(ui.calls.output, 1);
     await ui.render({ micMuted: true, outputMuted: true });
     assert.equal(ui.trigger(), trigger);
-    assert.match(trigger.getAttribute("aria-label")!, /Input muted/);
+    assert.match(trigger.getAttribute("aria-label")!, /Live/);
     assert.equal(ui.button(".voice-mic").getAttribute("aria-pressed"), "true");
     assert.equal(ui.button(".voice-mic").getAttribute("aria-label"), "Unmute microphone");
     assert.equal(ui.button(".voice-speaker").getAttribute("aria-pressed"), "true");
@@ -83,7 +83,8 @@ test("connected microphone and speaker states stay separate and update without r
     assert.equal(ui.calls.start, 0); assert.equal(ui.calls.end, 0);
     await ui.render({ micMuted: false, outputMuted: false, status: "Speaking" });
     assert.equal(ui.trigger(), trigger);
-    assert.match(trigger.getAttribute("aria-label")!, /Speaking/);
+    assert.match(trigger.getAttribute("aria-label")!, /Live/);
+    assert.equal(ui.container.querySelector('[role="status"]')!.textContent, "Live");
   } finally { await ui.close(); }
 });
 

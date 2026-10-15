@@ -7,16 +7,23 @@ The private workspace database is separate from model-editable tools.yaml.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
+import logging
 import secrets
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING
 from weakref import ref
+
+from ._async import finish_on_cancel
+
+logger = logging.getLogger("uvicorn.error")
 
 if TYPE_CHECKING:
     from weakref import ReferenceType
@@ -38,6 +45,8 @@ class ToolApprovals:
         self.path = path
         self.workspace = str(workspace.resolve())
         self._registrations: dict[int, tuple[ReferenceType[ToolDefinition], ReferenceType[object], str, str]] = {}
+        self._policy_revision = 0
+        self._last_lookup_report = float("-inf")
 
     def initialize(self) -> None:
         # The Harness creates this private parent directory before initialization.
@@ -162,6 +171,24 @@ class ToolApprovals:
             ).fetchone()
         return row is not None and row[0] == binding.key
 
+    async def check_allowed(self, binding: ToolBinding) -> bool:
+        """Join the read worker and reject a grant changed while it was in flight.
+
+        Binding/ownership checks remain on the event loop at the callsite. Host
+        grants and revocations are synchronous: a changed local policy revision
+        cannot race between this final check and the caller's authority check.
+        """
+        revision = self._policy_revision
+        started = monotonic()
+        try:
+            allowed = await finish_on_cancel(asyncio.to_thread(self.allowed, binding))
+            return allowed and revision == self._policy_revision
+        finally:
+            now = monotonic()
+            if now - started >= 0.05 and now - self._last_lookup_report >= 5:
+                self._last_lookup_report = now
+                logger.warning("Workspace permission lookup delayed: elapsed_ms=%.1f", (now - started) * 1000)
+
     def grant(self, binding: ToolBinding) -> None:
         # No await between the HTTP route's live nonce validation, commit and
         # future resolution. A cancellation/timeout cannot save a stale grant.
@@ -173,6 +200,7 @@ class ToolApprovals:
                 "binding=excluded.binding, persistent=excluded.persistent, revision=excluded.revision",
                 (self.workspace, binding.name, binding.key, int(binding.persistent), secrets.token_hex(16)),
             )
+        self._policy_revision += 1
 
     def snapshot(self) -> list[dict[str, object]]:
         with closing(sqlite3.connect(self.path, timeout=0.2)) as db:
@@ -190,4 +218,7 @@ class ToolApprovals:
                 "DELETE FROM ngn_web_tool_approvals WHERE workspace = ? AND tool = ? AND revision = ?",
                 (self.workspace, name, revision),
             )
-            return cursor.rowcount == 1
+            changed = cursor.rowcount == 1
+        if changed:
+            self._policy_revision += 1
+        return changed

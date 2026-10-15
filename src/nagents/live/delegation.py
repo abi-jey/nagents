@@ -37,15 +37,19 @@ async def delegation_workers(
 ) -> None:
     """Own a fixed worker pool; cancellation or a failed send stops every lane."""
     tasks = [asyncio.create_task(worker(), name="live-client-delegation") for _ in range(concurrency)]
-    aggregate = asyncio.gather(*tasks)
     try:
         # Mark the transport closed before cancellation reaches a handler that
         # catches CancelledError and returns one last result during cleanup.
-        await asyncio.shield(aggregate)
+        # wait() leaves child cancellation to this owner. A shielded gather can
+        # log its deliberate cancellation as an unhandled exception on Python
+        # 3.14, even when the aggregate is subsequently joined.
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
     finally:
         on_stop()
-        aggregate.cancel()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.gather(aggregate, return_exceptions=True)

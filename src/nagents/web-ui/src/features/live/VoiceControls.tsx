@@ -28,7 +28,7 @@ export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputM
   const panelId = useId();
   const connected = phase === "connected";
   const active = connected || phase === "permission" || phase === "connecting" || phase === "ending";
-  const label = connected ? micMuted ? "Input muted" : status || "Listening" : status || (phase === "ended" ? "Stopped" : "Voice");
+  const label = connected ? "Live" : status || (phase === "ended" ? "Stopped" : "Voice");
   const startLabel = phase === "error" ? "Retry" : phase === "ended" ? "Start again" : "Start voice";
   const endLabel = connected ? "End voice" : phase === "ending" ? "Ending voice" : "Cancel connection";
   const microphoneLabel = micMuted ? "Unmute microphone" : "Mute microphone";

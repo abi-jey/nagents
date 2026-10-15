@@ -40,6 +40,19 @@ def test_chat_roots_adopt_unowned_main_and_keep_history_and_typing_isolated(
     with site(tmp_path, monkeypatch) as app:
         app.configure()
         app.emit("first", thread="thread-a")
+
+        async def first_activity() -> None:
+            # Typing is optional and concurrent instant turns may coalesce a
+            # stale start. Establish this start before checking its routing and
+            # eventual stop; don't make that assertion depend on DB scheduling.
+            async with asyncio.timeout(HANG_GUARD):
+                while not any(
+                    event.active and event.conversation_id == "chat-a" for event in app.channels[0].activities
+                ):
+                    await asyncio.sleep(0.001)
+
+        assert app.client.portal is not None
+        app.client.portal.call(first_activity)
         app.emit("second", "chat-b")
         app.idle()
         bindings = app.bindings()

@@ -81,7 +81,6 @@ export function LiveComposer({ targets, state, status, elapsed, disabled, unavai
   const startDisabled = disabled || settingsSaving || settingsOpen || loading;
   const interactionDisabled = connected ? false : active || startDisabled;
   const caption = state.captions.findLast(item => item.speaker === "assistant" && item.text.trim());
-  const currentStatus = connected ? state.micMuted ? "Input muted" : !state.outputMuted && state.outputLevel > .015 ? "Speaking" : "Listening" : status;
   if (!targets.presence || !targets.caption || !targets.controls || !targets.details) return null;
 
   return <>
@@ -96,7 +95,7 @@ export function LiveComposer({ targets, state, status, elapsed, disabled, unavai
       <span className="byline">Assistant <span className="live-badge"><Icon name="wave" size={11} /> Live</span></span>
       {caption && <CurrentCaption caption={caption} />}
     </div>, targets.caption)}
-    {createPortal(<VoiceControls phase={state.phase} status={currentStatus} voice={voice} elapsed={elapsed}
+    {createPortal(<VoiceControls phase={state.phase} status={status} voice={voice} elapsed={elapsed}
       micMuted={state.micMuted} outputMuted={state.outputMuted} startDisabled={startDisabled}
       settingsOpen={settingsOpen} settingsSaving={settingsSaving} start={start} end={end} close={close}
       configure={configure} muteInput={muteInput} muteOutput={muteOutput} />, targets.controls)}

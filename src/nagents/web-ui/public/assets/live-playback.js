@@ -4,6 +4,7 @@ const PCM_RATE = 24000;
 const CAPACITY = PCM_RATE; // One second, independent of WebSocket packet size.
 const MIN_TARGET = 0.04;
 const MAX_TARGET = 0.16;
+const RESERVE_DECAY = 0.002; // Give back two milliseconds per second of clean delivery.
 
 class LivePlayback extends AudioWorkletProcessor {
   constructor() {
@@ -93,11 +94,18 @@ class LivePlayback extends AudioWorkletProcessor {
     const incoming = buffer.byteLength / 2;
     if (this.lastArrival >= 0) {
       const interval = now - this.lastArrival;
+      const relaxedTarget = Math.max(MIN_TARGET, this.target - interval * RESERVE_DECAY);
       // Learn short transport/render-message variation. A pause between spoken
       // replies is not network jitter, nor is an unpaced API audio batch.
       if (interval < 0.25 && this.packetDuration <= 0.06) {
         this.jitter += (Math.abs(interval - this.packetDuration) - this.jitter) * 0.08;
-        this.target = Math.min(MAX_TARGET, Math.max(MIN_TARGET, MIN_TARGET + 3 * this.jitter));
+        // Averages alone learn a 70–150ms stall too slowly. Remember its peak
+        // immediately so the next re-prime can absorb repeated delivery gaps.
+        // This cannot recover audio already missing during the first stall.
+        const late = Math.max(0, interval - this.packetDuration);
+        this.target = Math.min(MAX_TARGET, Math.max(relaxedTarget, MIN_TARGET + late, MIN_TARGET + 3 * this.jitter));
+      } else {
+        this.target = relaxedTarget;
       }
     }
     this.lastArrival = now;

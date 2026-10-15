@@ -27,6 +27,8 @@ from nagents.events import RateLimitEvent
 from nagents.events import TextChunkEvent
 from nagents.events import ToolCallEvent
 from nagents.http import HTTPError
+from nagents.observation import HTTPAttempt
+from nagents.observation import http_attempt
 from nagents.observation import scope
 from nagents.provider import Provider
 from nagents.provider import ProviderType
@@ -74,7 +76,17 @@ def provider(route: str, *, url: str = URL, timeout: float = 120) -> Provider:
 def details(event: ErrorEvent) -> dict[str, object]:
     value = event.extra["transport"]
     assert isinstance(value, dict)
-    assert set(value) <= {"category", "phase", "generation_elapsed_ms", "model_call_id"}
+    assert set(value) <= {
+        "category",
+        "phase",
+        "generation_elapsed_ms",
+        "model_call_id",
+        "exception",
+        "errno",
+        "causes",
+        "http_attempt_id",
+        "http_attempt_elapsed_ms",
+    }
     assert isinstance(value["generation_elapsed_ms"], (float, int)) and value["generation_elapsed_ms"] >= 0
     assert PRIVATE not in json.dumps(asdict(event), default=str)
     return dict(value)
@@ -136,12 +148,14 @@ def test_generation_failure_categories_are_private_and_do_not_change_recovery(
             error = events[0]
             assert error.code == ("CODEX_CONNECTION" if route == "codex" else "PROVIDER_REQUEST_FAILED")
             assert error.recoverable is False
-            assert details(error) == {
+            record = details(error)
+            expected = {
                 "category": category,
                 "phase": "request" if route == "codex" else "unknown",
                 "generation_elapsed_ms": 2500.0,
                 "model_call_id": "a" * 32,
             }
+            assert all(record[key] == value for key, value in expected.items())
             assert request.await_count == 1
         finally:
             scope.reset(token)
@@ -285,7 +299,8 @@ def test_failure_after_stream_headers_keeps_tools_buffered_and_reports_only_obse
             assert isinstance(error, ErrorEvent) and error.recoverable is False
             expected = {"timeout": "timeout", "reset": "response_payload", "decode": "protocol"}[failure]
             assert details(error)["category"] == expected
-            assert details(error)["phase"] == ("response" if route == "codex" else "unknown")
+            assert details(error)["phase"] == "response"
+            assert len(str(details(error)["http_attempt_id"])) == 32
             assert error.code == (
                 ("CODEX_STREAM_INVALID" if route == "codex" else "PROVIDER_PROTOCOL_ERROR")
                 if failure == "decode"
@@ -425,7 +440,94 @@ def test_nonstream_decoding_errors_are_categorized_without_response_contents(rou
         error = events[-1]
         assert len(events) == 1 and isinstance(error, ErrorEvent)
         assert error.code == "PROVIDER_REQUEST_FAILED" and error.recoverable is False
-        assert details(error)["category"] == "decode" and details(error)["phase"] == "unknown"
+        assert details(error)["category"] == "decode" and details(error)["phase"] == "response"
         assert requests == 1
 
     asyncio.run(scenario())
+
+
+def test_traced_connector_failures_log_errno_cause_and_distinct_concurrent_attempts(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def scenario() -> None:
+        # A bound, non-listening port may time out or return EINVAL on Windows
+        # and macOS. Inject the OS failure at sock_connect instead, retaining
+        # aiohttp's real exception wrapping and per-request trace callbacks.
+        async def refused(sock: socket.socket, address: tuple[str, int]) -> None:
+            assert address == ("127.0.0.1", 9)
+            await asyncio.sleep(0)  # Both requests own simultaneous trace scopes.
+            raise ConnectionRefusedError(errno.ECONNREFUSED, PRIVATE)
+
+        monkeypatch.setattr(asyncio.get_running_loop(), "sock_connect", refused)
+        url = f"http://127.0.0.1:9/{PRIVATE}"
+        monkeypatch.setattr(openai, "CODEX_ENDPOINT", url)
+
+        async def fail(route: str, call_id: str) -> tuple[str, str]:
+            token = scope.set({"model_call_id": call_id})
+            try:
+                async with provider(route, url=url, timeout=HANG_GUARD) as client:
+                    events = [event async for event in client.generate([Message(role="user", content=PRIVATE)])]
+                assert len(events) == 1 and isinstance(events[0], ErrorEvent)
+                record = details(events[0])
+                assert record["category"] == "connect" and record["phase"] == "request"
+                assert record["exception"] == "ClientConnectorError"
+                assert record["errno"] == errno.ECONNREFUSED
+                assert record["causes"] == [{"exception": "ConnectionRefusedError", "errno": errno.ECONNREFUSED}]
+                assert record["model_call_id"] == call_id
+                attempt_id = record["http_attempt_id"]
+                assert isinstance(attempt_id, str) and attempt_id == http_attempt.get().id
+                elapsed = record["http_attempt_elapsed_ms"]
+                assert isinstance(elapsed, (int, float)) and elapsed >= 0
+                return call_id, attempt_id
+            finally:
+                scope.reset(token)
+
+        pairs = await asyncio.gather(fail("codex", "a" * 32), fail("responses", "b" * 32))
+        assert pairs[0][1] != pairs[1][1]
+        logs = [record.getMessage() for record in caplog.records if "Provider generation failed" in record.message]
+        assert len(logs) == 2
+        for call_id, attempt_id in pairs:
+            matching = [line for line in logs if f"model_call_id={call_id}" in line]
+            assert len(matching) == 1 and f"http_attempt_id={attempt_id}" in matching[0]
+            assert f"ClientConnectorError(errno={errno.ECONNREFUSED})" in matching[0]
+            assert f"causes=ConnectionRefusedError(errno={errno.ECONNREFUSED})" in matching[0]
+
+    asyncio.run(scenario())
+    assert PRIVATE not in caplog.text
+
+
+def test_stale_inherited_http_attempt_is_omitted_from_later_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = http_attempt.set(HTTPAttempt("a" * 32, 1.0, "response"))
+    monkeypatch.setattr(_diagnostics, "monotonic", lambda: 3.0)
+    try:
+        extra = _diagnostics.failure_extra(ValueError(PRIVATE), 2.0)
+        record = extra["transport"]
+        assert isinstance(record, dict)
+        assert "http_attempt_id" not in record
+        assert "http_attempt_elapsed_ms" not in record
+        assert record["phase"] == "unknown"
+    finally:
+        http_attempt.reset(token)
+
+
+def test_exception_getters_names_and_cause_cycles_cannot_leak_or_break_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class HostileConnector(aiohttp.ClientConnectorError):
+        @property
+        def os_error(self) -> OSError:
+            raise AssertionError(PRIVATE)
+
+        def __str__(self) -> str:
+            raise AssertionError(PRIVATE)
+
+    HostileConnector.__name__ = PRIVATE
+    cause = socket.gaierror(socket.EAI_NONAME, PRIVATE)
+    error = HostileConnector(KEY, cause)
+    cause.__cause__ = error
+    extra = _diagnostics.failure_extra(error, 0)
+    record = extra["transport"]
+    assert isinstance(record, dict)
+    assert record["category"] == "dns" and record["exception"] == "ClientConnectorError"
+    assert record["causes"] == [{"exception": "gaierror", "errno": socket.EAI_NONAME}]
+    assert PRIVATE not in json.dumps(extra) and PRIVATE not in caplog.text
