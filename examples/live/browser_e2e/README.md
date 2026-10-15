@@ -227,6 +227,19 @@ also align known-utterance ends with the first rendered audible output before
 the next utterance. This is observed timing, not proof that a particular output
 belongs to a particular delegation.
 
+For a normal authenticated run, also check the matching backend's final
+`Live audio output timing` record: `dropped_samples=0` and `recoveries=0`.
+Browser counters alone cannot establish this because a server recovery uses an
+ordered playback interrupt. The browser's separate `interruptedSamples` counter
+includes queued audio cleared by interruptions, mute, and closing; correlate it
+with those actions rather than treating every reset as an audio fault.
+
+Real-time output limits each local reservoir to 240 ms and explicitly discards
+stale audio only on overload. This prevents a local queue from accumulating
+seconds of delay; it is not an end-to-end latency guarantee for provider,
+network, kernel, or physical speaker buffering. Recovery fault tests must report
+their discarded samples separately from normal runs, which require zero drops.
+
 While no samples are dropped/reset and only one socket/epoch is present, the
 analyzer maps cumulative consumed samples back to their received packet. New
 builds' audio-thread `renderedAt` timestamp excludes delayed main-thread health

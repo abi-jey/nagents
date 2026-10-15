@@ -13,9 +13,10 @@ export type PlaybackHealth = {
   lastUnderrunAt?: number;
   lastRecoveryAt?: number;
   latencyRecoveries?: number;
+  interruptedSamples?: number;
 };
 const fields = ["receivedSamples", "playedSamples", "underruns", "droppedSamples", "bufferedMs", "peakBufferedMs", "targetMs", "sampleRate", "correctionPpm"] as const;
-const timingFields = ["renderedAt", "lastUnderrunAt", "lastRecoveryAt", "latencyRecoveries"] as const;
+const timingFields = ["renderedAt", "lastUnderrunAt", "lastRecoveryAt", "latencyRecoveries", "interruptedSamples"] as const;
 export interface PcmPlayback {
   readonly node: AudioWorkletNode;
   identify(sessionId: string): void;

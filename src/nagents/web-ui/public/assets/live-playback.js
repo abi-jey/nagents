@@ -55,6 +55,7 @@ class LivePlayback extends AudioWorkletProcessor {
     this.playedSamples = 0;
     this.underruns = 0;
     this.droppedSamples = 0;
+    this.interruptedSamples = 0;
     this.peakBufferedSamples = 0;
     this.realtime = false;
     this.latencyRecoveries = 0;
@@ -78,6 +79,7 @@ class LivePlayback extends AudioWorkletProcessor {
 
   reset(epoch) {
     if (!Number.isSafeInteger(epoch)) return;
+    this.interruptedSamples += this.count;
     this.epoch = epoch;
     this.samples.fill(0); this.history.fill(0); this.filterIndex = 0; this.primed = false;
     this.count = this.read = this.phase = this.reportSize = 0;
@@ -160,7 +162,8 @@ class LivePlayback extends AudioWorkletProcessor {
       bufferedMs: this.count / PCM_RATE * 1000, peakBufferedMs: this.peakBufferedSamples / PCM_RATE * 1000,
       targetMs: this.target * 1000, sampleRate, correctionPpm: (this.ratio - 1) * 1000000,
       renderedAt: currentTime, lastUnderrunAt: this.lastUnderrunAt,
-      latencyRecoveries: this.latencyRecoveries, lastRecoveryAt: this.lastRecoveryAt });
+      latencyRecoveries: this.latencyRecoveries, lastRecoveryAt: this.lastRecoveryAt,
+      interruptedSamples: this.interruptedSamples });
     this.nextHealth = currentTime + 1;
   }
 

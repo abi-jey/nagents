@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 
-type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number };
+type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number; interruptedSamples: number };
 type Played = { type: "played"; epoch: number; at: number; buffer: ArrayBuffer };
 function fixture(rate = 48000) {
   let Processor!: new () => { port: { onmessage(event: { data: object }): void }; process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean };
@@ -189,6 +189,7 @@ test("only explicitly selected real-time mode discards a stale incoming burst", 
   const stats = realtime.stats();
   assert.equal(stats.bufferedMs, 80); assert.equal(stats.latencyRecoveries, 1);
   assert.equal(stats.droppedSamples, 22080); assert.equal(stats.lastRecoveryAt, 0);
+  assert.equal(stats.interruptedSamples, 12000, "resets account for queued samples separately from overload drops");
 });
 
 test("audio-thread health carries the actual starvation time", () => {
