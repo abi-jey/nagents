@@ -43,7 +43,12 @@ class UnavailableModelProvider(Provider):
         )
         # Every request surface below is local. The inert loopback origin also
         # prevents an inherited transport helper reaching a fallback provider.
-        super().__init__(ProviderType.OPENAI_COMPATIBLE, model=binding.id, base_url="http://127.0.0.1:0")
+        super().__init__(
+            ProviderType.OPENAI_COMPATIBLE,
+            model=binding.id,
+            api_key="unavailable-model-no-transport",
+            base_url="http://127.0.0.1:0",
+        )
 
     async def verify_model(self, force: bool = False) -> bool:
         raise ValueError(self.reason)
