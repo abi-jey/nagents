@@ -156,7 +156,9 @@ class ChatGPTLiveConnection:
             "model": self.config.model,
             "instructions": self.config.instructions,
             "audio": {"output": {"voice": self.config.voice}},
-            "delegation": {"type": "client"},
+            # Suppress automatic acknowledgement speech; verified backend
+            # replies still use the explicit speakable context channel.
+            "delegation": {"type": "client", "ack_filler": False},
             "initial_items": list(self.config.history),
         }
         try:

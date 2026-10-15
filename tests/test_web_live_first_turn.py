@@ -83,7 +83,7 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
 
 @pytest.mark.requires_posix
 @pytest.mark.parametrize("native", [False, True])
-@pytest.mark.parametrize("first_text", ["Hello", "Please explain the current project"])
+@pytest.mark.parametrize("first_text", ["Hello", "Do you hear me?", "Please explain the current project"])
 def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_relayed(
     tmp_path: Path, native: bool, first_text: str
 ) -> None:
@@ -200,7 +200,9 @@ def test_first_notice_loads_context_once_and_typed_messages_after_close_are_not_
                     await spoken.wait()
                     drain()
                     assert model_inputs[0] == first_text and not transport_results
-                    assert voice_updates.count(("commentary", answer, "first")) == 1
+                    assert [update for update in voice_updates if update[0] == "commentary"] == [
+                        ("commentary", answer, "first")
+                    ]
                     await bridge.close()
                     worker.cancel()
                     await asyncio.gather(worker, return_exceptions=True)

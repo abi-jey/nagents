@@ -96,7 +96,7 @@ def test_login_voice_provisions_delegates_with_transcripts_and_finalizes(
                         "model": "gpt-live-1-codex",
                         "instructions": "Use the selected assistant.",
                         "audio": {"output": {"voice": "cove"}},
-                        "delegation": {"type": "client"},
+                        "delegation": {"type": "client", "ack_filler": False},
                         "initial_items": list(history),
                     },
                 }
