@@ -99,8 +99,9 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
     {error && <p className="team-load-error" role="status">{error}<button type="button" onClick={refresh}>Retry</button></p>}
     <ol className="team-tree" aria-label="Agent conversations">{agents[0] && branch(agents[0], 0)}</ol>
     {!!available.length && <div className="team-profiles"><span className="team-profiles-label">Available agents</span>
-      {available.slice(0, profileLimit).map(profile => <button type="button" key={profile.id} className={`team-profile${selected === profileTarget(profile.id) ? " is-selected" : ""}`}
-        onClick={() => inspect(profileTarget(profile.id))}><span><strong>{profile.name}</strong><span>Not started</span></span><small>{profile.description || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small></button>)}
+      {available.slice(0, profileLimit).map(profile => <div key={profile.id} className="team-profile-row"><button type="button" className={`team-profile${selected === profileTarget(profile.id) ? " is-selected" : ""}`}
+        onClick={() => inspect(profileTarget(profile.id))}><span><strong>{profile.name}</strong><span>Not started</span></span><small>{profile.description || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small></button>
+        <button type="button" className="team-profile-settings" aria-label={`Model settings for ${profile.name}`} onClick={() => configure(profileTarget(profile.id))}><Icon name="settings" size={14} /></button></div>)}
       {available.length > profileLimit && <button type="button" className="team-profile-more" data-more-profiles="" onClick={() => setProfileLimit(value => value + 6)}>More agents <span>{available.length - profileLimit}</span></button>}
     </div>}
   </div>;

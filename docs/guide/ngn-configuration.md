@@ -226,6 +226,7 @@ the provider editor does not offer an API-key-value field.
 | Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.json`; defaults to `~/.config/ngn/providers.json` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
 | Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json` | Workspace-only connections and selection; inherits global connections and default. |
 | Workspace chat-model preference | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/config.json` | The workspace `model` field overrides the global model preference; no credentials. |
+| Agent model overrides | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agent-models/<name>.md` | Model-only Markdown references saved from Team settings, including `assistant`; no instruction or permission overrides. |
 | Project JSON | `<workspace>/.ngn/config.json` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
 | Explicit JSON | `--config /any/path/settings.json` | Any filename/location ending in `.json` is accepted. Selecting it explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
@@ -252,6 +253,21 @@ project file.
 Review trusted configuration **and its referenced Python code**. It can redirect
 requests and select executable plugins. There is no safe-settings subset loaded
 from an untrusted project file: the entire file is skipped.
+
+Model preferences store a complete reference, for example
+`"model": {"provider": "openai", "id": "gpt-6.1-sol"}`. Resolution uses the
+agent's model, then the workspace default, then the global default. Each layer
+selects a connection and model together from the merged global/workspace
+registry. A missing named connection is an error, not a fallback to a different
+provider. Existing string model preferences remain readable. Native agent
+frontmatter accepts the same map; see [agent definitions](agent-definitions.md).
+
+Agent definitions refresh before each model call, while already issued calls
+keep their accepted definitions. Team refreshes newly discovered and renamed
+profiles independently of chat execution. A trusted `agent_imports` entry may
+name a definition directory to enable these updates without trusting the entire
+project. This refresh does not reload endpoints, credentials, host permission
+ceilings, or arbitrary project code.
 
 ### Relative paths
 
@@ -281,7 +297,7 @@ or authentication-route selection. String choices are case-sensitive.
 | --- | --- | --- | --- |
 | `provider_id` | string | `""` | Optional named connection from `providers.json`; otherwise the registry's active connection is used. |
 | `providers` | string or object | omitted | Relative `.json` file reference for this scope, or `{"global": "path.json", "workspace": "path.json"}`. Omitted scopes use their default `providers.json`. The web UI saves the selected file. |
-| `model` | string | `"gpt-6-astra"` | Nonempty after trimming whitespace; a model ID supported by the endpoint/account, or an Azure deployment name. No model-catalog validation occurs at startup. |
+| `model` | string or `{provider, id}` reference | `"gpt-6-astra"` | A model ID supported by the endpoint/account, or an Azure deployment name. A reference selects its named connection and model together. No model-catalog validation occurs at startup. |
 
 Connection details—`kind`, `api`, `base_url`, `api_key_env`, `auth`, and
 `api_version`—belong only to entries under `providers.json` → `providers.NAME`.
@@ -445,14 +461,17 @@ Custom profile names match `[A-Za-z0-9_-]{1,128}`. Each profile accepts these fi
 | --- | --- | --- |
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
-| `model` | `""` | Optional model override on profile activation. Empty keeps the current/top-level model. |
-| `provider` | `""` | Optional named connection ID in `providers.json`. Empty follows the active connection. The profile's `model`, if set, overrides the shared chat-model choice. |
+| `model` | omitted | Optional `{provider, id}` model reference on profile activation. Omission inherits workspace, then global defaults. Older string overrides remain readable. |
 | `description` | `""` | Description shown to the model and agent picker. |
 | `tools` | omitted | Tool-name array; omission inherits, `[]` permits no tools. |
 | `denied_tools` | `[]` | Additional tool-name denials. |
 | `allowed_agents` | omitted | Delegation target-name array; `[]` disables delegation. |
 | `user_invocable` | `true` | Boolean controlling user selection. |
 | `subagent_available` | `true` | Boolean controlling delegation eligibility. |
+
+A model reference names an existing global or workspace connection; the agent
+does not define credentials or its own provider. Older scalar model definitions
+with a separate provider connection ID remain readable.
 
 ```json
 {

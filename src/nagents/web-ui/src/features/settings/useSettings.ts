@@ -12,19 +12,19 @@ import {
   saveSettings,
   settingsFailure,
 } from "./transport.js";
-import type { SettingsReply, SettingsValues } from "./types.js";
+import type { ModelBinding, SettingsReply, SettingsValues } from "./types.js";
 import type { SettingsScope } from "./transport.js";
 
 const refreshInterval = 4000;
 
 function changed(snapshot: SettingsReply, draft: SettingsDraft) {
-  return Object.entries(createDraft(snapshot.values)).some(
+  return Object.entries(createDraft(snapshot.values, snapshot.model_binding)).some(
     ([key, value]) => draft[key as keyof SettingsDraft] !== value,
   );
 }
 
 function savedValuesChanged(previous: SettingsReply, next: SettingsReply) {
-  return previous.revision !== next.revision || Object.entries(next.values).some(
+  return previous.revision !== next.revision || JSON.stringify(previous.model_binding) !== JSON.stringify(next.model_binding) || Object.entries(next.values).some(
     ([key, value]) => previous.values[key as keyof SettingsValues] !== value,
   );
 }
@@ -77,7 +77,7 @@ export function useSettings({
 
   function receive(reply: SettingsReply) {
     snapshotRef.current = reply;
-    draftRef.current = createDraft(reply.values);
+    draftRef.current = createDraft(reply.values, reply.model_binding);
     setSnapshot(reply);
     setDraft(draftRef.current);
     setErrors({});
@@ -113,7 +113,7 @@ export function useSettings({
         snapshotRef.current = reply;
         setSnapshot(reply);
         if (!changed(previous, currentDraft)) {
-          draftRef.current = createDraft(reply.values);
+          draftRef.current = createDraft(reply.values, reply.model_binding);
           setDraft(draftRef.current);
         }
         if (scopeRef.current === "workspace") accept(reply);
@@ -183,6 +183,15 @@ export function useSettings({
     setNotice("");
   }
 
+  function updateModel(binding: ModelBinding) {
+    const current = draftRef.current;
+    if (disabled || !current) return;
+    draftRef.current = { ...current, model_provider: binding.provider, model: binding.id };
+    setDraft(draftRef.current);
+    setErrors(current => ({ ...current, model: undefined }));
+    setNotice("");
+  }
+
   async function write(reset = false) {
     const currentSnapshot = snapshotRef.current;
     const currentDraft = draftRef.current;
@@ -207,7 +216,7 @@ export function useSettings({
         try {
           const reply = reset
             ? await resetSettings(token, currentSnapshot.revision, scopeRef.current)
-            : await saveSettings(token, currentSnapshot.revision, parsed.values, scopeRef.current);
+            : await saveSettings(token, currentSnapshot.revision, parsed.values, scopeRef.current, { provider: currentDraft.model_provider, id: parsed.values.model });
           receive(reply);
           if (scopeRef.current === "global") accept(await readSettings(token, new AbortController().signal));
           setNotice(
@@ -259,6 +268,7 @@ export function useSettings({
     refresh: () => load("applied"),
     reload: () => load("reload"),
     update,
+    updateModel,
     save: () => write(),
     reset: () => write(true),
   };

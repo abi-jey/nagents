@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from nagents.harness.tool_config import HarnessToolRegistry
 from nagents.harness.tools import MODIFYING_TOOLS
 from nagents.tools.registry import ToolRegistry
 
@@ -40,11 +41,16 @@ class MCPRetryInput(BaseModel):
 
 def snapshot(state: WebState) -> dict[str, object]:
     harness = state.harness
+    harness.refresh_agent_definitions()
     policy = harness.tool_settings
     policy.load()
     profiles = harness.config.profile_names
     tools = []
-    for tool in ToolRegistry.get_all(harness.agent.tool_registry):
+    registry = harness.agent.tool_registry
+    definitions = (
+        registry.get_catalog() if isinstance(registry, HarnessToolRegistry) else ToolRegistry.get_all(registry)
+    )
+    for tool in definitions:
         builtin = tool.func is not None and tool.func == harness.tools.builtins.get(tool.name)
         category = (
             "Files"

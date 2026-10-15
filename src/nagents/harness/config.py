@@ -23,6 +23,7 @@ from nagents.types import ReasoningEffort
 from .agent_definitions import DefinitionBatch
 from .agent_definitions import discover_agents
 from .agent_definitions import import_agents
+from .model_bindings import ModelBinding
 from .providers import ProviderProfile
 from .providers import ScopedProviderRegistryStore
 from .providers import validate_provider
@@ -82,11 +83,21 @@ class AgentProfile:
 
 
 @dataclass
+class AgentDefinitionSource:
+    """An operator-selected definition source, retained in precedence order."""
+
+    kind: Literal["personal", "workspace", "configuration"]
+    path: Path
+    resolve: bool = False
+
+
+@dataclass
 class HarnessConfig:
     workspace: Path
     provider: str = ""
     providers: dict[str, ProviderProfile] = field(default_factory=dict)
     model: str = DEFAULT_HARNESS_MODEL
+    unavailable_model_binding: ModelBinding = field(default_factory=ModelBinding, repr=False, compare=False)
     global_model_default: str = ""  # Loader-only baseline for global web defaults.
     agent: str = "assistant"
     read_only: bool = False
@@ -104,6 +115,8 @@ class HarnessConfig:
     profiles: dict[str, AgentProfile] = field(default_factory=dict)
     diagnostics: tuple[str, ...] = ()
     agent_diagnostics: tuple[str, ...] = ()
+    agent_sources: tuple[AgentDefinitionSource, ...] = ()
+    agent_source_profiles: dict[str, AgentProfile] = field(default_factory=dict, repr=False, compare=False)
     config_paths: tuple[Path, ...] = ()
     # Explicit symlink configs historically resolve relative references beside
     # their target. Keep the logical location so extension reloads can rotate it.
@@ -239,6 +252,11 @@ def _json_profile(value: object, source: Path) -> AgentProfile:
     list_fields = {"tools", "denied_tools", "allowed_agents"}
     if not isinstance(value, dict) or value.keys() - (string_fields | bool_fields | list_fields):
         raise ValueError(f"{source}: invalid agent profile fields")
+    if isinstance(value.get("model"), dict):
+        binding = ModelBinding.parse(value["model"])
+        if "provider" in value and value["provider"] != binding.provider:
+            raise ValueError(f"{source}: model provider conflicts with the separate provider field")
+        value = {**value, "model": binding.id, "provider": binding.provider}
     profile = AgentProfile(source=str(source), source_format="json")
     for name, item in value.items():
         if name in string_fields:
@@ -259,16 +277,31 @@ def _json_profile(value: object, source: Path) -> AgentProfile:
 def _provider_defaults(config: HarnessConfig, store: ScopedProviderRegistryStore) -> tuple[HarnessConfig, str]:
     """Select the active named provider without reading credential values."""
     registry = store.load()
-    if registry.active:
+    binding = store.model_binding("workspace")
+    if not binding.configured:
+        binding = store.model_binding("global", legacy_provider=registry.active)
+    selected = binding.provider or registry.active
+    if selected:
+        if selected not in registry.providers:
+            return (
+                replace(
+                    config,
+                    provider="",
+                    providers=dict(registry.providers),
+                    model=binding.id,
+                    unavailable_model_binding=binding,
+                ),
+                f"Model provider connection {selected!r} is unavailable. Choose an available model connection in Settings.",
+            )
         return (
             replace(
                 config,
-                provider=registry.active,
+                provider=selected,
                 providers=dict(registry.providers),
                 model=store.model() or config.model,
                 model_explicit=bool(store.model()) or config.model_explicit,
             ),
-            f"Applied provider connection: {registry.active}",
+            f"Applied provider connection: {selected}",
         )
     return config, ""
 
@@ -334,6 +367,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     fallback_model = defaults.model
     config, login_note = _provider_defaults(defaults, store)
     selected_name = config.provider
+    selected_model_reference = config.unavailable_model_binding
     config.provider_paths = provider_paths
     config.providers = dict(store.load().providers)
     global_model = store.model_store("global").load() or fallback_model
@@ -384,6 +418,7 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 global_model = env_value
 
     diagnostics: list[str] = [login_note] if login_note else []
+    agent_sources = [AgentDefinitionSource("personal", Path.home())]
     _install_agents(config, discover_agents(Path.home(), personal=True), diagnostics)
     project_agents_loaded = False
     if project.exists() and not trust_project and not explicit_project:
@@ -393,8 +428,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     loaded: list[Path] = []
     for path, values in documents:
         if (path != user or path == explicit) and trust_project and not project_agents_loaded:
+            agent_sources.append(AgentDefinitionSource("workspace", defaults.workspace))
             _install_agents(config, discover_agents(defaults.workspace), diagnostics)
             project_agents_loaded = True
+        agent_sources.append(AgentDefinitionSource("configuration", path, path == explicit))
         loaded.append(path)
         unknown = values.keys() - allowed
         if unknown:
@@ -406,12 +443,20 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         for key, value in values.items():
             if key in {"providers", "agent_imports"}:
                 continue
+            model_provider = ""
+            if key == "model" and isinstance(value, dict):
+                binding = ModelBinding.parse(value)
+                value = binding.id
+                model_provider = binding.provider
             if key == "model" and isinstance(value, str):
                 global_model = value
                 if path != user or path == explicit:
                     model_overridden = True
                 elif store.model_store("workspace").load():
                     continue
+                if model_provider:
+                    selected_name = model_provider
+                    selected_model_reference = ModelBinding(model_provider, value)
             if key in strings | {"data_dir"}:
                 if not isinstance(value, str):
                     raise ValueError(f"{path}: {key} must be a string")
@@ -454,12 +499,31 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 continue
             if key == "provider_id":
                 assert isinstance(value, str)
-                selected_name = value
+                if not isinstance(values.get("model"), dict):
+                    selected_name = value
             else:
                 setattr(config, key, value)
         diagnostics.append(f"Loaded trusted configuration: {path}")
     if trust_project and not project_agents_loaded:
+        agent_sources.append(AgentDefinitionSource("workspace", defaults.workspace))
         _install_agents(config, discover_agents(defaults.workspace), diagnostics)
+    # Keep absent trusted config locations too, so an operator can create one
+    # later without restarting. Insert them at their original precedence.
+    for path in paths:
+        if not any(source.kind == "configuration" and source.path == path for source in agent_sources):
+            definition_source = AgentDefinitionSource("configuration", path, path == explicit)
+            if path == user and path != explicit:
+                agent_sources.insert(1, definition_source)
+            elif path == project:
+                position = next(
+                    (index + 1 for index, item in enumerate(agent_sources) if item.kind == "workspace"),
+                    len(agent_sources),
+                )
+                agent_sources.insert(position, definition_source)
+            else:
+                agent_sources.append(definition_source)
+    config.agent_sources = tuple(agent_sources)
+    config.agent_source_profiles = {name: replace(profile) for name, profile in config.profiles.items()}
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
     config.explicit_config_paths = (explicit,) if explicit is not None else ()
@@ -468,8 +532,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     if selected_name:
         registry = store.load()
         if selected_name not in registry.providers:
-            raise ValueError(f"Unknown provider connection {selected_name!r}")
-        config.provider = selected_name
+            if selected_model_reference.provider != selected_name:
+                raise ValueError(f"Unknown provider connection {selected_name!r}")
+            config.unavailable_model_binding = ModelBinding(selected_name, config.model)
+            config.provider = ""
+        else:
+            config.provider = selected_name
+            config.unavailable_model_binding = ModelBinding()
     else:
         config.provider = ""
     config.model_explicit = (

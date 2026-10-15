@@ -212,11 +212,22 @@ class SessionAgents:
                 "reasoning_effort": "",
             }
         profile = harness.config.profile(name)
-        provider_id = profile.provider or harness.providers.active or harness.config.provider
+        try:
+            binding = harness.resolved_model_binding(name).binding
+        except ValueError:
+            return {
+                "agent": name,
+                "model": "",
+                "provider": "",
+                "provider_kind": "",
+                "mode": harness.mode_for_profile(name),
+                "reasoning_effort": "",
+            }
+        provider_id = binding.provider or harness.providers.active or harness.config.provider
         provider = harness.providers.providers.get(provider_id) or harness.config.provider_profile()
         return {
             "agent": name,
-            "model": profile.model or self.state.settings.values.model,
+            "model": binding.id or self.state.settings.values.model,
             "provider": provider_id or provider.kind,
             "provider_kind": provider.kind,
             "mode": harness.mode_for_profile(name),
@@ -252,11 +263,14 @@ class SessionAgents:
         profile = harness.config.profile(name)
         if not profile.user_invocable:
             return "This profile is available only for delegation."
-        if profile.provider and profile.provider not in harness.providers.providers:
-            return "The profile's provider connection is unavailable."
+        try:
+            harness.resolved_model_binding(name)
+        except ValueError:
+            return "The agent's model reference is unavailable. Open its model settings to choose a connection."
         return ""
 
     async def snapshot(self, session_id: str) -> dict[str, object]:
+        self.state.harness.refresh_agent_definitions()
         choice = await self.ensure(session_id)
         active = self.state.run_for(session_id)
         identity = (
@@ -267,6 +281,7 @@ class SessionAgents:
         return {
             "session_id": session_id,
             "revision": choice.revision,
+            "profile_revision": self.state.harness.profile_revision,
             "agent": choice.agent,
             "workspace_default": self.state.settings.values.agent,
             "effective": identity,
@@ -285,6 +300,7 @@ class SessionAgents:
 
     async def change(self, session_id: str, body: AgentInput) -> dict[str, object]:
         async with self.state.queued_mutation():
+            self.state.harness.refresh_agent_definitions()
             await self.ensure(session_id)
             if reason := self.unavailable(body.agent):
                 raise HTTPException(422, reason)
@@ -333,14 +349,17 @@ class SessionAgents:
             harness._permission_ceiling = "reviewer"
 
     async def apply(self, run: Run, harness: Harness) -> None:
+        self.state.harness.refresh_agent_definitions()
+        harness.refresh_agent_definitions()
         choice = await self.ensure(run.session_id)
         name = run.agent or choice.agent
         run.agent = name
         if reason := self.unavailable(name):
             raise HTTPException(422, reason)
-        # A shared configuration runtime must keep its workspace identity.
-        if harness.config.agent != name:
-            await harness.set_agent(name)
+        # The same profile may have a newly saved model reference. Resolve at
+        # this activation boundary even when its name is unchanged; never apply
+        # a new model ID to the previous connection.
+        await harness.set_agent(name)
         if run.read_only:
             await self.state.executions.configuration_owner()
             self.tighten(run)
@@ -373,8 +392,11 @@ class SessionAgents:
 
     @asynccontextmanager
     async def view(self, session_id: str, *, next_run: bool = False) -> AsyncIterator[Harness]:
+        self.state.harness.refresh_agent_definitions()
         choice = await self.ensure(session_id)
         current = self.state.harness_for(session_id)
+        if current is not self.state.harness:
+            current.refresh_agent_definitions()
         active = self.state.run_for(session_id)
         if not next_run and active is not None and active.harness is not None:
             yield active.harness
@@ -387,7 +409,7 @@ class SessionAgents:
         if restricted:
             expected["mode"] = "reviewer"
         primary = self.state.harness
-        provider_id = primary.config.profile(name).provider or primary.providers.active or primary.config.provider
+        provider_id = primary.resolved_model_binding(name).binding.provider
         accepted_connection = primary.providers.providers.get(provider_id) or primary.config.provider_profile()
         current_connection = (
             current._built_provider_name == provider_id and current._built_provider_profile == accepted_connection
@@ -400,7 +422,7 @@ class SessionAgents:
         if self.actual(current) == expected and current_connection and (active is None or not next_run):
             yield current
             return
-        harness = self.state.executions.factory(deepcopy(self.state.harness.config))
+        harness = self.state.executions.factory(self.state.harness.clone_configuration())
         if harness is self.state.harness or harness in self.state.executions.owners.values():
             raise RuntimeError("Session inspection requires an independent runtime")
         try:

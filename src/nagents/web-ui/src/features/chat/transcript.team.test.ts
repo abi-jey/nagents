@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { JSDOM } from "jsdom";
 import { Composer } from "./Composer.js";
 import { appendEvent } from "./transcript.js";
 import { TaskTimeline } from "../team/TaskTimeline.js";
 import { TeamTree } from "../team/TeamTree.js";
-import { taskEntries } from "../team/TaskConversation.js";
-import { TaskDrafts, agentAncestors, mergeTaskActivity, orderedTeam, providerLabel, taskAgent, type TaskActivity, type TeamAgent, type TaskDetail } from "../team/model.js";
+import { TaskConversation, taskEntries } from "../team/TaskConversation.js";
+import { profileTarget, useTeam, type TeamController } from "../team/useTeam.js";
+import { TaskDrafts, agentAncestors, mergeTaskActivity, orderedTeam, providerLabel, taskAgent, type TaskActivity, type TeamAgent, type TaskDetail, type TeamProfile } from "../team/model.js";
 import type { RetainedTask } from "../../types.js";
 
 const task = (id: string, parent = "", updated = 1): RetainedTask => ({ id, name: id, parent_task_id: parent,
@@ -119,4 +122,81 @@ test("unused discovered profiles appear as not started and used profiles are not
     { id: "assistant", name: "Assistant", description: "Main", provider: "openai", model: "model", used: true, available: true },
   ], selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
   assert.match(markup, /Researcher/); assert.match(markup, /Not started/); assert.equal((markup.match(/class="team-profile"/g) || []).length, 1);
+});
+
+test("team refreshes added and renamed definitions during a run without retargeting drafts or existing children", async (t) => {
+  const dom = new JSDOM("<div id='root'></div>");
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: () => 0, cancelAnimationFrame() {} };
+  Object.assign(globalThis, globals);
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const requests: { path: string; signal?: AbortSignal; respond: (value: Response) => void }[] = [];
+  t.mock.method(globalThis, "fetch", (path: string, init: RequestInit) => new Promise<Response>(respond => {
+    requests.push({ path, signal: init.signal || undefined, respond });
+  }));
+  const react = createRoot(dom.window.document.getElementById("root")!);
+  let mounted = true;
+  let team!: TeamController;
+  function View({ revision }: { revision: number }) {
+    team = useTeam("token", "root", revision, true, []);
+    return createElement(TeamTree, { agents: [root, ...team.tasks.map(taskAgent)], profiles: team.profiles,
+      selected: team.selected, inspect: team.select, configure() {}, arrivals: {}, error: team.error, refresh: team.refresh });
+  }
+  const profile = (id: string): TeamProfile => ({ id, name: id, description: `${id} coding agent`,
+    provider: "openai", model: "accepted-model", used: false, available: true, can_start: true });
+  const respond = async (index: number, profiles: TeamProfile[], tasks: RetainedTask[] = []) => act(async () => {
+    requests[index].respond(Response.json({ tasks, profiles }));
+  });
+  const shownProfiles = () => [...document.querySelectorAll(".team-profile strong")].map(row => row.textContent);
+  try {
+    await act(async () => react.render(createElement(View, { revision: 0 })));
+    await respond(0, []);
+    assert.deepEqual(shownProfiles(), []);
+    await act(async () => { t.mock.timers.tick(300); });
+    await respond(1, [profile("mint")]);
+    assert.deepEqual(shownProfiles(), ["mint"]);
+    assert.match(document.querySelector(".team-profile")?.textContent || "", /Not started/);
+    await act(async () => team.select(profileTarget("mint")));
+    await act(async () => team.setPrompt("Please inspect the workspace"));
+
+    await act(async () => react.render(createElement(View, { revision: 1 })));
+    await act(async () => { t.mock.timers.tick(300); });
+    await respond(2, [profile("min")]);
+    assert.deepEqual(shownProfiles(), ["min"]);
+    assert.equal(team.selected, profileTarget("mint"), "A rename must not silently choose another recipient");
+    assert.equal(team.prompt, "Please inspect the workspace");
+    assert.equal(team.canMessage, false);
+    const missing = renderToStaticMarkup(createElement(TaskConversation, { team, agents: [root], arrivals: {}, token: "", sessionId: "root", back() {} }));
+    assert.match(missing, /profile was removed or renamed/);
+    assert.match(missing, /Your draft is kept/);
+    assert.doesNotMatch(missing, /Loading conversation/);
+
+    const accepted = { ...task("accepted-child"), name: "mint", profile: "mint", model: "accepted-model" };
+    await act(async () => react.render(createElement(View, { revision: 2 })));
+    await act(async () => { t.mock.timers.tick(300); });
+    await respond(3, [profile("mini")], [accepted]);
+    assert.deepEqual(shownProfiles(), ["mini"]);
+    assert.equal(document.querySelector('[data-agent-id="accepted-child"] strong')?.textContent, "mint");
+    assert.equal(team.tasks[0].model, "accepted-model");
+    await act(async () => team.select(profileTarget("mini")));
+    assert.equal(team.profile?.name, "mini");
+    assert.equal(team.canMessage, true);
+    assert.equal(team.prompt, "", "A new definition must not inherit the removed profile's draft");
+    await act(async () => team.select(profileTarget("mint")));
+    assert.equal(team.prompt, "Please inspect the workspace");
+    assert.ok(requests.every(request => request.path === "/api/sessions/root/tasks"));
+
+    await act(async () => { t.mock.timers.tick(900); });
+    assert.equal(requests.length, 5, "The active-run timer refreshes even without a transcript event");
+    await act(async () => react.unmount());
+    mounted = false;
+    assert.equal(requests[4].signal?.aborted, true);
+  } finally {
+    if (mounted) await act(async () => react.unmount());
+    t.mock.timers.reset(); dom.window.close();
+    for (const name of Object.keys(globals)) {
+      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]); else Reflect.deleteProperty(globalThis, name);
+    }
+  }
 });

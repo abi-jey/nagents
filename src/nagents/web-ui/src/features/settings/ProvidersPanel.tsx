@@ -4,7 +4,7 @@ import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { Icon } from "../../components/Icon.js";
 import type { SettingsScope } from "./transport.js";
 
-type Profile = {
+export type ProviderProfile = {
   kind: string; auth: string; base_url: string; api: string;
   api_key_env: string; api_version: string; scope: string;
   request_timeout?: number;
@@ -13,15 +13,15 @@ type Profile = {
   key_configured?: boolean; credential_source?: string; effective_endpoint?: string;
 };
 type WindowDraft = { model: string; tokens: string };
-type ProfileDraft = Omit<Profile, "request_timeout" | "context_window" | "model_context_windows"> & {
+type ProfileDraft = Omit<ProviderProfile, "request_timeout" | "context_window" | "model_context_windows"> & {
   request_timeout: string; context_window: string; model_context_windows: WindowDraft[];
 };
 type Kind = {
   label: string; auth: string[]; apis: string[]; env: string;
   endpoint_required: boolean; version_required: boolean; live: boolean;
 };
-type Registry = {
-  revision: string; active: string; providers: Record<string, Profile>; kinds: Record<string, Kind>;
+export type ProviderRegistry = {
+  revision: string; active: string; providers: Record<string, ProviderProfile>; kinds: Record<string, Kind>;
   scope: SettingsScope; path: string; origins?: Record<string, SettingsScope>;
   inherited_active?: boolean; global_active?: string;
 };
@@ -34,6 +34,7 @@ export type ProviderSelection = {
   label: string;
   auth: string;
   inherited: boolean;
+  origin: SettingsScope | "";
   contextWindow: number;
   modelContextWindows: Record<string, number>;
 };
@@ -42,6 +43,7 @@ export type ProviderWorkspace = ProviderSelection & {
   configure: () => void;
   activate: () => void;
   busy: boolean;
+  canConfigure: boolean;
 };
 
 function defaultProfile(kind: string, specs: Record<string, Kind>): ProfileDraft {
@@ -53,7 +55,7 @@ function defaultProfile(kind: string, specs: Record<string, Kind>): ProfileDraft
   };
 }
 
-function editable(profile: Profile): ProfileDraft {
+function editable(profile: ProviderProfile): ProfileDraft {
   return { kind: profile.kind, auth: profile.auth, base_url: profile.base_url,
     api: profile.api, api_key_env: profile.api_key_env, api_version: profile.api_version,
     scope: profile.scope, request_timeout: String(profile.request_timeout ?? 120),
@@ -67,7 +69,7 @@ function validWindows(rows: WindowDraft[]): boolean {
 }
 
 export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onDraftChange, onBusyChange,
-  children, onSelectionChange, confirmActivation, login, loginConnection = "",
+  children, onSelectionChange, confirmActivation, login, loginConnection = "", bindingProvider,
 }: {
   token: string; blocked: boolean; applied: () => void | Promise<void>; scope: SettingsScope;
   openGlobal?: () => void; onDraftChange?: (dirty: boolean) => void; onBusyChange?: (busy: boolean) => void;
@@ -76,8 +78,10 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   confirmActivation?: (apply: () => Promise<void>) => void;
   login?: () => void;
   loginConnection?: string;
+  bindingProvider?: string;
 }) {
-  const [registry, setRegistry] = useState<Registry>();
+  const [registry, setRegistry] = useState<ProviderRegistry>();
+  const [merged, setMerged] = useState<ProviderRegistry>();
   const [name, setName] = useState("");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ProfileDraft>();
@@ -95,18 +99,22 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   async function refresh() {
     reading.current?.abort();
     const controller = new AbortController(); reading.current = controller;
-    const value = (await (await request(endpoint, token, undefined, controller.signal)).json()) as Registry;
+    const value = (await (await request(endpoint, token, undefined, controller.signal)).json()) as ProviderRegistry;
+    const choices = bindingProvider !== undefined && scope === "global"
+      ? (await (await request("provider-scopes/workspace/providers", token, undefined, controller.signal)).json()) as ProviderRegistry : value;
     if (controller.signal.aborted || reading.current !== controller) return;
     setRegistry(value);
-    setSelected(current => value.providers[current] ? current : value.active);
+    setMerged(choices);
+    setSelected(current => choices.providers[current] ? current : bindingProvider ?? value.active);
     setError("");
     reading.current = undefined;
   }
   useEffect(() => {
-    setRegistry(undefined); setDraft(undefined); setName(""); setSelected("");
+    setRegistry(undefined); setMerged(undefined); setDraft(undefined); setName(""); setSelected("");
     void refresh().catch(() => setError("Could not load provider connections."));
     return () => { reading.current?.abort(); };
   }, [token, scope]);
+  useEffect(() => { if (bindingProvider !== undefined) setSelected(bindingProvider); }, [bindingProvider]);
   const inherited = scope === "workspace" && registry?.origins?.[name] === "global";
   const connectionDirty = !!registry && !!draft && !inherited &&
     (!editing || !registry.providers[name] || JSON.stringify(draft) !== JSON.stringify(editable(registry.providers[name])));
@@ -115,34 +123,38 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
 
-  const selectedProfile = registry?.providers[selected];
+  const choices = merged || registry;
+  const selectedProfile = choices?.providers[selected];
   const selectedKind = selectedProfile?.kind || "";
   const selection: ProviderSelection = {
     // An inherited global profile can change without changing the local registry revision.
-    id: selected, revision: `${registry?.revision || ""}:${JSON.stringify(selectedProfile || {})}`, active: registry?.active || "", kind: selectedKind,
-    label: registry?.kinds[selectedKind]?.label || selectedKind,
-    auth: selectedProfile?.auth || "", inherited: scope === "workspace" && !!registry?.inherited_active,
+    id: selected, revision: `${choices?.revision || ""}:${JSON.stringify(selectedProfile || {})}`, active: registry?.active || "", kind: selectedKind,
+    label: choices?.kinds[selectedKind]?.label || selectedKind,
+    auth: selectedProfile?.auth || "", inherited: scope === "workspace" && choices?.origins?.[selected] === "global",
+    origin: choices?.origins?.[selected] || "",
     contextWindow: selectedProfile?.context_window || 0,
     modelContextWindows: selectedProfile?.model_context_windows || {},
   };
   useEffect(() => { if (registry) onSelectionChange?.(selection); }, [registry, selected, onSelectionChange]);
 
-  async function action(run: () => Promise<Registry>, message: string, saved = false) {
+  async function action(run: () => Promise<ProviderRegistry>, message: string, saved = false) {
     if (busy || blocked) return;
     reading.current?.abort(); setBusy(true); setError(""); setNotice("");
     try {
       const next = await run();
       setRegistry(next);
+      if (scope !== "global" || bindingProvider === undefined) setMerged(next);
       setSelected(current => next.providers[current] ? current : next.active);
       if (saved) { setDraft(editable(next.providers[name])); setEditing(true); setSelected(name); }
       else if (draft && !next.providers[name]) { setDraft(undefined); setName(""); }
       setNotice(message);
-      if (next.active !== registry?.active || (editing && next.active === name)) await applied();
+      if (bindingProvider !== undefined || next.active !== registry?.active || (editing && next.active === name)) await applied();
+      if (scope === "global" && bindingProvider !== undefined) await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Provider operation failed; reload connections.");
     } finally { setBusy(false); }
   }
-  if (!registry) return <div className={children ? "settings-workspace-grid" : undefined}><section className={children ? "settings-provider-rail" : "settings-group"} aria-label="Provider connections"><h3>Provider connections</h3><p role="status">{error || "Loading connections…"}</p>{error && <button type="button" onClick={() => void refresh().catch(() => setError("Could not load provider connections."))}>Retry connections</button>}</section>{children && <div className="settings-model-workspace">{children({ ...selection, busy: true, configure: () => {}, activate: () => {} })}</div>}</div>;
+  if (!registry) return <div className={children ? "settings-workspace-grid" : undefined}><section className={children ? "settings-provider-rail" : "settings-group"} aria-label="Provider connections"><h3>Provider connections</h3><p role="status">{error || "Loading connections…"}</p>{error && <button type="button" onClick={() => void refresh().catch(() => setError("Could not load provider connections."))}>Retry connections</button>}</section>{children && <div className="settings-model-workspace">{children({ ...selection, busy: true, canConfigure: false, configure: () => {}, activate: () => {} })}</div>}</div>;
   const spec = draft ? registry.kinds[draft.kind] : undefined;
   const edit = (change: Partial<ProfileDraft>) => setDraft(current => current && { ...current, ...change });
   const timeout = Number(draft?.request_timeout);
@@ -160,13 +172,13 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
     changeEditor(() => { setName(id); setEditing(true); setDraft(editable(registry!.providers[id])); setError(""); });
   }
   function activate(id: string) {
-    const apply = () => action(async () => (await (await request(`${endpoint}/${encodeURIComponent(id)}/activate`, token, { revision: registry!.revision })).json()) as Registry,
+    const apply = () => action(async () => (await (await request(`${endpoint}/${encodeURIComponent(id)}/activate`, token, { revision: registry!.revision })).json()) as ProviderRegistry,
       `Using ${id} ${scope === "global" ? "globally" : "in this workspace"}.`);
     if (confirmActivation) confirmActivation(apply);
     else void apply();
   }
   const inherit = () => {
-    const apply = () => action(async () => (await (await request("providers/inherit", token, { revision: registry.revision })).json()) as Registry, "Using the global default in this workspace.");
+    const apply = () => action(async () => (await (await request("providers/inherit", token, { revision: registry.revision })).json()) as ProviderRegistry, "Using the global default in this workspace.");
     if (confirmActivation) confirmActivation(apply);
     else void apply();
   };
@@ -174,32 +186,34 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
     <section className={children ? "settings-provider-rail" : "settings-group"} aria-label="Provider connections">
     <div className="provider-rail-heading"><h3>Provider connections</h3><button type="button" title={connectionDirty ? "Save or discard connection edits before reloading" : "Reload connections"} aria-label="Reload connections" disabled={busy || connectionDirty} onClick={() => void refresh().catch(() => setError("Could not reload connections."))}>↻</button></div>
     <p className="provider-rail-help">{scope === "global" ? "Global connections are available to every workspace." : "Choose a connection to browse its models."}</p>
-    <p className="provider-rail-status" role="status">{notice || (registry.active ? `Active: ${registry.active}${scope === "workspace" && registry.inherited_active ? " · from Global" : ""}` : "Using startup configuration.")}</p>
+    <p className="provider-rail-status" role="status">{notice || (bindingProvider !== undefined ? "Connection and model are saved together." : registry.active ? `Active: ${registry.active}${scope === "workspace" && registry.inherited_active ? " · from Global" : ""}` : "Using startup configuration.")}</p>
     {error && <p role="alert" className="error-text">{error}</p>}
     <ul className="provider-connection-list" aria-label="Saved provider connections">
-      {Object.entries(registry.providers).map(([id, profile]) => <li key={id} className={selected === id ? "is-selected" : ""}>
+      {Object.entries(choices?.providers || {}).map(([id, profile]) => <li key={id} className={selected === id ? "is-selected" : ""}>
         <button type="button" className="provider-connection-select" aria-pressed={selected === id} disabled={busy || blocked} onClick={() => {
           if (children) changeEditor(() => { setSelected(id); setDraft(undefined); setName(""); });
           else { setSelected(id); configure(id); }
         }}>
-          <ProviderLogo provider={profile.kind} /><span><strong>{id}<span className="sr-only">{id === registry.active ? " (active)" : ""}</span></strong>
+          <ProviderLogo provider={profile.kind} /><span><strong>{id}<span className="sr-only">{bindingProvider === id ? " (selected model connection)" : bindingProvider === undefined && id === registry.active ? " (active)" : ""}</span></strong>
             <small>{registry.kinds[profile.kind]?.label || profile.kind} · {profile.auth === "chatgpt" || profile.auth === "codex" ? "ChatGPT / Codex" : profile.auth === "entra" ? "Entra ID" : profile.auth === "auto" ? "Automatic" : "API key"}</small>
-            <span className="provider-row-status">{id === registry.active ? "Active" : scope === "workspace" && registry.origins?.[id] === "global" ? "Global connection" : "Saved connection"}</span>
+            <span className="provider-row-status">{choices?.origins?.[id] === "global" ? "Global connection" : "Workspace connection"}{bindingProvider === id ? " · selected" : ""}</span>
           </span>
         </button>
-        {children && <button type="button" className="provider-connection-edit" aria-label={`Edit ${id} connection`} title={`Edit ${id}`} disabled={busy || blocked} onClick={() => configure(id)}><Icon name="settings" size={14} /></button>}
+        {children && <button type="button" className="provider-connection-edit" aria-label={`Edit ${id} connection`} title={scope === "global" && choices?.origins?.[id] === "workspace" ? "Edit this connection in Workspace settings" : `Edit ${id}`} disabled={busy || blocked || (scope === "global" && choices?.origins?.[id] === "workspace")} onClick={() => configure(id)}><Icon name="settings" size={14} /></button>}
       </li>)}
     </ul>
     <button type="button" className="provider-add" disabled={busy || blocked} onClick={() => changeEditor(() => {
         const kind = "openai";
         setName(""); setEditing(false); setDraft(defaultProfile(kind, registry.kinds));
       })}><Icon name="plus" size={15} />Add connection</button>
-    {scope === "workspace" && !registry.inherited_active && !!registry.global_active && <button className="provider-inherit" type="button" disabled={busy || blocked} onClick={inherit}>Use global connection</button>}
+    {bindingProvider === undefined && scope === "workspace" && !registry.inherited_active && !!registry.global_active && <button className="provider-inherit" type="button" disabled={busy || blocked} onClick={inherit}>Use global connection</button>}
     <details className="provider-storage"><summary>Connection storage</summary><p>Configuration file: <code>{registry.path}</code></p><p>Connection changes apply immediately. Model settings are saved separately.</p></details>
     </section>
     <div className={children ? "settings-model-workspace" : undefined}>
     {switchEditor && <section className="settings-confirmation" role="alert"><h3>Discard connection edits?</h3><p>Your connection has unsaved changes.</p><div className="settings-confirmation-actions"><button type="button" onClick={() => { switchEditor(); setSwitchEditor(undefined); }}>Discard connection edits</button><button type="button" onClick={() => setSwitchEditor(undefined)}>Keep editing connection</button></div></section>}
-    {!draft && children?.({ ...selection, busy: busy || blocked, configure: () => { if (selected) configure(selected); }, activate: () => activate(selected) })}
+    {!draft && children?.({ ...selection, busy: busy || blocked,
+      canConfigure: !!registry.providers[selected] && !(scope === "global" && choices?.origins?.[selected] === "workspace"),
+      configure: () => { if (selected && registry.providers[selected] && !(scope === "global" && choices?.origins?.[selected] === "workspace")) configure(selected); }, activate: () => activate(selected) })}
     {draft && spec && <div className="settings-connection provider-editor">
       {children && <button type="button" className="provider-back" disabled={busy} onClick={() => changeEditor(() => setDraft(undefined))}>← Back to model settings</button>}
       <h4>{editing ? `${inherited ? "Global connection" : "Edit"} ${name}` : `Add a ${scope} connection`}</h4>
@@ -251,10 +265,10 @@ export function ProvidersPanel({ token, blocked, applied, scope, openGlobal, onD
       {login && scope === "workspace" && editing && name === registry.active && name === loginConnection && !connectionDirty && draft.kind === "openai" && ["auto", "chatgpt", "codex"].includes(draft.auth) && <div className="provider-login"><p>Sign in for the active workspace connection, {name}. Credentials stay on the ngn server.</p><button type="button" disabled={busy || blocked} onClick={login}>Sign in with ChatGPT</button></div>}
       <div className="settings-model-controls">
         {!inherited && <button type="button" disabled={busy || blocked || !timeoutValid || !contextValid || !/^[a-z][a-z0-9_-]{0,63}$/.test(name) || (!editing && !!registry.providers[name])} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision, profile: { ...draft, request_timeout: timeout, context_window: contextWindow,
-          model_context_windows: Object.fromEntries(draft.model_context_windows.map(row => [row.model.trim(), Number(row.tokens)])) } }, undefined, "PUT")).json()) as Registry, `Saved ${name} to ${scope} settings.`, true)}>Save connection</button>}
+          model_context_windows: Object.fromEntries(draft.model_context_windows.map(row => [row.model.trim(), Number(row.tokens)])) } }, undefined, "PUT")).json()) as ProviderRegistry, `Saved ${name} to ${scope} settings.`, true)}>Save connection</button>}
         {editing && registry.providers[name] && <>
-          <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active) || connectionDirty} onClick={() => activate(name)}>Make active</button>
-          {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as Registry, `Deleted ${name}.`)}>Delete</button>}
+          {bindingProvider === undefined && <button type="button" disabled={busy || blocked || (name === registry.active && !registry.inherited_active) || connectionDirty} onClick={() => activate(name)}>Make active</button>}
+          {locallySaved && <button type="button" disabled={busy || blocked || name === registry.active} onClick={() => void action(async () => (await (await request(route, token, { revision: registry.revision }, undefined, "DELETE")).json()) as ProviderRegistry, `Deleted ${name}.`)}>Delete</button>}
         </>}
       </div>
     </div>}

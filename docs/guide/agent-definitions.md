@@ -23,7 +23,12 @@ agent through `/agent research` or the web settings, or delegate to it from
 another agent. Descriptions appear in the picker and the model's delegation tool
 schema. Web settings show the selected source file and expandable loading
 diagnostics. Terminal diagnostics also include parsing failures and collisions.
-Definitions load at startup; restart ngn after editing them.
+Trusted definitions refresh before every model request, including requests after
+tool calls and requests in children. Creating or renaming a definition updates
+the next request's delegation schema. Team also refreshes its catalog, so new
+definitions appear as **Not started** without a restart. Already issued tool
+batches keep the definitions they were given; a rename cannot redirect an
+accepted delegation. Running children retain their identity and history.
 
 ## Native format
 
@@ -36,8 +41,7 @@ when `name` is omitted; `research/agent.md` uses the directory name.
 | `name` | Letters, digits, underscores, or hyphens; at most 128 characters. `assistant` is reserved. |
 | `description` | Required, nonempty description for selection and delegation. |
 | `mode` | `build` (default) or `reviewer`. Reviewer prohibits writes, shell, and custom tools. |
-| `model` | Exact model ID; omitted inherits the selected model. Applies to delegated children too. |
-| `provider` | Existing ngn provider connection ID; omitted inherits the connection. Credentials remain in ngn. |
+| `model` | A reference containing `provider` (an existing connection ID) and `id` (an exact model ID). Omitted inherits workspace, then global defaults. Applies to delegated children too. |
 | `tools` | Allowlist of ngn tool names, as a YAML list or comma-separated string. Omitted inherits; `[]` permits no tools. |
 | `denied_tools` | Tool names to subtract from the inherited or explicit allowlist. |
 | `allowed_agents` | Permitted delegation targets. Omitted inherits; `[]` disables delegation. |
@@ -46,6 +50,27 @@ when `name` is omitted; `research/agent.md` uses the directory name.
 
 Existing JSON `profiles` support the same fields, with `instructions` in the JSON
 object and arrays for tool/agent lists. JSON profiles may omit `description`.
+
+The model and its connection form one selection:
+
+```yaml
+model:
+  provider: openai
+  id: gpt-6.1-sol
+```
+
+Connections may come from the global or workspace registry. Credentials stay in
+the connection; an agent does not define a provider. An unavailable connection
+is reported rather than silently using another one. Older scalar `model` and
+separate `provider` fields remain readable; do not combine a model reference
+with a separate provider field.
+
+In the web Team pane, model settings are available for `assistant` and unused
+profiles too. Saves write model-only Markdown overrides under
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agent-models/`. **Inherit**
+uses workspace/global defaults; **Restore definition** removes the override and
+uses the original definition again. A save affects the next activation while
+accepted work keeps its selected connection and model.
 
 ## Discovery and precedence
 
@@ -106,7 +131,24 @@ provider connection:
 ```
 
 Paths resolve beside the JSON configuration; absolute paths are also accepted.
-Each entry selects one file. `format` is one of `native`, `claude`, `copilot`,
+Each entry selects one file or a directory. Directory imports use the selected
+format's discovery layout, with a shared limit of 256 files across entries.
+For example, this trusted configuration enables just two definition directories
+without trusting the workspace's other configuration:
+
+```json
+{
+  "agent_imports": [
+    {"path": "/state/workspace/.agents/agents", "format": "antigravity"},
+    {"path": "/state/workspace/.ngn/agents", "format": "native"}
+  ]
+}
+```
+
+The later native import wins when both contain the same name. New files and
+renames in these directories are discovered at the next model request or Team
+refresh. Unsupported files are reported and valid neighboring files still load.
+`format` is one of `native`, `claude`, `copilot`,
 `opencode`, `codex`, `cursor`, `gemini`, or `antigravity`.
 
 Foreign tools are mapped explicitly to ngn tools. For an installed custom tool,

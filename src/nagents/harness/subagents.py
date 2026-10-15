@@ -54,6 +54,8 @@ if TYPE_CHECKING:
     from nagents.types import Message
     from nagents.types import ReasoningEffort
 
+    from .config import AgentProfile
+    from .model_bindings import ModelBinding
     from .providers import ProviderProfile
     from .runtime import Harness
 
@@ -117,6 +119,10 @@ class SubagentManager:
         self._infos: dict[str, TaskInfo] = {} if root is None else root._infos
         self._workers: dict[str, asyncio.Task[None]] = {} if root is None else root._workers
         self._children: dict[str, Harness] = {} if root is None else root._children
+        self._profile_snapshots: dict[str, tuple[dict[str, AgentProfile], dict[str, AgentProfile]]] = (
+            {} if root is None else root._profile_snapshots
+        )
+        self._model_snapshots: dict[str, ModelBinding] = {} if root is None else root._model_snapshots
         self._options: dict[str, TaskOptions] = {} if root is None else root._options
         self._next_options: dict[str, TaskOptions] = {} if root is None else root._next_options
         self._provider_overrides: dict[str, ProviderProfile] = {} if root is None else root._provider_overrides
@@ -235,8 +241,8 @@ class SubagentManager:
         Args:
             prompt: A self-contained task; the child does not receive parent conversation history.
             agent: Defaults to assistant. Use an explicitly configured profile; never pass an empty name.
-            model: Optional model identifier; omission inherits the selected profile or parent model.
-            provider: Optional configured provider connection name; omission inherits profile or parent routing.
+            model: Optional model identifier; omission inherits the agent, workspace, then global model selection.
+            provider: Optional connection for this invocation; omission uses the resolved model's provider.
             compact_trigger: Optional auto, tokens, messages, or off; omission inherits parent compaction.
             compact_tokens: Context budget for tokens mode; compaction starts at seventy percent.
             compact_messages: Message threshold for messages mode.
@@ -245,9 +251,10 @@ class SubagentManager:
         if not self.harness.can_delegate:
             raise PermissionError("Delegation is disabled at the configured subagent depth limit")
         self._check_budget(prompt)
-        profile = self.harness.config.profile(agent)
+        profile = self.harness.delegation_profile(agent)
         options = TaskOptions(provider, model, compact_trigger, compact_tokens, compact_messages, reasoning_effort)
         options.validate(self.harness)
+        binding = self.harness.delegation_model_binding(agent, model=model, provider=provider)
         if agent not in self.harness.delegatable_profile_names:
             raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
         if len(self._infos) >= MAX_RETAINED_TASKS:
@@ -269,9 +276,9 @@ class SubagentManager:
             depth=self.harness.subagent_depth + 1,
             profile=agent,
             mode="reviewer" if self.harness.mode == "reviewer" else profile.mode,
-            provider=provider or profile.provider or self.harness.config.provider,
+            provider=binding.provider,
             provider_kind=self.harness.config.provider_profile().kind,
-            model=model or profile.model or self.harness.agent.provider.model,
+            model=binding.id,
             reasoning_effort=resolve_effort(
                 reasoning_effort, resolve_effort(profile.reasoning_effort, self.harness.reasoning_effort())
             ),
@@ -304,6 +311,11 @@ class SubagentManager:
         if info.provider:
             info.provider_kind = self.harness.providers.providers[info.provider].kind
         self._infos[info.id] = info
+        self._profile_snapshots[info.id] = (
+            {name: replace(value) for name, value in self.harness.delegation_profiles().items()},
+            {name: replace(value) for name, value in self.harness.delegation_source_profiles().items()},
+        )
+        self._model_snapshots[info.id] = binding
         self._options[info.id] = options
         self._inputs[info.id] = deque()
         self._admitted[info.id] = {}
@@ -683,7 +695,15 @@ class SubagentManager:
 
         parent = self._children[info.id] if continuing and info is not None else self.harness
         options = self._options.get(info.id, TaskOptions()) if info else TaskOptions()
-        if not parent.config.profile(agent).subagent_available:
+        if continuing:
+            parent.refresh_agent_definitions()
+        profiles, source_profiles = (
+            self._profile_snapshots[info.id]
+            if not continuing and info is not None and info.id in self._profile_snapshots
+            else (parent.config.profiles, parent.config.agent_source_profiles)
+        )
+        profile = parent.config.profile("assistant") if agent == "assistant" else profiles.get(agent)
+        if profile is None or not profile.subagent_available:
             raise PermissionError(f"Agent {agent!r} is no longer available for delegation")
         if not continuing and agent not in parent.delegatable_profile_names:
             raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
@@ -720,22 +740,19 @@ class SubagentManager:
             raise ValueError(
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
-        profiles = {name: replace(profile) for name, profile in parent.config.profiles.items()}
-        if agent in profiles:
-            profiles[agent] = replace(
-                profiles[agent],
-                model=options.model or profiles[agent].model,
-                provider=options.provider or profiles[agent].provider,
-                reasoning_effort=options.reasoning_effort or profiles[agent].reasoning_effort,
-            )
+        profiles = {name: replace(profile) for name, profile in profiles.items()}
+        binding = (
+            self._model_snapshots[info.id]
+            if not continuing and info is not None and info.id in self._model_snapshots
+            else parent.delegation_model_binding(agent, model=options.model, provider=options.provider)
+        )
         config = replace(
-            parent.config,
+            parent.clone_configuration(),
             agent=agent,
-            provider=options.provider or parent.config.provider,
-            model=options.model or parent.agent.provider.model,
             model_explicit=bool(options.model) or parent.config.model_explicit,
             reasoning_effort=resolve_effort(options.reasoning_effort, parent.reasoning_effort()),
             profiles=profiles,
+            agent_source_profiles={name: replace(value) for name, value in source_profiles.items()},
             plugins=(),
             diagnostics=(),
             demo=parent.config.demo or self.root.harness.config.demo,
@@ -780,11 +797,16 @@ class SubagentManager:
                 providers={name: profile for name, profile in config.providers.items() if name},
             ),
             shared_auth=self.root.harness.openai_auth,
+            model_binding=binding,
+        )
+        child._reasoning_effort_override = options.reasoning_effort or (
+            parent._reasoning_effort_override if continuing else ""
         )
         if child._built_provider_profile == parent._built_provider_profile:
             child.agent.provider.restore_context_metadata(parent.agent.provider.context_metadata_snapshot())
         options.apply_compaction(child, parent)
         child._is_subagent = True
+        child._preserve_first_profile = True
         child._task_id = info.id if info else str(uuid.uuid4())
         child._task_name = info.name if info else "subagent"
         child._activation = info.activation if info else 0

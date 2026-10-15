@@ -31,6 +31,9 @@ from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
 from nagents.provider.openai import CODEX_ENDPOINT
 
+from .model_bindings import AgentModelStore
+from .model_bindings import ModelBinding
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from collections.abc import Mapping
@@ -335,7 +338,7 @@ class ProviderRegistry:
 
 
 class ModelPreferenceStore:
-    """Scoped chat-model choice inside config.json, separate from connections."""
+    """Scoped model reference inside config.json, without connection credentials."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -360,16 +363,43 @@ class ModelPreferenceStore:
     def load(self) -> str:
         return self._model(self._document())
 
+    def load_binding(self, *, provider: str = "") -> ModelBinding:
+        """Resolve old bare IDs against their configured connection selection."""
+        model = self._document().get("model", "")
+        if isinstance(model, dict):
+            return ModelBinding.parse(model)
+        identifier = self._model({"model": model})
+        return ModelBinding(provider, identifier.strip()) if identifier else ModelBinding()
+
     @staticmethod
     def _model(document: dict[str, object]) -> str:
         model = document.get("model", "")
+        if isinstance(model, dict):
+            return ModelBinding.parse(model).id
         if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
             raise ValueError("Invalid model preference")
         return model
 
     def save(self, model: str, *, only_if_missing: bool = False) -> str:
+        """Update an ID while retaining an existing complete binding's provider."""
         if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
             raise ValueError("Invalid model preference")
+        return self._model(self._save(model, only_if_missing=only_if_missing))
+
+    def save_binding(self, binding: ModelBinding, *, only_if_missing: bool = False) -> ModelBinding:
+        """Persist a complete pair, or remove this layer to inherit defaults."""
+        if binding.configured and not binding.provider:
+            raise ValueError("Saved models must name a configured provider connection")
+        document = self._save(binding, only_if_missing=only_if_missing)
+        model = document.get("model", "")
+        if isinstance(model, dict):
+            return ModelBinding.parse(model)
+        identifier = self._model(document)
+        # only_if_missing can retain an old ID-only document. Its connection is
+        # still the caller's configured selection, never the rejected new pair.
+        return ModelBinding("", identifier.strip()) if identifier else ModelBinding()
+
+    def _save(self, model: str | ModelBinding, *, only_if_missing: bool) -> dict[str, object]:
         directory = self.path.parent
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         lock = directory / ".models.lock"
@@ -377,11 +407,20 @@ class ModelPreferenceStore:
             raise ValueError("Model preference lock must not be a symlink")
         with lock.open("a+b") as stream, _exclusive_lock(stream):
             document = self._document()
-            current = self._model(document)
-            if (only_if_missing and "model" in document) or ("model" in document and current == model):
-                return current
-            if model:
-                document["model"] = model
+            self._model(document)
+            if only_if_missing and "model" in document:
+                return document
+            previous = document.get("model", "")
+            if isinstance(model, ModelBinding):
+                value: str | dict[str, str] = model.as_dict() if model.configured else ""
+            elif model and isinstance(previous, dict):
+                value = ModelBinding(ModelBinding.parse(previous).provider, model.strip()).as_dict()
+            else:
+                value = model
+            if previous == value:
+                return document
+            if value:
+                document["model"] = value
             else:
                 document.pop("model", None)
             payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -404,7 +443,7 @@ class ModelPreferenceStore:
                         os.close(directory_fd)
             finally:
                 Path(temporary).unlink(missing_ok=True)
-            return model
+            return document
 
 
 class ProviderRegistryStore:
@@ -546,6 +585,15 @@ class ScopedProviderRegistryStore:
     def model_store(self, scope: str) -> ModelPreferenceStore:
         self.store(scope)
         return self._models[scope]
+
+    @property
+    def agent_models(self) -> AgentModelStore:
+        return AgentModelStore(self.model_store("workspace").path.parent / "agent-models")
+
+    def model_binding(self, scope: str, *, legacy_provider: str = "") -> ModelBinding:
+        """Read one model layer; only legacy bare IDs use its active connection."""
+        selected = legacy_provider or (self.load_scope("global").active if scope == "global" else self.load().active)
+        return self.model_store(scope).load_binding(provider=selected)
 
     def model(self) -> str:
         return self.model_store("workspace").load() or self.model_store("global").load()

@@ -448,6 +448,7 @@ class HarnessResources(AgentPlugin):
 
     async def _reload(self, *, initial: bool) -> None:
         harness = self.harness
+        harness.refresh_agent_definitions()
         if harness._is_subagent and not harness.supports_child_custom_tools:
             self._mcp_status = "disabled"
             return
@@ -765,6 +766,24 @@ class HarnessResources(AgentPlugin):
             )
         return request
 
+    async def before_generation(self, context: RunContext) -> None:
+        # Unlike plugin/MCP setup this also runs for ordinary child harnesses.
+        # Read-only web catalog refreshes never activate an in-flight profile.
+        harness = self.harness
+        harness.refresh_agent_definitions()
+        authored = harness.agent.system_prompt != harness._generated_system_prompt
+        harness.activate_agent_definitions()
+        if not authored:
+            harness.refresh_instructions()
+        if self.active is not self.current:
+            await self._retire_active(context)
+            self.active = self.current
+            self.active.used = True
+            for hook in self.active.hooks:
+                await hook.before_run(context, copy.deepcopy(self._message))
+        for hook in self.active.hooks:
+            await hook.before_generation(context)
+
     async def after_model(self, context: RunContext) -> None:
         for hook in self.active.hooks:
             await hook.after_model(context)
@@ -816,6 +835,7 @@ class HarnessResources(AgentPlugin):
             self._running = False
             self.pinned.clear()
             self._snapshot_ready = False
+            self.harness._agent_generation_active = False
 
     async def aclose(self) -> None:
         self._closed = True

@@ -7,6 +7,7 @@ import { request } from "../../api/client.js";
 import { compactLabel, compactionWarning } from "./context.js";
 import { contextSummary, contextUsageLabel, contextWindowSource } from "../context/controller.js";
 import { ReasoningEffort, effortLabel } from "../settings/ReasoningEffort.js";
+import { ModelBindingPicker } from "../settings/ModelBindingPicker.js";
 
 export function TeamPane({ team, agents, arrivals, open, close, configure }: {
   team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; open: boolean; close: () => void; configure: (id: string) => void;
@@ -27,7 +28,7 @@ export function TeamPane({ team, agents, arrivals, open, close, configure }: {
   return open ? <aside className="team-pane" aria-label="Team conversations">{body}</aside> : null;
 }
 
-export function AgentConfiguration({ agent, token, sessionId, changed, close }: { agent: TeamAgent; token: string; sessionId: string; changed: () => void; close: () => void }) {
+export function AgentConfiguration({ agent, token, sessionId, changed, close, configureDefinition }: { agent: TeamAgent; token: string; sessionId: string; changed: () => void; close: () => void; configureDefinition?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pending = agent.task?.next_settings;
   const [provider, setProvider] = useState(pending?.provider || agent.provider);
@@ -36,12 +37,10 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
   const [trigger, setTrigger] = useState(pending?.compact_trigger || "");
   const [budget, setBudget] = useState(String(pending?.compact_tokens || agent.compactTokens || 200000));
   const [messages, setMessages] = useState(String(pending?.compact_messages || agent.compactMessages || 100));
-  const [providers, setProviders] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   useEffect(() => { const previous = document.activeElement; dialog.current?.showModal(); return () => { dialog.current?.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); }; }, []);
-  useEffect(() => { const controller = new AbortController(); void request("provider-scopes/workspace/providers", token, undefined, controller.signal).then(response => response.json()).then((result: { providers: Record<string, unknown> }) => setProviders(Object.keys(result.providers))).catch(() => {}); return () => controller.abort(); }, [token]);
   async function save() {
     if (saving) return;
     const tokens = Number(budget), count = Number(messages);
@@ -64,18 +63,17 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close }: 
       <dt>Compaction</dt><dd>{compactLabel(agent) || "Unavailable"}{compactionWarning(agent) && <p className="team-context-warning">{compactionWarning(agent)}</p>}</dd>
       <dt>Context</dt><dd>{agent.context ? <>{contextSummary(agent.context)}<small>{contextUsageLabel(agent.context)} · {contextWindowSource(agent.context)}</small></> : "Unavailable"}</dd>
       <dt>Status</dt><dd>{agent.phase === "waiting" ? agent.reason : agent.phase}</dd>
-    </dl><form className="agent-next-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
+    </dl>{configureDefinition && <button type="button" disabled={saving} onClick={configureDefinition}>Model defaults for {agent.task?.profile || agent.name}</button>}<form className="agent-next-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
       <h3>Next activation</h3><p>Saved changes apply when this agent next starts from idle. Messages queued during its current work use the settings above.</p>
-      <label>Provider connection<input list="agent-provider-connections" value={provider} onChange={event => setProvider(event.target.value)} maxLength={200} autoComplete="off" /></label>
-      <datalist id="agent-provider-connections">{providers.map(id => <option key={id} value={id} />)}</datalist>
-      <label>Model<input value={model} onChange={event => setModel(event.target.value)} maxLength={200} autoComplete="off" spellCheck={false} /></label>
+      <ModelBindingPicker token={token} value={{ provider, id: model }} disabled={saving}
+        change={binding => { setProvider(binding.provider); setModel(binding.id); }} />
       <ReasoningEffort token={token} provider={provider} model={model} value={effort} update={setEffort}
         defaultLabel={`Keep accepted effort · ${effortLabel(agent.reasoningEffort)}`} allowReset />
       <label>Compaction<select value={trigger} onChange={event => setTrigger(event.target.value)}><option value="">Keep accepted policy</option><option value="auto">Automatic</option><option value="tokens">Token budget</option><option value="messages">Message threshold</option><option value="off">Off</option></select></label>
       {trigger === "tokens" && <label>Context budget<input type="number" min={1024} max={10000000} value={budget} onChange={event => setBudget(event.target.value)} /><small>Compaction starts at 70% of this budget.</small></label>}
       {trigger === "messages" && <label>Messages before compaction<input type="number" min={1} max={10000} value={messages} onChange={event => setMessages(event.target.value)} /></label>}
       {error && <p className="agent-settings-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-      <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save for next activation"}</button>
+      <button type="submit" disabled={saving || !model.trim()}>{saving ? "Saving…" : "Save for next activation"}</button>
     </form>
   </dialog>;
 }

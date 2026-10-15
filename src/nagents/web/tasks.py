@@ -102,6 +102,7 @@ class Tasks:
 
     async def index(self, root: str) -> dict[str, object]:
         await self.store.validate(root)
+        self.state.harness.refresh_agent_definitions()
         saved = {str(task["id"]): task for task in await self.store.tasks(root)}
         for task in saved.values():
             task.update(
@@ -128,20 +129,30 @@ class Tasks:
             profiles: list[dict[str, object]] = []
             for name in profile_owner.config.profile_names:
                 profile = profile_owner.config.profile(name)
+                unavailable = ""
+                try:
+                    binding = profile_owner.resolved_model_binding(name).binding
+                    provider_id, model_id = binding.provider, binding.id
+                except ValueError:
+                    provider_id, model_id = profile.provider, profile.model
+                    unavailable = (
+                        "The agent's model reference is unavailable. Open its model settings to choose a connection."
+                    )
                 available = (
                     profile.user_invocable
                     and profile_owner.can_delegate
                     and name in profile_owner.delegatable_profile_names
+                    and not unavailable
                 )
                 profiles.append(
                     {
                         "id": name,
                         "name": name,
                         "description": profile.description[:2000],
-                        "provider": profile.provider
+                        "provider": provider_id
                         or profile_owner.config.provider
                         or profile_owner.config.provider_profile().kind,
-                        "model": profile.model or profile_owner.agent.provider.model,
+                        "model": model_id or profile_owner.agent.provider.model,
                         "reasoning_effort": resolve_effort(profile.reasoning_effort, profile_owner.reasoning_effort()),
                         "source": profile.source,
                         "used": name in used,
@@ -149,10 +160,14 @@ class Tasks:
                         "can_start": available,
                         "unavailable_reason": ""
                         if available
-                        else "This profile is not available for delegation from the current agent.",
+                        else unavailable or "This profile is not available for delegation from the current agent.",
                     }
                 )
-            return {"tasks": list(saved.values()), "profiles": profiles}
+            return {
+                "tasks": list(saved.values()),
+                "profiles": profiles,
+                "profile_revision": profile_owner.profile_revision,
+            }
 
     @staticmethod
     def task(data: dict[str, object], owner: Harness) -> dict[str, object]:

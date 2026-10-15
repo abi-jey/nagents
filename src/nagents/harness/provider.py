@@ -8,6 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
+from nagents.events import ErrorEvent
 from nagents.events import Event
 from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
@@ -15,9 +16,11 @@ from nagents.events import ToolCallEvent
 from nagents.exceptions import ModelListError
 from nagents.extensions import CompactionResult
 from nagents.provider import Provider
+from nagents.provider import ProviderType
 from nagents.provider.reasoning import native_openai_api
 from nagents.types import Message
 
+from .model_bindings import ModelBinding
 from .providers import PROVIDERS
 
 if TYPE_CHECKING:
@@ -27,6 +30,44 @@ if TYPE_CHECKING:
 
     from .config import HarnessConfig
     from .credentials import ProviderLoginStore
+
+
+class UnavailableModelProvider(Provider):
+    """A repairable model reference with no credentials or usable transport."""
+
+    def __init__(self, binding: ModelBinding) -> None:
+        self.binding = binding
+        self.reason = (
+            f"Model connection {binding.provider!r} is unavailable in this workspace. "
+            "Choose an available connection and model in Settings."
+        )
+        # Every request surface below is local. The inert loopback origin also
+        # prevents an inherited transport helper reaching a fallback provider.
+        super().__init__(
+            ProviderType.OPENAI_COMPATIBLE,
+            model=binding.id,
+            api_key="unavailable-model-no-transport",
+            base_url="http://127.0.0.1:0",
+        )
+
+    async def verify_model(self, force: bool = False) -> bool:
+        raise ValueError(self.reason)
+
+    async def get_model_list(self) -> list[str]:
+        raise ModelListError(self.reason)
+
+    async def _fetch_context_metadata(self) -> None:
+        return
+
+    async def generate(
+        self,
+        messages: list[Message],
+        tools: list["ToolDefinition"] | None = None,
+        config: "GenerationConfig | None" = None,
+        stream: bool = True,
+        verify_model: bool = False,
+    ) -> AsyncIterator[Event]:
+        yield ErrorEvent(message=self.reason, code="MODEL_CONNECTION_UNAVAILABLE", recoverable=False)
 
 
 class HarnessProvider(Provider):

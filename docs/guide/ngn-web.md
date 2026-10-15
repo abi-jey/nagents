@@ -65,10 +65,10 @@ Azure AI Foundry, Anthropic, Gemini, OpenRouter, Azure v1, LiteLLM or custom
 OpenAI-compatible connections. Select a provider type to see its supported API
 and authentication modes. Connection settings show the credential source and
 effective endpoint without showing secrets. Select a connection in the left column
-to browse its model catalog on the right. Browsing does not activate it: choose
-**Use connection** before selecting a model. Enter a model ID directly when
+to browse its model catalog on the right. Select a model to choose its connection
+and model together; browsing does not activate the connection. Enter a model ID directly when
 discovery is unavailable. **Save workspace settings** or **Save global settings**
-saves the model, reasoning effort and other defaults separately from connection
+saves the provider/model reference, reasoning effort and other defaults separately from connection
 changes. Unsaved settings require an explicit discard before switching connections.
 The same connections appear in the TUI's `/provider` menu. The
 global registry lives in `$XDG_CONFIG_HOME/ngn/providers.json` (normally
@@ -95,6 +95,18 @@ a chat model; global/workspace model preferences are shared by web and terminal.
 Existing saved settings are not deleted when you add a
 connection; set its environment variable before making requests.
 
+Both model-default scopes can reference a global or workspace connection. An
+agent model overrides the workspace default, which overrides the global default.
+Open an agent's settings in Team to configure the same provider/model selection
+for `assistant` or any unused profile. **Inherit** removes its explicit model
+choice; **Restore definition** restores the model declared in its source file.
+Accepted executions keep their connection and model until the next activation.
+New trusted agent definitions appear in Team without restarting the server.
+If a global model references a workspace-only connection that is absent in
+another workspace, Settings shows that selection as unavailable. Choose an
+available connection and model there to repair it; ngn does not send the request
+through a substitute provider.
+
 `ngn serve` logs resolved trusted config paths, provider registry path and
 connection names/types, settings storage paths, session/run and tool lifecycle,
 Live connection changes, and model catalog requests/results. Prompt contents,
@@ -112,9 +124,9 @@ The selected-model summary distinguishes configured context limits from metadata
 advertised for that exact model. Missing metadata stays unknown. Exact model
 overrides take priority over the connection-wide limit, then provider metadata.
 **Context compaction** controls when history is compacted; it does not change the
-model's input capacity. Agent profiles can override the workspace model, provider
+model's input capacity. Agent profiles can override the workspace model reference
 and reasoning effort; the panel shows those overrides and their configuration
-source instead of presenting them as editable workspace defaults.
+source. Edit an agent's model reference from its Team settings.
 
 For your own installation, choose your own connection deliberately:
 
@@ -1630,7 +1642,13 @@ allowlisted `providers`/`apis`/`auths` lists, and read-only `connection`
 | `compact_messages` | Integer, 1 through 10,000; the conversation length used when `compact_trigger` is `messages` |
 | `submit_mode` | `queue` (default) or `interrupt` for new messages in the active web conversation |
 
-POST carries `{revision, values}`. Provider, endpoint, API, authentication, and
+POST carries `{revision, values, model_binding: {provider, id}}`, where
+`values.model` must match `model_binding.id`. The binding's provider is a saved
+connection ID; `values.provider` remains the read-only provider kind. Responses
+include `model_binding`, `default_model_binding`, `model_binding_source`,
+`provider_origin`, `model_binding_available`, and an actionable unavailable
+reason. Both scopes choose from the merged global/workspace connection registry.
+Provider, endpoint, API, authentication, and
 key-environment fields are read-only projections of the selected connection;
 edit them through Provider connections. Unknown fields, numeric strings,
 booleans used as numbers, and nonfinite numbers are
@@ -1642,8 +1660,19 @@ model preference. Model IDs are free text: settings GET/save never query
 a model catalog or test entitlement. A later provider request may reject an
 unavailable ID. Permission ceilings and per-call approvals remain enforced.
 Existing sessions, history, provider credentials, and tools are retained. New
-children inherit the current model; retained children keep their prior state
-under the existing child continuation contract.
+children resolve their own agent model, then workspace and global defaults;
+an explicit invocation model has highest priority. Retained children keep their
+prior history under the existing child continuation contract.
+
+`GET/PUT/DELETE /api/agent-models/{name}` reads, saves, and resets a reusable
+agent's model selection, including `assistant`. PUT carries
+`{revision, model: {provider, id}}`; both empty strings explicitly inherit
+workspace/global defaults. DELETE carries `{revision}` and removes the
+model-only override to reveal the source definition again. A missing override
+is returned as `model: null`. Replies include `definition_model`, `inherited`,
+`effective`, `source`, `provider_origin`, `source_path`, and availability.
+These endpoints do not edit instructions, permissions, or provider credentials.
+Saves publish `agent_profiles_changed` to refresh Team and model metadata.
 
 `compact_trigger = auto` leaves the provider's context-limit default in place,
 `tokens` compacts near 70% of `compact_tokens`, `messages` compacts once the
@@ -1656,8 +1685,9 @@ Settings requests reject `api_key` and `clear_api_key`. Configure the selected
 provider's credential reference or ChatGPT/Codex login in Provider connections.
 Credential values never enter the settings response.
 
-Mutations reject HTTP 409 during a run, approval, or another mutation, or when the
-submitted revision is stale. Reload before retrying; do not automatically overwrite
+Settings can be saved during an execution; its accepted runtime keeps its
+configuration and the next activation receives the saved choice. Mutations
+reject HTTP 409 when the submitted revision is stale. Reload before retrying; do not automatically overwrite
 another tab's settings. Reads expose only the last committed snapshot, including
 during a save. Error `detail` is a safe string, never raw request/provider data.
 

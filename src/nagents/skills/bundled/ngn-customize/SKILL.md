@@ -74,14 +74,25 @@ than assuming the top-level model always wins.
 
 For reusable native agents, create `.ngn/agents/<name>.md` with YAML frontmatter
 and a Markdown instruction body. `description` is required; `name` defaults to
-the filename. Optional fields are `mode`, `model`, `provider`, `tools`,
+the filename. Optional fields are `mode`, `model`, `tools`,
 `denied_tools`, `allowed_agents`, `user_invocable`, and `subagent_available`.
 Omitted tools inherit; `tools: []` allows no tools. Parent and ancestor ceilings
 and `.ngn/tools.yaml` remain additional restrictions, including on follow-ups.
 `user_invocable: false` hides an agent from user selection;
 `subagent_available: false` prevents delegation.
 
-Discovery runs at startup; workspace roots require `--trust-project`. Personal
+Use `model: {provider: "connection-name", id: "exact-model-id"}` in native
+frontmatter. Provider and model are one reference, not independent agent
+settings. Omission inherits the workspace model, then the global model; either
+may reference a global or workspace connection. The Team model settings also
+support `assistant` and unused profiles. UI saves are model-only Markdown
+overrides; inherit defaults and restore the source definition are distinct.
+
+Discovery refreshes before every model request, including after tools and in
+children. New names enter the next delegation schema and the Team catalog
+without restarting. Already issued tool batches keep their advertised profiles;
+running children keep their identities. Workspace roots require `--trust-project`
+or a directory import in trusted configuration. Personal
 native definitions live in `$XDG_CONFIG_HOME/ngn/agents`. Foreign Markdown roots
 for Claude, Copilot/VS Code, OpenCode, Cursor, Gemini and Antigravity, plus Codex
 `.codex/agents/*.toml`, have separate strict adapters. `.agents/agents` uses
@@ -90,12 +101,17 @@ definition there and assume identical permissions.
 
 Use trusted JSON `agent_imports: [{"path": "../.claude/agents/review.md", "format":
 "claude", "model": "exact-model-id", "provider": "connection-name"}]` for explicit
-imports and model mapping. Foreign model aliases require an explicit override;
+imports and model mapping. An import path can also name a directory, for example
+`{"path": "/state/workspace/.ngn/agents", "format": "native"}`. This trusts only
+the definitions in that directory, not other workspace configuration. Imports
+are ordered; put native after Antigravity if duplicate names should use native
+semantics. Foreign model aliases require an explicit override;
 unknown tool names require an explicit `tool_map` to installed ngn tools.
 Unsupported restrictions, hooks and MCP declarations reject that definition and
 produce a source diagnostic. Importing a definition never starts its foreign
-runtime. Inspect `config.agent_diagnostics` or web settings before claiming it
-loaded, and restart ngn after changing definitions.
+runtime. Inspect `config.agent_diagnostics`, the Team catalog, or the next
+delegation schema before claiming a definition loaded. Do not claim a restart
+is needed for a new or renamed file in an already trusted definition directory.
 
 JSON plugin paths and `data_dir` resolve relative to the config file. CLI
 `--plugin` paths resolve relative to the invoking directory. JSON plugin lists
@@ -223,6 +239,7 @@ native child agents do not automatically inherit parent MCP servers.
 | Hook | Contract |
 | --- | --- |
 | `before_run(context, message) -> Message` | Transform incoming message. |
+| `before_generation(context) -> None` | Refresh local capabilities before the next prompt and tool schemas are assembled. |
 | `before_model(context, request) -> ModelRequest` | Transform next-request messages, tools, and generation config; does not rewrite history. |
 | `before_tool(context, call) -> ToolCall` | Transform arguments before executor authorization; preserve name and call ID. |
 | `after_tool(context, result) -> ToolResultEvent` | Transform result; preserve name and call ID. |

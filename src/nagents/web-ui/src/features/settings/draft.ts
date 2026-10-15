@@ -1,8 +1,8 @@
-import type { SettingsProfile, SettingsValues } from "./types.js";
+import type { ModelBinding, SettingsProfile, SettingsValues } from "./types.js";
 
 export type SettingsDraft = {
   [Key in keyof SettingsValues]: SettingsValues[Key] extends boolean ? boolean : string;
-};
+} & { model_provider: string };
 export type DraftErrors = Partial<Record<keyof SettingsValues, string>>;
 
 export const executionLimits = [
@@ -73,9 +73,10 @@ export const compactionLimits = [
   },
 ] as const;
 
-export function createDraft(values: SettingsValues): SettingsDraft {
+export function createDraft(values: SettingsValues, binding?: ModelBinding): SettingsDraft {
   return {
     model: values.model,
+    model_provider: binding?.provider ?? values.provider,
     reasoning_effort: values.reasoning_effort || "",
     agent: values.agent,
     provider: values.provider,

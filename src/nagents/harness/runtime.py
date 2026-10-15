@@ -32,6 +32,7 @@ from nagents.types import GenerationConfig
 from nagents.types import ReasoningEffort
 from nagents.types import TextContent
 
+from .agent_catalog import AgentCatalog
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .config import AgentProfile
@@ -50,9 +51,13 @@ from .followups import FollowupReady
 from .followups import RunInput
 from .followups import RunInputs
 from .followups import RunTurn
+from .model_bindings import ModelBinding
+from .model_bindings import ResolvedModelBinding
+from .model_bindings import resolve_model_binding
 from .model_catalog import ModelCatalog
 from .provider import DemoCompaction
 from .provider import HarnessProvider
+from .provider import UnavailableModelProvider
 from .providers import ProviderProfile
 from .providers import ProviderRegistry
 from .providers import ScopedProviderRegistryStore
@@ -89,6 +94,8 @@ if TYPE_CHECKING:
     from .model_catalog import ModelCapabilities
     from .types import ApprovalHandler
     from .types import WakeupHandler
+
+_INHERIT_MODEL = ModelBinding()
 
 
 async def _deny(request: ApprovalRequest) -> bool:
@@ -142,7 +149,7 @@ class Harness:
 
     def reasoning_effort(self) -> ReasoningEffort:
         return resolve_effort(
-            self._reasoning_effort_override or self.config.profile(self.config.agent).reasoning_effort,
+            self._reasoning_effort_override or self.current_profile().reasoning_effort,
             self.config.reasoning_effort,
         )
 
@@ -181,6 +188,7 @@ class Harness:
         allow_subagents: bool = True,
         provider_registry: ProviderRegistry | None = None,
         shared_auth: OpenAIAuth | None = None,
+        model_binding: ModelBinding = _INHERIT_MODEL,
     ) -> None:
         """Build a runtime, optionally inheriting an accepted connection snapshot.
 
@@ -190,6 +198,15 @@ class Harness:
         """
         self._reasoning_effort_override: ReasoningPreference = ""
         self.config = config
+        self._agent_catalog = AgentCatalog(config)
+        self._current_profile_name = config.agent
+        self._current_profile = replace(config.profile(config.agent))
+        self._generation_profiles: dict[str, AgentProfile] = {}
+        self._generation_source_profiles: dict[str, AgentProfile] = {}
+        self._generation_model_bindings: dict[str, ModelBinding] = {}
+        self._generation_model_errors: dict[str, str] = {}
+        self._agent_generation_active = False
+        self._preserve_first_profile = False
         self.allow_subagents = allow_subagents
         self._is_subagent = False
         self.subagent_depth = 0
@@ -221,15 +238,23 @@ class Harness:
         self.provider_store = ScopedProviderRegistryStore(self.workspace, paths=config.provider_paths)
         self.providers = self.provider_store.load() if provider_registry is None else provider_registry
         initial_profile = config.profile(config.agent)
-        if initial_profile.provider:
-            selected = self.providers.providers.get(initial_profile.provider)
-            if selected is None:
-                raise ValueError(f"Unknown provider connection {initial_profile.provider!r} for agent {config.agent!r}")
-            config.provider = initial_profile.provider
+        self._default_provider_name = config.provider or config.unavailable_model_binding.provider
+        self._selected_model = config.model
+        selected_binding = (
+            model_binding
+            if model_binding.configured
+            else self._resolve_agent_model(config.agent, initial_profile, require_available=False).binding
+        )
+        missing_connection = bool(
+            selected_binding.provider and selected_binding.provider not in self.providers.providers
+        )
+        if selected_binding.configured:
+            config.provider = "" if missing_connection else selected_binding.provider
+            config.model = selected_binding.id
+        config.unavailable_model_binding = selected_binding if missing_connection else ModelBinding()
         self._built_provider_name = config.provider
         self._built_provider_profile = config.provider_profile()
         self._api_model = config.model
-        self._selected_model = config.model
         self._selected_model_explicit = config.model_explicit
         self._initialized = False
         self._session_created = False
@@ -244,7 +269,9 @@ class Harness:
         self.tool_settings = WorkspaceTools(self.workspace)
         self.agent = Agent(
             provider=(
-                build_provider(config.providers[config.provider], config, self.openai_auth)
+                UnavailableModelProvider(selected_binding)
+                if missing_connection
+                else build_provider(config.providers[config.provider], config, self.openai_auth)
                 if config.provider
                 else HarnessProvider(config, self.login_store if not config.provider else None)
             ),
@@ -265,11 +292,8 @@ class Harness:
         self.resources = HarnessResources(self)
         self.agent.tool_executor = HarnessExecutor(self, self.tools)
         self.agent.workspace = self.workspace
-        profile = config.profile(config.agent)
-        if profile.model:
-            self.config.model = profile.model
+        if initial_profile.model or model_binding.configured:
             self.config.model_explicit = True
-            self.agent.provider.model = profile.model
         self._defer_prompt_capabilities = True
         self.refresh_instructions()
         self._defer_prompt_capabilities = False
@@ -278,9 +302,185 @@ class Harness:
     def mode(self) -> str:
         return self.mode_for_profile(self.config.agent)
 
+    @property
+    def profile_revision(self) -> str:
+        """Opaque catalog revision; contains no instruction bodies."""
+        return self._agent_catalog.revision
+
+    def resolved_model_binding(self, agent: str = "") -> ResolvedModelBinding:
+        """Resolve a catalog model selection without changing the running provider."""
+        name = agent or self.config.agent
+        return self._resolve_agent_model(name, self.config.profile(name))
+
+    def clone_configuration(self) -> "HarnessConfig":
+        """Copy host defaults without promoting this runtime's agent override."""
+        config = copy.deepcopy(self.config)
+        missing = bool(self._default_provider_name and self._default_provider_name not in config.providers)
+        config.provider = "" if missing else self._default_provider_name
+        config.model = self._selected_model
+        config.unavailable_model_binding = (
+            ModelBinding(self._default_provider_name, self._selected_model) if missing else ModelBinding()
+        )
+        return config
+
+    def _default_model_choices(self) -> tuple[ModelBinding, ModelBinding, ModelBinding]:
+        builtin = ModelBinding(self._default_provider_name, self._selected_model)
+        if self.config.model_config_explicit:
+            return ModelBinding(), ModelBinding(), builtin
+        if not self._default_provider_name and "" in self.config.providers:
+            workspace = self.provider_store.model_store("workspace").load_binding()
+            global_default = self.provider_store.model_store("global").load_binding()
+        else:
+            workspace = self.provider_store.model_binding("workspace")
+            global_default = self.provider_store.model_binding(
+                "global", legacy_provider=self._default_provider_name or self.providers.active
+            )
+        return workspace, global_default, builtin
+
+    def default_model_binding(self) -> ResolvedModelBinding:
+        """Workspace/global inheritance without any agent definition or overlay."""
+        workspace, global_default, builtin = self._default_model_choices()
+        local_names = self.provider_store.load_scope("workspace").providers
+        return resolve_model_binding(
+            providers=self.providers.providers,
+            workspace=workspace,
+            global_default=global_default,
+            builtin=builtin,
+            origins={name: "workspace" if name in local_names else "global" for name in self.providers.providers},
+            sources={
+                "workspace": str(self.provider_store.model_store("workspace").path),
+                "global": str(self.provider_store.model_store("global").path),
+            },
+        )
+
+    def definition_model_binding(self, name: str) -> ModelBinding:
+        """The source definition's selection, ignoring its editable UI overlay."""
+        profile = self.config.profile(name)
+        if not (profile.model or profile.provider):
+            return ModelBinding()
+        default = self.default_model_binding().binding
+        return ModelBinding(profile.provider or default.provider, profile.model or default.id)
+
+    def _resolve_agent_model(
+        self, name: str, profile: AgentProfile, *, require_available: bool = True
+    ) -> ResolvedModelBinding:
+        preference = self.provider_store.agent_models.load(name)
+        workspace, global_default, builtin = self._default_model_choices()
+        # Existing embeddings can supply an unnamed provider and scalar model.
+        # Persisted selections always contain a named connection and model ID.
+        route = profile.provider or workspace.provider or global_default.provider or builtin.provider
+        source = str(preference.path)
+        if preference.revision != "0" * 64:
+            agent_binding = preference.binding
+        elif (profile.model or profile.provider) and route:
+            agent_binding = ModelBinding(route, profile.model or workspace.id or global_default.id or builtin.id)
+            source = profile.source
+        else:
+            agent_binding = ModelBinding()
+            if profile.model:
+                # Scalar profile models predate named connections. Their
+                # precedence is still agent-level; do not demote them beneath
+                # a legacy global ID merely because this embedding is unnamed.
+                return ResolvedModelBinding(ModelBinding("", profile.model), "agent", profile.source)
+        local_names = self.provider_store.load_scope("workspace").providers
+        return resolve_model_binding(
+            providers=self.providers.providers,
+            agent=agent_binding,
+            workspace=workspace,
+            global_default=global_default,
+            builtin=builtin,
+            origins={name: "workspace" if name in local_names else "global" for name in self.providers.providers},
+            sources={
+                "agent": source,
+                "workspace": str(self.provider_store.model_store("workspace").path),
+                "global": str(self.provider_store.model_store("global").path),
+            },
+            require_available=require_available,
+        )
+
+    def delegation_model_binding(self, name: str, *, model: str = "", provider: str = "") -> ModelBinding:
+        if model and provider:
+            # A complete invocation selection takes precedence even when a
+            # profile's saved default references an unavailable connection.
+            if provider not in self.providers.providers:
+                raise ValueError(f"Model references unavailable provider connection {provider!r}")
+            return ModelBinding(provider, model)
+        if self._agent_generation_active:
+            if name in self._generation_model_errors:
+                raise ValueError(self._generation_model_errors[name])
+            if name not in self._generation_model_bindings:
+                raise ValueError(f"Agent {name!r} was not available in this model generation")
+            resolved = self._generation_model_bindings[name]
+        else:
+            resolved = self._resolve_agent_model(name, self.delegation_profile(name)).binding
+        if model or provider:
+            return ModelBinding(provider or resolved.provider, model or resolved.id)
+        return resolved
+
+    def refresh_agent_definitions(self) -> bool:
+        """Refresh the discoverable catalog without changing an accepted tool batch."""
+        return self._agent_catalog.refresh(self.config)
+
+    def current_profile(self) -> AgentProfile:
+        """The active identity survives source removal until this runtime is retired."""
+        if self.config.agent != self._current_profile_name:
+            self._current_profile_name = self.config.agent
+            self._current_profile = replace(self.config.profile(self.config.agent))
+        elif (
+            not self._agent_generation_active
+            and not self._preserve_first_profile
+            and self.config.agent in self.config.profile_names
+        ):
+            self._current_profile = replace(
+                self.config.profile(self.config.agent),
+                model=self._current_profile.model,
+                provider=self._current_profile.provider,
+            )
+        return self._current_profile
+
+    def activate_agent_definitions(self) -> None:
+        """Accept current definitions only at a new model-generation boundary."""
+        profile = self.current_profile()
+        if self._preserve_first_profile:
+            self._preserve_first_profile = False
+        elif self.config.agent in self.config.profile_names:
+            fresh = self.config.profile(self.config.agent)
+            # Routing belongs to the accepted runtime. Editing a profile's route
+            # affects new selections/children, never swaps a live provider owner.
+            self._current_profile = replace(fresh, model=profile.model, provider=profile.provider)
+        self._generation_profiles = {name: replace(value) for name, value in self.config.profiles.items()}
+        self._generation_source_profiles = {
+            name: replace(value) for name, value in self.config.agent_source_profiles.items()
+        }
+        self._agent_generation_active = True
+        self._generation_model_bindings = {}
+        self._generation_model_errors = {}
+        for name in ("assistant", *sorted(self._generation_profiles)):
+            try:
+                binding = self._resolve_agent_model(name, self.delegation_profile(name)).binding
+            except (OSError, ValueError) as error:
+                self._generation_model_errors[name] = str(error)
+            else:
+                self._generation_model_bindings[name] = binding
+
+    def delegation_profiles(self) -> dict[str, AgentProfile]:
+        """Profiles advertised to this generation, or the idle catalog."""
+        return self._generation_profiles if self._agent_generation_active else self.config.profiles
+
+    def delegation_source_profiles(self) -> dict[str, AgentProfile]:
+        return self._generation_source_profiles if self._agent_generation_active else self.config.agent_source_profiles
+
+    def delegation_profile(self, name: str) -> AgentProfile:
+        if name == "assistant":
+            return self.config.profile(name)
+        profiles = self.delegation_profiles()
+        if name not in profiles:
+            raise ValueError(f"Unknown agent profile {name!r}")
+        return profiles[name]
+
     def mode_for_profile(self, name: str) -> str:
         """Effective permissions for a profile, including inherited ceilings."""
-        profile = self.config.profile(name)
+        profile = self.current_profile() if name == self.config.agent else self.config.profile(name)
         if (
             self.config.read_only
             or self._permission_ceiling == "reviewer"
@@ -299,7 +499,7 @@ class Harness:
         )
         self._inherited_tool_profiles = (
             *parent._inherited_tool_profiles,
-            replace(parent.config.profile(parent.config.agent)),
+            replace(parent.current_profile()),
             AgentProfile(denied_tools=denied),
         )
 
@@ -310,9 +510,9 @@ class Harness:
 
     def tool_enabled(self, name: str) -> bool:
         profiles = (
-            self.config.profile(self.config.agent),
+            self.current_profile(),
             *self._inherited_tool_profiles,
-            *(parent.config.profile(parent.config.agent) for parent in self._permission_parents),
+            *(parent.current_profile() for parent in self._permission_parents),
         )
         return all(
             (profile.tools is None or name in profile.tools) and name not in profile.denied_tools
@@ -322,20 +522,20 @@ class Harness:
     @property
     def delegatable_profile_names(self) -> tuple[str, ...]:
         policies = (
-            self.config.profile(self.config.agent),
+            self.current_profile(),
             *self._inherited_tool_profiles,
-            *(parent.config.profile(parent.config.agent) for parent in self._permission_parents),
+            *(parent.current_profile() for parent in self._permission_parents),
         )
         return tuple(
             name
-            for name in self.config.profile_names
-            if self.config.profile(name).subagent_available
+            for name in ("assistant", *sorted(self.delegation_profiles()))
+            if self.delegation_profile(name).subagent_available
             and all(profile.allowed_agents is None or name in profile.allowed_agents for profile in policies)
         )
 
     def delegation_catalog(self) -> str:
         return "; ".join(
-            f"{name}: {self.config.profile(name).description or 'Configured agent'}"
+            f"{name}: {self.delegation_profile(name).description or 'Configured agent'}"
             for name in self.delegatable_profile_names
         )
 
@@ -369,14 +569,14 @@ class Harness:
             # generated-looking text could now contain authored instructions.
             return prompt, ()
         profiles = self._inherited_profile_instructions
-        instructions = self.config.profile(self.config.agent).instructions
+        instructions = self.current_profile().instructions
         if not continuing and instructions and instructions not in profiles:
             profiles += (instructions,)
         return self._parent_instructions, profiles
 
     def refresh_instructions(self) -> None:
         self.tools.refresh_limits()
-        profile = self.config.profile(self.config.agent)
+        profile = self.current_profile()
         # Construction defers workspace configuration I/O to initialization,
         # where failures are recorded for clients. Every later refresh resolves
         # the effective contracts and propagates invalid settings.
@@ -475,6 +675,7 @@ class Harness:
                     self.refresh_instructions()
                     if (
                         not self.config.demo
+                        and not isinstance(self.agent.provider, UnavailableModelProvider)
                         and not self.config.provider
                         and self.config.provider_profile().kind in {"openai", "openai_compatible"}
                         and not self.config.provider_profile().base_url
@@ -923,17 +1124,17 @@ class Harness:
 
     async def set_agent(self, name: str) -> None:
         with self.operation("set agent"):
+            self.refresh_agent_definitions()
             profile = self.config.profile(name)
             if not profile.user_invocable:
                 raise ValueError(f"Agent {name!r} is available only for delegation")
-            if profile.provider:
-                await self._select_provider(profile.provider)
-            elif self.config.provider and self.config.provider != self.providers.active and self.providers.active:
-                await self._select_provider(self.providers.active)
+            binding = self._resolve_agent_model(name, profile).binding
+            candidate = replace(self.config, agent=name, provider=binding.provider, model=binding.id)
+            await self.reconfigure_provider(candidate)
             self.config.agent = name
-            self.config.model = profile.model or self._selected_model
+            self._current_profile_name = name
+            self._current_profile = replace(profile)
             self.config.model_explicit = bool(profile.model) or self._selected_model_explicit
-            self.agent.provider.model = self.config.model
             self.refresh_instructions()
 
     async def set_model(self, model: str) -> None:
@@ -957,6 +1158,9 @@ class Harness:
         config.validate()
         if config.demo is not self.config.demo:
             raise ValueError("Provider overrides cannot change demo mode")
+        unavailable = config.unavailable_model_binding if not config.provider else _INHERIT_MODEL
+        if unavailable.configured and unavailable.id != config.model:
+            raise ValueError("The unavailable model reference must match the requested model")
         profile = config.provider_profile()
         if config.provider:
             selected = self.provider_store.load().providers.get(config.provider)
@@ -967,10 +1171,16 @@ class Harness:
         # mutable config can therefore already describe the new connection while
         # the running client still uses the old auth/endpoint. Compare against
         # the immutable profile that actually constructed that client.
-        changing = (config.provider, profile) != (self._built_provider_name, self._built_provider_profile)
+        changing = (
+            unavailable.configured
+            or isinstance(self.agent.provider, UnavailableModelProvider)
+            or ((config.provider, profile) != (self._built_provider_name, self._built_provider_profile))
+        )
         if changing:
             replacement: Provider
-            if config.provider:
+            if unavailable.configured:
+                replacement = UnavailableModelProvider(unavailable)
+            elif config.provider:
                 replacement = build_provider(profile, config, self.openai_auth)
             elif config.provider_profile().auth == "chatgpt":
                 if not (isinstance(self.agent.provider, OpenAIProvider) and self.agent.provider.uses_chatgpt_auth):
@@ -987,10 +1197,12 @@ class Harness:
         self.config.provider = config.provider
         self.config.providers = dict(config.providers)
         self.config.model = config.model
+        self.config.unavailable_model_binding = unavailable
         self.config.model_explicit = True
-        self.agent.provider.model = config.model
+        if self.agent.provider.model != config.model:
+            self.agent.provider.model = config.model
 
-    async def _select_provider(self, name: str) -> None:
+    async def _select_provider(self, name: str, *, model: str = "") -> None:
         registry = self.provider_store.load()
         profile = registry.providers.get(name)
         if profile is None:
@@ -999,9 +1211,27 @@ class Harness:
             self.config,
             provider=name,
             providers=dict(registry.providers),
+            model=model or self.config.model,
         )
         await self.reconfigure_provider(candidate)
         self.providers = registry
+
+    def _model_connection_fixed(self, *, include_agent: bool = True) -> bool:
+        """A complete model reference is independent of registry activation."""
+        if include_agent:
+            preference = self.provider_store.agent_models.load(self.config.agent)
+            if preference.revision != "0" * 64:
+                if preference.binding.configured:
+                    return bool(preference.binding.provider)
+            elif self.current_profile().provider:
+                return True
+        if self.config.model_config_explicit:
+            return bool(self._default_provider_name)
+        for scope in ("workspace", "global"):
+            binding = self.provider_store.model_store(scope).load_binding()
+            if binding.configured:
+                return bool(binding.provider)
+        return False
 
     async def activate_provider(self, name: str, revision: str, scope: str = "workspace") -> ProviderRegistry:
         with self.operation("select provider"):
@@ -1010,14 +1240,16 @@ class Harness:
                 raise ValueError("Provider configuration changed; reload before selecting")
             if scope == "global" and name not in current.providers:
                 raise ValueError("Select global connections in global settings")
-            if not self.config.profile(self.config.agent).provider and (
-                scope == "workspace" or not self.provider_store.load_scope("workspace").active
-            ):
-                await self._select_provider(name)
+            effective_scope = scope == "workspace" or not self.provider_store.load_scope("workspace").active
+            if effective_scope and not self._model_connection_fixed():
+                selected_model = self._resolve_agent_model(self.config.agent, self.current_profile()).binding.id
+                await self._select_provider(name, model=selected_model)
             saved = self.provider_store.save_scope(
                 ProviderRegistry(active=name, providers=current.providers), expected=revision, scope=scope
             )
             self.providers = self.provider_store.load()
+            if effective_scope and not self._model_connection_fixed(include_agent=False):
+                self._default_provider_name = name
             return saved
 
     async def inherit_provider(self, revision: str) -> ProviderRegistry:
@@ -1029,12 +1261,15 @@ class Harness:
             global_active = self.provider_store.load_scope("global").active
             if not global_active:
                 raise ValueError("No global provider default is configured")
-            if not self.config.profile(self.config.agent).provider:
-                await self._select_provider(global_active)
+            if not self._model_connection_fixed():
+                selected_model = self._resolve_agent_model(self.config.agent, self.current_profile()).binding.id
+                await self._select_provider(global_active, model=selected_model)
             saved = self.provider_store.save_scope(
                 ProviderRegistry(providers=current.providers), expected=revision, scope="workspace"
             )
             self.providers = self.provider_store.load()
+            if not self._model_connection_fixed(include_agent=False):
+                self._default_provider_name = global_active
             return saved
 
     async def save_provider(
@@ -1058,13 +1293,13 @@ class Harness:
                 ProviderRegistry(active=active, providers=entries), expected=revision, scope=scope
             )
             self.providers = self.provider_store.load()
-            agent_provider = self.config.profile(self.config.agent).provider
-            if (
-                self.config.provider == name
-                or agent_provider == name
-                or (not agent_provider and self.providers.active == name)
-            ) and self.providers.providers[name] == profile:
-                await self._select_provider(name)
+            if self.providers.active == name and not self._model_connection_fixed(include_agent=False):
+                self._default_provider_name = name
+            selected = self._resolve_agent_model(
+                self.config.agent, self.current_profile(), require_available=False
+            ).binding
+            if selected.provider == name and self.providers.providers[name] == profile:
+                await self._select_provider(name, model=selected.id)
             return saved
 
     async def delete_provider(self, name: str, revision: str, scope: str = "workspace") -> ProviderRegistry:
@@ -1072,12 +1307,28 @@ class Harness:
             current = self.provider_store.load_scope(scope)
             if current.revision != revision or name not in current.providers:
                 raise ValueError("Provider configuration changed; reload before deleting")
+            self.refresh_agent_definitions()
+            model_connections = {self.provider_store.model_binding(layer).provider for layer in ("global", "workspace")}
+            agent_models = self.provider_store.agent_models
+            agent_names = set(self.config.profile_names)
+            if agent_models.directory.exists():
+                # Retired definitions can still have a saved model override.
+                # Keep that reference intact if the profile is later restored.
+                for index, path in enumerate(agent_models.directory.iterdir()):
+                    if index >= 1024:
+                        raise ValueError("Too many agent model preferences to safely delete a provider")
+                    if path.suffix == ".md":
+                        agent_names.add(path.stem)
+            model_connections.update(agent_models.load(agent).binding.provider for agent in agent_names)
             if (
                 name == current.active
                 or name == self.provider_store.load().active
                 or any(profile.provider == name for profile in self.config.profiles.values())
+                or name in model_connections
             ):
-                raise ValueError("Select another connection and remove agent bindings before deleting this provider")
+                raise ValueError(
+                    "Select another connection and remove default or agent model bindings before deleting this provider"
+                )
             entries = {key: profile for key, profile in current.providers.items() if key != name}
             saved = self.provider_store.save_scope(
                 ProviderRegistry(active=current.active, providers=entries), expected=revision, scope=scope
@@ -1249,6 +1500,8 @@ class Harness:
                 self._built_provider_profile = self.config.provider_profile()
 
     def auth_status(self) -> str:
+        if isinstance(self.agent.provider, UnavailableModelProvider):
+            return self.agent.provider.reason
         if self.config.demo:
             return "Offline demo; authentication is disabled"
         if self.config.provider:
