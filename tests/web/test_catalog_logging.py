@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from nagents.harness.config import HarnessConfig
+from nagents.harness.model_catalog import ModelCatalog
 from nagents.provider import _codex_catalog as catalog
 from tests.support.config import connection
 from tests.support.web import client_app
@@ -18,7 +19,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.mark.parametrize("path", ["/api/models", "/api/providers/fixture/models"])
+@pytest.mark.parametrize(
+    "path",
+    ["/api/models", "/api/providers/fixture/models", "/api/provider-scopes/workspace/providers/fixture/models"],
+)
 @pytest.mark.parametrize("outage", [False, True])
 def test_catalog_diagnostics_use_host_logger_without_enabling_other_library_logs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, path: str, outage: bool
@@ -37,6 +41,9 @@ def test_catalog_diagnostics_use_host_logger_without_enabling_other_library_logs
         logging.getLogger("nagents.mcp.client").info("SECRET-unrelated-MCP-log")
         return ["selected-catalog-model"]
 
+    async def scoped_models(name: str, *, scope: str) -> ModelCatalog:
+        return ModelCatalog(await models(name), {})
+
     async def scenario() -> None:
         config = HarnessConfig(workspace=tmp_path, data_dir=tmp_path / "data", providers=connection(auth="api-key"))
         # This matches ngn serve: library/root logging stays at WARNING while
@@ -46,6 +53,7 @@ def test_catalog_diagnostics_use_host_logger_without_enabling_other_library_logs
                 harness = harnesses[0]
                 monkeypatch.setattr(harness.agent.provider, "get_model_list", models)
                 monkeypatch.setattr(harness, "provider_models", models)
+                monkeypatch.setattr(harness, "provider_catalog", scoped_models)
                 response = await client.get(path, headers=headers)
                 assert response.status_code == 200
                 assert response.json()["models"] == ["selected-catalog-model"]

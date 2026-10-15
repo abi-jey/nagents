@@ -11,11 +11,12 @@ const labels: Record<string, string> = {
 export const effortLabel = (value = "") => labels[value] || value;
 
 export function ReasoningEffort({ token, scope = "workspace", provider = "", model,
-  value, update, disabled = false, error = "", defaultLabel = "Provider default", allowReset = false, children, id: suppliedId,
+  value, update, disabled = false, error = "", defaultLabel = "Provider default", allowReset = false, children, id: suppliedId, knownOptions,
 }: {
   token: string; scope?: SettingsScope; provider?: string; model: string;
   value: string; update: (value: string) => void; disabled?: boolean; error?: string;
   defaultLabel?: string; allowReset?: boolean; children?: ReactNode; id?: string;
+  knownOptions?: string[];
 }) {
   const generatedId = useId(), id = suppliedId || generatedId;
   const [result, setResult] = useState<OptionsReply>();
@@ -25,6 +26,7 @@ export function ReasoningEffort({ token, scope = "workspace", provider = "", mod
   useEffect(() => {
     const controller = new AbortController();
     setResult(undefined); setFailure(""); setLoading(true);
+    if (knownOptions) { setResult({ options: knownOptions }); setLoading(false); return () => controller.abort(); }
     const timer = setTimeout(() => {
       void request(`reasoning-options?${query}`, token, undefined, controller.signal).then(response => response.json()).then((reply: unknown) => {
         if (controller.signal.aborted) return;
@@ -38,7 +40,7 @@ export function ReasoningEffort({ token, scope = "workspace", provider = "", mod
       }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, 200);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [query, token]);
+  }, [query, token, knownOptions]);
   const explicit = !!value && value !== "default";
   const unsupported = explicit && !!result && !result.options.includes(value);
   const keepValue = explicit && !result?.options.includes(value);

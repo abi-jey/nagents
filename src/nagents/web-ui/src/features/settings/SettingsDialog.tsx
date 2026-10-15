@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createDraft, executionLimits, compactionLimits } from "./draft.js";
-import { ModelSelector } from "./ModelSelector.js";
+import { ModelSelector, type ModelCatalog } from "./ModelSelector.js";
 import { ReasoningEffort, effortLabel } from "./ReasoningEffort.js";
-import { ProvidersPanel } from "./ProvidersPanel.js";
+import { ProvidersPanel, type ProviderSelection } from "./ProvidersPanel.js";
+import { ProviderLogo } from "../../components/ProviderLogo.js";
+import { Icon } from "../../components/Icon.js";
+import { LoginDialog } from "./LoginDialog.js";
 import type { useSettings } from "./useSettings";
 import type { SettingsScope } from "./transport.js";
 import type { SettingsDraft } from "./draft.js";
@@ -19,13 +22,24 @@ export function SettingsDialog({
   const feedback = useRef<HTMLDivElement>(null);
   const confirmationHeading = useRef<HTMLHeadingElement>(null);
   const restoreFocus = useRef<"" | "heading" | SettingsScope>("");
-  const [confirmation, setConfirmation] = useState<"" | "refresh" | "reset" | SettingsScope>("");
+  const [confirmation, setConfirmation] = useState<"" | "refresh" | "reset" | "connection" | SettingsScope>("");
   const [connectionDirty, setConnectionDirty] = useState(false);
   const [connectionBusy, setConnectionBusy] = useState(false);
+  const [selection, setSelection] = useState<ProviderSelection>();
+  const [catalog, setCatalog] = useState<ModelCatalog>();
+  const [loginOpen, setLoginOpen] = useState(false);
+  const activateConnection = useRef<() => Promise<void>>(undefined);
   const { snapshot, draft, errors, disabled, pending, loading } = settings;
   const global = settings.scope === "global";
   const globalDraft = snapshot && createDraft(snapshot.defaults);
   const savedDraft = snapshot && createDraft(snapshot.values);
+  const preview = !!selection && selection.id !== selection.active;
+  const profile = snapshot?.profiles.find(item => item.name === draft?.agent);
+
+  function confirmConnection(apply: () => Promise<void>) {
+    if (settings.dirty) { activateConnection.current = apply; setConfirmation("connection"); }
+    else void apply();
+  }
 
   function origin(key: keyof SettingsDraft) {
     if (global || !snapshot || !draft || !globalDraft || !savedDraft) return null;
@@ -47,6 +61,7 @@ export function SettingsDialog({
     if (next === settings.scope || pending || connectionBusy || settings.blocked || confirmation) return;
     if (settings.dirty || connectionDirty) setConfirmation(next);
     else {
+      setSelection(undefined);
       settings.switchScope(next);
       if (body.current) body.current.scrollTop = 0;
     }
@@ -80,20 +95,23 @@ export function SettingsDialog({
   function finishConfirmation() {
     restoreFocus.current = confirmation === "workspace" || confirmation === "global" ? settings.scope : "heading";
     setConfirmation("");
+    activateConnection.current = undefined;
   }
 
   return (
     <dialog
       ref={dialog}
-      className="settings-dialog"
+      className="settings-dialog settings-workspace-panel"
       aria-labelledby="settings-title"
       aria-describedby="settings-description"
       onCancel={(event) => {
         event.preventDefault();
+        if (loginOpen) return;
         if (confirmation) finishConfirmation();
         else if (!connectionBusy) settings.close();
       }}
       onKeyDown={(event) => {
+        if (loginOpen) return;
         if (event.key !== "Tab") return;
         const controls = [
           ...event.currentTarget.querySelectorAll<HTMLElement>(
@@ -120,9 +138,7 @@ export function SettingsDialog({
       }}
     >
       <header className="settings-heading">
-        <h2 id="settings-title" ref={heading} tabIndex={-1}>
-          Settings
-        </h2>
+        <div className="settings-title-row"><div><span className="settings-eyebrow">{global ? "Across your workspaces" : "Workspace settings"}</span><h2 id="settings-title" ref={heading} tabIndex={-1}>Provider &amp; model</h2></div><button type="button" aria-label="Close settings" disabled={pending || connectionBusy} onClick={settings.close}><Icon name="close" size={19} /></button></div>
         <div className="settings-scopes" role="group" aria-label="Settings scope">
           {(["workspace", "global"] as const).map((scope) => (
             <button key={scope} type="button" data-settings-scope={scope}
@@ -135,15 +151,15 @@ export function SettingsDialog({
         </div>
         <p id="settings-description">
           {global
-            ? "Global defaults and provider connections are shared across workspaces. Workspace overrides take priority. Change a value here to update the default for workspaces that inherit it."
-            : "Workspace settings and provider connections. Values marked Inherited from Global follow global defaults as they change. Edit a value and save to override it only here; Use global defaults removes saved workspace overrides."}
+            ? "Global defaults and provider connections are shared across workspaces. Workspace overrides take priority."
+            : "Choose the defaults for this workspace. Individual agent profiles can override them."}
         </p>
       </header>
       <form
         noValidate
         onSubmit={async (event) => {
           event.preventDefault();
-          if (confirmation) return;
+          if (confirmation || preview || connectionBusy) return;
           await settings.save();
           requestAnimationFrame(() => {
             const invalid = dialog.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
@@ -217,14 +233,15 @@ export function SettingsDialog({
               >
                 {confirmation === "reset"
                   ? (global ? "Restore startup defaults?" : "Use global defaults?")
-                  : confirmation === "refresh" ? "Discard draft and reload?" : `Discard changes and switch to ${confirmation === "global" ? "Global" : "Workspace"}?`}
+                  : confirmation === "refresh" ? "Discard draft and reload?" : confirmation === "connection" ? "Discard settings draft and use connection?" : `Discard changes and switch to ${confirmation === "global" ? "Global" : "Workspace"}?`}
               </h3>
               <p>
                 {confirmation === "reset"
                   ? (global ? "This removes saved global defaults. Workspace overrides are kept." : "This removes saved workspace overrides and discards your draft. Global defaults apply to your next run.")
                   : confirmation === "refresh"
                     ? "This replaces your unsaved draft with the latest saved settings. It does not change saved settings or retry your save."
-                    : "Switching scopes discards unsaved settings and connection edits in this scope. Saved settings and connections are kept."}
+                    : confirmation === "connection" ? "This discards unsaved model and workspace settings, then applies the selected connection immediately. Saved settings are kept."
+                      : "Switching scopes discards unsaved settings and connection edits in this scope. Saved settings and connections are kept."}
               </p>
               {confirmation === "reset" && snapshot && (
                 <p>
@@ -242,8 +259,13 @@ export function SettingsDialog({
                   onClick={async () => {
                     if (confirmation === "reset") await settings.reset();
                     else if (confirmation === "refresh") await settings.reload();
-                    else {
+                    else if (confirmation === "connection") {
+                      const apply = activateConnection.current;
+                      await settings.reload();
+                      await apply?.();
+                    } else {
                       const next = confirmation;
+                      setSelection(undefined);
                       settings.switchScope(next);
                       setConnectionDirty(false);
                       if (body.current) body.current.scrollTop = 0;
@@ -256,7 +278,7 @@ export function SettingsDialog({
                 >
                   {confirmation === "reset"
                     ? "Remove overrides and reset"
-                    : confirmation === "refresh" ? "Discard draft and reload" : "Discard and switch"}
+                    : confirmation === "refresh" ? "Discard draft and reload" : confirmation === "connection" ? "Discard draft and use connection" : "Discard and switch"}
                 </button>
                 <button
                   type="button"
@@ -270,7 +292,32 @@ export function SettingsDialog({
           )}
           {snapshot && draft && (
             <>
-              <ProvidersPanel key={settings.scope} token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} applied={() => void settings.refresh()} openGlobal={() => selectScope("global")} onDraftChange={setConnectionDirty} onBusyChange={setConnectionBusy} />
+              <ProvidersPanel key={settings.scope} token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} applied={settings.refresh} openGlobal={() => selectScope("global")} onDraftChange={setConnectionDirty} onBusyChange={setConnectionBusy} onSelectionChange={setSelection} confirmActivation={confirmConnection} login={() => setLoginOpen(true)} loginConnection={snapshot.connection.provider_id}>
+                {connection => {
+                  const metadata = catalog?.route === `${settings.scope}/${connection.id}/${connection.revision}` ? catalog.metadata[draft.model] : undefined;
+                  const contextWindow = connection.modelContextWindows[draft.model] || connection.contextWindow || metadata?.context_window || 0;
+                  const contextSource = connection.modelContextWindows[draft.model] || connection.contextWindow ? "configured" : metadata?.context_window_source || "";
+                  return <>
+                  <section className="settings-selection-summary" aria-label="Model selection summary">
+                    <div className="selection-summary-caption"><span>{connection.id !== connection.active ? "Browsing connection" : global ? "Global default" : "Workspace default"}</span><span>{global ? "Global" : connection.inherited ? "Connection from Global" : "Workspace"}</span></div>
+                    <div className="selection-summary-model"><ProviderLogo provider={connection.kind || snapshot.connection.provider} /><div><strong>{connection.id !== connection.active ? connection.label : draft.model || "Choose a model"}</strong><span>{connection.id || snapshot.connection.provider} · {connection.auth === "chatgpt" || connection.auth === "codex" ? "ChatGPT / Codex login" : connection.auth === "entra" ? "Microsoft Entra ID" : connection.auth === "api-key" ? "API key" : "Automatic authentication"}</span></div>{connection.id && <button type="button" title="Connection settings" aria-label="Connection settings" disabled={connection.busy} onClick={connection.configure}><Icon name="settings" size={16} /></button>}</div>
+                    {connection.id !== connection.active ? <div className="settings-preview-action"><p>Use this connection before choosing a model. Connection changes apply immediately.</p><button type="button" disabled={connection.busy} onClick={connection.activate}>Use connection</button></div> : <div className="selection-summary-metrics"><span>{effortLabel(draft.reasoning_effort)} reasoning</span><span>{draft.compact_trigger === "auto" ? "Compact at 70%" : draft.compact_trigger === "off" ? "Auto compaction off" : draft.compact_trigger === "messages" ? `Compact at ${draft.compact_messages} messages` : `Compact at ${Math.floor(Number(draft.compact_tokens) * .7).toLocaleString()} tokens`}</span><span>{contextWindow ? `${contextWindow.toLocaleString()} context · ${contextSource}` : "Context · automatic"}</span></div>}
+                  </section>
+                  <fieldset className="settings-group settings-model-selection" disabled={disabled || !!confirmation || connection.busy}>
+                    <legend>Choose a model</legend>
+                    <ModelSelector key={`${settings.scope}-${connection.id}-${connection.revision}`} token={settings.token} scope={settings.scope} provider={connection.id} revision={connection.revision} model={draft.model} error={errors.model} disabled={disabled || !!confirmation || connection.busy} preview={connection.id !== connection.active} update={model => settings.update("model", model)} autoLoad onCatalog={setCatalog} />
+                    {origin("model")}
+                    {profile && (profile.model || profile.provider || profile.reasoning_effort) && <div className="settings-profile-override"><Icon name="team" size={15} /><div><strong>{profile.name} has its own settings</strong><p>{profile.model ? `Model: ${profile.model}. ` : ""}{profile.provider ? `Connection: ${profile.provider}. ` : ""}{profile.reasoning_effort ? `Reasoning: ${effortLabel(profile.reasoning_effort)}. ` : ""}These take precedence over workspace defaults.{profile.source ? <> Edit <code>{profile.source}</code> to change this profile.</> : " Choose another profile below to use the workspace defaults."}</p></div></div>}
+                  </fieldset>
+                  <fieldset className="settings-group settings-tuning" disabled={disabled || !!confirmation || preview}>
+                    <legend>Reasoning &amp; context</legend>
+                    <ReasoningEffort id="settings-reasoning_effort" token={settings.token} scope={settings.scope}
+                      provider={connection.id} model={draft.model}
+                      knownOptions={metadata?.reasoning_efforts}
+                      value={draft.reasoning_effort} error={errors.reasoning_effort} disabled={disabled || !!confirmation || preview}
+                      update={effort => settings.update("reasoning_effort", effort)}>{origin("reasoning_effort")}</ReasoningEffort>
+                    <p className="settings-context-help">Context limits follow the connection and model metadata. {connection.id && <button type="button" disabled={connection.busy} onClick={connection.configure}>Configure a limit</button>}</p>
+                  </fieldset>
               <fieldset
                 className="settings-group"
                 disabled={disabled || !!confirmation}
@@ -318,16 +365,6 @@ export function SettingsDialog({
                     </p>
                   )}
                 </div>
-                 <ModelSelector token={settings.token} scope={settings.scope} model={draft.model}
-                   error={errors.model} disabled={disabled || !!confirmation}
-                   update={model => settings.update("model", model)} />
-                 <ReasoningEffort id="settings-reasoning_effort" token={settings.token} scope={settings.scope}
-                   provider={snapshot.connection.provider_id || ""} model={draft.model}
-                   value={draft.reasoning_effort} error={errors.reasoning_effort} disabled={disabled || !!confirmation}
-                   update={effort => settings.update("reasoning_effort", effort)}>{origin("reasoning_effort")}</ReasoningEffort>
-                 {!!snapshot.profiles.find(profile => profile.name === draft.agent)?.reasoning_effort && <p>
-                   This agent profile sets its own reasoning effort: {effortLabel(snapshot.profiles.find(profile => profile.name === draft.agent)?.reasoning_effort)}.
-                 </p>}
               </fieldset>
               <fieldset className="settings-group" disabled={disabled || !!confirmation}>
                 <legend>Message submission</legend>
@@ -445,6 +482,8 @@ export function SettingsDialog({
                   </button>
                 </section>
               </details>
+                </>; }}
+              </ProvidersPanel>
             </>
           )}
         </div>
@@ -457,13 +496,14 @@ export function SettingsDialog({
             className="primary"
             type="submit"
             disabled={
-              disabled || connectionBusy || settings.needsRefresh || !settings.dirty || !!confirmation
+              disabled || connectionBusy || preview || settings.needsRefresh || !settings.dirty || !!confirmation
             }
           >
             {pending ? "Applying..." : `Save ${settings.scope} settings`}
           </button>
         </footer>
       </form>
+      {loginOpen && <LoginDialog token={settings.token} close={() => setLoginOpen(false)} applied={settings.refresh} />}
     </dialog>
   );
 }

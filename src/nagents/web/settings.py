@@ -30,10 +30,13 @@ from nagents.provider.reasoning import reasoning_effort_options
 from nagents.types import ReasoningEffort
 
 from ._async import join_owned as _join
+from .model_capabilities import CatalogCapabilities
+from .model_capabilities import catalog_route
 
 if TYPE_CHECKING:
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
+    from nagents.harness.model_catalog import ModelCatalog
 
 MAX_SETTINGS_BYTES = 16384
 MAX_API_KEY_BYTES = 4096
@@ -222,6 +225,7 @@ class SettingsInput(SettingsRevision):
 class WebSettings:
     def __init__(self, harness: "Harness") -> None:
         self.harness = harness
+        self.catalog_capabilities = CatalogCapabilities()
         # Construct only after initialize(), including initial Codex resolution.
         # Each restart captures the current trusted configuration anew; saved
         # overrides never mutate the administrator's ceiling or storage.
@@ -358,6 +362,27 @@ class WebSettings:
             },
         }
 
+    async def model_catalog(self, name: str, *, scope: str) -> "ModelCatalog":
+        """Retain advertised choices only while the accepted route stays unchanged."""
+        registry = (
+            self.harness.provider_store.load_scope("global")
+            if scope == "global"
+            else self.harness.provider_store.load()
+        )
+        profile = registry.providers.get(name)
+        if profile is None:
+            raise ValueError("Provider connection is unavailable in this scope")
+        accepted = catalog_route(profile, self.harness.openai_auth)
+        catalog = await self.harness.provider_catalog(name, scope=scope)
+        current = (
+            self.harness.provider_store.load_scope("global")
+            if scope == "global"
+            else self.harness.provider_store.load()
+        ).providers.get(name)
+        if current is not None and accepted == catalog_route(current, self.harness.openai_auth):
+            self.catalog_capabilities.remember(scope, name, accepted, catalog)
+        return catalog
+
     def reasoning_options(
         self,
         *,
@@ -382,7 +407,12 @@ class WebSettings:
         choices = reasoning_effort_options(
             profile.kind, selected_model, api=profile.api, auth=profile.auth, base_url=profile.base_url
         )
-        if profile == self.harness._built_provider_profile:
+        retained = self.catalog_capabilities.lookup(
+            scope, selected, catalog_route(profile, self.harness.openai_auth), selected_model
+        )
+        if retained.known:
+            choices, source = retained.options, "Provider metadata"
+        elif not retained.tracked and profile == self.harness._built_provider_profile:
             cached = self.harness.agent.provider.cached_reasoning_efforts(selected_model)
             if cached != choices:
                 choices, source = cached, "Provider metadata"
@@ -391,14 +421,57 @@ class WebSettings:
             "source": source,
             "provider": provider or profile.kind,
             "model": selected_model,
+            "refresh_required": retained.refresh_required,
         }
 
-    def validate_reasoning(self, values: SettingsValues, *, scope: str = "workspace") -> None:
+    async def validate_reasoning(self, values: SettingsValues, *, scope: str = "workspace") -> None:
         if not values.reasoning_effort or self.harness.config.demo:
             return
-        options = self.reasoning_options(scope=scope, model=values.model)["options"]
-        if not isinstance(options, list) or values.reasoning_effort not in options:
+        reply = self.reasoning_options(scope=scope, model=values.model)
+        options = reply["options"]
+        refresh = bool(reply["refresh_required"])
+        if isinstance(options, list) and values.reasoning_effort in options and not refresh:
+            return
+        if reply["source"] == "Provider metadata" and not refresh:
             raise ValueError("This reasoning effort is not supported by the selected provider and model")
+        registry = (
+            self.harness.provider_store.load_scope("global")
+            if scope == "global"
+            else self.harness.provider_store.load()
+        )
+        if not registry.active:
+            raise ValueError("This reasoning effort is not supported by the selected provider and model")
+        try:
+            # Save may verify an expired catalog or opaque credential source.
+            # Read-only options never initiate an authentication or network call.
+            async with asyncio.timeout(10):
+                catalog = await self.model_catalog(registry.active, scope=scope)
+        except Exception:
+            raise HTTPException(
+                422, "Reasoning options could not be refreshed. Refresh the model catalog or choose Provider default."
+            ) from None
+        current = (
+            self.harness.provider_store.load_scope("global")
+            if scope == "global"
+            else self.harness.provider_store.load()
+        )
+        if current.active != registry.active or current.providers.get(current.active) != registry.providers.get(
+            registry.active
+        ):
+            raise HTTPException(422, "Provider connection changed. Refresh the model catalog before saving.")
+        details = catalog.metadata.get(values.model, {})
+        if "reasoning_efforts" in details:
+            if values.reasoning_effort in details["reasoning_efforts"]:
+                return
+        elif (
+            reply["source"] == "Known model support"
+            and isinstance(options, list)
+            and values.reasoning_effort in options
+        ):
+            return
+        raise HTTPException(
+            422, "This reasoning effort is unavailable. Refresh the model catalog and choose a supported effort."
+        )
 
     def validate(self, values: SettingsValues) -> str:
         if not self.harness.config.profile(values.agent).user_invocable:
@@ -643,7 +716,7 @@ class WebSettings:
         if any(getattr(values, name) != getattr(self.defaults, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
         self.validate(values)
-        self.validate_reasoning(values, scope="global")
+        await self.validate_reasoning(values, scope="global")
         payload = values.model_dump_json(exclude={"agent", *_CONNECTION_FIELDS})
         next_revision = secrets.token_hex(32)
         self.global_path.parent.mkdir(parents=True, exist_ok=True)
@@ -706,7 +779,7 @@ class WebSettings:
         try:
             values = self._effective_values(values)
             self.validate(values)
-            self.validate_reasoning(values)
+            await self.validate_reasoning(values)
             base = self._effective_values(self.defaults).model_dump()
             overrides = {key: value for key, value in values.model_dump().items() if base[key] != value}
             payload = json.dumps(overrides, separators=(",", ":"))

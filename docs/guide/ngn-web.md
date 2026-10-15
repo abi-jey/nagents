@@ -58,15 +58,19 @@ described below. Textual is not required.
 
 ### Your Own Connection
 
-Open **Settings → Global → Provider connections** to add connections shared by all
-workspaces, or **Settings → Workspace → Provider connections** to add a connection
-just for this workspace or select a global connection. Add named OpenAI,
+Open **Settings** for the left-hand **Provider & model** workspace panel. Select
+**Global** to manage connections shared by all workspaces, or **Workspace** to
+manage this workspace's connections and defaults. Add named OpenAI,
 Azure AI Foundry, Anthropic, Gemini, OpenRouter, Azure v1, LiteLLM or custom
 OpenAI-compatible connections. Select a provider type to see its supported API
-and authentication modes; the list displays each connection's credential source
-and effective endpoint without showing secrets. Choose a chat model in **Agent
-profile and permissions**, where you can enter an ID or browse the active
-connection's model catalog. The same connections appear in the TUI's `/provider` menu. The
+and authentication modes. Connection settings show the credential source and
+effective endpoint without showing secrets. Select a connection in the left column
+to browse its model catalog on the right. Browsing does not activate it: choose
+**Use connection** before selecting a model. Enter a model ID directly when
+discovery is unavailable. **Save workspace settings** or **Save global settings**
+saves the model, reasoning effort and other defaults separately from connection
+changes. Unsaved settings require an explicit discard before switching connections.
+The same connections appear in the TUI's `/provider` menu. The
 global registry lives in `$XDG_CONFIG_HOME/ngn/providers.json` (normally
 `~/.config/ngn/providers.json`); the workspace registry lives under
 `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json`. Use an API key **environment-variable name**
@@ -76,8 +80,8 @@ ChatGPT device login or local Codex discovery; Foundry can use API keys or
 Microsoft Entra ID with the optional `azure-identity` package.
 
 The first named connection becomes active if no global default exists. A workspace
-can use a global connection or its own connection; **Use global default** removes
-the workspace selection. Choosing another switches chat's
+can use a global connection or its own connection; **Use global connection** removes
+the workspace selection. Activating another switches chat's
 provider; trusted agent profiles may also bind to a named provider. Voice
 models, backend mode and voice are separate Global/Workspace preferences in
 the settings icon beside **Voice**. Select a voice connection there or follow the active
@@ -97,10 +101,20 @@ Live connection changes, and model catalog requests/results. Prompt contents,
 tool arguments, keys, authorization headers and upstream response bodies are
 not logged by these operational messages.
 
-Model discovery uses the backend's **active provider**, not browser-supplied
-credentials or a browser-selected endpoint. It never changes authentication or
-billing mode. Keep an existing private deployment's ChatGPT/Codex login; enabling
+Model discovery uses the selected **saved connection** in the panel's scope,
+with credentials resolved by the backend. A workspace connection with the same
+name cannot replace a global connection during global discovery. Browsing a
+catalog never activates a connection or changes authentication or billing mode.
+Keep an existing private deployment's ChatGPT/Codex login; enabling
 catalog discovery does not require switching it to an OpenAI Platform API key.
+
+The selected-model summary distinguishes configured context limits from metadata
+advertised for that exact model. Missing metadata stays unknown. Exact model
+overrides take priority over the connection-wide limit, then provider metadata.
+**Context compaction** controls when history is compacted; it does not change the
+model's input capacity. Agent profiles can override the workspace model, provider
+and reasoning effort; the panel shows those overrides and their configuration
+source instead of presenting them as editable workspace defaults.
 
 For your own installation, choose your own connection deliberately:
 
@@ -123,7 +137,8 @@ For your own installation, choose your own connection deliberately:
 The API-key and Codex catalogs are not interchangeable, and discovery never falls
 back between them. In particular, a Codex OAuth access token is **not** an OpenAI
 API key. Login/refresh remains on the backend; the browser receives only model
-IDs and a non-secret source label. Device login exposes only the verification
+IDs, available context and reasoning metadata, and a non-secret source label.
+Device login exposes only the verification
 URL, one-time user code, expiration and status; it never returns tokens or the
 private device authorization ID. Signing in changes the server's selected
 connection. This does not add multi-user account isolation to a shared deployment.

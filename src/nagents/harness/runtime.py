@@ -50,6 +50,7 @@ from .followups import FollowupReady
 from .followups import RunInput
 from .followups import RunInputs
 from .followups import RunTurn
+from .model_catalog import ModelCatalog
 from .provider import DemoCompaction
 from .provider import HarnessProvider
 from .providers import ProviderProfile
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
 
     from .auth import DeviceAuthorization
     from .config import HarnessConfig
+    from .model_catalog import ModelCapabilities
     from .types import ApprovalHandler
     from .types import WakeupHandler
 
@@ -1083,8 +1085,14 @@ class Harness:
             self.providers = self.provider_store.load()
             return saved
 
-    async def provider_models(self, name: str) -> list[str]:
-        registry = self.provider_store.load()
+    async def provider_models(self, name: str, *, scope: str = "workspace") -> list[str]:
+        return (await self.provider_catalog(name, scope=scope)).models
+
+    async def provider_catalog(self, name: str, *, scope: str = "workspace") -> ModelCatalog:
+        """Discover a saved connection without selecting it or fetching metadata twice."""
+        if scope not in {"global", "workspace"}:
+            raise ValueError("Provider scope must be global or workspace")
+        registry = self.provider_store.load_scope("global") if scope == "global" else self.provider_store.load()
         profile = registry.providers.get(name)
         if profile is None:
             raise ValueError(f"Unknown provider connection {name!r}")
@@ -1098,9 +1106,24 @@ class Harness:
             if isinstance(provider, HarnessProvider):
                 provider.credentials()
             models = await provider.get_model_list()
+            snapshot = provider.context_metadata_snapshot()
+            metadata: dict[str, ModelCapabilities] = {}
+            for model in models:
+                capabilities: ModelCapabilities = {}
+                configured = profile.model_context_windows.get(model, profile.context_window)
+                if configured:
+                    capabilities["context_window"] = configured
+                    capabilities["context_window_source"] = "configured"
+                elif limit := snapshot.limits.get(model, 0):
+                    capabilities["context_window"] = limit
+                    capabilities["context_window_source"] = "provider"
+                if model in snapshot.reasoning_efforts:
+                    capabilities["reasoning_efforts"] = list(snapshot.reasoning_efforts[model])
+                if capabilities:
+                    metadata[model] = capabilities
             if name == self._built_provider_name and profile == self._built_provider_profile:
-                self.agent.provider.copy_context_metadata(provider)
-            return models
+                self.agent.provider.restore_context_metadata(snapshot)
+            return ModelCatalog(models, metadata)
         finally:
             await provider.close()
 
