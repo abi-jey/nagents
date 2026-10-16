@@ -1,168 +1,39 @@
-name: CI
+name: Windows SQLite diagnostics
 
 on:
-  push:
-    branches: [main]
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       publish_alpha:
-        description: 'Publish a tested feature-branch alpha to PyPI'
+        description: 'Publish alpha (unused in diagnostics workflow)'
         required: false
         default: false
         type: boolean
       publish_dev:
-        description: 'Publish dev release to PyPI'
+        description: 'Publish dev release (unused in diagnostics workflow)'
         required: false
         default: false
         type: boolean
       version_bump:
-        description: 'Version bump type (automatically publishes stable release)'
+        description: 'No version bump in this diagnostics workflow'
         required: false
         default: 'none'
         type: choice
         options:
           - none
-          - patch
-          - minor
-          - major
+
+permissions:
+  contents: read
 
 jobs:
-  # =============================================================================
-  # LINT
-  # =============================================================================
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install pre-commit
-        run: pip install pre-commit
-
-      - name: Run pre-commit
-        run: pre-commit run --all-files
-
-      - name: Validate alpha release request
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
-        env:
-          REF: ${{ github.ref }}
-          BUMP: ${{ inputs.version_bump }}
-          PUBLISH_DEV: ${{ inputs.publish_dev }}
-        run: |
-          case "$REF" in refs/heads/*) ;; *) exit 1 ;; esac
-          test "$REF" != refs/heads/main
-          test "$BUMP" = none
-          test "$PUBLISH_DEV" = false
-
-  # =============================================================================
-  # LINUX TESTS
-  # =============================================================================
-  test-linux:
-    name: Test Linux (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
-          cache: 'pip'
-          cache-dependency-path: pyproject.toml
-
-      - name: Install package and test dependencies
-        run: pip install -e ".[dev,tui,voice,web]"
-
-      - name: Verify package import
-        run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
-
-      - name: Run tests
-        run: pytest tests/ -n auto -v --cov=nagents --cov-report=xml --cov-report=term-missing
-
-      - name: Check offline harness diagnostics
-        if: matrix.python-version == '3.12'
-        run: >-
-          pytest -q benchmarks/terminal_bench/tests/test_runner.py
-          benchmarks/diagnostics/tests/test_diagnostic.py
-
-      - name: Upload coverage
-        if: matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage.xml
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-
-  # =============================================================================
-  # MACOS TESTS
-  # =============================================================================
-  test-macos:
-    name: Test macOS (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest]
-        python-version: ['3.11', '3.12', '3.13', '3.14']
-        include:
-          - os: macos-15-intel
-            python-version: '3.13'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
-          cache: 'pip'
-          cache-dependency-path: pyproject.toml
-
-      - name: Install package and test dependencies
-        run: pip install -e ".[dev,tui,voice,web]"
-
-      - name: Report platform
-        run: python -c "import platform; print(platform.platform(), platform.machine())"
-
-      - name: Verify package import
-        run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
-
-      - name: Run tests
-        run: pytest tests/ -n auto -v -o faulthandler_timeout=60
-
-  # =============================================================================
-  # WINDOWS TESTS
-  # =============================================================================
-  test-windows:
-    name: Test Windows (py${{ matrix.python-version }}, shard ${{ matrix.group }}/${{ matrix.shards }})
+  windows-sqlite-diagnostic:
+    name: Windows SQLite diagnostic (py${{ matrix.python-version }})
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
-        shards: [3]
-        group: [1, 2, 3]
+        python-version: ['3.11', '3.14']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -178,507 +49,485 @@ jobs:
       - name: Install package and test dependencies
         run: pip install -e ".[dev,tui,voice,web]"
 
-      - name: Verify package import
-        run: python -c "from nagents import Agent, Provider, ProviderType; print('Package imports work')"
-
-      - name: Run portable tests (POSIX harness cases are marked)
-        shell: bash
+      - name: Run traced original shard 3
+        shell: python
         run: |
-          pytest $(python .github/scripts/shard_tests.py --shards ${{ matrix.shards }} --group ${{ matrix.group }}) \
-            -n auto -v -rs -o faulthandler_timeout=60
-
-  # =============================================================================
-  # BUMP VERSION (runs only after all tests pass)
-  # =============================================================================
-  bump-version:
-    name: Bump Version
-    runs-on: ubuntu-latest
-    needs: [lint, test-linux, test-macos, test-windows]
-    if: |
-      github.event_name == 'workflow_dispatch' &&
-      inputs.version_bump != 'none' &&
-      needs.lint.result == 'success' &&
-      needs.test-linux.result == 'success' &&
-      needs.test-macos.result == 'success' &&
-      needs.test-windows.result == 'success'
-    outputs:
-      version: ${{ steps.bump.outputs.version }}
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install toml packaging
-
-      - name: Bump version
-        id: bump
-        run: |
-          import toml
-          import subprocess
           import os
-          from packaging.version import Version
-
-          bump_type = "${{ inputs.version_bump }}"
-
-          # Pull latest before bumping to avoid conflicts
-          subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
-
-          with open('pyproject.toml', 'r') as f:
-              config = toml.load(f)
-
-          current = config['project']['version']
-          major, minor, patch = Version(current).release
-
-          if bump_type == 'major':
-              major += 1
-              minor = 0
-              patch = 0
-          elif bump_type == 'minor':
-              minor += 1
-              patch = 0
-          elif bump_type == 'patch':
-              patch += 1
-
-          new_version = f"{major}.{minor}.{patch}"
-
-          # If this tag already exists, keep bumping patch until we find a free version
-          while True:
-              tag = f"v{new_version}"
-              result = subprocess.run(["git", "tag", "-l", tag], capture_output=True, text=True)
-              if result.stdout.strip() == tag:
-                  print(f"Tag {tag} already exists, bumping patch")
-                  patch += 1
-                  new_version = f"{major}.{minor}.{patch}"
-              else:
-                  break
-
-          config['project']['version'] = new_version
-          with open('pyproject.toml', 'w') as f:
-              toml.dump(config, f)
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={new_version}\n")
-
-          print(f"Bumped version: {current} -> {new_version}")
-        shell: python
-
-      - name: Commit and push version bump
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git pull --rebase origin main || true
-          git add pyproject.toml
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
-          git push
-
-  # =============================================================================
-  # BUILD DISTRIBUTION
-  # =============================================================================
-  build:
-    name: Build Distribution
-    runs-on: ubuntu-latest
-    needs: [lint, bump-version, test-linux, test-macos, test-windows]
-    if: |
-      always() &&
-      needs.lint.result == 'success' &&
-      needs.test-linux.result == 'success' &&
-      needs.test-macos.result == 'success' &&
-      needs.test-windows.result == 'success' &&
-      (needs.bump-version.result == 'success' || needs.bump-version.result == 'skipped')
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Fetch successful version bump
-        if: needs.bump-version.result == 'success'
-        run: git fetch origin "${GITHUB_REF}" && git checkout --detach FETCH_HEAD
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.20.0'
-          cache: npm
-          cache-dependency-path: src/nagents/web-ui/package-lock.json
-
-      - name: Install web dependencies
-        working-directory: src/nagents/web-ui
-        run: npm ci
-
-      - name: Type-check web frontend
-        working-directory: src/nagents/web-ui
-        run: npm run typecheck
-
-      - name: Test web frontend
-        working-directory: src/nagents/web-ui
-        run: npm test
-
-      - name: Test browser voice E2E recorder
-        run: node --test examples/live/browser_e2e/*.test.mjs
-
-      - name: Check subagent interaction demos
-        working-directory: src/nagents/web-ui
-        run: |
-          npm run demo:subagents:build -- --outDir "$RUNNER_TEMP/ngn-subagent-concepts"
-          npm run demo:subagents:test
-
-      - name: Build web assets
-        working-directory: src/nagents/web-ui
-        run: npm run build
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install build tools
-        run: pip install build hatch
-
-      - name: Stamp feature alpha version
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
-        run: python .github/scripts/alpha_version.py
-
-      - name: Build wheel and sdist
-        run: python -m build
-
-      - name: Verify bundled web assets, skills, and instructions
-        shell: python
-        run: |
-          import hashlib
-          import json
           from pathlib import Path
-          import tarfile
-          import zipfile
+          import subprocess
+          import sys
 
-          with zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
-              wheel_files = wheel.namelist()
-              manifest = json.loads(wheel.read("nagents/web/static/build.json"))
-              assert manifest["version"] == 1
-              assert manifest["sources"] and manifest["assets"]
-              for path, digest in manifest["assets"].items():
-                  assert hashlib.sha256(wheel.read(f"nagents/web/static/{path}")).hexdigest() == digest, path
-              instructions_path = "nagents/harness/instructions/AGENTS.md"
-              instructions = wheel.read(instructions_path)
-              assert instructions == Path(f"src/{instructions_path}").read_bytes()
-              assert instructions.decode("utf-8").strip()
-          with tarfile.open(next(Path("dist").glob("*.tar.gz"))) as sdist:
-              sdist_files = [name.split("/", 1)[-1] for name in sdist.getnames()]
-              prefix = sdist.getnames()[0].split("/", 1)[0]
-              for path, digest in manifest["sources"].items():
-                  source = sdist.extractfile(f"{prefix}/src/nagents/web-ui/{path}")
-                  assert source is not None, path
-                  assert hashlib.sha256(source.read()).hexdigest() == digest, path
-              source = sdist.extractfile(f"{prefix}/src/{instructions_path}")
-              assert source is not None, instructions_path
-              assert source.read() == instructions
+          sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+          runner_temp = Path(os.environ["RUNNER_TEMP"])
+          repo_root = Path(os.environ["GITHUB_WORKSPACE"])
+          plugin_source = r'''
+          """Explicit diagnostic pytest plugin: NGN_SQLITE_TRACE=1 pytest -p ngn_sqlite_trace.
 
-          assert "nagents/web/static/index.html" in wheel_files
-          assert any(name.startswith("nagents/web/static/assets/") and name.endswith(".js") for name in wheel_files)
-          assert "src/nagents/web/static/index.html" in sdist_files
-          assert "src/nagents/web-ui/package-lock.json" in sdist_files
-          assert not any(name.startswith("nagents/web-ui/") for name in wheel_files)
-          for skill in ("ngn-customize", "ngn-channels"):
-              path = f"nagents/skills/bundled/{skill}/SKILL.md"
-              assert path in wheel_files, path
-              assert f"src/{path}" in sdist_files, path
-              with zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
-                  content = wheel.read(path).decode("utf-8")
-              assert f"name: {skill}\n" in content
-              assert len(content.encode("utf-8")) <= 40000, "Keep bundled skill bodies within the default budget"
-          for name in wheel_files + sdist_files:
-              assert not {"node_modules", ".vite", ".cache", ".test-build"}.intersection(Path(name).parts), name
-              assert not name.endswith(".tsbuildinfo"), name
-          print("Web assets, built-in skills, and default instructions are bundled; frontend dependencies and caches are excluded")
+          Temporary instrumentation only. Never retains SQL, parameters, paths, frames,
+          exceptions, connections, or cursors in its records. Reader flags are conservative:
+          a fetched last row can already have released SQLite's lock before exhaustion is
+          observed here. No retries, timeouts, transaction modes, or statement ordering are
+          changed. A custom caller-supplied connection factory is left untouched.
+          """
 
-      - name: List artifacts
-        run: ls -la dist/
+          from __future__ import annotations
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-  # =============================================================================
-  # DOCKER BUILD & PUSH
-  # =============================================================================
-  docker-build:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest
-    needs: [build, bump-version]
-    if: |
-      always() &&
-      needs.build.result == 'success' &&
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) ||
-       github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none' && needs.bump-version.result == 'success' ||
-       github.event_name == 'workflow_dispatch' && inputs.publish_alpha)
-    permissions:
-      packages: write
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}/agent-server
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Pull latest changes (for bump workflow)
-        if: github.event_name == 'workflow_dispatch' && needs.bump-version.result == 'success'
-        run: git fetch origin main && git checkout --detach FETCH_HEAD
-
-      - uses: actions/setup-python@v5
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
-        with:
-          python-version: '3.12'
-
-      - name: Stamp the same feature alpha as the tested distribution
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
-        run: python .github/scripts/alpha_version.py
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=alpha-${{ github.run_number }}-${{ github.run_attempt }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_alpha }}
-            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=v${{ needs.bump-version.outputs.version }},enable=${{ needs.bump-version.result == 'success' }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: dockerfiles/Runtime.Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # =============================================================================
-  # PUBLISH & RELEASE (Stable)
-  # =============================================================================
-  publish-stable:
-    name: Publish & Release (Stable)
-    runs-on: ubuntu-latest
-    needs: [bump-version, build]
-    if: |
-      always() &&
-      needs.build.result == 'success' &&
-      !inputs.publish_alpha &&
-      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version_bump != 'none'))
-    environment:
-      name: pypi-stable
-      url: https://pypi.org/project/nagents/
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Pull latest changes
-        run: git pull --rebase origin ${{ github.ref_name }} || true
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install toml
-
-      - name: Get version
-        id: version
-        run: |
-          import toml
+          import hashlib
+          import itertools
+          import json
           import os
+          import re
+          import sqlite3
+          import sys
+          import threading
+          import time
+          import weakref
+          from collections import deque
+          from pathlib import Path
 
-          with open('pyproject.toml', 'r') as f:
-              config = toml.load(f)
+          _LIMIT = 2000
+          _MAX_DUMPS = 3
+          _LOCK = threading.RLock()
+          _RING = deque(maxlen=_LIMIT)
+          _CONNECTIONS = {}
+          _CURSORS = {}
+          _SEQUENCE = itertools.count(1)
+          _LOCAL = threading.local()
+          _START = time.monotonic()
+          _DUMPS = 0
+          _ENABLED = False
+          _CURRENT_TEST = ""
+          _CONNECT = sqlite3.connect
+          _AIO_EXECUTE = None
+          _THIS_FILE = Path(__file__).name
+          _VERBS = {
+              "SELECT", "INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "ALTER",
+              "DROP", "PRAGMA", "BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT",
+              "RELEASE", "WITH", "EXPLAIN", "VACUUM", "ATTACH", "DETACH",
+          }
 
-          version = config['project']['version']
 
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={version}\n")
+          def _now():
+              return round((time.monotonic() - _START) * 1000, 3)
 
-          print(f"Version: {version}")
-        shell: python
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
+          def _source():
+              inherited = getattr(_LOCAL, "origin", ())
+              if inherited:
+                  return inherited
+              frame = sys._getframe(1)
+              sources = []
+              try:
+                  while frame is not None and len(sources) < 4:
+                      name = Path(frame.f_code.co_filename).name
+                      if name != _THIS_FILE:
+                          sources.append((name, frame.f_code.co_name[:80], frame.f_lineno))
+                      frame = frame.f_back
+                  return tuple(sources)
+              finally:
+                  del frame
+
+
+          def _traceback(error):
+              trace = error.__traceback__
+              sources = []
+              try:
+                  while trace is not None:
+                      code = trace.tb_frame.f_code
+                      sources.append((Path(code.co_filename).name, code.co_name[:80], trace.tb_lineno))
+                      trace = trace.tb_next
+                  return sources[-12:]
+              finally:
+                  del trace
+
+
+          def _sql(sql):
+              # Strip comments and all quoted strings/identifiers before extracting names.
+              # The SQLite callback expands bound values; none may enter the trace ring.
+              if not isinstance(sql, str):
+                  return {"verb": "OTHER", "tables": []}
+              stripped = re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]", "?", sql)
+              stripped = re.sub(r"/\*.*?\*/|--[^\n]*", " ", stripped, flags=re.S)
+              first = re.match(r"\s*([A-Za-z]+)", stripped)
+              verb = first.group(1).upper() if first else "OTHER"
+              if verb not in _VERBS:
+                  verb = "OTHER"
+              names = []
+              patterns = []
+              if verb in {"SELECT", "WITH", "EXPLAIN", "DELETE"}:
+                  patterns.append(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)")
+              if verb in {"INSERT", "REPLACE"}:
+                  patterns.append(r"\bINTO\s+([A-Za-z_][A-Za-z0-9_]*)")
+              if verb == "UPDATE":
+                  patterns.append(r"^\s*UPDATE(?:\s+OR\s+\w+)?\s+([A-Za-z_][A-Za-z0-9_]*)")
+              if verb in {"CREATE", "ALTER", "DROP"}:
+                  patterns.append(r"\bTABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)")
+                  patterns.append(r"\bON\s+([A-Za-z_][A-Za-z0-9_]*)")
+              for pattern in patterns:
+                  for match in re.finditer(pattern, stripped, flags=re.I):
+                      name = match.group(1)
+                      # Only framework-owned schema names are useful here. Do not expose
+                      # arbitrary extension/user table names accidentally used as secrets.
+                      if name == "schema_migrations" or name.startswith(("ngn_", "nagents_", "v2_")):
+                          if name not in names:
+                              names.append(name[:100])
+              return {"verb": verb, "tables": names[:4]}
+
+
+          def _record(kind, **fields):
+              with _LOCK:
+                  _RING.append({"ms": _now(), "thread": threading.get_ident(), "kind": kind, **fields})
+
+
+          def _remember(mapping, identifier, record):
+              with _LOCK:
+                  mapping[identifier] = record
+                  while len(mapping) > _LIMIT:
+                      mapping.pop(next(iter(mapping)))
+
+
+          def _collected(kind, identifier):
+              mapping = _CONNECTIONS if kind == "connection" else _CURSORS
+              with _LOCK:
+                  mapping.pop(identifier, None)
+              _record(f"{kind}_collected", id=identifier)
+
+
+          def _dump(reason, error=None, **fields):
+              global _DUMPS
+              match = os.environ.get("NGN_SQLITE_TRACE_TEST_MATCH", "")
+              if reason == "sqlite_busy_or_locked" and match and not re.search(match, _CURRENT_TEST):
+                  return
+              with _LOCK:
+                  if _DUMPS >= _MAX_DUMPS:
+                      return
+                  _DUMPS += 1
+                  snapshot = {
+                      "reason": reason,
+                      "test": _CURRENT_TEST.split("[", 1)[0],
+                      "dump": _DUMPS,
+                      "ms": _now(),
+                      **fields,
+                      "traceback": _traceback(error) if error is not None else [],
+                      "connections": [dict(item) for item in _CONNECTIONS.values()],
+                      "potentially_unfinished_cursors": [
+                          dict(item) for item in _CURSORS.values() if item.get("unfinished")
+                      ],
+                      "events": list(_RING),
+                  }
+              sys.stderr.write("\nNGN_SQLITE_TRACE " + json.dumps(snapshot, separators=(",", ":")) + "\n")
+              sys.stderr.flush()
+
+
+          def _state(connection):
+              identifier = connection._ngn_trace_id
+              with _LOCK:
+                  record = _CONNECTIONS.get(identifier)
+                  if record is not None:
+                      try:
+                          active = connection.in_transaction
+                      except sqlite3.Error:
+                          # Preserve the operation's own result/error if the user has
+                          # already closed this connection or SQLite is closing it.
+                          record["state_unavailable"] = True
+                          return
+                      if active and not record.get("in_transaction"):
+                          record["transaction_since_ms"] = _now()
+                      elif not active:
+                          record.pop("transaction_since_ms", None)
+                      record["in_transaction"] = active
+
+
+          def _invoke(connection, operation, callback, *, cursor=0, statement=None):
+              started = _now()
+              origin = _source()
+              fields = {"connection": connection._ngn_trace_id, "operation": operation, "cursor": cursor, "source": origin}
+              if statement is not None:
+                  fields["statement"] = statement
+              _record("start", **fields)
+              try:
+                  result = callback()
+              except sqlite3.Error as error:
+                  _state(connection)
+                  code = getattr(error, "sqlite_errorcode", -1)
+                  safe_code = code if type(code) is int else -1
+                  _record("error", **fields, elapsed_ms=round(_now() - started, 3), sqlite_code=safe_code)
+                  if safe_code >= 0 and safe_code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                      _dump("sqlite_busy_or_locked", error, **fields, sqlite_code=safe_code)
+                  raise
+              _state(connection)
+              _record("end", **fields, elapsed_ms=round(_now() - started, 3))
+              return result
+
+
+          class TraceCursor(sqlite3.Cursor):
+              def __init__(self, connection):
+                  super().__init__(connection)
+                  self._ngn_trace_id = next(_SEQUENCE)
+                  _remember(_CURSORS, self._ngn_trace_id, {
+                      "id": self._ngn_trace_id, "connection": connection._ngn_trace_id,
+                      "database": connection._ngn_trace_database,
+                      "created_ms": _now(), "source": _source(), "unfinished": False,
+                  })
+                  weakref.finalize(self, _collected, "cursor", self._ngn_trace_id)
+
+              def _statement(self, operation, sql, callback):
+                  summary = _sql(sql)
+                  with _LOCK:
+                      info = _CURSORS.get(self._ngn_trace_id)
+                      if info is not None:
+                          info.update(statement=summary, source=_source(), started_ms=_now(), unfinished=False)
+                  result = _invoke(self.connection, operation, callback, cursor=self._ngn_trace_id, statement=summary)
+                  with _LOCK:
+                      info = _CURSORS.get(self._ngn_trace_id)
+                      if info is not None:
+                          info["unfinished"] = self.description is not None
+                  return result
+
+              def execute(self, sql, parameters=()):
+                  return self._statement("execute", sql, lambda: super(TraceCursor, self).execute(sql, parameters))
+
+              def executemany(self, sql, parameters):
+                  return self._statement("executemany", sql, lambda: super(TraceCursor, self).executemany(sql, parameters))
+
+              def executescript(self, script):
+                  return self._statement("executescript", script, lambda: super(TraceCursor, self).executescript(script))
+
+              def _exhausted(self):
+                  with _LOCK:
+                      info = _CURSORS.get(self._ngn_trace_id)
+                      if info is not None:
+                          info["unfinished"] = False
+
+              def fetchone(self):
+                  result = _invoke(self.connection, "fetchone", super().fetchone, cursor=self._ngn_trace_id)
+                  if result is None:
+                      self._exhausted()
+                  return result
+
+              def fetchall(self):
+                  result = _invoke(self.connection, "fetchall", super().fetchall, cursor=self._ngn_trace_id)
+                  self._exhausted()
+                  return result
+
+              def fetchmany(self, size=None):
+                  result = _invoke(
+                      self.connection, "fetchmany",
+                      lambda: super(TraceCursor, self).fetchmany() if size is None else super(TraceCursor, self).fetchmany(size),
+                      cursor=self._ngn_trace_id,
+                  )
+                  if len(result) < (self.arraysize if size is None else size):
+                      self._exhausted()
+                  return result
+
+              def __next__(self):
+                  try:
+                      return super().__next__()
+                  except StopIteration:
+                      self._exhausted()
+                      raise
+
+              def close(self):
+                  result = _invoke(self.connection, "cursor_close", super().close, cursor=self._ngn_trace_id)
+                  self._exhausted()
+                  with _LOCK:
+                      _CURSORS.pop(self._ngn_trace_id, None)
+                  return result
+
+
+          class TraceConnection(sqlite3.Connection):
+              def __init__(self, database, *args, **kwargs):
+                  self._ngn_trace_id = next(_SEQUENCE)
+                  digest = hashlib.sha256(os.fsencode(database)).hexdigest()[:16]
+                  self._ngn_trace_database = digest
+                  _record("connection_open_start", connection=self._ngn_trace_id, database=digest, source=_source())
+                  started = _now()
+                  super().__init__(database, *args, **kwargs)
+                  _remember(_CONNECTIONS, self._ngn_trace_id, {
+                      "id": self._ngn_trace_id, "database": digest, "created_ms": started,
+                      "source": _source(), "in_transaction": self.in_transaction,
+                  })
+                  weakref.finalize(self, _collected, "connection", self._ngn_trace_id)
+                  self.set_trace_callback(None)
+                  _record("connection_open_end", connection=self._ngn_trace_id, elapsed_ms=round(_now() - started, 3))
+
+              def set_trace_callback(self, callback):
+                  identifier = self._ngn_trace_id
+
+                  def traced(sql):
+                      summary = _sql(sql)
+                      with _LOCK:
+                          record = _CONNECTIONS.get(identifier)
+                          if record is not None:
+                              record.update(last_statement=summary, last_statement_ms=_now(), last_source=_source())
+                      _record("sql", connection=identifier, statement=summary, source=_source())
+                      if callback is not None:
+                          callback(sql)
+
+                  # The callback captures only an integer and the user's callback, never
+                  # self. A self-capturing callback would itself manufacture a GC cycle.
+                  return super().set_trace_callback(traced)
+
+              def cursor(self, factory=None):
+                  return super().cursor(TraceCursor if factory is None else factory)
+
+              def execute(self, sql, parameters=()):
+                  return self.cursor().execute(sql, parameters)
+
+              def executemany(self, sql, parameters):
+                  return self.cursor().executemany(sql, parameters)
+
+              def executescript(self, script):
+                  return self.cursor().executescript(script)
+
+              def commit(self):
+                  return _invoke(self, "commit", super().commit)
+
+              def rollback(self):
+                  return _invoke(self, "rollback", super().rollback)
+
+              def close(self):
+                  started = _now()
+                  _record("connection_close_start", connection=self._ngn_trace_id, source=_source())
+                  try:
+                      return super().close()
+                  finally:
+                      with _LOCK:
+                          _CONNECTIONS.pop(self._ngn_trace_id, None)
+                      _record("connection_close_end", connection=self._ngn_trace_id, elapsed_ms=round(_now() - started, 3))
+
+              def __exit__(self, *args):
+                  return _invoke(self, "context_exit", lambda: super(TraceConnection, self).__exit__(*args))
+
+
+          def _connect(*args, **kwargs):
+              positional = list(args)
+              factory = positional[5] if len(positional) > 5 else kwargs.get("factory", sqlite3.Connection)
+              if factory is sqlite3.Connection:
+                  if len(positional) > 5:
+                      positional[5] = TraceConnection
+                  else:
+                      kwargs["factory"] = TraceConnection
+              elif factory is not TraceConnection:
+                  _record("custom_connection_factory_untraced", source=_source())
+              return _CONNECT(*positional, **kwargs)
+
+
+          async def _aio_execute(self, fn, *args, **kwargs):
+              origin = _source()
+
+              def annotated(*values, **options):
+                  previous = getattr(_LOCAL, "origin", ())
+                  _LOCAL.origin = origin
+                  try:
+                      return fn(*values, **options)
+                  finally:
+                      _LOCAL.origin = previous
+
+              return await _AIO_EXECUTE(self, annotated, *args, **kwargs)
+
+
+          def pytest_configure(config):
+              global _ENABLED, _AIO_EXECUTE
+              if os.environ.get("NGN_SQLITE_TRACE") != "1":
+                  return
+              _ENABLED = True
+              sqlite3.connect = _connect
+              try:
+                  import aiosqlite
+              except ImportError:
+                  pass
+              else:
+                  _AIO_EXECUTE = aiosqlite.Connection._execute
+                  aiosqlite.Connection._execute = _aio_execute
+
+
+          def pytest_runtest_setup(item):
+              global _CURRENT_TEST
+              _CURRENT_TEST = item.nodeid
+
+
+          def pytest_unconfigure(config):
+              if not _ENABLED:
+                  return
+              if os.environ.get("NGN_SQLITE_TRACE_DUMP_AT_EXIT") == "1":
+                  _dump("pytest_exit")
+              if sqlite3.connect is _connect:
+                  sqlite3.connect = _CONNECT
+              if _AIO_EXECUTE is not None:
+                  import aiosqlite
+                  if aiosqlite.Connection._execute is _aio_execute:
+                      aiosqlite.Connection._execute = _AIO_EXECUTE
+          '''
+          plugin_path = runner_temp / "ngn_sqlite_trace.py"
+          plugin_path.write_text(plugin_source.lstrip("\n") + "\n", encoding="utf-8")
+
+          env = os.environ.copy()
+          env["NGN_SQLITE_TRACE"] = "1"
+          env["NGN_SQLITE_TRACE_DUMP_AT_EXIT"] = "1"
+          env["NGN_SQLITE_TRACE_TEST_MATCH"] = "test_web_child_failure_scope.py|test_web_live_assistant_updates.py"
+          env["PYTHONPATH"] = os.pathsep.join(
+              (str(runner_temp), str(repo_root / "src"), str(repo_root))
+          )
+          selection = subprocess.run(
+              [
+                  sys.executable,
+                  str(repo_root / ".github/scripts/shard_tests.py"),
+                  "--shards",
+                  "3",
+                  "--group",
+                  "3",
+              ],
+              cwd=repo_root,
+              env=env,
+              check=True,
+              capture_output=True,
+              text=True,
+              encoding="utf-8",
+          )
+          tests = selection.stdout.split()
+          command = [
+              sys.executable,
+              "-m",
+              "pytest",
+              *tests,
+              "-n",
+              "auto",
+              "-v",
+              "-rs",
+              "-o",
+              "faulthandler_timeout=60",
+              "-p",
+              "ngn_sqlite_trace",
+          ]
+          log_path = runner_temp / f"ngn-sqlite-trace-py{sys.version_info.major}.{sys.version_info.minor}.log"
+          with log_path.open("w", encoding="utf-8", errors="replace") as log:
+              process = subprocess.Popen(
+                  command,
+                  cwd=repo_root,
+                  env=env,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+                  bufsize=1,
+              )
+              assert process.stdout is not None
+              for line in process.stdout:
+                  sys.stdout.write(line)
+                  sys.stdout.flush()
+                  log.write(line)
+                  log.flush()
+              status = process.wait()
+          print(f"Diagnostic output saved to {log_path}")
+          raise SystemExit(status)
+
+      - name: Upload sanitized SQLite trace and test output
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist
-
-      - name: List artifacts
-        run: ls -la dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          skip-existing: true
-
-      - name: Get previous stable tag
-        id: prev_tag
-        run: |
-          PREV_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -2 | tail -1)
-          if [ -z "$PREV_TAG" ]; then
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
-          echo "Previous stable tag: $PREV_TAG"
-
-      - name: Generate release notes
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          PREV_TAG="${{ steps.prev_tag.outputs.prev_tag }}"
-
-          echo "## What's Changed" > release_notes.md
-          echo "" >> release_notes.md
-
-          git log ${PREV_TAG}..HEAD --pretty=format:"* %s (%h)" --no-merges >> release_notes.md
-
-          echo "" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${VERSION}" >> release_notes.md
-
-          cat release_notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          body_path: release_notes.md
-          files: dist/*
-
-  # =============================================================================
-  # FEATURE-BRANCH ALPHAS (same tested SHA and built artifacts, no branch changes)
-  # =============================================================================
-  publish-alpha:
-    name: Publish Feature Alpha
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish_alpha && needs.build.result == 'success' }}
-    environment:
-      name: pypi-alpha
-      url: https://pypi.org/project/nagents/
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-
-      - name: Publish tested alpha artifacts
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-
-  # =============================================================================
-  # PUBLISH & RELEASE (Dev)
-  # =============================================================================
-  publish-dev:
-    name: Publish & Release (Dev)
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_dev
-    environment:
-      name: pypi-dev
-      url: https://pypi.org/project/nagents/
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.20.0'
-          cache: npm
-          cache-dependency-path: src/nagents/web-ui/package-lock.json
-
-      - name: Install web dependencies
-        working-directory: src/nagents/web-ui
-        run: npm ci
-
-      - name: Build web assets
-        working-directory: src/nagents/web-ui
-        run: npm run build
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install toml build
-
-      - name: Generate dev version
-        id: version
-        run: |
-          import toml
-          import os
-          from datetime import datetime
-
-          with open('pyproject.toml', 'r') as f:
-              config = toml.load(f)
-
-          base_version = config['project']['version']
-          timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-
-          dev_version = f"{base_version}.dev{timestamp}"
-
-          config['project']['version'] = dev_version
-          with open('pyproject.toml', 'w') as f:
-              toml.dump(config, f)
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"version={dev_version}\n")
-
-          print(f"Dev version: {dev_version}")
-        shell: python
-
-      - name: Build wheel and sdist
-        run: python -m build
-
-      - name: List artifacts
-        run: ls -la dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          skip-existing: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Dev v${{ steps.version.outputs.version }}
-          prerelease: true
-          generate_release_notes: true
-          files: dist/*
+          name: windows-sqlite-diagnostic-py${{ matrix.python-version }}
+          path: ${{ runner.temp }}/ngn-sqlite-trace-py${{ matrix.python-version }}.log
+          if-no-files-found: warn
+          retention-days: 3
