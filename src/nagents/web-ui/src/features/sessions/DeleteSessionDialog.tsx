@@ -25,7 +25,7 @@ export function DeleteSessionDialog({ state, controller, currentSessionId = stat
     <header className="approval-heading"><h2 id="delete-session-title">Delete forever?</h2></header>
     <div className="approval-body">
       <p className="delete-session-name">{state.target?.title}</p>
-      <p id="delete-session-description">Permanently delete this session’s saved conversation.
+      <p id="delete-session-description">Permanently delete this conversation and all its subagent conversations. Running agents and scheduled work will stop.
         {!state.trash && state.target?.id === currentSessionId
           ? " Your current draft will be discarded only after deletion is confirmed."
           : " Your current conversation and draft are kept."}

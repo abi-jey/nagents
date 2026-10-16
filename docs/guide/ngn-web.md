@@ -344,7 +344,7 @@ conversation, and draft visible, with an error explaining what needs attention.
 
 Soft deletion hides the root from the active session list and prevents ordinary
 resume, message admission, channel selection, history access, or subscription to
-it. Its saved conversation remains available for restoration until its retention
+it. Its saved conversation and all subagent conversations remain available for restoration until its retention
 deadline. Deleting a different row preserves the conversation, draft, and live
 subscription you are viewing. If your current root is trashed, the client opens a
 surviving root; the server chooses or creates a replacement atomically when needed,
@@ -392,19 +392,23 @@ Use a session row's **More actions → Delete forever**, or **Delete forever** o
 Trash item, for immediate permanent deletion. This retains an irreversible-action
 confirmation naming the session. Confirming submits the request; pending/error
 feedback prevents duplicate submissions. Cancelling leaves the conversation
-intact. Permanent deletion removes that root's saved history and offers no Undo.
+intact. Permanent deletion removes that root's saved history and all its subagent
+histories, and offers no Undo.
 It removes logical database records, not backups or SQLite free pages.
 
-#### Activity And Routing Guards
+#### Task Tree And Routing Cleanup
 
-Moving to Trash and deleting forever retain the idle, active-work, and
-in-memory-process guards. Admission returns `409` while the Harness is busy, a
-descendant task handle is retained, descendant tasks are still running, or the
-root has pending wakeups. Finish or cancel running work first. Retained handles
-can still resume child conversations; after those tasks finish, restart ngn to
-expire the handles before deleting their root. Child histories are kept:
-deletion never guesses ownership from a session prefix, a task name, or text in
-old messages.
+Moving to Trash or deleting forever stops the selected root and its running
+subagents, denies their pending approvals, cancels their scheduled wakeups, and
+releases completed task handles. It waits for their cleanup before changing
+saved history; no restart is required. Other chats keep running. Task ownership
+comes from the root's task registry and persisted journal, never from a session
+prefix, task name, or text in old messages.
+
+Restore recovers the saved tree as read-only task history. It does not restart
+cancelled work, timers, or queued messages; start a new agent to continue work.
+If storage fails after cancellation, the conversation remains saved and its work
+remains stopped. Deletion does not undo tools that already completed.
 
 Channel attachments and queued inbox work never block deletion. Deletion wins:
 deleting a bound root detaches that channel conversation, so its next inbound
@@ -422,11 +426,11 @@ and related stored input. Restore atomically reinstates that membership and titl
 Permanent purge removes the root's content while retaining content-free
 channel/message deduplication keys and historical session-owner identities, so
 late channel redelivery cannot execute deleted work or transfer a reused session
-ID to another chat. Workspace files, unrelated roots and child histories, saved
+ID to another chat. Workspace files, unrelated conversations and their child histories, saved
 settings, channel configuration, and private credentials are preserved.
 
 Cancellation joins the SQLite transaction and selection/subscription cleanup
-before releasing the idle boundary, avoiding partially applied membership changes.
+before releasing the mutation boundary, avoiding partially applied membership changes.
 Deleted-root subscribers are revoked, and clients refresh session membership;
 ordinary resume/reconnect cannot restore a trashed root. Restore publishes the
 updated session list but never replays a prompt, tool, or old subscription event.
@@ -654,7 +658,7 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `POST session-groups/reparent` | `{revision, group_id, parent_id}` moves a folder and its subtree; cycles, excessive depth, missing parents, and sibling name collisions are rejected |
 | `POST session-groups/move` | `{revision, session_id, group_id}` moves an existing root; an empty `group_id` means Ungrouped; allowed while chats run |
 | `POST session-groups/remove` | `{revision, group_id}` removes a folder, promoting direct subfolders and chat assignments (including Trash) to its parent or the top level; chats are preserved; name collisions return 409 |
-| `DELETE sessions/{session_id}` | `{}` or `{permanent: false}` moves an idle, unbound root to Trash; returns `Snapshot & {deleted_session_id: string, trash: TrashItem}` |
+| `DELETE sessions/{session_id}` | `{}` or `{permanent: false}` stops the root's task tree and moves it to Trash; returns `Snapshot & {deleted_session_id: string, trash: TrashItem}` |
 | `DELETE sessions/{session_id}` | `{permanent: true}` permanently deletes an active-list root; returns `Snapshot & {deleted_session_id: string}` |
 | `GET trash` | Returns `{revision: string, retention_days: number, items: TrashItem[]}` |
 | `PUT trash/settings` | `{revision: string, retention_days: number}` saves retention for future deletions; returns the same Trash snapshot shape |

@@ -90,6 +90,14 @@ class Tasks:
         self.truncated: set[tuple[str, str]] = set()
         self.created: dict[str, asyncio.Event] = {}
 
+    def forget_session(self, root: str) -> None:
+        """Drop transient inspection data after all producers have joined."""
+        for cache in (self.activity, self.cursors, self.boundaries):
+            for key in tuple(cache):
+                if key[0] == root:
+                    del cache[key]
+        self.truncated = {key for key in self.truncated if key[0] != root}
+
     def owner(self, root: str) -> Harness:
         # The configuration harness fallback is deliberately not authority.
         owner = self.state.executions.owners.get(root)
@@ -385,6 +393,8 @@ class Tasks:
         try:
             while True:
                 async with self.admission:
+                    if self.state.mutating or self.state.executions.closed:
+                        raise HTTPException(409, "Server configuration is changing. Retry shortly.")
                     duplicate = await self.store.duplicate(root, task_id, body.message_id, body.text)
                     if duplicate and (not journaled or duplicate["status"] != "queued"):
                         return duplicate
@@ -479,6 +489,12 @@ class Tasks:
             return {"receipt": receipt, "task": next((task for task in tasks if task["id"] == receipt["task_id"]), {})}
 
     async def configure(self, root: str, task_id: str, body: TaskSettingsInput) -> dict[str, object]:
+        async with self.admission:
+            if self.state.mutating or self.state.executions.closed:
+                raise HTTPException(409, "Server configuration is changing. Retry shortly.")
+            return await self._configure(root, task_id, body)
+
+    async def _configure(self, root: str, task_id: str, body: TaskSettingsInput) -> dict[str, object]:
         known = (await self.index(root))["tasks"]
         assert isinstance(known, list)
         if not any(task["id"] == task_id for task in known):

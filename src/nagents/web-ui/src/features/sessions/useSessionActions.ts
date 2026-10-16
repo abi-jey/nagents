@@ -10,12 +10,11 @@ type Options = {
   sessions: ReturnType<typeof useSessions>;
   chat: ReturnType<typeof useChatRun>;
   operations: ReturnType<typeof useOperations>;
-  busy: boolean;
   blocked: boolean;
 };
 
 /** Session membership changes own their controllers, drafts, and selection races. */
-export function useSessionActions({ sessions, chat, operations, busy, blocked }: Options) {
+export function useSessionActions({ sessions, chat, operations, blocked }: Options) {
   const token = sessions.config?.token || "";
   const [deletion, setDeletion] = useState<DeletionState>({ pending: false, error: "" });
   const removeAction = useRef(confirmPermanent);
@@ -51,11 +50,11 @@ export function useSessionActions({ sessions, chat, operations, busy, blocked }:
   useEffect(() => { trashController.activate(); return () => trashController.dispose(); }, [trashController]);
 
   function canDeleteSession(id: string): boolean {
-    return !!token && !operations.occupied() && !busy && !blocked && !trash.open;
+    return !!token && !operations.occupied() && !blocked && !trash.open;
   }
 
   async function trashMutation(action: () => Promise<void>) {
-    if (!token || operations.occupied() || busy || blocked)
+    if (!token || operations.occupied() || blocked)
       throw new Error("Finish the current operation before changing Trash.");
     await operations.run(action);
   }
