@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
+pytestmark = pytest.mark.requires_posix
+
+
 @pytest.mark.parametrize("permanent", [False, True])
 def test_delete_cancels_nested_tasks_and_quarantines_queued_receipts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, permanent: bool
