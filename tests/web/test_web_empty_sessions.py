@@ -299,6 +299,49 @@ def test_referenced_empty_roots_are_preserved(tmp_path: Path, reference: str) ->
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("receipt_state", "protects_root"),
+    [("queued", True), ("terminal", True), ("pruned", False)],
+)
+def test_task_receipt_body_preserves_empty_root_until_pruned(
+    tmp_path: Path, receipt_state: str, protects_root: bool
+) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            protected = await draft(state)
+            unused = await draft(state)
+            store = state.tasks.store
+            await store.validate(protected)
+            message_id = f"empty-root-{receipt_state}"
+            await store.insert(protected, "reviewer", message_id, "retained receipt text")
+            if receipt_state != "queued":
+                text = "" if receipt_state == "pruned" else "retained receipt text"
+                await store.db._transaction(
+                    lambda db: db.execute(
+                        "UPDATE ngn_web_task_inputs SET status = 'error', text = ? WHERE message_id = ?",
+                        (text, message_id),
+                    )
+                )
+
+            response = await client.get("/api/sessions", headers=headers)
+            assert response.status_code == 200, response.text
+            current = await roots(state)
+            assert (protected in current) is protects_root
+            assert unused not in current
+            receipt = await store.db._transaction(
+                lambda db: db.execute(
+                    "SELECT status, text FROM ngn_web_task_inputs WHERE message_id = ?", (message_id,)
+                ).fetchone()
+            )
+            expected_status = "queued" if receipt_state == "queued" else "error"
+            expected_text = "" if receipt_state == "pruned" else "retained receipt text"
+            assert receipt == (expected_status, expected_text)
+
+    asyncio.run(scenario())
+
+
 def test_pruning_never_deletes_raw_children_foreign_users_non_ngn_or_trashed_roots(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
