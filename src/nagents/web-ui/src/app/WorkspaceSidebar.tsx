@@ -54,7 +54,7 @@ export function WorkspaceSidebar({ client, composer, open, close, select, collap
           <Icon name="close" size={14} /></button>
       </div>}
       {!client.trash.open && <TrashNotice state={client.trash} controller={client.trashController}
-        openSession={(id) => void select(id)} blocked={client.busy} openDisabled={false} />}</>}
+        openSession={(id) => void select(id)} blocked={client.operating} openDisabled={false} />}</>}
       settings={client.settings.show} settingsDisabled={!available.settings}
       tools={client.showTools} toolsDisabled={!available.tools}
       channels={client.channels.show} channelsDisabled={!available.channels} demo={!!sessions.config?.demo}

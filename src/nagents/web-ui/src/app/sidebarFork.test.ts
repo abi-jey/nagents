@@ -39,7 +39,7 @@ for (const outcome of ["success", "failure", "rename"] as const) {
     const client = stub<Client>({
       sessions: stub<Client["sessions"]>({ config: undefined, sessions: [source], sessionId: source.id }),
       available: { navigate: true, create: true, submit: true, settings: true, tools: true, channels: true, live: true, trash: true },
-      busy: false, error: "", deletion: { pending: false, error: "" },
+      busy: false, operating: false, error: "", deletion: { pending: false, error: "" },
       deletionController: stub<Client["deletionController"]>({ show() {} }),
       trash: { open: false, pending: "", loading: false, error: "", draftDays: "30" },
       trashController: stub<Client["trashController"]>({ show() {} }),
