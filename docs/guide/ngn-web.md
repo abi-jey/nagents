@@ -407,6 +407,8 @@ prefix, task name, or text in old messages.
 
 Restore recovers the saved tree as read-only task history. It does not restart
 cancelled work, timers, or queued messages; start a new agent to continue work.
+An untitled conversation containing only subagent history or saved task input
+counts as a used chat and is preserved by empty-session cleanup after restoration.
 If storage fails after cancellation, the conversation remains saved and its work
 remains stopped. Deletion does not undo tools that already completed.
 

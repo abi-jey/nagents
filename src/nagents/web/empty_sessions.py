@@ -23,6 +23,8 @@ _ROOT = re.compile(r"ngn-[A-Za-z0-9-]{1,76}\Z")
 _REFERENCES = (
     ("v2_messages", "session_id = ?"),
     ("ngn_web_inbox", "session_id = ?"),
+    ("ngn_web_tasks", "root = ?"),
+    ("ngn_web_task_inputs", "root = ? AND text != ''"),
     ("nagents_channel_inbox", "session_id = ?"),
     ("ngn_web_uploads", "session_id = ?"),
     ("ngn_web_group_members", "session_id = ?"),

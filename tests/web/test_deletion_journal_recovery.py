@@ -27,7 +27,7 @@ def test_retry_keeps_child_ownership_when_journal_write_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_write: int, permanent: bool
 ) -> None:
     async def scenario() -> None:
-        async with client_app(tmp_path) as (app, _, _, _):
+        async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
             await quiet(state)
             root = state.selected_session_id
@@ -64,6 +64,9 @@ def test_retry_keeps_child_ownership_when_journal_write_fails(
                 trash = result["trash"]
                 assert isinstance(trash, dict)
                 await state.trash.restore(root, str(trash["deletion_id"]))
+                listed = await client.get("/api/sessions", headers=headers)
+                assert listed.status_code == 200, listed.text
+                assert root in {session["id"] for session in listed.json()["sessions"]}
                 assert await state.history.get_history(child)
                 index = await state.tasks.index(root)
                 saved = index["tasks"]
