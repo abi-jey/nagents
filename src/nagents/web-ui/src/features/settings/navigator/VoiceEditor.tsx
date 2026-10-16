@@ -18,7 +18,7 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
       const effective = resolved(snapshot, draft);
       const error = settingsValidation({ ...snapshot.values, ...effective, model: effective.model.id, connection_id: effective.model.provider });
       if (error) throw new RequestError(error, 422);
-      return (await request("live/settings", token, voiceWrite(target, snapshot.revision, draft))).json() as Promise<NavigatorVoiceReply>;
+      return (await request("live/settings", token, voiceWrite(target, snapshot.revision, draft, snapshot))).json() as Promise<NavigatorVoiceReply>;
     },
   });
   const { snapshot, draft, pending, recovery, error, dirty } = editor;

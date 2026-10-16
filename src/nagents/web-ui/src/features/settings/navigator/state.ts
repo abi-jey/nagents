@@ -59,10 +59,19 @@ export function voiceDraft(reply: NavigatorVoiceReply): VoiceDraft {
   if (Object.hasOwn(values, "model") || Object.hasOwn(values, "connection_id")) result.model = { provider: values.connection_id ?? reply.global_preferences.connection_id ?? "", id: values.model ?? reply.global_preferences.model };
   return result;
 }
-export function voiceWrite(target: NavigatorTarget, revision: string, draft: VoiceDraft) {
+export function voiceWrite(target: NavigatorTarget, revision: string, draft: VoiceDraft, snapshot?: NavigatorVoiceReply) {
   if (target.scope === "agent") return { scope: target.scope, agent: target.agent, revision, overrides: draft };
   const { model, ...rest } = draft;
-  const preferences = { ...rest, ...(model ? { connection_id: model.provider, model: model.id } : {}) };
+  let binding: { connection_id?: string; model?: string } = model ? { connection_id: model.provider, model: model.id } : {};
+  if (model && target.scope === "workspace" && snapshot?.scope === "workspace" && equal(model, voiceDraft(snapshot).model)) {
+    // Legacy files may override only half of the binding. An unrelated edit must
+    // preserve that inheritance; editing the binding deliberately saves the pair.
+    const original = snapshot.overrides as LiveSettingsSnapshot["overrides"];
+    binding = {};
+    if (Object.hasOwn(original, "connection_id")) binding.connection_id = original.connection_id;
+    if (Object.hasOwn(original, "model")) binding.model = original.model;
+  }
+  const preferences = { ...rest, ...binding };
   return { scope: target.scope, revision, [target.scope === "global" ? "preferences" : "overrides"]: preferences };
 }
 export function inheritField<D extends object>(draft: D, key: keyof D): D { const next = { ...draft }; delete next[key]; return next; }

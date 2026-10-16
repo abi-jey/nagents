@@ -196,3 +196,29 @@ test("catalog changes expose new definitions and keep a removed agent's dirty dr
     assert.equal(writes, 1);
   } finally { await ui.close(); }
 });
+
+
+for (const partial of [{ model: "custom-speech" }, { connection_id: "named" }]) {
+  test(`workspace voice preserves legacy ${Object.keys(partial)[0]} inheritance until the binding changes`, () => {
+    const snapshot = live("workspace");
+    snapshot.global_preferences = { ...snapshot.global_preferences, connection_id: "global-A", model: "global-speech" };
+    snapshot.overrides = partial;
+    const original = voiceDraft(snapshot);
+    const draft = { ...original, voice: "cedar", instructions: "Unrelated voice guidance" };
+    const target = { scope: "workspace" as const, agent: "" };
+    assert.deepEqual(voiceWrite(target, "revision", draft, snapshot), {
+      scope: "workspace", revision: "revision", overrides: { voice: "cedar", instructions: "Unrelated voice guidance", ...partial },
+    });
+    const modelEdited = { ...draft, model: { provider: original.model!.provider, id: "new-speech" } };
+    assert.deepEqual(voiceWrite(target, "revision", modelEdited, snapshot), {
+      scope: "workspace", revision: "revision", overrides: { voice: "cedar", instructions: "Unrelated voice guidance", connection_id: original.model!.provider, model: "new-speech" },
+    });
+    const providerEdited = { ...draft, model: { provider: "new-provider", id: original.model!.id } };
+    assert.deepEqual(voiceWrite(target, "revision", providerEdited, snapshot), {
+      scope: "workspace", revision: "revision", overrides: { voice: "cedar", instructions: "Unrelated voice guidance", connection_id: "new-provider", model: original.model!.id },
+    });
+    assert.deepEqual(voiceWrite(target, "revision", inheritField(draft, "model"), snapshot), {
+      scope: "workspace", revision: "revision", overrides: { voice: "cedar", instructions: "Unrelated voice guidance" },
+    });
+  });
+}
