@@ -12,6 +12,8 @@ import { VoiceContextDetails } from "./VoiceContextDetails.js";
 import { OutputDeviceNotice } from "./OutputDeviceNotice.js";
 import { LiveSettings } from "./LiveSettings.js";
 import type { LiveCapability, LivePhase, LiveSettingsSnapshot } from "./types.js";
+import type { NavigatorAudio } from "../settings/navigator/AgentNavigator.js";
+import { settingsChanged } from "../settings/navigator/state.js";
 
 const labels: Record<LivePhase, string> = {
   idle: "Ready for voice", permission: "Allow your microphone", connecting: "Connecting",
@@ -25,11 +27,12 @@ function duration(seconds: number) {
 // Voice lives inside the composer. Captions use the same authenticated chat
 // event stream as typed messages; opening settings never remounts the call.
 export function LiveDialog({ token, sessionId, assistant, targets, visible = true, close, configureConnection, autoStart = true,
-  openSettingsInitially = !autoStart, consumeStartIntent }: {
+  openSettingsInitially = !autoStart, consumeStartIntent, openAgentSettings, audioChanged }: {
   token: string; sessionId: string; close: () => void; configureConnection?: () => void; autoStart?: boolean;
   targets: LiveComposerTargets; visible?: boolean;
   assistant?: LiveCapability["assistant"];
   openSettingsInitially?: boolean; consumeStartIntent?: () => void;
+  openAgentSettings?: () => void; audioChanged?: (audio?: NavigatorAudio) => void;
 }) {
   const loadingRequest = useRef<AbortController | undefined>(undefined);
   const [controller] = useState(() => new LiveController({ ...liveApi(token), token, media: browserMedia }));
@@ -39,14 +42,15 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [settingsOpen, setSettingsOpen] = useState(openSettingsInitially);
-  const [settingsVisited, setSettingsVisited] = useState(openSettingsInitially);
+  const [settingsOpen, setSettingsOpen] = useState(openSettingsInitially && !openAgentSettings);
+  const [settingsVisited, setSettingsVisited] = useState(openSettingsInitially && !openAgentSettings);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [inspectedId, setInspectedId] = useState("");
   const inspected = state.delegations.find(item => item.id === inspectedId) || currentLiveDelegation(state.delegations);
   const firstLoad = useRef(true);
+  const acceptedAudio = useRef({ voice: "", model: "" });
   const startIntent = useRef(autoStart);
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const connected = state.phase === "connected";
@@ -67,10 +71,10 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
     try {
       const next = await capability(token, AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)]));
       if (abort.signal.aborted) return;
-      setConfig(next); setVoice(current => active || next.voices.includes(current) ? current : next.voice);
+      setConfig(next); setVoice(current => active ? current : next.voice);
       if (firstLoad.current) {
         firstLoad.current = false;
-        if (!next.enabled || !next.key_configured) { setSettingsVisited(true); setSettingsOpen(true); }
+        if (!next.enabled || !next.key_configured) { if (openAgentSettings) openAgentSettings(); else { setSettingsVisited(true); setSettingsOpen(true); } }
       }
       return next;
     } catch (cause) {
@@ -89,6 +93,7 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
   function configure() {
     startIntent.current = false;
     setContextOpen(false);
+    if (openAgentSettings) { setInspectionOpen(false); openAgentSettings(); return; }
     if (settingsOpen) { closeSettings(); return; }
     setInspectionOpen(false); setSettingsVisited(true); setSettingsOpen(true);
   }
@@ -142,6 +147,19 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
     };
   }, [controller]);
   useEffect(() => {
+    const updated = () => { void refresh(); };
+    window.addEventListener(settingsChanged, updated);
+    return () => window.removeEventListener(settingsChanged, updated);
+  }, [active]);
+  useEffect(() => {
+    if (active && !acceptedAudio.current.model) acceptedAudio.current = { voice, model: config?.model || "" };
+    if (!active) acceptedAudio.current = { voice: "", model: "" };
+    audioChanged?.({ phase: state.phase, active: connected, disabled: ["permission", "connecting", "ending"].includes(state.phase), transport: config?.transport,
+      selection: state.devices, voice: active ? acceptedAudio.current.voice : voice, model: active ? acceptedAudio.current.model : config?.model || "",
+      applyDevice: connected ? (kind, id) => controller.switchDevice(kind, id) : undefined });
+  }, [active, connected, state.phase, state.devices, voice, config?.model, config?.transport, controller, audioChanged]);
+  useEffect(() => () => audioChanged?.(undefined), [audioChanged]);
+  useEffect(() => {
     if (!connected) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -151,7 +169,7 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
   return <><LiveComposer targets={targets} state={state} audio={controller.audio} status={status} elapsed={duration(elapsed)}
     disabled={settingsOpen || settingsSaving || loading || !config?.available || !!unavailable}
     unavailable={unavailable} loading={loading} voice={voice}
-    settingsOpen={settingsOpen} settingsSaving={settingsSaving} inspectionOpen={inspectionOpen} inspect={inspect}
+    settingsOpen={settingsOpen} settingsSaving={settingsSaving} settingsDialogId={openAgentSettings ? "agent-navigator-dialog" : undefined} inspectionOpen={inspectionOpen} inspect={inspect}
     contextOpen={contextOpen} showContext={showContext}
     audioNotice={<OutputDeviceNotice connected={connected} outputId={state.devices.outputId} hidden={settingsOpen}
       useDefault={() => controller.switchDevice("output", "")} />}

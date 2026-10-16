@@ -225,6 +225,7 @@ class Harness:
         self._parent_instructions = ""
         self._inherited_profile_instructions: tuple[str, ...] = ()
         self._generated_system_prompt = ""
+        self._prompt_profile_instructions = ""
         self._behavior = AgentBehavior()
         self.workspace: Path = config.workspace.resolve()
         if not self.workspace.is_dir():
@@ -578,7 +579,9 @@ class Harness:
             # generated-looking text could now contain authored instructions.
             return prompt, ()
         profiles = self._inherited_profile_instructions
-        instructions = self._behavior.instructions
+        # Tool permission checks may load newly saved preferences during a round.
+        # Children inherit the instructions actually published to their parent.
+        instructions = self._prompt_profile_instructions
         if not continuing and instructions and instructions not in profiles:
             profiles += (instructions,)
         return self._parent_instructions, profiles
@@ -648,6 +651,7 @@ class Harness:
             base += f"\nApplicable project context ({path}):\n{content}\n"
         self.agent.system_prompt = base
         self._generated_system_prompt = base
+        self._prompt_profile_instructions = profile_instructions
 
     async def initialize(self, *, create_session: bool = True) -> None:
         """Initialize local sessions, instructions and trusted extensions. No provider I/O.

@@ -6,12 +6,13 @@ import type { SettingsScope } from "./transport.js";
 export type ModelMetadata = { context_window?: number; context_window_source?: "configured" | "provider"; reasoning_efforts?: string[] };
 export type ModelCatalog = { route: string; metadata: Record<string, ModelMetadata> };
 
-export function ModelSelector({ token, scope, provider = "", revision = "", model, error, disabled, preview = false, update, autoLoad = false, onCatalog }: {
+export function ModelSelector({ token, scope, provider = "", revision = "", idPrefix = "", model, error, disabled, preview = false, update, autoLoad = false, onCatalog }: {
   token: string; scope: SettingsScope; provider?: string; model: string; error?: string;
   disabled: boolean; preview?: boolean; update: (model: string) => void;
   autoLoad?: boolean; onCatalog?: (catalog: ModelCatalog) => void;
-  revision?: string;
+  revision?: string; idPrefix?: string;
 }) {
+  const modelId = idPrefix ? `${idPrefix}-settings-model` : "settings-model";
   const [models, setModels] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState("");
@@ -58,9 +59,9 @@ export function ModelSelector({ token, scope, provider = "", revision = "", mode
     {notice && <p className="model-catalog-status" role="status">{notice}</p>}
     {loaded && <ul className="model-catalog-list" aria-label="Catalog model IDs">{filtered.slice(0, 100).map(id => <li key={id}><button type="button" disabled={disabled || preview} aria-pressed={!preview && model === id} onClick={() => update(id)}><span><strong>{id}</strong><small>{metadata[id]?.context_window ? `${metadata[id].context_window!.toLocaleString()} context · ${metadata[id].context_window_source === "configured" ? "configured" : "provider"}` : id === model && !preview ? "Selected model" : "Available on this connection"}</small></span><span className="model-selection-mark" aria-hidden="true">{id === model && !preview ? "✓" : ""}</span></button></li>)}{!filtered.length && <li className="model-catalog-empty">No models match this search.</li>}</ul>}
     {filtered.length > 100 && <p>Showing the first 100 matches. Refine your search to find a model.</p>}
-    <div className="settings-custom-model"><label htmlFor="settings-model">Model ID</label><input id="settings-model" value={model} disabled={disabled || preview} autoComplete="off" spellCheck={false}
-      maxLength={200} aria-invalid={!!error} aria-describedby="settings-model-help" onChange={event => update(event.target.value)} />
-      <p id="settings-model-help">{preview ? "Use this connection to choose or enter a model." : "Choose from the catalog, or enter a model ID. Agent profile overrides take precedence."}</p>
+    <div className="settings-custom-model"><label htmlFor={modelId}>Model ID</label><input id={modelId} value={model} disabled={disabled || preview} autoComplete="off" spellCheck={false}
+      maxLength={200} aria-invalid={!!error} aria-describedby={`${modelId}-help`} onChange={event => update(event.target.value)} />
+      <p id={`${modelId}-help`}>{preview ? "Use this connection to choose or enter a model." : "Choose from the catalog, or enter a model ID. Agent profile overrides take precedence."}</p>
       {error && <p className="error-text">{error}</p>}
     </div>
   </div>;

@@ -221,7 +221,9 @@ def test_auxiliary_reads_keep_the_accepted_provider_during_settings_saves(
                 assert service._context_factory is not None
                 # Exercise the real context callback with the admission's
                 # captured settings, without holding HTTP provisioning's lock.
-                async with settings.admit(saved_voice["revision"], root):
+                capability = await client.get("/api/live", headers=headers)
+                assert capability.status_code == 200
+                async with settings.admit(str(capability.json()["revision"]), root):
                     seed = await service._context_factory("test-voice-context")
                     return seed.method
 

@@ -21,8 +21,13 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.live_settings import AgentVoiceInput
+from nagents.web.live_settings import GlobalVoiceInput
 from nagents.web.live_settings import LiveSettings
+from nagents.web.live_settings import WorkspaceVoiceInput
 from nagents.web.session_agents import Choice
+from nagents.web.voice_preferences import Scope
+from nagents.web.voice_preferences import VoiceOverrides
+from nagents.web.voice_preferences import VoicePreferences
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 
@@ -284,5 +289,68 @@ def test_admission_binds_chat_agent_generation_and_captures_immutable_profile(tm
                 async with settings.admit(fresh.revision, session):
                     pytest.fail("Changed definition generation must fail")
             assert changed_definition.value.status_code == 409
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("scope", ["global", "workspace"])
+def test_legacy_voice_instruction_values_save_and_remain_readable_after_restart(tmp_path: Path, scope: Scope) -> None:
+    async def scenario() -> None:
+        instructions = "Legacy text\x00with a control character"
+        owner = LiveSettings(tmp_path / "sessions.db", demo=True, active=lambda: "")
+        await owner.load()
+        before = await owner.snapshot(scope)
+        body = (
+            GlobalVoiceInput(
+                scope="global",
+                revision=str(before["revision"]),
+                preferences=VoicePreferences(instructions=instructions),
+            )
+            if scope == "global"
+            else WorkspaceVoiceInput(
+                scope="workspace", revision=str(before["revision"]), overrides=VoiceOverrides(instructions=instructions)
+            )
+        )
+        saved = await owner.change(body)
+        values = saved["values"]
+        assert isinstance(values, dict) and values["instructions"] == instructions
+        await owner.shutdown()
+        restarted = LiveSettings(tmp_path / "sessions.db", demo=True, active=lambda: "")
+        await restarted.load()
+        restored = await restarted.snapshot(scope)
+        assert restored["revision"] == saved["revision"]
+        assert restored["values"] == values
+        await restarted.shutdown()
+        with pytest.raises(ValueError, match="instructions"):
+            LiveProfile.parse({"instructions": instructions})
+
+    asyncio.run(scenario())
+
+
+def test_agent_voice_rejects_escaped_credential_text_without_saving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "fixture-key-with-'\"\\-characters"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
+            store = harnesses[0].provider_store.agent_models
+            before = store.load("reader")
+            snapshot = (await client.get("/api/live/settings?scope=agent&agent=reader", headers=headers)).json()
+            response = await client.post(
+                "/api/live/settings",
+                headers=headers,
+                json={
+                    "scope": "agent",
+                    "agent": "reader",
+                    "revision": snapshot["revision"],
+                    "overrides": {"instructions": "Accidentally pasted " + secret},
+                },
+            )
+            assert response.status_code == 422
+            assert response.json() == {"detail": "Keep API keys out of Voice preferences."}
+            assert store.load("reader") == before
+            assert not before.path.exists()
 
     asyncio.run(scenario())

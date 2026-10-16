@@ -26,6 +26,7 @@ export interface LiveComposerProps {
   voice: string;
   settingsOpen: boolean;
   settingsSaving: boolean;
+  settingsDialogId?: string;
   inspectionOpen: boolean;
   start(): void;
   end(): void;
@@ -67,7 +68,7 @@ function CurrentCaption({ caption }: { caption: Caption }) {
 }
 
 /** Stable slots share the actual composer without moving its textarea or media controller. */
-export function LiveComposer({ targets, state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice, audio }: LiveComposerProps) {
+export function LiveComposer({ targets, state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, settingsDialogId, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice, audio }: LiveComposerProps) {
   const connected = state.phase === "connected";
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const delegation = currentLiveDelegation(state.delegations);
@@ -97,7 +98,7 @@ export function LiveComposer({ targets, state, status, elapsed, disabled, unavai
     </div>, targets.caption)}
     {createPortal(<VoiceControls phase={state.phase} status={status} voice={voice} elapsed={elapsed}
       micMuted={state.micMuted} outputMuted={state.outputMuted} startDisabled={startDisabled}
-      settingsOpen={settingsOpen} settingsSaving={settingsSaving} start={start} end={end} close={close}
+      settingsOpen={settingsOpen} settingsSaving={settingsSaving} settingsDialogId={settingsDialogId} start={start} end={end} close={close}
       configure={configure} muteInput={muteInput} muteOutput={muteOutput} />, targets.controls)}
     {createPortal(<section id="voice-session" className={`voice-composer phase-${state.phase}`} aria-label="Voice in this chat" onKeyDown={event => {
       if (event.key === "Escape" && contextOpen) { event.stopPropagation(); showContext?.(); }

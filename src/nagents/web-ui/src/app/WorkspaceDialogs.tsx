@@ -4,11 +4,9 @@ import { skillCommand } from "../features/chat/commands.js";
 import { LoginDialog } from "../features/settings/LoginDialog.js";
 import "../features/chat/commands.css";
 import { ApprovalReview } from "../features/approvals/ApprovalReview.js";
-import { SettingsDialog } from "../features/settings/SettingsDialog";
 import { ChannelsDialog } from "../features/channels/ChannelsDialog";
 import { DeleteSessionDialog } from "../features/sessions/DeleteSessionDialog";
 import { TrashDialog } from "../features/sessions/TrashDialog";
-import { ToolsDialog } from "../features/tools/ToolsDialog";
 import "../features/sessions/trash.css";
 import "../features/settings/settings.css";
 import "../features/settings/workspacePanel.css";
@@ -16,8 +14,8 @@ import "../features/channels/channels.css";
 import type { Client } from "./useClient";
 import { SessionAgentPicker } from "../features/sessions/SessionAgentPicker.js";
 
-export function WorkspaceDialogs({ client, select, closePanel }: {
-  client: Client; select: (id?: string) => Promise<void>; closePanel: () => void;
+export function WorkspaceDialogs({ client, select }: {
+  client: Client; select: (id?: string) => Promise<void>;
 }) {
   const { sessions, chat } = client;
   const config = sessions.config;
@@ -29,8 +27,6 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
       requestAnimationFrame(() => document.getElementById("composer")?.focus());
     }} />}
     {client.loginOpen && config && <LoginDialog token={config.token} close={client.closeLogin} applied={client.connect} />}
-    {client.panel === "tools" && config && <ToolsDialog token={config.token} blocked={false} close={closePanel} />}
-    {client.settings.open && <SettingsDialog settings={client.settings} />}
     {client.sessionAgent.open && <SessionAgentPicker {...client.sessionAgent} />}
     {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController}
       permanent={(item) => client.deletionController.showTrash(item)} openSession={openRestored}

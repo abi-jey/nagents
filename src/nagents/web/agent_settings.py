@@ -21,10 +21,14 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.default_instructions import load_default_instructions
 from nagents.harness.tool_config import HarnessToolRegistry
 from nagents.harness.tools import MODIFYING_TOOLS
+from nagents.harness.tools import READ_ONLY_TOOLS
 from nagents.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from nagents.harness import Harness
+    from nagents.types import ToolDefinition
 
     from .service import WebState
 
@@ -47,13 +51,50 @@ class BehaviorInput(BaseModel):
     preferences: BehaviorPreferences
 
 
+def _runtime_reason(
+    harness: Harness, profile: AgentProfile, scope: BehaviorScope, agent: str, tool: ToolDefinition
+) -> str:
+    """Preview durable runtime gates without borrowing another agent's policy.
+
+    Shared defaults have no source-profile ceiling. Agent previews use the named
+    profile, not the currently selected agent's delegation or reviewer settings.
+    Scheduling and delegation limits here are capabilities, never live quotas.
+    """
+    builtin = tool.func is not None and tool.func == harness.tools.builtins.get(tool.name)
+    root = harness.tasks.root.harness if harness._is_subagent else harness
+    if tool.name == "delegate":
+        if not harness.allow_subagents or not root.allow_subagents:
+            return "Delegation is disabled for this runtime."
+        if harness.subagent_depth >= min(harness.config.max_subagent_depth, root.config.max_subagent_depth):
+            return "Unavailable at the configured delegation depth limit."
+        if not any(
+            harness.config.profile(name).subagent_available
+            and (profile.allowed_agents is None or name in profile.allowed_agents)
+            for name in harness.config.profile_names
+        ):
+            return "No agents are eligible for delegation from this profile."
+    if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}):
+        return "Unavailable in offline demo mode."
+    if (
+        scope == "agent"
+        and harness.mode_for_profile(agent) == "reviewer"
+        and (not builtin or tool.name in MODIFYING_TOOLS)
+    ):
+        return "Unavailable in reviewer mode."
+    if harness._is_subagent and not builtin and not harness.supports_child_custom_tools:
+        return "Custom tools are unavailable in this child runtime."
+    if builtin and tool.func == harness.tools.schedule_wakeup and root.wakeup_handler is None:
+        return "No wake-up scheduler is configured for this runtime."
+    return ""
+
+
 def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, object]:
     harness = state.harness
     harness.refresh_agent_definitions()
     if agent not in harness.config.profile_names:
         raise HTTPException(404, "This agent definition is no longer available.")
     profile = harness.config.profile(agent) if scope == "agent" else AgentProfile()
-    layers = behavior_layers(harness.provider_store, agent)
+    layers = behavior_layers(harness.provider_store, agent, through_scope=scope)
     preference = layers[scope]
     revisions = [scope, agent, harness.profile_revision]
     for name in ("global", "workspace", "agent"):
@@ -64,7 +105,8 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
     resolved = resolve_behavior(layers, profile, scope)
     inherited = resolve_behavior(layers, profile, scope, inherit=True)
     policy = harness.tool_settings
-    policy.load()
+    if scope == "agent":
+        policy.load()
     registry = harness.agent.tool_registry
     catalog = registry.get_catalog() if isinstance(registry, HarnessToolRegistry) else ToolRegistry.get_all(registry)
     names = {tool.name for tool in catalog}
@@ -79,10 +121,8 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
                 reason = "Denied by this agent definition."
             elif not policy.enabled(agent, tool.name):
                 reason = "Disabled in the workspace tool configuration."
-            elif harness.mode_for_profile(agent) == "reviewer" and (
-                tool.name in MODIFYING_TOOLS or tool.func != harness.tools.builtins.get(tool.name)
-            ):
-                reason = "Unavailable in reviewer mode."
+        if not reason:
+            reason = _runtime_reason(harness, profile, scope, agent, tool)
         category = (
             "Files"
             if tool.name in {"read_file", "list_files", "find", "search", "edit", "write"}

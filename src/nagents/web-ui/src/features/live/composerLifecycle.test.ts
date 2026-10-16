@@ -504,3 +504,28 @@ for (const voiceAuth of ["chatgpt", "api-key", "entra"] as const) {
     } finally { await ui.close(); }
   });
 }
+
+test("unified agent settings and immediate device routing keep the accepted voice session connected", async () => {
+  const ui = view();
+  let opened = 0;
+  let audio: Parameters<NonNullable<ComponentProps<typeof LiveDialog>["audioChanged"]>>[0];
+  const audioChanged: NonNullable<ComponentProps<typeof LiveDialog>["audioChanged"]> = value => { audio = value; };
+  try {
+    await ui.render({ openAgentSettings: () => { opened++; }, audioChanged });
+    assert.equal(audio?.active, true);
+    await ui.click("Audio devices and voice settings");
+    assert.equal(opened, 1);
+    assert.equal(ui.container.querySelector("#voice-settings-dialog"), null);
+    assert.equal(ui.counts().closures, 0);
+    assert.equal(ui.counts().creates, 1);
+    ui.capability({ ...capability, voice: "breeze", model: "next-speech-model", revision: "next-voice" });
+    await act(async () => window.dispatchEvent(new ui.dom.window.Event("ngn:agent-settings-saved")));
+    assert.equal(audio?.model, "gpt-live-1-codex", "Current session retains the accepted model after a profile save");
+    assert.equal(audio?.voice, "cove");
+    await act(async () => { await audio?.applyDevice?.("input", "microphone"); });
+    assert.equal(audio?.selection.inputId, "microphone");
+    assert.equal(ui.counts().creates, 1, "Device changes do not allocate another provider session");
+    assert.equal(ui.counts().closures, 0);
+    assert.ok(ui.tracks.some(track => track.readyState === "live"));
+  } finally { await ui.close(); }
+});

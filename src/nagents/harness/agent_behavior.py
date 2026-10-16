@@ -36,8 +36,13 @@ def behavior_store(providers: ScopedProviderRegistryStore, scope: BehaviorScope)
     return AgentModelStore(providers.model_store(scope).path.parent / "agent-defaults")
 
 
-def behavior_layers(providers: ScopedProviderRegistryStore, name: str) -> dict[BehaviorScope, AgentModelPreference]:
-    return {scope: behavior_store(providers, scope).load(name if scope == "agent" else "defaults") for scope in _LAYERS}
+def behavior_layers(
+    providers: ScopedProviderRegistryStore, name: str, *, through_scope: BehaviorScope = "agent"
+) -> dict[BehaviorScope, AgentModelPreference]:
+    return {
+        scope: behavior_store(providers, scope).load(name if scope == "agent" else "defaults")
+        for scope in _LAYERS[: _LAYERS.index(through_scope) + 1]
+    }
 
 
 def resolve_behavior(

@@ -5,8 +5,8 @@ import type { ProviderRegistry } from "./ProvidersPanel.js";
 import type { ModelBinding } from "./types.js";
 
 /** A model always travels with the saved connection used to discover it. */
-export function ModelBindingPicker({ token, value, change, disabled = false, named = false }: {
-  token: string; value: ModelBinding; change: (binding: ModelBinding) => void; disabled?: boolean; named?: boolean;
+export function ModelBindingPicker({ token, value, change, disabled = false, named = false, idPrefix = "" }: {
+  token: string; value: ModelBinding; change: (binding: ModelBinding) => void; disabled?: boolean; named?: boolean; idPrefix?: string;
 }) {
   const [registry, setRegistry] = useState<ProviderRegistry>();
   const [error, setError] = useState("");
@@ -31,7 +31,7 @@ export function ModelBindingPicker({ token, value, change, disabled = false, nam
     {error && <p className="error-text" role="alert">{error} <button type="button" disabled={disabled} onClick={() => refresh(value => value + 1)}>Reload connections</button></p>}
     {registry && named && !Object.keys(registry.providers).length && <p className="settings-origin">Add a saved provider connection in Settings to choose a model for this agent.</p>}
     {unavailable && <p className="error-text" role="status">This saved connection is unavailable in this workspace. Choose another connection.</p>}
-    <ModelSelector token={token} scope="workspace" provider={value.provider} revision={registry?.revision || ""}
+    <ModelSelector idPrefix={idPrefix} token={token} scope="workspace" provider={value.provider} revision={registry?.revision || ""}
       model={value.id} update={id => change({ provider: value.provider, id })}
       disabled={disabled || !registry || unavailable || (named && !value.provider)} autoLoad />
   </div>;

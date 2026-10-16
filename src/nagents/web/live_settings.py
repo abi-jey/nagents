@@ -26,6 +26,7 @@ from pydantic import field_validator
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.connection import codex_discovery_selected
 from nagents.harness.connection import live_auth_available
+from nagents.harness.live_profiles import LIVE_FIELDS
 from nagents.harness.live_profiles import LiveProfile
 from nagents.harness.providers import KINDS
 from nagents.harness.providers import ProviderProfile
@@ -406,13 +407,7 @@ class LiveSettings:
                 else "global"
                 if key in global_values.model_fields_set
                 else "builtin"
-                for key in LiveProfile.parse(
-                    {
-                        key: value
-                        for key, value in preferences.model_dump().items()
-                        if key not in {"connection_id", "model"}
-                    }
-                ).selected()
+                for key in sorted(LIVE_FIELDS - {"model"})
             }
             origins["model"] = (
                 "agent"
@@ -566,7 +561,10 @@ class LiveSettings:
                     raise HTTPException(422, "Choose an existing GPT-Live provider connection.")
             registry = self.providers.load()
             keys = [os.environ.get(profile.key_env, "") for profile in registry.providers.values()]
-            if any(key and key in str(selected) for key in keys):
+            strings = tuple(value for value in selected.values() if isinstance(value, str))
+            if isinstance(model, dict):
+                strings += tuple(value for value in model.values() if isinstance(value, str))
+            if any(key and any(key in value for value in strings) for key in keys):
                 raise HTTPException(422, "Keep API keys out of Voice preferences.")
             layer = self._agent_layer(body.agent)
             if layer.preferences_revision != current.agent_settings["preferences_revision"] or (

@@ -194,6 +194,48 @@ def test_changed_parent_or_sibling_section_rejects_stale_save(tmp_path: Path) ->
     asyncio.run(scenario())
 
 
+def test_child_inherits_published_instructions_until_next_model_round(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, _):
+            parent = app.state.web.harness
+            await save(client, headers, "agent", {"instructions": "ACCEPTED_ROUND_A"})
+            parent.refresh_instructions()
+            await save(client, headers, "agent", {"instructions": "NEXT_ROUND_B"})
+            child = ControlledHarness(copy.deepcopy(parent.config))
+            try:
+                child._is_subagent = True
+                child.inherit_tool_permissions(parent)
+                assert "ACCEPTED_ROUND_A" in parent.agent.system_prompt
+                assert parent.inherited_run_instructions()[1] == ("ACCEPTED_ROUND_A",)
+                parent.refresh_instructions()
+                assert "NEXT_ROUND_B" in parent.agent.system_prompt
+                assert parent.inherited_run_instructions()[1] == ("NEXT_ROUND_B",)
+            finally:
+                await child.close()
+
+    asyncio.run(scenario())
+
+
+def test_defaults_do_not_read_lower_preference_scopes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, _):
+            providers = app.state.web.harness.provider_store
+            await save(client, headers, "global", {"instructions": "GLOBAL"})
+            workspace = behavior_store(providers, "workspace").load("defaults").path
+            workspace.parent.mkdir(parents=True, exist_ok=True)
+            workspace.write_text("---\ninstructions: [broken\n---\n", encoding="utf-8")
+            assert (await read(client, headers, "global"))["values"]["instructions"] == "GLOBAL"
+            assert (await client.get("/api/agent-settings?scope=workspace", headers=headers)).status_code == 422
+            workspace.unlink()
+            agent = providers.agent_models.load("assistant").path
+            agent.parent.mkdir(parents=True, exist_ok=True)
+            agent.write_text("---\ntools: [broken\n---\n", encoding="utf-8")
+            assert (await read(client, headers, "workspace"))["values"]["instructions"] == "GLOBAL"
+            assert (await client.get("/api/agent-settings?scope=agent", headers=headers)).status_code == 422
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "query",
     [

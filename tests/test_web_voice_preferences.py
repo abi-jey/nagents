@@ -701,7 +701,7 @@ def test_scoped_http_settings_expose_inheritance_and_never_edit_connection(tmp_p
             local_snapshot = local_response.json()
             assert global_snapshot["global_preferences"]["model"] == "gpt-live-1"
             assert local_snapshot["overrides"] == {}
-            assert local_snapshot["origins"]["model"] == "global"
+            assert local_snapshot["origins"]["model"] == "builtin"
             bad = await client.post(
                 "/api/live/settings",
                 headers=headers,
@@ -723,7 +723,7 @@ def test_scoped_http_settings_expose_inheritance_and_never_edit_connection(tmp_p
             )
             assert changed.status_code == 200, changed.text
             assert changed.json()["values"]["model"] == "voice-only"
-            assert changed.json()["origins"]["voice"] == "global"
+            assert changed.json()["origins"]["voice"] == "builtin"
             assert (await client.get("/api/live", headers=headers)).json()["model"] == "voice-only"
             assert (await client.get("/api/live/settings?scope=global", headers=headers)).json() == global_snapshot
             assert providers.global_store.path.read_bytes() == original

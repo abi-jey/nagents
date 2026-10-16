@@ -58,9 +58,12 @@ described below. Textual is not required.
 
 ### Your Own Connection
 
-Open **Settings** for the left-hand **Provider & model** workspace panel. Select
-**Global** to manage connections shared by all workspaces, or **Workspace** to
-manage this workspace's connections and defaults. Add named OpenAI,
+Open **Settings** for the **Agent Navigator**. Its left-hand tree contains
+**Global defaults**, the workspace, and every available agent, including unused
+definitions. Each has **Overview**, **Model**, **Instructions**, **Tools**, and
+**Voice** sections. Select **Model** under Global defaults to manage connections
+shared by all workspaces, or under the workspace to manage local connections and
+defaults. Add named OpenAI,
 Azure AI Foundry, Anthropic, Gemini, OpenRouter, Azure v1, LiteLLM or custom
 OpenAI-compatible connections. Select a provider type to see its supported API
 and authentication modes. Connection settings show the credential source and
@@ -162,6 +165,38 @@ joins the matching attempt. These routes require the normal same-origin web
 token. Finish active assistant or Live work first: sign-in holds the host's
 configuration boundary until completion, cancellation or expiration. Server
 shutdown cancels the flow, and terminal states clear the displayed code.
+
+### Agent Navigator And Inheritance
+
+Settings, Team's agent settings, the composer Voice gear, and Tools open the same
+navigator at the relevant agent and section. The selected chat and active voice
+connection remain mounted while navigating settings. Microphone and speaker
+choices are local to the browser, separate from reusable agent preferences.
+
+**Overview** shows saved effective values and their sources. **Instructions**
+edits additional profile instructions; bundled instructions and loaded workspace
+`AGENTS.md` files remain inspectable. **Tools** selects a reusable allowlist and
+shows unavailable tools with reasons. Workspace tool policy, MCP configuration,
+and approval management remain accessible inside that section. A preference
+cannot grant a tool excluded by an authored definition, ancestor, runtime mode,
+or workspace policy.
+
+Model, instructions, tools, and Voice have section-specific save actions. Drafts
+survive navigation and closing the panel; an unsaved marker identifies them.
+Concurrent changes require an explicit reload rather than replaying a stale
+save. Saving or resetting one section preserves the others. Empty instructions,
+an empty tool allowlist, and disabled Voice are explicit values, not inheritance.
+Removing an agent override restores its authored definition; Voice also offers
+**Use workspace defaults** to bypass that definition without deleting it.
+
+Global and workspace instruction/tool defaults live in `agent-defaults/defaults.md`
+beside each scope's model preferences. Agent overrides use the existing
+`agent-models/<agent>.md` store, with `model`, `instructions`, `tools`, and `live`
+sections. These are operator preferences; editing them does not rewrite imported
+source definitions. Instructions refresh at the next model round, while model
+and Voice changes apply at their next activation. Permission checks can tighten
+tools during a run; existing children never gain a wider inherited permission
+ceiling from later changes.
 
 ### Frontend Build
 
@@ -675,8 +710,11 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `POST cancel` | `{run_id}` cancels/joins exactly that active run |
 | `POST approval` | `{run_id, approval_id, call_id, decision: "allow" or "deny"}` |
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
-| `GET live/settings?scope=global\|workspace` | Voice defaults or effective workspace preferences, field origins/overrides, revision, and active provider connection reference |
-| `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, revision, overrides}` for workspace fields; unavailable during a call |
+| `GET agent-settings?scope=global\|workspace\|agent&agent=<name>` | Effective instruction/tool preferences, inherited values, sources, available tools, and composite revision; agent is optional outside agent scope |
+| `PUT agent-settings` | `{scope, agent?, revision, preferences}` replaces only instruction/tool preferences at that scope; omitted fields inherit and sibling model/Live sections are preserved |
+| `GET live/settings?scope=global\|workspace\|agent&agent=<name>` | Scoped Voice preferences, field sources, revision, and provider connection reference |
+| `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, agent?, revision, overrides}` for workspace/agent fields; applies to the next call |
+| `DELETE live/settings` | `{scope: "agent", agent, revision}` removes only the operator Live section and restores the authored definition |
 | `POST live/sessions` | `{voice?: string, revision, session_id}` starts a GPT-Live call through the server. `session_id` binds main-assistant work to the selected chat. Returns `201 {session_id, model, voice, context?}` with an opaque application session ID. No provider SDP or credentials reach the browser. |
 | `WS live/sessions/{session_id}/audio` | Same-origin authenticated PCM16 mono 24 kHz binary audio frames in both directions; the server relays them to/from GPT-Live. Required `ngn.live.v2` also accepts server-only `{"type":"interrupt"}` to clear queued playback. |
 | `GET live/sessions/{session_id}?after=0` | Bounded normalized transcript/status snapshot after a sequence cursor; renews the active call's browser lease |
@@ -1111,9 +1149,10 @@ The chat stays visible and typing remains available.
 Status, elapsed time, microphone mute, speaker mute, **Audio**, and **Stop** live
 in the composer. Mute controls are independent and do not end voice. **Stop**
 finishes the connection. The settings icon beside **Voice** opens a complete
-**Voice settings** overlay without starting the microphone. Devices, voice defaults,
-instructions, context, and connection options share one scrollable form, with its
-header and Save controls always visible. The overlay fills the screen on phones.
+**Agent Navigator** directly at the selected agent's **Voice** section, without
+starting the microphone. Voice, instructions, starting context, and the speech
+model belong to that agent; the summary includes browser audio devices and the
+currently connected voice session. The overlay fills the screen on phones.
 During voice, **Audio** opens the same overlay; opening and closing it keeps voice
 connected, and device changes remain available during the call.
 Reduced-motion preferences disable the sphere's motion.
@@ -1174,8 +1213,8 @@ it does not gain direct tool execution. Hosted voice remains separate and does
 not receive the workspace chat's seed.
 
 **Voice instructions** configures speaking style and behavior, independently of
-the main assistant's instructions. The text is saved with the existing Global or
-Workspace preferences; uncustomized workspace fields inherit the global value.
+the main assistant's instructions. The text is saved at Global, Workspace, or
+Agent scope; omitted fields inherit workspace, then global defaults.
 It is combined with the application's voice/delegation instructions at the next
 voice start. Active conversations keep their startup instructions. Instructions
 are limited to 6,000 Unicode characters and 12,000 UTF-8 bytes; oversized input
@@ -1188,18 +1227,17 @@ and [delegation guide](https://developers.openai.com/api/docs/guides/live-delega
 
 #### Voice Settings
 
-1. Start **`ngn serve`**, then open **Settings → Workspace → Provider connections**.
+1. Start **`ngn serve`**, then open **Settings → Workspace → Model** for provider connections.
 2. Add an OpenAI or Foundry connection for voice. You can keep your current chat
    connection, including ChatGPT login, Anthropic or Gemini, active.
 3. For an OpenAI connection, choose **ChatGPT login** or **Local Codex login** to
    use your existing account. API-key connections and Foundry Entra ID remain
    supported. Use the settings icon beside **Voice**, or **Audio** during voice.
-4. Select **Global** for defaults shared by workspaces, **Workspace** for local
-   overrides, or an **Agent** for that profile's Live settings. Select the **Voice connection**, or leave it set
-   to follow the provider registry's default connection. Set **Enable GPT-Live**, **GPT-Live model**,
-   **Hosted backend model**, and **Default voice** independently of provider
-   connection and chat model selection. Unticked workspace fields follow later
-   global changes. Choose the reasoning backend. **Main assistant (selected chat provider)** is the
+4. Select **Global defaults**, the **Workspace**, or an **Agent**, then **Voice**.
+   Select the **Provider connection** and **Speech model ID**, or inherit their
+   defaults. Set **Live voice**, **Voice**, and **Voice instructions**. Each field
+   identifies its source; **Use global** or **Use workspace** restores inheritance.
+   Choose the reasoning backend. **Main assistant · this chat's agent** is the
    default: the selected conversation's assistant, provider, model, history, tools,
    and approvals remain in charge, and the Live service handles speech only.
    **Hosted Responses** remains an option for an independent voice conversation;
@@ -1259,7 +1297,9 @@ The panel explains missing setup in **Voice settings**. Demo mode also permits
 inspecting and saving settings, but real calls require starting `ngn serve`
 without `--demo`. Readiness
 checks local configuration; provider access and network failures are reported when
-connecting. Settings saves conflict while a call is connecting, active, or closing.
+connecting. Voice preferences can be saved during a call and apply to the next
+voice conversation. The accepted call keeps its original profile. Browser device
+changes apply immediately.
 After a competing tab changes settings, reload the form before saving or connecting.
 
 #### Browser Requirements And Initial Scope
