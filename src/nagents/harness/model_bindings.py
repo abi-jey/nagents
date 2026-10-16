@@ -8,6 +8,7 @@ import re
 import stat
 import tempfile
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
@@ -16,6 +17,7 @@ from typing import Literal
 import yaml
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from collections.abc import Mapping
 
     from .providers import ProviderProfile
@@ -24,7 +26,7 @@ _PROVIDER = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _AGENT = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
 _EMPTY_REVISION = "0" * 64
-_MAX_BYTES = 16384
+_MAX_BYTES = 65536
 _EMPTY_MAPPING: Mapping[str, str] = MappingProxyType({})
 ModelLayer = Literal["invocation", "agent", "workspace", "global", "builtin"]
 
@@ -117,13 +119,15 @@ class AgentModelPreference:
     binding: ModelBinding
     revision: str
     path: Path
+    model_present: bool = False
+    preferences: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 class AgentModelStore:
-    """Model-only Markdown overlays in the operator's workspace configuration.
+    """Revisioned Markdown agent overlays; writes preserve unrelated sections.
 
-    These files cannot define instructions, tools, permissions, or providers.
-    They therefore also support the built-in assistant and imported profiles.
+    Tool selections remain restrictions under the harness permission ceiling.
+    Overlays cannot define providers, credentials, hooks, or permissions.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -159,77 +163,133 @@ class AgentModelStore:
         return True, result
 
     @staticmethod
-    def _binding(raw: bytes) -> ModelBinding:
+    def _validate(value: object) -> dict[str, object]:
+        from .live_profiles import LiveProfile
+
+        if not isinstance(value, dict) or set(value) - {"model", "live", "instructions", "tools"}:
+            raise ValueError("Agent preference contains unsupported fields")
+        result: dict[str, object] = {}
+        for name, item in value.items():
+            if name == "model":
+                binding = ModelBinding() if item == {"provider": "", "id": ""} else ModelBinding.parse(item)
+                result[name] = binding.as_dict()
+            elif name == "live":
+                result[name] = LiveProfile.parse(item).selected()
+            elif name == "instructions":
+                if not isinstance(item, str) or len(item.encode("utf-8")) > 12000 or "\x00" in item:
+                    raise ValueError("Agent instructions must be a bounded string")
+                result[name] = item
+            elif name == "tools":
+                if (
+                    not isinstance(item, list)
+                    or len(item) > 512
+                    or any(
+                        not isinstance(tool, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}", tool)
+                        for tool in item
+                    )
+                ):
+                    raise ValueError("Agent tools must be a bounded array of tool names")
+                result[name] = list(dict.fromkeys(item))
+        return result
+
+    @staticmethod
+    def _preferences(raw: bytes) -> dict[str, object]:
         try:
             lines = raw.decode("utf-8").splitlines()
         except UnicodeError:
-            raise ValueError("Agent model preference must contain UTF-8 text") from None
+            raise ValueError("Agent preference must contain UTF-8 text") from None
         if not lines or lines[0].strip() != "---":
-            raise ValueError("Agent model preference requires Markdown frontmatter")
-        closing = next((index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"), 0)
+            raise ValueError("Agent preference requires Markdown frontmatter")
+        closing = next((index for index, line in enumerate(lines[1:], 1) if line.rstrip() == "---"), 0)
         if not closing or any(line.strip() for line in lines[closing + 1 :]):
-            raise ValueError("Agent model preference must contain only model frontmatter")
+            raise ValueError("Agent preference must contain only frontmatter")
         header = "\n".join(lines[1:closing])
         try:
             for token in yaml.scan(header):
                 if isinstance(token, yaml.tokens.AliasToken | yaml.tokens.AnchorToken | yaml.tokens.TagToken):
-                    raise ValueError("Agent model preference does not support YAML aliases, anchors or tags")
+                    raise ValueError("Agent preference does not support YAML aliases, anchors or tags")
             depth = 0
             for event in yaml.parse(header, Loader=yaml.SafeLoader):
                 if isinstance(event, yaml.events.CollectionStartEvent):
                     depth += 1
-                    if depth > 2:
-                        raise ValueError("Agent model preference must not contain nested model fields")
+                    if depth > 3:
+                        raise ValueError("Agent preference is too deeply nested")
                 elif isinstance(event, yaml.events.CollectionEndEvent):
                     depth -= 1
             node = yaml.compose(header, Loader=yaml.SafeLoader)
+
+            def unique(node: yaml.Node) -> None:
+                if isinstance(node, yaml.MappingNode):
+                    seen: set[str] = set()
+                    for key, child in node.value:
+                        if (
+                            not isinstance(key, yaml.ScalarNode)
+                            or key.tag != "tag:yaml.org,2002:str"
+                            or key.value in seen
+                        ):
+                            raise ValueError("Agent preference fields must be unique strings")
+                        seen.add(key.value)
+                        unique(child)
+                elif isinstance(node, yaml.SequenceNode):
+                    for child in node.value:
+                        unique(child)
+
+            if node is not None:
+                unique(node)
+            return AgentModelStore._validate(yaml.safe_load(header))
         except (yaml.YAMLError, RecursionError):
-            raise ValueError("Invalid agent model frontmatter") from None
-        if not isinstance(node, yaml.MappingNode) or len(node.value) != 1:
-            raise ValueError("Agent model preference must contain only model")
-        key, model = node.value[0]
-        if (
-            not isinstance(key, yaml.ScalarNode)
-            or key.tag != "tag:yaml.org,2002:str"
-            or key.value != "model"
-            or not isinstance(model, yaml.MappingNode)
-        ):
-            raise ValueError("Agent model preference must contain a model mapping")
-        fields: dict[str, str] = {}
-        for key, value in model.value:
-            if (
-                not isinstance(key, yaml.ScalarNode)
-                or key.tag != "tag:yaml.org,2002:str"
-                or key.value in fields
-                or not isinstance(value, yaml.ScalarNode)
-                or value.tag != "tag:yaml.org,2002:str"
-            ):
-                raise ValueError("Model fields must be unique strings")
-            fields[key.value] = value.value
-        if fields == {"provider": "", "id": ""}:
-            return ModelBinding()
-        return ModelBinding.parse(fields)
+            raise ValueError("Invalid agent preference frontmatter") from None
 
     def load(self, agent: str) -> AgentModelPreference:
         path = self._path(agent)
         exists, raw = self._read(path)
         if not exists:
             return AgentModelPreference(agent, ModelBinding(), _EMPTY_REVISION, path)
-        return AgentModelPreference(agent, self._binding(raw), hashlib.sha256(raw).hexdigest(), path)
+        preferences = self._preferences(raw)
+        model = preferences.get("model", {"provider": "", "id": ""})
+        binding = ModelBinding() if model == {"provider": "", "id": ""} else ModelBinding.parse(model)
+        return AgentModelPreference(
+            agent, binding, hashlib.sha256(raw).hexdigest(), path, "model" in preferences, MappingProxyType(preferences)
+        )
 
     def save(self, agent: str, binding: ModelBinding, *, expected: str) -> AgentModelPreference:
-        """Save an explicit choice; an empty pair explicitly inherits defaults."""
-        return self._change(agent, binding, expected=expected, remove=False)
-
-    def reset(self, agent: str, *, expected: str) -> AgentModelPreference:
-        """Remove the UI override and reveal the agent definition's model choice."""
-        return self._change(agent, ModelBinding(), expected=expected, remove=True)
-
-    def _change(self, agent: str, binding: ModelBinding, *, expected: str, remove: bool) -> AgentModelPreference:
-        from .providers import _exclusive_lock
-
+        """Save an explicit model choice without replacing other preferences."""
         if binding.configured and not binding.provider:
             raise ValueError("Saved agent models must name a configured provider connection")
+        return self.patch(agent, {"model": binding.as_dict()}, expected=expected)
+
+    def reset(self, agent: str, *, expected: str) -> AgentModelPreference:
+        """Remove only the model override, revealing the source definition."""
+        return self.remove(agent, ("model",), expected=expected)
+
+    def patch(self, agent: str, changes: Mapping[str, object], *, expected: str) -> AgentModelPreference:
+        return self._change(agent, self._validate(dict(changes)), (), expected=expected)
+
+    def remove(self, agent: str, fields: Iterable[str], *, expected: str) -> AgentModelPreference:
+        selected = tuple(fields)
+        if set(selected) - {"model", "live", "instructions", "tools"}:
+            raise ValueError("Unsupported agent preference fields")
+        return self._change(agent, {}, selected, expected=expected)
+
+    def replace_fields(
+        self, agent: str, fields: Iterable[str], values: Mapping[str, object], *, expected: str
+    ) -> AgentModelPreference:
+        """Atomically replace one section group, preserving all other preferences."""
+        selected = tuple(fields)
+        if set(selected) - {"model", "live", "instructions", "tools"} or set(values) - set(selected):
+            raise ValueError("Unsupported agent preference fields")
+        return self._change(
+            agent,
+            self._validate(dict(values)),
+            tuple(name for name in selected if name not in values),
+            expected=expected,
+        )
+
+    def _change(
+        self, agent: str, changes: Mapping[str, object], removed: tuple[str, ...], *, expected: str
+    ) -> AgentModelPreference:
+        from .providers import _exclusive_lock
+
         path = self._path(agent)
         if not isinstance(expected, str) or not _REVISION.fullmatch(expected):
             raise ValueError("Invalid agent model revision")
@@ -247,13 +307,19 @@ class AgentModelStore:
             current = self.load(agent)
             if current.revision != expected:
                 raise ValueError("Agent model changed. Refresh before saving.")
-            if remove:
+            preferences = dict(current.preferences)
+            preferences.update(changes)
+            for name in removed:
+                preferences.pop(name, None)
+            if preferences == current.preferences:
+                return current
+            if not preferences:
                 path.unlink(missing_ok=True)
                 self._sync_directory()
                 return self.load(agent)
-            if current.binding == binding and current.revision != _EMPTY_REVISION:
-                return current
-            payload = ("---\n" + yaml.safe_dump({"model": binding.as_dict()}, sort_keys=False) + "---\n").encode()
+            payload = ("---\n" + yaml.safe_dump(preferences, sort_keys=False) + "---\n").encode()
+            if len(payload) > _MAX_BYTES:
+                raise ValueError("Agent preference exceeds the storage limit")
             descriptor, temporary = tempfile.mkstemp(prefix=".model-", dir=self.directory)
             try:
                 with os.fdopen(descriptor, "wb") as output:

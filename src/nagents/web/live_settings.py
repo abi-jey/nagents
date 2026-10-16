@@ -26,6 +26,8 @@ from pydantic import field_validator
 from nagents.harness.auth import OpenAIAuth
 from nagents.harness.connection import codex_discovery_selected
 from nagents.harness.connection import live_auth_available
+from nagents.harness.live_profiles import LIVE_FIELDS
+from nagents.harness.live_profiles import LiveProfile
 from nagents.harness.providers import KINDS
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ScopedProviderRegistryStore
@@ -50,6 +52,8 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine
     from collections.abc import Iterator
     from pathlib import Path
+
+    from nagents.harness import Harness
 
     from .live_auth import LoginCredentials
     from .live_auth import VoiceAuth
@@ -118,6 +122,38 @@ class WorkspaceVoiceInput(BaseModel):
     overrides: VoiceOverrides
 
 
+class AgentVoiceRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    scope: Literal["agent"]
+    agent: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    revision: Revision
+
+
+class AgentVoiceInput(AgentVoiceRevision):
+    overrides: dict[str, object]
+
+    @field_validator("overrides")
+    @classmethod
+    def profile(cls, value: dict[str, object]) -> dict[str, object]:
+        return LiveProfile.parse(value).selected()
+
+
+@dataclass(frozen=True)
+class AgentLiveLayer:
+    agent: str = ""
+    definition: LiveProfile = field(default_factory=LiveProfile)
+    overrides: LiveProfile = field(default_factory=LiveProfile)
+    preferences_revision: str = ""
+    definitions_revision: str = ""
+    source: str = ""
+    path: str = ""
+    present: bool = False
+
+
+_EMPTY_AGENT_LAYER = AgentLiveLayer()
+
+
 @dataclass(frozen=True)
 class LiveConnection:
     values: LiveValues
@@ -133,6 +169,7 @@ class LiveConnection:
     connections: tuple[tuple[str, str, str], ...] = ()
     voice_auth: VoiceAuth = "api-key"
     login_credentials: LoginCredentials | None = field(default=None, repr=False)
+    agent_settings: dict[str, object] = field(default_factory=dict)
 
     @property
     def voices(self) -> tuple[str, ...]:
@@ -181,6 +218,7 @@ class LiveConnection:
                 live_supported=self.profile.kind in NAMED_LIVE_PROVIDERS,
                 connection_scope=self.connection_scope,
             )
+        result.update(self.agent_settings)
         return result
 
 
@@ -231,7 +269,11 @@ class LiveSettings:
         active: Callable[[], str],
         providers: ScopedProviderRegistryStore | None = None,
         auth: OpenAIAuth | None = None,
+        harness: Harness | None = None,
+        selected_agent: Callable[[], str] = lambda: "",
     ) -> None:
+        self.harness = harness
+        self.selected_agent = selected_agent
         self.db_path = db_path
         self.demo = demo
         self.active = active
@@ -245,7 +287,32 @@ class LiveSettings:
         self.auth = auth or OpenAIAuth()
         self._session: ContextVar[str] = ContextVar("live_chat_session")
 
-    def _scoped(self, scope: Scope) -> LiveConnection:
+    def _agent_layer(self, agent: str) -> AgentLiveLayer:
+        if not agent or self.harness is None:
+            if agent:
+                raise HTTPException(404, "Agent Live settings are unavailable.")
+            return AgentLiveLayer()
+        self.harness.refresh_agent_definitions()
+        if agent not in self.harness.config.profile_names:
+            raise HTTPException(404, "This agent profile is no longer available.")
+        profile = self.harness.config.profile(agent)
+        try:
+            saved = self.providers.agent_models.load(agent)
+            overrides = LiveProfile.parse(saved.preferences.get("live", {}))
+        except (OSError, ValueError):
+            raise HTTPException(422, "Agent Live preferences could not be read.") from None
+        return AgentLiveLayer(
+            agent,
+            profile.live,
+            overrides,
+            saved.revision,
+            self.harness.profile_revision,
+            profile.source,
+            str(saved.path),
+            "live" in saved.preferences,
+        )
+
+    def _scoped(self, scope: Scope, agent: AgentLiveLayer = _EMPTY_AGENT_LAYER) -> LiveConnection:
         global_registry = self.providers.load_scope("global")
         local = self.providers.load_scope("workspace")
         registry = global_registry if scope == "global" else self.providers.load()
@@ -273,6 +340,41 @@ class LiveSettings:
                     **(overrides.selected() if scope == "workspace" else {}),
                 }
             )
+            inherited_values = {
+                **{
+                    key: value
+                    for key, value in preferences.model_dump().items()
+                    if key not in {"connection_id", "model"}
+                },
+                "model": {"provider": preferences.connection_id or name, "id": preferences.model},
+            }
+            parent_profile = registry.providers.get(preferences.connection_id or name)
+            parent_auth, _ = (
+                resolve_voice_auth(parent_profile, self.auth, preferences.model)
+                if parent_profile
+                else ("api-key", None)
+            )
+            parent_voices = LOGIN_VOICES if parent_auth == "chatgpt" else LIVE_VOICES
+            if preferences.voice not in parent_voices:
+                inherited_values["voice"] = "sol" if parent_auth == "chatgpt" else "marin"
+            if preferences.model in {"gpt-live-1", "gpt-live-1-codex"}:
+                inherited_values["model"] = {
+                    "provider": preferences.connection_id or name,
+                    "id": "gpt-live-1-codex" if parent_auth == "chatgpt" else "gpt-live-1",
+                }
+            definition = agent.definition.selected()
+            overlay = agent.overrides.selected()
+            agent_fields = overlay if agent.present else definition
+            if agent.agent:
+                revision = hashlib.sha256(
+                    f"{revision}:{agent.agent}:{agent.preferences_revision}:{agent.definitions_revision}".encode()
+                ).hexdigest()
+                flattened = {key: value for key, value in agent_fields.items() if key != "model"}
+                if "model" in agent_fields:
+                    binding = agent_fields["model"]
+                    assert isinstance(binding, dict)
+                    flattened.update(connection_id=binding["provider"], model=binding["id"])
+                preferences = VoicePreferences.model_validate({**preferences.model_dump(), **flattened})
             selected_name = preferences.connection_id or name
             profile = registry.providers.get(selected_name)
             connection_scope = "workspace" if scope == "workspace" and selected_name in local.providers else "global"
@@ -296,6 +398,60 @@ class LiveSettings:
                 }
             )
             supported = profile is not None and profile.kind in NAMED_LIVE_PROVIDERS
+            local_fields = overrides.selected() if scope == "workspace" else {}
+            origins = {
+                key: "agent"
+                if key in agent_fields
+                else "workspace"
+                if key in local_fields
+                else "global"
+                if key in global_values.model_fields_set
+                else "builtin"
+                for key in sorted(LIVE_FIELDS - {"model"})
+            }
+            origins["model"] = (
+                "agent"
+                if "model" in agent_fields
+                else "workspace"
+                if {"connection_id", "model"} & local_fields.keys()
+                else "global"
+                if {"connection_id", "model"} & global_values.model_fields_set
+                else "builtin"
+            )
+            details: dict[str, object] = {
+                "effective": {
+                    **{
+                        key: value
+                        for key, value in values.model_dump().items()
+                        if key in {"enabled", "voice", "instructions", "context_mode", "backend_mode", "backend_model"}
+                    },
+                    "model": {"provider": selected_name, "id": values.model},
+                },
+                "origins": origins if agent.agent else {**origins, "connection_id": origins["model"]},
+            }
+            if agent.agent:
+                details.update(
+                    scope="agent",
+                    agent=agent.agent,
+                    overrides=overlay,
+                    saved_preferences=overlay,
+                    definition_live=definition,
+                    saved_live_present=agent.present,
+                    inherited=inherited_values,
+                    agent_overrides=agent_fields,
+                    preferences_revision=agent.preferences_revision,
+                    definitions_revision=agent.definitions_revision,
+                    source_path=agent.source,
+                    preference_path=agent.path,
+                    field_sources={
+                        key: "overlay"
+                        if key in overlay
+                        else "definition"
+                        if not agent.present and key in definition
+                        else origins[key]
+                        for key in origins
+                    },
+                )
             return LiveConnection(
                 values,
                 revision,
@@ -320,6 +476,7 @@ class LiveSettings:
                 overrides=overrides,
                 voice_auth=voice_auth,
                 login_credentials=credentials,
+                agent_settings=details,
                 connections=tuple(
                     (
                         identifier,
@@ -366,14 +523,15 @@ class LiveSettings:
             raise HTTPException(503, "Live connection settings are unavailable.")
 
     async def connection(self) -> LiveConnection:
-        return await self.scoped("workspace")
+        return await self.scoped("workspace", agent=self.selected_agent())
 
-    async def scoped(self, scope: Scope) -> LiveConnection:
+    async def scoped(self, scope: Scope, *, agent: str = "") -> LiveConnection:
         self._ready()
+        layer = self._agent_layer(agent)
 
         async def read() -> LiveConnection:
             try:
-                return await asyncio.to_thread(self._scoped, scope)
+                return await asyncio.to_thread(self._scoped, scope, layer)
             except HTTPException:
                 raise
             except Exception:
@@ -383,8 +541,48 @@ class LiveSettings:
 
         return await self._owned(read())
 
-    async def snapshot(self, scope: Scope) -> dict[str, object]:
+    async def snapshot(self, scope: Scope | Literal["agent"], agent: str = "") -> dict[str, object]:
+        if scope == "agent":
+            if not agent:
+                raise HTTPException(422, "Choose an agent for Live settings.")
+            return (await self.scoped("workspace", agent=agent)).snapshot()
         return (await self.scoped(scope)).snapshot()
+
+    async def change_agent(self, body: AgentVoiceInput | AgentVoiceRevision) -> dict[str, object]:
+        selected = body.overrides if isinstance(body, AgentVoiceInput) else {}
+        with self._idle(allow_active=True):
+            current = await self.scoped("workspace", agent=body.agent)
+            if current.revision != body.revision:
+                raise HTTPException(409, "Agent Live preferences changed. Refresh before saving.")
+            model = selected.get("model")
+            if isinstance(model, dict):
+                profile = self.providers.load().providers.get(str(model["provider"]))
+                if profile is None or profile.kind not in NAMED_LIVE_PROVIDERS:
+                    raise HTTPException(422, "Choose an existing GPT-Live provider connection.")
+            registry = self.providers.load()
+            keys = [os.environ.get(profile.key_env, "") for profile in registry.providers.values()]
+            strings = tuple(value for value in selected.values() if isinstance(value, str))
+            if isinstance(model, dict):
+                strings += tuple(value for value in model.values() if isinstance(value, str))
+            if any(key and any(key in value for value in strings) for key in keys):
+                raise HTTPException(422, "Keep API keys out of Voice preferences.")
+            layer = self._agent_layer(body.agent)
+            if layer.preferences_revision != current.agent_settings["preferences_revision"] or (
+                layer.definitions_revision != current.agent_settings["definitions_revision"]
+            ):
+                raise HTTPException(409, "Agent Live preferences changed. Refresh before saving.")
+            try:
+                if isinstance(body, AgentVoiceInput):
+                    self.providers.agent_models.patch(
+                        body.agent, {"live": selected}, expected=layer.preferences_revision
+                    )
+                else:
+                    self.providers.agent_models.remove(body.agent, ("live",), expected=layer.preferences_revision)
+            except ValueError as error:
+                raise HTTPException(409 if "changed" in str(error) else 422, str(error)) from None
+            except OSError:
+                raise HTTPException(500, "Agent Live preferences could not be saved.") from None
+            return await self.snapshot("agent", body.agent)
 
     @contextmanager
     def _idle(self, *, allow_active: bool = False) -> Iterator[None]:
@@ -482,6 +680,13 @@ class LiveSettings:
         with self._idle():
             connection = await self.connection()
             self._ready()  # Shutdown may have started while the database read was running.
+            layer = self._agent_layer(self.selected_agent())
+            if layer.agent and (
+                connection.agent_settings.get("agent") != layer.agent
+                or connection.agent_settings.get("preferences_revision") != layer.preferences_revision
+                or connection.agent_settings.get("definitions_revision") != layer.definitions_revision
+            ):
+                raise HTTPException(409, "Selected agent Live settings changed. Refresh before connecting.")
             if connection.revision != revision:
                 raise HTTPException(409, "Live settings changed. Reload Voice settings before connecting.")
             token = self._admission.set(connection)

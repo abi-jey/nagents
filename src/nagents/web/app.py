@@ -39,6 +39,7 @@ from nagents.provider._codex_catalog import catalog_logging
 from nagents.provider.context import validate_context_window
 from nagents.provider.context import validate_model_context_windows
 
+from . import agent_settings
 from . import built_assets
 from . import empty_sessions
 from . import is_loopback_host
@@ -205,6 +206,8 @@ def create_app(
             active=lambda: live.active_session_id,
             providers=harness.provider_store,
             auth=harness.openai_auth,
+            harness=harness,
+            selected_agent=lambda: state.session_agents.target(state.selected_session_id)["agent"],
         )
 
         def voice_agent(voice: str) -> Agent:
@@ -397,6 +400,7 @@ def create_app(
     register_session_groups(app, lambda: session_groups)
     register_session_actions(app, lambda: state, lambda: live)
     session_agents.register(app, lambda: state)
+    agent_settings.register(app, lambda: state)
     from .agent_models import register as register_agent_models
 
     register_agent_models(app, lambda: state)

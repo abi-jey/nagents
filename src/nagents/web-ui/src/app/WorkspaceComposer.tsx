@@ -14,12 +14,14 @@ import "../features/live/sphere.css";
 import "../features/live/settingsDialog.css";
 import "../features/live/inspection.css";
 import type { Client } from "./useClient";
+import type { NavigatorAudio } from "../features/settings/navigator/AgentNavigator.js";
 
-export function WorkspaceComposer({ client, composer, submit, select }: {
+export function WorkspaceComposer({ client, composer, submit, select, configureSettings, audioChanged }: {
   client: Client;
   composer: RefObject<HTMLTextAreaElement | null>;
   submit: () => void;
   select: (id?: string) => Promise<void>;
+  configureSettings: () => void; audioChanged: (audio?: NavigatorAudio) => void;
 }) {
   const { chat, sessions, busy } = client;
   const { config, sessionId, externalRun } = sessions;
@@ -66,7 +68,7 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
       autoStart={client.liveAutoStart}
       openSettingsInitially={client.liveIntent === "settings"} consumeStartIntent={client.consumeLiveStart}
       close={() => { client.closeLive(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }}
-      configureConnection={() => { client.closeLive(); client.settings.show(); }} />}</div>
+      configureConnection={() => client.settings.show()} openAgentSettings={configureSettings} audioChanged={audioChanged} />}</div>
     <Composer inputRef={composer} prompt={child ? team.prompt : chat.prompt} setPrompt={child ? team.setPrompt : chat.setPrompt} demo={!!config?.demo}
       voiceLayout={client.liveOpen && !child} voiceRefs={voiceRefs}
       recipient={child ? recipient : "ngn"} commandsEnabled={!child} maxLength={child ? 16000 : 32000}
@@ -78,7 +80,7 @@ export function WorkspaceComposer({ client, composer, submit, select }: {
       canSubmit={child ? !!config && team.canMessage && !team.submitting : client.available.submit} running={!child && busy && !!chat.runId} submit={submit} cancel={() => void client.cancel()}
       skills={client.skills.items} skillsLoading={client.skills.loading} skillsError={client.skills.error}
       refreshSkills={() => void client.skills.refresh()}
-      voiceControl={!child && !client.liveOpen && <div className="voice-entry"><button type="button" id="live-launch" className="live-launch" aria-label="Start voice" title="Talk in this chat" disabled={!client.available.live} onClick={() => client.showLive()}><Icon name="wave" size={17} /><span>Voice</span></button><button type="button" className="voice-entry-settings" aria-label="Voice settings" title="Voice settings" aria-haspopup="dialog" aria-controls="voice-settings-dialog" disabled={!client.available.live} onClick={() => client.showLive("settings")}><Icon name="settings" size={16} /></button></div>}
+      voiceControl={!child && !client.liveOpen && <div className="voice-entry"><button type="button" id="live-launch" className="live-launch" aria-label="Start voice" title="Talk in this chat" disabled={!client.available.live} onClick={() => client.showLive()}><Icon name="wave" size={17} /><span>Voice</span></button><button type="button" className="voice-entry-settings" aria-label="Voice settings" title="Voice settings" aria-haspopup="dialog" aria-controls="agent-navigator-dialog" disabled={!client.available.live} onClick={configureSettings}><Icon name="settings" size={16} /></button></div>}
       status={child ? <span className="run-status" role="status">{team.submitting ? "Sending…" : !team.canMessage ? "Unavailable" : team.profile ? "Starts this agent" : "Joins the next response"}</span> : <span className={`run-status${chat.status === "Ready" && !chat.pendingWakeups ? " sr-only" : ""}`} role="status" title={runStatus}>{runStatus}</span>}
     />
   </footer>;

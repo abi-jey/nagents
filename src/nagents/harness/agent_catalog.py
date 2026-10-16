@@ -56,14 +56,15 @@ class AgentCatalog:
         # A programmatic catalog without reloadable sources owns its supplied
         # diagnostics too; there is no discovery pass that can replace them.
         diagnostics: list[str] = [] if self.sources else list(config.agent_diagnostics)
+        failed = False
         for source in self.sources:
             before = dict(candidate.profiles)
             notes_before = len(diagnostics)
             try:
                 if source.kind in {"personal", "workspace"}:
-                    _install_agents(
-                        candidate, discover_agents(source.path, personal=source.kind == "personal"), diagnostics
-                    )
+                    batch = discover_agents(source.path, personal=source.kind == "personal")
+                    failed = failed or batch.failed
+                    _install_agents(candidate, batch, diagnostics)
                     continue
                 path = source.path.resolve() if source.resolve else source.path
                 try:
@@ -79,7 +80,9 @@ class AgentCatalog:
                 if not isinstance(document, dict):
                     raise ValueError("Agent configuration must be a mapping")
                 if "agent_imports" in document:
-                    _install_agents(candidate, import_agents(document["agent_imports"], path.parent), diagnostics)
+                    batch = import_agents(document["agent_imports"], path.parent)
+                    failed = failed or batch.failed
+                    _install_agents(candidate, batch, diagnostics)
                 profiles = document.get("profiles", {})
                 if profiles is None:
                     profiles = {}
@@ -89,10 +92,16 @@ class AgentCatalog:
                     _install_profile(candidate, name, _json_profile(fields, path), diagnostics)
                 candidate.validate()
             except (OSError, ValueError, RuntimeError, UnicodeError) as error:
+                failed = True
                 # No invalid document contents or private profile bodies in diagnostics.
                 candidate.profiles = before
                 del diagnostics[notes_before:]
                 diagnostics.append(f"{source.path}: agent definitions could not be loaded ({type(error).__name__})")
+        if failed:
+            # A partially written or invalid source never replaces an accepted catalog.
+            # Diagnostics can change independently; admission uses the accepted revision.
+            config.agent_diagnostics = tuple(diagnostics)
+            return False
         source_profiles = {name: replace(profile) for name, profile in candidate.profiles.items()}
         candidate.profiles.update({name: replace(profile) for name, profile in self.overrides.items()})
         for name in self._removed:

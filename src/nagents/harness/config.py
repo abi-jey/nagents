@@ -23,6 +23,7 @@ from nagents.types import ReasoningEffort
 from .agent_definitions import DefinitionBatch
 from .agent_definitions import discover_agents
 from .agent_definitions import import_agents
+from .live_profiles import LiveProfile
 from .model_bindings import ModelBinding
 from .providers import ProviderProfile
 from .providers import ScopedProviderRegistryStore
@@ -55,9 +56,13 @@ class AgentProfile:
     source: str = field(default="", compare=False)
     source_format: str = field(default="", compare=False)
     reasoning_effort: ReasoningPreference = ""
+    live: LiveProfile = field(default_factory=LiveProfile)
 
     def validate(self) -> None:
         resolve_effort(self.reasoning_effort)
+        if not isinstance(self.live, LiveProfile):
+            raise ValueError("live must be a parsed Live profile")
+        LiveProfile.parse(self.live.selected())
         if self.mode not in {"build", "reviewer"}:
             raise ValueError("mode must be build or reviewer")
         for name in ("instructions", "description", "model", "provider", "source", "source_format"):
@@ -237,6 +242,7 @@ def _install_agents(config: HarnessConfig, batch: DefinitionBatch, diagnostics: 
             source=definition.source,
             source_format=definition.source_format,
             reasoning_effort=definition.reasoning_effort,
+            live=definition.live,
         )
         try:
             _install_profile(config, definition.name, profile, diagnostics)
@@ -250,7 +256,7 @@ def _json_profile(value: object, source: Path) -> AgentProfile:
     string_fields = {"mode", "instructions", "model", "provider", "description", "reasoning_effort"}
     bool_fields = {"user_invocable", "subagent_available"}
     list_fields = {"tools", "denied_tools", "allowed_agents"}
-    if not isinstance(value, dict) or value.keys() - (string_fields | bool_fields | list_fields):
+    if not isinstance(value, dict) or value.keys() - (string_fields | bool_fields | list_fields | {"live"}):
         raise ValueError(f"{source}: invalid agent profile fields")
     if isinstance(value.get("model"), dict):
         binding = ModelBinding.parse(value["model"])
@@ -259,7 +265,9 @@ def _json_profile(value: object, source: Path) -> AgentProfile:
         value = {**value, "model": binding.id, "provider": binding.provider}
     profile = AgentProfile(source=str(source), source_format="json")
     for name, item in value.items():
-        if name in string_fields:
+        if name == "live":
+            item = LiveProfile.parse(item)
+        elif name in string_fields:
             if not isinstance(item, str):
                 raise ValueError(f"{source}: profile {name} must be a string")
         elif name in bool_fields:

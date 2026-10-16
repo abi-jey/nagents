@@ -126,3 +126,24 @@ test("settings treat provider-only changes as dirty and conflict on a changed pa
     assert.equal(settings.draft?.model_provider, "third");
   } finally { t.mock.timers.reset(); await view.close(); }
 });
+
+test("embedded model refreshes clean snapshots after another section saves and preserves dirty model drafts", async t => {
+  const view = browser(); let reads = 0; let reply = agentReply;
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    if (path === "/api/agent-models/mini") { reads++; return Response.json(reply); }
+    if (path.endsWith("/providers")) return Response.json(registry);
+    return Response.json({ models: ["another-model"] });
+  });
+  try {
+    await act(async () => view.root.render(createElement(AgentModelDialog, { embedded: true, agent: "mini", token: "token", close() {}, changed() {} })));
+    reply = { ...reply, revision: "after-voice" };
+    await act(async () => window.dispatchEvent(new view.dom.window.Event("ngn:agent-settings-saved")));
+    assert.equal(reads, 2, "Clean model snapshots refresh after other preference writes");
+    await act(async () => view.container.querySelector<HTMLButtonElement>(".model-catalog-list button")!.click());
+    reply = { ...reply, revision: "after-instructions" };
+    await act(async () => window.dispatchEvent(new view.dom.window.Event("ngn:agent-settings-saved")));
+    assert.equal(reads, 2, "Dirty model keeps its original revision for explicit conflict handling");
+    assert.equal(view.container.querySelector<HTMLInputElement>('.settings-custom-model input')!.value, "another-model");
+    assert.equal(view.button("Save agent model").disabled, false);
+  } finally { await view.close(); }
+});

@@ -32,6 +32,8 @@ from nagents.types import GenerationConfig
 from nagents.types import ReasoningEffort
 from nagents.types import TextContent
 
+from .agent_behavior import AgentBehavior
+from .agent_behavior import load_behavior
 from .agent_catalog import AgentCatalog
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
@@ -223,6 +225,8 @@ class Harness:
         self._parent_instructions = ""
         self._inherited_profile_instructions: tuple[str, ...] = ()
         self._generated_system_prompt = ""
+        self._prompt_profile_instructions = ""
+        self._behavior = AgentBehavior()
         self.workspace: Path = config.workspace.resolve()
         if not self.workspace.is_dir():
             raise ValueError(f"Workspace is not a directory: {self.workspace}")
@@ -370,7 +374,7 @@ class Harness:
         # Persisted selections always contain a named connection and model ID.
         route = profile.provider or workspace.provider or global_default.provider or builtin.provider
         source = str(preference.path)
-        if preference.revision != "0" * 64:
+        if preference.model_present:
             agent_binding = preference.binding
         elif (profile.model or profile.provider) and route:
             agent_binding = ModelBinding(route, profile.model or workspace.id or global_default.id or builtin.id)
@@ -501,12 +505,15 @@ class Harness:
             *parent._inherited_tool_profiles,
             replace(parent.current_profile()),
             AgentProfile(denied_tools=denied),
+            AgentProfile(tools=parent._behavior.tools if parent._behavior.tools_limited else None),
         )
 
     def refresh_tool_policy(self) -> None:
         self.tool_settings.load()
+        self._behavior = load_behavior(self.provider_store, self.config.agent, self.current_profile())
         for parent in self._permission_parents:
             parent.tool_settings.load()
+            parent._behavior = load_behavior(parent.provider_store, parent.config.agent, parent.current_profile())
 
     def tool_enabled(self, name: str) -> bool:
         profiles = (
@@ -517,7 +524,10 @@ class Harness:
         return all(
             (profile.tools is None or name in profile.tools) and name not in profile.denied_tools
             for profile in profiles
-        ) and all(owner.tool_settings.enabled(owner.config.agent, name) for owner in (self, *self._permission_parents))
+        ) and all(
+            owner.tool_settings.enabled(owner.config.agent, name) and owner._behavior.permits(name)
+            for owner in (self, *self._permission_parents)
+        )
 
     @property
     def delegatable_profile_names(self) -> tuple[str, ...]:
@@ -569,7 +579,9 @@ class Harness:
             # generated-looking text could now contain authored instructions.
             return prompt, ()
         profiles = self._inherited_profile_instructions
-        instructions = self.current_profile().instructions
+        # Tool permission checks may load newly saved preferences during a round.
+        # Children inherit the instructions actually published to their parent.
+        instructions = self._prompt_profile_instructions
         if not continuing and instructions and instructions not in profiles:
             profiles += (instructions,)
         return self._parent_instructions, profiles
@@ -598,10 +610,11 @@ class Harness:
             )
         else:
             base += "No native wake-up scheduler is advertised; do not promise delayed self-follow-up without an advertised scheduler.\n"
-        if profile.instructions:
-            base += f"\nTrusted profile instructions:\n{profile.instructions}\n"
+        profile_instructions = profile.instructions if self._defer_prompt_capabilities else self._behavior.instructions
+        if profile_instructions:
+            base += f"\nTrusted profile instructions:\n{profile_instructions}\n"
         for instructions in self._inherited_profile_instructions:
-            if instructions != profile.instructions:
+            if instructions != profile_instructions:
                 base += f"\nParent profile instructions (your own permission ceiling applies):\n{instructions}\n"
         if self._parent_instructions:
             base += (
@@ -638,6 +651,7 @@ class Harness:
             base += f"\nApplicable project context ({path}):\n{content}\n"
         self.agent.system_prompt = base
         self._generated_system_prompt = base
+        self._prompt_profile_instructions = profile_instructions
 
     async def initialize(self, *, create_session: bool = True) -> None:
         """Initialize local sessions, instructions and trusted extensions. No provider I/O.
@@ -1220,7 +1234,7 @@ class Harness:
         """A complete model reference is independent of registry activation."""
         if include_agent:
             preference = self.provider_store.agent_models.load(self.config.agent)
-            if preference.revision != "0" * 64:
+            if preference.model_present:
                 if preference.binding.configured:
                     return bool(preference.binding.provider)
             elif self.current_profile().provider:

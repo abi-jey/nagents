@@ -113,12 +113,29 @@ class LocalOnly:
         voice_scope = (
             scope["method"] == "GET"
             and path == "/api/live/settings"
-            and scope["query_string"] in {b"scope=global", b"scope=workspace"}
+            and (
+                scope["query_string"] in {b"scope=global", b"scope=workspace"}
+                or re.fullmatch(
+                    rb"(?:scope=agent&agent=[A-Za-z0-9_-]{1,128}|agent=[A-Za-z0-9_-]{1,128}&scope=agent)",
+                    scope["query_string"],
+                )
+                is not None
+            )
         )
         skill_scope = (
             scope["method"] == "GET"
             and path == "/api/skills"
             and re.fullmatch(rb"session_id=ngn-[A-Za-z0-9-]{1,76}", scope["query_string"]) is not None
+        )
+        agent_settings_query = (
+            scope["method"] == "GET"
+            and path == "/api/agent-settings"
+            and re.fullmatch(
+                rb"(?:scope=(?:global|workspace|agent)(?:&agent=[A-Za-z0-9_-]{1,128})?|"
+                rb"agent=[A-Za-z0-9_-]{1,128}(?:&scope=(?:global|workspace|agent))?)",
+                scope["query_string"],
+            )
+            is not None
         )
         task_history_query = False
         if (
@@ -178,7 +195,13 @@ class LocalOnly:
             except (ValueError, UnicodeError):
                 pass
         if scope["query_string"] and not (
-            live_cursor or voice_scope or skill_scope or delegation_query or task_history_query or reasoning_query
+            live_cursor
+            or voice_scope
+            or agent_settings_query
+            or skill_scope
+            or delegation_query
+            or task_history_query
+            or reasoning_query
         ):
             await reject(400, "Query parameters are not supported. Do not put tokens in URLs.")
             return

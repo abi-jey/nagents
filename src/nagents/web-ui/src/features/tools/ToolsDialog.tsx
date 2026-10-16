@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { request, RequestError } from "../../api/client.js";
 import { Icon } from "../../components/Icon.js";
+import { announceSettingsSaved } from "../settings/navigator/state.js";
 import { McpDiscovery, type McpDiagnostics } from "./McpDiagnostics.js";
 
 interface ToolInfo {
@@ -17,7 +18,8 @@ interface ToolSettings {
   mcp_retry?: { server: string; status: "queued" | "completed" };
 }
 
-export function ToolsDialog({ token, blocked, close }: { token: string; blocked: boolean; close: () => void }) {
+export function ToolsDialog({ token, blocked, close, embedded = false, onDraftChange }: { token: string; blocked: boolean; close: () => void; embedded?: boolean; onDraftChange?: (dirty: boolean) => void }) {
+  const Surface = embedded ? "section" : "dialog";
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const requestRef = useRef<AbortController | undefined>(undefined);
@@ -39,6 +41,8 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   const [mcpError, setMcpError] = useState("");
   const disabled = blocked || pending;
   const dirty = !!catalog && JSON.stringify(agents) !== JSON.stringify(catalog.agents);
+
+  useEffect(() => { onDraftChange?.(dirty); }, [dirty, onDraftChange]);
 
   function receive(next: ToolSettings) {
     setCatalog(next); setAgents(structuredClone(next.agents));
@@ -72,7 +76,7 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   useEffect(() => {
     alive.current = true;
     const element = dialog.current, previous = document.activeElement;
-    element?.showModal(); heading.current?.focus(); void refresh();
+    if (!embedded) { element?.showModal(); heading.current?.focus(); } void refresh();
     const timer = setInterval(() => {
       if (writing.current || requestRef.current) return;
       const controller = new AbortController(); requestRef.current = controller;
@@ -84,7 +88,7 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
         finally { if (requestRef.current === controller) requestRef.current = undefined; }
       })();
     }, 3000);
-    return () => { alive.current = false; clearInterval(timer); requestRef.current?.abort(); element?.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+    return () => { alive.current = false; clearInterval(timer); requestRef.current?.abort(); if (!embedded) { element?.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); } };
   }, []);
 
   async function save() {
@@ -94,6 +98,7 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     try {
       const next = await (await request("tools", token, { revision: catalog.revision, agents })).json() as ToolSettings;
       receive(next); setNotice(`Saved to ${next.path}. Selections apply to the next model request for each agent.`);
+      if (embedded) announceSettingsSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Save was not confirmed. Refresh to check the workspace file.");
       setConflict(cause instanceof RequestError && cause.status === 409);
@@ -139,9 +144,9 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
   const selected = agents[agent] || {};
   const enabled = (tool: ToolInfo) => selected[tool.name] !== false;
   const visible = (catalog?.tools || []).filter((tool) => (!category || tool.category === category) && `${tool.name} ${tool.description}`.toLowerCase().includes(search.toLowerCase()));
-  return <dialog ref={dialog} className="tools-dialog" aria-labelledby="tools-title" onCancel={(event) => { event.preventDefault(); if (!pending) close(); }}>
+  return <Surface ref={dialog} className={`tools-dialog${embedded ? " an-embedded" : ""}`} aria-labelledby="tools-title" onCancel={(event) => { event.preventDefault(); if (!pending) close(); }}>
     <header><div><h2 id="tools-title" ref={heading} tabIndex={-1}><Icon name="tools" />Tools</h2><p>Choose which tools each agent can use in this workspace.</p></div>
-      <button type="button" className="icon-button" aria-label="Close tools" disabled={pending} onClick={close}><Icon name="close" /></button></header>
+      {!embedded && <button type="button" className="icon-button" aria-label="Close tools" disabled={pending} onClick={close}><Icon name="close" /></button>}</header>
     <div className="tools-toolbar">
       <label>Agent<select value={agent} disabled={disabled} onChange={(event) => setAgent(event.target.value)}>{catalog?.profiles.map((item) => <option key={item.id} value={item.id}>{item.id}{item.id === catalog.active_agent ? " · current" : ""}{item.mode === "reviewer" ? " · read-only" : ""}</option>)}</select></label>
       <label className="tools-search">Search tools<input type="search" placeholder="Name or description…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
@@ -176,5 +181,5 @@ export function ToolsDialog({ token, blocked, close }: { token: string; blocked:
     <footer><div><code>{catalog?.path || ".ngn/tools.yaml"}</code><small>{dirty ? "Unsaved changes" : "Workspace configuration"}</small></div>
       <button type="button" disabled={pending} onClick={() => void refresh()}>{conflict ? "Reload saved settings" : "Refresh"}</button>
       <button type="button" className="primary" disabled={disabled || conflict || !dirty} onClick={() => void save()}>Save tools</button></footer>
-  </dialog>;
+  </Surface>;
 }

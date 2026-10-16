@@ -12,6 +12,7 @@ export interface VoiceControlsProps {
   startDisabled: boolean;
   settingsOpen: boolean;
   settingsSaving: boolean;
+  settingsDialogId?: string;
   start(): void;
   end(): void;
   close(): void;
@@ -21,7 +22,7 @@ export interface VoiceControlsProps {
 }
 
 /** Expanding the capsule changes the controls, never the connection or audio. */
-export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputMuted, startDisabled, settingsOpen, settingsSaving, start, end, close, configure, muteInput, muteOutput }: VoiceControlsProps) {
+export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputMuted, startDisabled, settingsOpen, settingsSaving, settingsDialogId = "voice-settings-dialog", start, end, close, configure, muteInput, muteOutput }: VoiceControlsProps) {
   const [expanded, setExpanded] = useState(settingsOpen);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -76,7 +77,7 @@ export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputM
       <div className="voice-controls-panel-inner"><div className="voice-controls-actions" role="group" aria-label="Voice controls">
         <button type="button" className="voice-mic" aria-label={microphoneLabel} title={microphoneLabel} aria-pressed={micMuted} disabled={!connected} onClick={muteInput}><Icon name={micMuted ? "mic-off" : "mic"} size={16} /></button>
         <button type="button" className="voice-speaker" aria-label={speakerLabel} title={speakerLabel} aria-pressed={outputMuted} disabled={!connected} onClick={muteOutput}><Icon name={outputMuted ? "volume-off" : "volume"} size={16} /></button>
-        <button type="button" className="voice-settings-trigger" aria-label="Audio devices and voice settings" title="Audio devices and voice settings" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-controls="voice-settings-dialog" disabled={settingsSaving} onClick={configure}><Icon name="settings" size={16} /></button>
+        <button type="button" className="voice-settings-trigger" aria-label="Audio devices and voice settings" title="Audio devices and voice settings" aria-haspopup="dialog" aria-expanded={settingsDialogId === "voice-settings-dialog" ? settingsOpen : undefined} aria-controls={settingsDialogId} disabled={settingsSaving} onClick={configure}><Icon name="settings" size={16} /></button>
         <span className="voice-controls-divider" aria-hidden="true" />
         {active ? <button type="button" className="voice-stop" aria-label={endLabel} title={endLabel} disabled={phase === "ending"} onClick={end}><Icon name="stop" size={14} /><span>{connected ? "Stop" : phase === "ending" ? "Ending" : "Cancel"}</span></button>
           : <button type="button" className="voice-start" aria-label={startLabel} title={startLabel} disabled={startDisabled || settingsSaving || settingsOpen} onClick={start}><Icon name="wave" size={14} /><span>{startLabel}</span></button>}

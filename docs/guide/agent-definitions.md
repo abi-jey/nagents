@@ -42,6 +42,7 @@ when `name` is omitted; `research/agent.md` uses the directory name.
 | `description` | Required, nonempty description for selection and delegation. |
 | `mode` | `build` (default) or `reviewer`. Reviewer prohibits writes, shell, and custom tools. |
 | `model` | A reference containing `provider` (an existing connection ID) and `id` (an exact model ID). Omitted inherits workspace, then global defaults. Applies to delegated children too. |
+| `live` | Optional Live profile: `enabled`, atomic `model: {provider, id}`, `voice`, `instructions`, `context_mode`, plus advanced `backend_mode` and `backend_model`. Missing fields inherit workspace, global, then built-in Live defaults. |
 | `tools` | Allowlist of ngn tool names, as a YAML list or comma-separated string. Omitted inherits; `[]` permits no tools. |
 | `denied_tools` | Tool names to subtract from the inherited or explicit allowlist. |
 | `allowed_agents` | Permitted delegation targets. Omitted inherits; `[]` disables delegation. |
@@ -66,11 +67,42 @@ separate `provider` fields remain readable; do not combine a model reference
 with a separate provider field.
 
 In the web Team pane, model settings are available for `assistant` and unused
-profiles too. Saves write model-only Markdown overrides under
+profiles too. Saves share revisioned Markdown preference files under
 `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agent-models/`. **Inherit**
 uses workspace/global defaults; **Restore definition** removes the override and
 uses the original definition again. A save affects the next activation while
-accepted work keeps its selected connection and model.
+accepted work keeps its selected connection and model. Model resets preserve the
+file's other preference sections.
+
+A Live profile configures speech separately from the normal agent model:
+
+```yaml
+model:
+  provider: text-connection
+  id: reasoning-model
+live:
+  enabled: true
+  model:
+    provider: voice-connection
+    id: gpt-live-1
+  voice: cedar
+  instructions: Keep spoken answers brief.
+  context_mode: recent
+```
+
+`live.model` is one complete reference to an existing global or workspace provider
+connection. It never defines credentials or inherits the normal agent's provider.
+Without a Live model selection, voice follows Live defaults and the provider
+registry's default connection. `enabled: false` and `instructions: ""` are explicit
+values; omit a field to inherit it. `context_mode` accepts `recent`, `summary`, or
+`none`. Advanced hosted mode uses `backend_mode: hosted` and `backend_model`.
+
+The agent Live editor writes a `live` section into the same operator preference
+file as model, instructions, and tools. A saved Live section replaces the source
+Live layer: `live: {}` explicitly uses workspace/global defaults. **Restore
+definition** removes only that section and reveals the native or JSON profile.
+Saved changes apply when the next voice call starts. An active call retains its
+captured Live profile even if the chat later selects another agent.
 
 ## Discovery and precedence
 
@@ -101,8 +133,10 @@ key order. Workspace formats use a stable discovery order (Antigravity, Claude,
 Copilot, OpenCode, Codex, Cursor, Gemini, then native). Personal formats use Claude,
 Copilot, Codex, Cursor, Gemini, OpenCode, Antigravity, then native. Files are sorted
 by path. A collision diagnostic names the winner and replaced source. An invalid
-discovered definition is skipped with a diagnostic; it does not replace a valid
-definition from a lower-priority source.
+discovered definition is skipped during initial loading. Later refreshes stage the
+whole catalog: an invalid or partially written definition reports diagnostics and
+keeps the previously accepted generation. Correcting the file publishes the next
+generation; deliberately deleting a file removes its profile on refresh.
 
 Discovery is bounded to 256 files per scope and 256 KiB per file, with a 32 KiB
 YAML header limit. Symlinks, special files, duplicate YAML keys, aliases, explicit
@@ -147,7 +181,7 @@ without trusting the workspace's other configuration:
 
 The later native import wins when both contain the same name. New files and
 renames in these directories are discovered at the next model request or Team
-refresh. Unsupported files are reported and valid neighboring files still load.
+refresh. Unsupported files are reported; a failed refresh keeps the accepted catalog until the source is corrected.
 `format` is one of `native`, `claude`, `copilot`,
 `opencode`, `codex`, `cursor`, `gemini`, or `antigravity`.
 

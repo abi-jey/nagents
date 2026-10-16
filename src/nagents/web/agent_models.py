@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("uvicorn.error")
 AgentName = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
-EMPTY_REVISION = "0" * 64
 
 
 class ModelReferenceInput(BaseModel):
@@ -100,7 +99,7 @@ def snapshot(harness: Harness, name: str) -> dict[str, object]:
                 if profile.model or profile.provider
                 else ModelBinding()
             )
-        exists = preference.revision != EMPTY_REVISION
+        exists = preference.model_present
         unavailable_reason = ""
         try:
             effective = harness.resolved_model_binding(name)

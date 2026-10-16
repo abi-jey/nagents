@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createDraft, executionLimits, compactionLimits } from "./draft.js";
 import { ModelSelector, type ModelCatalog } from "./ModelSelector.js";
 import { ReasoningEffort, effortLabel } from "./ReasoningEffort.js";
@@ -12,10 +12,14 @@ import type { SettingsDraft } from "./draft.js";
 import { revealAncestors } from "../../components/disclosures.js";
 
 export function SettingsDialog({
-  settings,
+  settings, embedded = false, onDraftChange, openGlobal, onConnectionsChanged,
 }: {
   settings: ReturnType<typeof useSettings>;
+  embedded?: boolean; onDraftChange?: (dirty: boolean) => void; openGlobal?: () => void; onConnectionsChanged?: () => void;
 }) {
+  const instance = useId();
+  const fieldId = (value: string) => embedded ? value.split(" ").map(item => `${instance}-${item}`).join(" ") : value;
+  const Surface = embedded ? "section" : "dialog";
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -34,6 +38,8 @@ export function SettingsDialog({
   const savedDraft = snapshot && createDraft(snapshot.values, snapshot.model_binding);
   const bindingChanged = !!draft && !!savedDraft && (draft.model_provider !== savedDraft.model_provider || draft.model !== savedDraft.model);
   const profile = snapshot?.profiles.find(item => item.name === draft?.agent);
+
+  async function connectionApplied() { await settings.refresh(); onConnectionsChanged?.(); }
 
   function confirmConnection(apply: () => Promise<void>) {
     if (settings.dirty) { activateConnection.current = apply; setConfirmation("connection"); }
@@ -65,7 +71,10 @@ export function SettingsDialog({
     }
   }
 
+  useEffect(() => { onDraftChange?.(settings.dirty || connectionDirty); }, [settings.dirty, connectionDirty, onDraftChange]);
+
   useEffect(() => {
+    if (embedded) return;
     const element = dialog.current;
     const previous = document.activeElement;
     element?.showModal();
@@ -97,11 +106,11 @@ export function SettingsDialog({
   }
 
   return (
-    <dialog
+    <Surface
       ref={dialog}
-      className="settings-dialog settings-workspace-panel"
-      aria-labelledby="settings-title"
-      aria-describedby="settings-description"
+      className={`settings-dialog settings-workspace-panel${embedded ? " an-embedded" : ""}`}
+      aria-labelledby={embedded ? undefined : fieldId("settings-title")}
+      aria-describedby={embedded ? undefined : fieldId("settings-description")}
       onCancel={(event) => {
         event.preventDefault();
         if (loginOpen) return;
@@ -135,24 +144,24 @@ export function SettingsDialog({
         }
       }}
     >
-      <header className="settings-heading">
-        <div className="settings-title-row"><div><span className="settings-eyebrow">{global ? "Across your workspaces" : "Workspace settings"}</span><h2 id="settings-title" ref={heading} tabIndex={-1}>Provider &amp; model</h2></div><button type="button" aria-label="Close settings" disabled={pending || connectionBusy} onClick={settings.close}><Icon name="close" size={19} /></button></div>
+      {!embedded && <header className="settings-heading">
+        <div className="settings-title-row"><div><span className="settings-eyebrow">{global ? "Across your workspaces" : "Workspace settings"}</span><h2 id={fieldId("settings-title")}  ref={heading} tabIndex={-1}>Provider &amp; model</h2></div><button type="button" aria-label="Close settings" disabled={pending || connectionBusy} onClick={settings.close}><Icon name="close" size={19} /></button></div>
         <div className="settings-scopes" role="group" aria-label="Settings scope">
           {(["workspace", "global"] as const).map((scope) => (
             <button key={scope} type="button" data-settings-scope={scope}
-              aria-pressed={settings.scope === scope} aria-controls="settings-scope-content"
+              aria-pressed={settings.scope === scope} aria-controls={fieldId("settings-scope-content")}
               disabled={pending || connectionBusy || settings.blocked || !!confirmation}
               onClick={() => selectScope(scope)}>
               {scope === "workspace" ? "Workspace" : "Global"}
             </button>
           ))}
         </div>
-        <p id="settings-description">
+        <p id={fieldId("settings-description")} >
           {global
             ? "Global defaults and provider connections are shared across workspaces. Workspace overrides take priority."
             : "Choose the defaults for this workspace. Individual agent profiles can override them."}
         </p>
-      </header>
+      </header>}
       <form
         noValidate
         onSubmit={async (event) => {
@@ -168,7 +177,7 @@ export function SettingsDialog({
           });
         }}
       >
-        <div id="settings-scope-content" ref={body} className="settings-body" aria-busy={loading || pending}>
+        <div id={fieldId("settings-scope-content")}  ref={body} className="settings-body" aria-busy={loading || pending}>
           <div ref={feedback} tabIndex={-1} className="settings-feedback">
             {(loading || pending || settings.notice) && (
               <div className="settings-status" role="status">
@@ -222,10 +231,10 @@ export function SettingsDialog({
           {confirmation && (
             <section
               className="settings-confirmation"
-              aria-labelledby="settings-confirmation-title"
+              aria-labelledby={fieldId("settings-confirmation-title")}
             >
               <h3
-                id="settings-confirmation-title"
+                id={fieldId("settings-confirmation-title")}
                 ref={confirmationHeading}
                 tabIndex={-1}
               >
@@ -289,7 +298,7 @@ export function SettingsDialog({
           )}
           {snapshot && draft && (
             <>
-              <ProvidersPanel key={settings.scope} token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} applied={settings.refresh} openGlobal={() => selectScope("global")} onDraftChange={setConnectionDirty} onBusyChange={setConnectionBusy} bindingProvider={draft.model_provider} confirmActivation={confirmConnection} login={() => setLoginOpen(true)} loginConnection={snapshot.connection.provider_id}>
+              <ProvidersPanel key={settings.scope} token={settings.token} scope={settings.scope} blocked={disabled || !!confirmation} applied={connectionApplied} openGlobal={openGlobal || (() => selectScope("global"))} onDraftChange={setConnectionDirty} onBusyChange={setConnectionBusy} bindingProvider={draft.model_provider} confirmActivation={confirmConnection} login={() => setLoginOpen(true)} loginConnection={snapshot.connection.provider_id}>
                 {connection => {
                   const browsing = connection.id !== draft.model_provider;
                   const metadata = !browsing && catalog?.route === `workspace/${connection.id}/${connection.revision}` ? catalog.metadata[draft.model] : undefined;
@@ -303,7 +312,7 @@ export function SettingsDialog({
                   </section>
                   <fieldset className="settings-group settings-model-selection" disabled={disabled || !!confirmation || connection.busy}>
                     <legend>Choose a model</legend>
-                    <ModelSelector key={`${settings.scope}-${connection.id}-${connection.revision}`} token={settings.token} scope="workspace" provider={connection.id} revision={connection.revision} model={browsing ? "" : draft.model} error={errors.model} disabled={disabled || !!confirmation || connection.busy} update={model => settings.updateModel({ provider: connection.id, id: model })} autoLoad onCatalog={setCatalog} />
+                    <ModelSelector idPrefix={embedded ? instance : ""} key={`${settings.scope}-${connection.id}-${connection.revision}`} token={settings.token} scope="workspace" provider={connection.id} revision={connection.revision} model={browsing ? "" : draft.model} error={errors.model} disabled={disabled || !!confirmation || connection.busy} update={model => settings.updateModel({ provider: connection.id, id: model })} autoLoad onCatalog={setCatalog} />
                     <p className="settings-origin">{bindingChanged ? `Unsaved ${settings.scope} model` : snapshot.model_binding_source === "startup" ? "Startup default" : global ? "Global default" : snapshot.model_binding_source === "global" ? "Inherited from Global" : "Workspace default"} · {draft.model_provider || "Startup connection"} / {draft.model}</p>
                     {!bindingChanged && snapshot.model_binding_available === false && <p className="error-text" role="status">{snapshot.model_binding_unavailable_reason || "The saved model connection is unavailable in this workspace."}</p>}
                     {global && !browsing && connection.origin === "workspace" && <p className="settings-origin">This global default uses a workspace connection. Other workspaces need a connection with this name.</p>}
@@ -311,7 +320,7 @@ export function SettingsDialog({
                   </fieldset>
                   <fieldset className="settings-group settings-tuning" disabled={disabled || !!confirmation}>
                     <legend>Reasoning &amp; context</legend>
-                    <ReasoningEffort id="settings-reasoning_effort" token={settings.token} scope="workspace"
+                    <ReasoningEffort id={fieldId("settings-reasoning_effort")}  token={settings.token} scope="workspace"
                       provider={draft.model_provider} model={draft.model}
                       knownOptions={metadata?.reasoning_efforts}
                       value={draft.reasoning_effort} error={errors.reasoning_effort} disabled={disabled || !!confirmation}
@@ -323,15 +332,15 @@ export function SettingsDialog({
                 disabled={disabled || !!confirmation}
               >
                 <legend>Agent profile and permissions</legend>
-                <label className="settings-checkbox"><input id="settings-read_only" type="checkbox" aria-describedby="settings-read_only-help" checked={draft.read_only || !!snapshot.read_only_locked} disabled={disabled || !!confirmation || !!snapshot.read_only_locked} onChange={(event) => settings.update("read_only", event.target.checked)} />Read-only workspace</label>
-                <p id="settings-read_only-help">{snapshot.read_only_locked ? "Read-only operation is required by the startup configuration." : "Limit agents to inspection: file changes, shell, and custom tools remain blocked."}{!snapshot.read_only_locked && origin("read_only")}</p>
+                <label className="settings-checkbox"><input id={fieldId("settings-read_only")}  type="checkbox" aria-describedby={fieldId("settings-read_only-help")}  checked={draft.read_only || !!snapshot.read_only_locked} disabled={disabled || !!confirmation || !!snapshot.read_only_locked} onChange={(event) => settings.update("read_only", event.target.checked)} />Read-only workspace</label>
+                <p id={fieldId("settings-read_only-help")} >{snapshot.read_only_locked ? "Read-only operation is required by the startup configuration." : "Limit agents to inspection: file changes, shell, and custom tools remain blocked."}{!snapshot.read_only_locked && origin("read_only")}</p>
                 <div className="settings-field">
-                  <label htmlFor="settings-agent">Workspace default agent</label>
+                  <label htmlFor={fieldId("settings-agent")} >Workspace default agent</label>
                   <select
-                    id="settings-agent"
+                    id={fieldId("settings-agent")}
                     disabled={global}
                     value={draft.agent}
-                    aria-describedby={`settings-agent-help${errors.agent ? " settings-agent-error" : ""}`}
+                    aria-describedby={fieldId(`settings-agent-help${errors.agent ? " settings-agent-error" : ""}`)}
                     aria-invalid={!!errors.agent}
                     onChange={(event) =>
                       settings.update("agent", event.target.value)
@@ -350,7 +359,7 @@ export function SettingsDialog({
                       </option>
                     ))}
                   </select>
-                   <p id="settings-agent-help">{global ? "Agent profiles belong to individual workspaces." : "Used for new chats. Existing conversations keep their selected agent. Profiles may set their own model or connection."}</p>
+                   <p id={fieldId("settings-agent-help")} >{global ? "Agent profiles belong to individual workspaces." : "Used for new chats. Existing conversations keep their selected agent. Profiles may set their own model or connection."}</p>
                   {snapshot.profiles.find(profile => profile.name === draft.agent)?.source && (
                     <p>Source: <code>{snapshot.profiles.find(profile => profile.name === draft.agent)?.source}</code></p>
                   )}
@@ -360,7 +369,7 @@ export function SettingsDialog({
                     </details>
                   )}
                   {errors.agent && (
-                    <p id="settings-agent-error" className="error-text">
+                    <p id={fieldId("settings-agent-error")}  className="error-text">
                       {errors.agent}
                     </p>
                   )}
@@ -368,12 +377,12 @@ export function SettingsDialog({
               </fieldset>
               <fieldset className="settings-group" disabled={disabled || !!confirmation}>
                 <legend>Message submission</legend>
-                <div className="settings-field"><label htmlFor="settings-submit_mode">When this conversation is working</label>
-                  <select id="settings-submit_mode" value={draft.submit_mode} aria-invalid={!!errors.submit_mode} aria-describedby="settings-submit-help" onChange={(event) => settings.update("submit_mode", event.target.value)}>
+                <div className="settings-field"><label htmlFor={fieldId("settings-submit_mode")} >When this conversation is working</label>
+                  <select id={fieldId("settings-submit_mode")}  value={draft.submit_mode} aria-invalid={!!errors.submit_mode} aria-describedby={fieldId("settings-submit-help")}  onChange={(event) => settings.update("submit_mode", event.target.value)}>
                     <option value="queue">Queue · finish current work first (default)</option>
                     <option value="interrupt">Interrupt · stop current work, then continue</option>
                   </select>
-                  <p id="settings-submit-help">New web messages are always saved to the queue. Interrupt also cancels the active run in this same conversation and waits for cleanup before processing queued messages.{origin("submit_mode")}</p>
+                  <p id={fieldId("settings-submit-help")} >New web messages are always saved to the queue. Interrupt also cancels the active run in this same conversation and waits for cleanup before processing queued messages.{origin("submit_mode")}</p>
                   {errors.submit_mode && <p className="error-text">{errors.submit_mode}</p>}
                 </div>
               </fieldset>
@@ -384,25 +393,25 @@ export function SettingsDialog({
                   <div className="settings-limits">
                     {executionLimits.map((limit) => (
                       <div className="settings-field" key={limit.key}>
-                        <label htmlFor={`settings-${limit.key}`}>{limit.label}</label>
+                        <label htmlFor={fieldId(`settings-${limit.key}`)}>{limit.label}</label>
                         <div className="settings-number">
                           <input
-                            id={`settings-${limit.key}`}
+                            id={fieldId(`settings-${limit.key}`)}
                             type="text"
                             inputMode={limit.key === "shell_timeout" ? "decimal" : "numeric"}
                             autoComplete="off"
                             spellCheck={false}
                             required
                             value={draft[limit.key]}
-                            aria-describedby={`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`}
+                            aria-describedby={fieldId(`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`)}
                             aria-invalid={!!errors[limit.key]}
                             onChange={(event) => settings.update(limit.key, event.target.value)}
                           />
                           <span aria-hidden="true">{limit.unit}</span>
                         </div>
-                        <p id={`settings-${limit.key}-help`}>{limit.help}{origin(limit.key)}</p>
+                        <p id={fieldId(`settings-${limit.key}-help`)}>{limit.help}{origin(limit.key)}</p>
                         {errors[limit.key] && (
-                          <p id={`settings-${limit.key}-error`} className="error-text">{errors[limit.key]}</p>
+                          <p id={fieldId(`settings-${limit.key}-error`)} className="error-text">{errors[limit.key]}</p>
                         )}
                       </div>
                     ))}
@@ -414,11 +423,11 @@ export function SettingsDialog({
                 <fieldset className="settings-group" disabled={disabled || !!confirmation}>
                   <legend className="sr-only">Context compaction</legend>
                   <div className="settings-field">
-                    <label htmlFor="settings-compact_trigger">Trigger</label>
+                    <label htmlFor={fieldId("settings-compact_trigger")} >Trigger</label>
                     <select
-                      id="settings-compact_trigger"
+                      id={fieldId("settings-compact_trigger")}
                       value={draft.compact_trigger}
-                      aria-describedby={`settings-compact_trigger-help${errors.compact_trigger ? " settings-compact_trigger-error" : ""}`}
+                      aria-describedby={fieldId(`settings-compact_trigger-help${errors.compact_trigger ? " settings-compact_trigger-error" : ""}`)}
                       aria-invalid={!!errors.compact_trigger}
                       onChange={(event) => settings.update("compact_trigger", event.target.value)}
                     >
@@ -427,7 +436,7 @@ export function SettingsDialog({
                       <option value="messages">Message count</option>
                       <option value="off">Off</option>
                     </select>
-                    <p id="settings-compact_trigger-help">
+                    <p id={fieldId("settings-compact_trigger-help")} >
                       Automatic compacts at 70% of the model&apos;s context window.
                       Token and message thresholds apply before the next model
                       call; off disables automatic compaction. Manual compaction
@@ -435,32 +444,32 @@ export function SettingsDialog({
                       {origin("compact_trigger")}
                     </p>
                     {errors.compact_trigger && (
-                      <p id="settings-compact_trigger-error" className="error-text">
+                      <p id={fieldId("settings-compact_trigger-error")}  className="error-text">
                         {errors.compact_trigger}
                       </p>
                     )}
                   </div>
                   {compactionLimits.map((limit) => (
                     <div className="settings-field" key={limit.key}>
-                      <label htmlFor={`settings-${limit.key}`}>{limit.label}</label>
+                      <label htmlFor={fieldId(`settings-${limit.key}`)}>{limit.label}</label>
                       <div className="settings-number">
                         <input
-                          id={`settings-${limit.key}`}
+                          id={fieldId(`settings-${limit.key}`)}
                           type="text"
                           inputMode="numeric"
                           autoComplete="off"
                           spellCheck={false}
                           required
                           value={draft[limit.key]}
-                          aria-describedby={`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`}
+                          aria-describedby={fieldId(`settings-${limit.key}-help${errors[limit.key] ? ` settings-${limit.key}-error` : ""}`)}
                           aria-invalid={!!errors[limit.key]}
                           onChange={(event) => settings.update(limit.key, event.target.value)}
                         />
                         <span aria-hidden="true">{limit.unit}</span>
                       </div>
-                      <p id={`settings-${limit.key}-help`}>{limit.help}{origin(limit.key)}</p>
+                      <p id={fieldId(`settings-${limit.key}-help`)}>{limit.help}{origin(limit.key)}</p>
                       {errors[limit.key] && (
-                        <p id={`settings-${limit.key}-error`} className="error-text">
+                        <p id={fieldId(`settings-${limit.key}-error`)} className="error-text">
                           {errors[limit.key]}
                         </p>
                       )}
@@ -470,8 +479,8 @@ export function SettingsDialog({
               </details>
               <details className="settings-disclosure">
                 <summary>Settings defaults</summary>
-                <section className="settings-reset" aria-labelledby="settings-reset-title">
-                  <h3 id="settings-reset-title">{global ? "Startup defaults" : "Inherited defaults"}</h3>
+                <section className="settings-reset" aria-labelledby={fieldId("settings-reset-title")} >
+                  <h3 id={fieldId("settings-reset-title")} >{global ? "Startup defaults" : "Inherited defaults"}</h3>
                   <p>Reset removes saved settings in this scope, not just this draft.</p>
                   <button
                     type="button"
@@ -489,8 +498,8 @@ export function SettingsDialog({
         </div>
         <footer className="settings-actions">
           <span>{settings.dirty ? `Unsaved ${settings.scope} settings` : connectionDirty ? "Unsaved connection edits" : "No unsaved changes"}</span>
-          <button type="button" disabled={pending || connectionBusy} onClick={settings.close}>
-            {settings.dirty || connectionDirty ? "Discard changes" : "Cancel"}
+          <button type="button" disabled={pending || connectionBusy} onClick={embedded ? () => void settings.reload() : settings.close}>
+            {embedded ? "Discard model draft" : settings.dirty || connectionDirty ? "Discard changes" : "Cancel"}
           </button>
           <button
             className="primary"
@@ -503,7 +512,7 @@ export function SettingsDialog({
           </button>
         </footer>
       </form>
-      {loginOpen && <LoginDialog token={settings.token} close={() => setLoginOpen(false)} applied={settings.refresh} />}
-    </dialog>
+      {loginOpen && <LoginDialog token={settings.token} close={() => setLoginOpen(false)} applied={connectionApplied} />}
+    </Surface>
   );
 }
