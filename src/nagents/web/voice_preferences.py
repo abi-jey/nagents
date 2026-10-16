@@ -113,7 +113,7 @@ class VoicePreferenceStore:
             )
         db.execute(
             "INSERT OR IGNORE INTO voice_global.ngn_voice_preferences VALUES (1, 1, ?, ?)",
-            (VoicePreferences().model_dump_json(), secrets.token_hex(32)),
+            (VoicePreferences().model_dump_json(exclude_unset=True), secrets.token_hex(32)),
         )
         with closing(db.execute("SELECT 1 FROM main.ngn_voice_preferences WHERE id = 1")) as cursor:
             workspace_exists = cursor.fetchone() is not None

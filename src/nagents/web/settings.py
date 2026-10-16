@@ -399,7 +399,7 @@ class WebSettings:
         if binding.id != values.model:
             raise ValueError("The selected model reference must match values.model")
         preference = self.harness.provider_store.agent_models.load(values.agent)
-        if preference.revision != "0" * 64:
+        if preference.model_present:
             if preference.binding.configured:
                 binding = preference.binding
         elif profile.model or profile.provider:
@@ -491,7 +491,7 @@ class WebSettings:
         # Model transactions apply their candidate to the runtime before commit.
         # The settings projection must keep its previously committed selection.
         preference = self.harness.provider_store.agent_models.load(self.values.agent)
-        if preference.revision != "0" * 64:
+        if preference.model_present:
             effective_model = preference.binding.id or self.values.model
         else:
             effective_model = profile.model or self.values.model

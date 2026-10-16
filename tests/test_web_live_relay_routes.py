@@ -130,7 +130,7 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                                 },
                             )
                             assert configured.status_code == 200
-                            revision = configured.json()["revision"]
+                            revision = (await client.get("/api/live", headers=headers)).json()["revision"]
                             phase = "provision"
                             response = await client.post(
                                 "/api/live/sessions",

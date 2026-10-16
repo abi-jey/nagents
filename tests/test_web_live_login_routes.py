@@ -172,7 +172,9 @@ async def configure(client: httpx.AsyncClient, headers: dict[str, str], **prefer
         },
     )
     assert result.status_code == 200, result.text
-    return str(result.json()["revision"])
+    capability = await client.get("/api/live", headers=headers)
+    assert capability.status_code == 200
+    return str(capability.json()["revision"])
 
 
 @pytest.mark.parametrize("auth", ["chatgpt", "auto"])
@@ -337,7 +339,10 @@ def test_voice_defaults_follow_auth_without_overwriting_saved_choices(
                 response = await client.post(
                     "/api/live/sessions",
                     headers=headers,
-                    json={"revision": current["revision"], "session_id": harnesses[0].session_id},
+                    json={
+                        "revision": (await client.get("/api/live", headers=headers)).json()["revision"],
+                        "session_id": harnesses[0].session_id,
+                    },
                 )
                 assert response.status_code == 201, response.text
                 assert response.json()["voice"] == expected_voice

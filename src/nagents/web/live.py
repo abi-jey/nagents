@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Annotated
+from typing import Literal
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -25,6 +26,8 @@ from nagents.live.delegation import ClientDelegationRequest
 from nagents.session import SessionManager
 
 from .live_login import LoginVoiceConfig
+from .live_settings import AgentVoiceInput
+from .live_settings import AgentVoiceRevision
 from .live_settings import GlobalVoiceInput
 from .live_settings import Revision
 from .live_settings import WorkspaceVoiceInput
@@ -226,18 +229,24 @@ def register(
         )
 
     @app.get("/api/live/settings")
-    async def connection_settings(scope: Scope) -> dict[str, object]:
-        return await settings().snapshot(scope)
+    async def connection_settings(scope: Scope | Literal["agent"], agent: str = "") -> dict[str, object]:
+        return await settings().snapshot(scope, agent)
 
     @app.post("/api/live/settings")
-    async def save_settings(body: GlobalVoiceInput | WorkspaceVoiceInput) -> dict[str, object]:
-        result = await settings().change(body)
+    async def save_settings(body: GlobalVoiceInput | WorkspaceVoiceInput | AgentVoiceInput) -> dict[str, object]:
+        result = (
+            await settings().change_agent(body) if isinstance(body, AgentVoiceInput) else await settings().change(body)
+        )
         logger.info(
             "Live settings saved: scope=%s source=%s",
             result["scope"],
             result["source"],
         )
         return result
+
+    @app.delete("/api/live/settings")
+    async def restore_agent_settings(body: AgentVoiceRevision) -> dict[str, object]:
+        return await settings().change_agent(body)
 
     @app.post("/api/live/sessions", status_code=201)
     async def create(body: SessionInput) -> dict[str, object]:

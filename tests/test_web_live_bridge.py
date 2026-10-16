@@ -792,11 +792,12 @@ def test_server_websocket_delegates_two_requests_to_selected_chat_without_restar
                     },
                 )
                 assert saved.status_code == 200
+                live_revision = (await client.get("/api/live", headers=headers)).json()["revision"]
                 created = await client.post(
                     "/api/live/sessions",
                     headers=headers,
                     json={
-                        "revision": saved.json()["revision"],
+                        "revision": live_revision,
                         "session_id": root,
                     },
                 )

@@ -12,11 +12,13 @@ import re
 import stat
 import tomllib
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import cast
 
 import yaml
 
+from .live_profiles import LiveProfile
 from .model_bindings import ModelBinding
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
@@ -47,12 +49,14 @@ class ParsedAgent:
     source_format: str = ""
     allowed_agents: tuple[str, ...] | None = None
     reasoning_effort: ReasoningPreference = ""
+    live: LiveProfile = field(default_factory=LiveProfile)
 
 
 @dataclass(frozen=True)
 class DefinitionBatch:
     profiles: tuple[ParsedAgent, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,7 @@ _FIELDS = {
         "subagent_available",
         "allowed_agents",
         "reasoning_effort",
+        "live",
     },
     "claude": {"name", "description", "model", "tools", "disallowedTools", "permissionMode"},
     "copilot": {"name", "description", "model", "tools", "user-invocable", "disable-model-invocation", "agents"},
@@ -291,7 +296,7 @@ def _markdown(source: str, fmt: str) -> tuple[dict[str, object], str]:
             return {}, source.strip()
         raise ValueError("expected YAML frontmatter beginning with ---")
     for index, line in enumerate(lines[1:], 1):
-        if line.strip() == "---":
+        if line.rstrip() == "---":
             return _yaml_header("".join(lines[1:index])), "".join(lines[index + 1 :]).strip()
     raise ValueError("YAML frontmatter is missing its closing --- delimiter")
 
@@ -428,6 +433,7 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         fmt,
         allowed_agents,
         cast("ReasoningPreference", effort),
+        LiveProfile.parse(data.get("live", {})),
     )
 
 
@@ -499,24 +505,29 @@ def discover_agents(base: Path, *, personal: bool = False) -> DefinitionBatch:
     profiles: dict[str, ParsedAgent] = {}
     diagnostics: list[str] = []
     scanned = 0
+    failed = False
     for root, fmt in _roots(base.absolute(), personal):
-        for path in _paths(root, fmt, diagnostics):
+        before = len(diagnostics)
+        paths = _paths(root, fmt, diagnostics)
+        failed = failed or len(diagnostics) > before
+        for path in paths:
             scanned += 1
             if scanned > MAX_AGENT_FILES:
                 diagnostics.append(
                     f"{root}: agent discovery exceeded {MAX_AGENT_FILES} files; remaining sources skipped"
                 )
-                return DefinitionBatch(tuple(profiles.values()), tuple(diagnostics))
+                return DefinitionBatch(tuple(profiles.values()), tuple(diagnostics), True)
             try:
                 profile = _parse(path, _Import(fmt))
             except (OSError, ValueError, yaml.YAMLError) as exc:
+                failed = True
                 diagnostics.append(f"{path}: {exc}")
                 continue
             if profile.name in profiles:
                 diagnostics.append(f"{profile.source}: agent {profile.name!r} replaces {profiles[profile.name].source}")
                 del profiles[profile.name]
             profiles[profile.name] = profile
-    return DefinitionBatch(tuple(profiles.values()), tuple(diagnostics))
+    return DefinitionBatch(tuple(profiles.values()), tuple(diagnostics), failed)
 
 
 def import_agents(value: object, directory: Path) -> DefinitionBatch:
@@ -527,7 +538,9 @@ def import_agents(value: object, directory: Path) -> DefinitionBatch:
     symlinks. Invalid entries produce diagnostics without executing anything.
     """
     if not isinstance(value, list) or len(value) > MAX_AGENT_FILES:
-        return DefinitionBatch(diagnostics=(f"agent_imports must be a list of at most {MAX_AGENT_FILES} imports",))
+        return DefinitionBatch(
+            diagnostics=(f"agent_imports must be a list of at most {MAX_AGENT_FILES} imports",), failed=True
+        )
     profiles: list[ParsedAgent] = []
     diagnostics: list[str] = []
     scanned = 0
@@ -567,11 +580,11 @@ def import_agents(value: object, directory: Path) -> DefinitionBatch:
                     diagnostics.append(
                         f"{source}: agent imports exceeded {MAX_AGENT_FILES} files; remaining sources skipped"
                     )
-                    return DefinitionBatch(tuple(profiles), tuple(diagnostics))
+                    return DefinitionBatch(tuple(profiles), tuple(diagnostics), bool(diagnostics))
                 try:
                     profiles.append(_parse(source, options))
                 except (OSError, ValueError, yaml.YAMLError) as exc:
                     diagnostics.append(f"{source}: {exc}")
         except (OSError, ValueError, yaml.YAMLError) as exc:
             diagnostics.append(f"{label}: {exc}")
-    return DefinitionBatch(tuple(profiles), tuple(diagnostics))
+    return DefinitionBatch(tuple(profiles), tuple(diagnostics), bool(diagnostics))

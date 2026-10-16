@@ -83,9 +83,9 @@ The first named connection becomes active if no global default exists. A workspa
 can use a global connection or its own connection; **Use global connection** removes
 the workspace selection. Activating another switches chat's
 provider; trusted agent profiles may also bind to a named provider. Voice
-models, backend mode and voice are separate Global/Workspace preferences in
+models, backend mode and voice are separate Global, Workspace, and Agent preferences in
 the settings icon beside **Voice**. Select a voice connection there or follow the active
-chat connection. Every browser voice connection uses the same-origin ngn audio
+provider-registry default connection. Every browser voice connection uses the same-origin ngn audio
 relay. The server owns ChatGPT/Codex media and control connections, or the Live
 WebSocket for supported API-key and Foundry connections. The **Main assistant**
 voice backend delegates reasoning to the selected conversation agent; **Separate hosted
@@ -1194,9 +1194,9 @@ and [delegation guide](https://developers.openai.com/api/docs/guides/live-delega
 3. For an OpenAI connection, choose **ChatGPT login** or **Local Codex login** to
    use your existing account. API-key connections and Foundry Entra ID remain
    supported. Use the settings icon beside **Voice**, or **Audio** during voice.
-4. Select **Global** for defaults shared by workspaces or **This workspace** to
-   override only chosen fields. Select the **Voice connection**, or leave it set
-   to follow the active provider connection. Set **Enable GPT-Live**, **GPT-Live model**,
+4. Select **Global** for defaults shared by workspaces, **Workspace** for local
+   overrides, or an **Agent** for that profile's Live settings. Select the **Voice connection**, or leave it set
+   to follow the provider registry's default connection. Set **Enable GPT-Live**, **GPT-Live model**,
    **Hosted backend model**, and **Default voice** independently of provider
    connection and chat model selection. Unticked workspace fields follow later
    global changes. Choose the reasoning backend. **Main assistant (selected chat provider)** is the
@@ -1213,7 +1213,12 @@ ChatGPT/Codex login uses `gpt-live-1-codex` for the default voice model and defa
 `sol`; its available voices are shown in the selector. Saved voice choices are preserved.
 The selected connection's supported voice is resolved without changing your saved defaults for other
 connections. Voice, model, and connection settings survive server restarts and
-apply to new sessions.
+apply to new sessions. Agent fields inherit workspace, global, then built-in values.
+The normal chat model and Live model remain separate. Saving an empty agent Live
+profile explicitly uses workspace defaults; **Restore definition** reveals the
+source profile again. A call captures the selected chat agent's Live profile at
+admission and keeps it throughout the call, including after settings edits or
+later agent selection changes.
 
 **Audio** in the composer selects the microphone and speaker. Both start
 at **System default**, allowing the browser to use your device's default input and
@@ -1381,8 +1386,8 @@ when locally ready and the active ID is empty when there is no active call.
 `global_preferences`, the workspace `overrides`, per-field `origins`, connection
 reference and a 64-character hexadecimal revision. The workspace's missing
 override fields inherit global values. Voice preferences are `{enabled,
-connection_id, backend_mode, model, backend_model, voice}`; an empty `connection_id`
-follows the active chat connection. An explicit ID selects a voice connection
+connection_id, backend_mode, model, backend_model, voice, instructions, context_mode}`; an empty `connection_id`
+follows the configured provider-registry default, independently of the normal agent model. An explicit ID selects a voice connection
 without changing the assistant. `backend_model` is used in hosted
 mode only. The provider and base URL in `values` describe the selected connection
 and cannot be changed by Voice settings. `POST /api/live/settings` accepts
@@ -1390,21 +1395,36 @@ and cannot be changed by Voice settings. `POST /api/live/settings` accepts
 overrides}`. An empty overrides object clears every workspace override. Unknown
 fields and invalid input are rejected without echoing values.
 
+`GET /api/live/settings?scope=agent&agent=NAME` additionally returns nested
+`effective` and `inherited` Live profiles, `origins`, `definition_live`,
+`agent_overrides`, saved `overrides`, `saved_live_present`, and preference and
+accepted-definition revisions. The nested model is `{provider, id}` and must name
+an existing connection. `POST /api/live/settings` also accepts
+`{scope:"agent", agent, revision, overrides}`. This replaces the saved Live layer;
+`overrides: {}` explicitly inherits workspace/global values.
+`DELETE /api/live/settings` with `{scope:"agent", agent, revision}` removes only the saved
+Live section and restores the source definition. Other agent preference sections
+are preserved by every save/reset.
+
 Both reads and writes require an explicit scope. Configure authentication in the
 provider registry; Voice preferences select a connection and contain no API keys.
 
-Each scope has a revisioned SQLite record. Global defaults live under the ngn
+Global and workspace scopes have revisioned SQLite records; agent Live preferences
+share the revisioned Markdown operator overlay. Global defaults live under the ngn
 configuration directory and workspace overrides in the workspace session DB;
-reads and writes span both in one SQLite transaction. The active provider's v1
-YAML `live` preferences are imported once into the appropriate scope if no record
-exists. They do not overwrite subsequent Voice edits. Provider YAML is never
-updated by Voice settings. Competing saves use the stored revision. A stale
+reads and writes span both in one SQLite transaction. Existing saved preferences
+are retained, including historical automatic connection selection. Retired
+workspace Live settings are imported only when no current workspace record
+exists. Provider credentials and registry files are never rewritten by Voice
+settings. Competing saves use the stored revision. A stale
 revision or a busy Live service returns `409`; reload settings before retrying.
 If a save acknowledgement is lost, fetch the settings again to see the committed
 state. Cancellation waits for an admitted transaction to finish.
 
-Creation requires the current committed `revision` and an optional supported
-voice string (`""` means the configured default). Main assistant mode also
+Creation requires the current `revision` returned by `GET /api/live`, which binds
+the current chat target agent, accepted definition generation, and preferences.
+An optional supported voice string overrides the configured default (`""` uses
+that default). Main assistant mode also
 requires the **selected root `session_id`**, which binds all delegated work and
 approvals to that chat even if another tab changes the selection. A stale
 permission-pending tab receives `409` before provider setup. Admission captures

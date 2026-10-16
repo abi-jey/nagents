@@ -157,7 +157,7 @@ def test_concurrent_agent_preference_writes_have_one_winner(tmp_path: Path) -> N
     [
         "",
         "---\nmodel: {provider: home, id: okay}\n---\nInstructions are not allowed.\n",
-        "---\nmodel: {provider: home, id: okay}\ntools: [shell]\n---\n",
+        "---\nmodel: {provider: home, id: okay}\npermissions: [shell]\n---\n",
         "---\nmodel: {provider: home, id: first, id: second}\n---\n",
         "---\nmodel: &reference {provider: home, id: okay}\n---\n",
         "---\nmodel: {provider: home, id: 123}\n---\n",
