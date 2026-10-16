@@ -63,8 +63,8 @@ export function useClient() {
     { active: !!chat.runId, revision: chat.contextRevision, enabled: !sessions.activityOnly,
       configuration },
   );
-  const membership = useSessionActions({ sessions, chat, operations, busy,
-    blocked: channels.open || settings.open || skills.open || sessionAgent.open || panel !== "none" || !!chat.approval.pending });
+  const membership = useSessionActions({ sessions, chat, operations,
+    blocked: channels.open || settings.open || skills.open || sessionAgent.open || panel !== "none" });
 
   function access() {
     return availability({

@@ -142,6 +142,12 @@ class Wakeups:
         self._bytes = sum(size for _, _, size in self._events)
         self._discarded = self.cursor
 
+    def cancel_session(self, session_id: str) -> None:
+        """Revoke every pending/claimed timer chain owned by this chat."""
+        for wakeup in (*self.pending.values(), *self._claimed.values()):
+            if wakeup.session_id == session_id:
+                self.cancel(wakeup.chain)
+
     def activity(self, session_id: str, after: int, active_run_id: str) -> dict[str, object]:
         return {
             "session_id": session_id,

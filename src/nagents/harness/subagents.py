@@ -1129,3 +1129,86 @@ class SubagentManager:
 
             self._shutdown = asyncio.create_task(stop(), name="ngn-subagent-cleanup")
         await _await_cleanup(self._shutdown)
+
+    async def release_session(self, session_id: str) -> builtins.list[TaskInfo]:
+        """Forget a stopped root's descendants without closing the shared harness.
+
+        The host must stop the root run and exclude new admissions first. Child
+        workers own their resource cleanup, so join them before removing any
+        shared registry entries. Saved histories remain the host's responsibility.
+        Return detached terminal metadata for the host's history journal. Other
+        sessions retained by this manager are unaffected.
+        """
+        if self is not self.root:
+            raise PermissionError("Only the root harness can release a session's tasks")
+        if (self._active and self._session_id == session_id) or (
+            self.harness._busy == "run" and self.harness.session_id == session_id
+        ):
+            raise RuntimeError("Stop the root run before releasing its descendant tasks")
+
+        async def release() -> builtins.list[TaskInfo]:
+            identifiers = {info.id for info in self._infos.values() if info.session_id == session_id}
+            workers = [worker for task_id, worker in self._workers.items() if task_id in identifiers]
+            for worker in workers:
+                if not worker.done():
+                    worker.cancel()
+            if workers:
+                await asyncio.gather(*workers, return_exceptions=True)
+            if self._session_id == session_id and self._shutdown is not None:
+                await _await_cleanup(self._shutdown)
+            released = []
+            for task_id in identifiers:
+                info = self._infos[task_id]
+                if info.status == "running":
+                    info.status = "cancelled"
+                    info.error = "Session removed before completion; this task will not be replayed."
+                    info.phase = info.status
+                    info.updated_at = info.completed_at = time.time()
+                released.append(copy.deepcopy(info))
+            # Child managers share the flat registry, but each owns its inbox.
+            # No await after this point: observers cannot see half-removed trees.
+            managers = [self, *(child.tasks for child in self._children.values())]
+            for manager in managers:
+                if manager is not self and manager.harness._task_id in identifiers:
+                    manager._active = False
+                    manager._ready.clear()
+                    manager._observed.clear()
+                    manager._pending.clear()
+                elif manager is self and self._session_id == session_id:
+                    manager._ready.clear()
+                    manager._observed.clear()
+                    manager._pending.clear()
+                else:
+                    manager._ready = deque(event for event in manager._ready if event.task_id not in identifiers)
+                    manager._observed = deque(
+                        event
+                        for event in manager._observed
+                        if not isinstance(event, TaskCompleted | TaskMessage | TaskDeliveryWarning)
+                        or event.task_id not in identifiers
+                    )
+                    manager._pending = {
+                        parent: [event for event in events if event.task_id not in identifiers]
+                        for parent, events in manager._pending.items()
+                        if parent not in identifiers
+                    }
+                manager.notification_sources = tuple(
+                    task_id for task_id in manager.notification_sources if task_id not in identifiers
+                )
+                manager._changed.set()
+            for task_id in identifiers:
+                self._workers.pop(task_id, None)
+                self._children.pop(task_id, None)
+                self._profile_snapshots.pop(task_id, None)
+                self._model_snapshots.pop(task_id, None)
+                self._options.pop(task_id, None)
+                self._next_options.pop(task_id, None)
+                self._provider_overrides.pop(task_id, None)
+                self._next_providers.pop(task_id, None)
+                self._inputs.pop(task_id, None)
+                self._admitted.pop(task_id, None)
+                self._initial_inputs.pop(task_id, None)
+                self._infos.pop(task_id, None)
+            self._activity_gaps.difference_update(identifiers)
+            return released
+
+        return await _await_cleanup(asyncio.create_task(release(), name="ngn-subagent-session-release"))

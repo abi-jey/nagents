@@ -18,7 +18,6 @@ from fastapi import HTTPException
 from nagents.channels.store import InboxStore
 from nagents.channels.store import finish_on_cancel
 from nagents.channels.types import ChannelCommand
-from nagents.harness.subagents import TaskInfo
 from nagents.types import Message
 from nagents.web import deletion
 from nagents.web.catalog import Connection
@@ -28,7 +27,6 @@ from nagents.web.subscriptions import Subscriber
 from nagents.web.trash import PURGE_BATCH
 from nagents.web.trash import SessionTrash
 from nagents.web.trash import TrashItem
-from nagents.web.wakeups import Chain
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.web.test_web_deletion import quiet
@@ -380,13 +378,7 @@ def test_recovered_dangling_binding_or_queued_ack_cannot_replay_trash(tmp_path: 
 
 @pytest.mark.parametrize(
     "guard",
-    [
-        "active",
-        "busy",
-        "retained",
-        "worker",
-        "wakeup",
-    ],
+    ["busy"],
 )
 def test_soft_delete_keeps_process_owned_work_guards(tmp_path: Path, clock: Clock, guard: str) -> None:
     async def run() -> None:
@@ -394,19 +386,7 @@ def test_soft_delete_keeps_process_owned_work_guards(tmp_path: Path, clock: Cloc
             state = cast("WebState", app.state.web)
             await quiet(state)
             root = state.selected_session_id
-            worker = asyncio.create_task(asyncio.sleep(3600))
-            if guard == "active":
-                state.active = Run("ngn-other-active")
-            elif guard == "busy":
-                state.harness._busy = "compaction"
-            elif guard == "retained":
-                state.harness.tasks._infos["retained"] = TaskInfo(
-                    "retained", "child", session_id=root, status="completed"
-                )
-            elif guard == "worker":
-                state.harness.tasks._workers["worker"] = worker
-            else:
-                state.wakeups.schedule(root, "run", Chain(), "", 86400, "later")
+            state.harness._busy = "compaction"
             try:
                 response = await client.request("DELETE", f"/api/sessions/{root}", headers=headers, json={})
                 assert response.status_code == 409, response.text
@@ -416,10 +396,6 @@ def test_soft_delete_keeps_process_owned_work_guards(tmp_path: Path, clock: Cloc
             finally:
                 state.active = None
                 state.harness._busy = ""
-                state.harness.tasks._infos.clear()
-                state.harness.tasks._workers.clear()
-                worker.cancel()
-                await asyncio.gather(worker, return_exceptions=True)
 
     asyncio.run(run())
 

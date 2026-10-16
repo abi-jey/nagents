@@ -20,9 +20,9 @@ export function SessionRow({ session, selected, disabled, canDelete, canFork, se
       <small className="sr-only">Updated {session.updated_at.slice(0, 10)}</small>
     </button>
     <button className="session-delete" aria-label={`Move to Trash: ${session.title || "New session"}`}
-      title="Move to Trash" disabled={!canDelete || !!session.active_run_id}
+      title="Move to Trash and stop this chat’s agents" disabled={!canDelete}
       onClick={() => remove(session)}><Icon name="trash" size={15} /></button>
-    <SessionMenu session={session} disabled={!canDelete || !!session.active_run_id} permanent={permanent} move={move}
+    <SessionMenu session={session} disabled={!canDelete} permanent={permanent} move={move}
       rename={!disabled && rename ? () => rename(session) : undefined}
       fork={fork ? () => fork(session) : undefined} forkDisabled={disabled || !canFork} contextTarget={row} />
   </div>;

@@ -18,10 +18,10 @@ from fastapi import HTTPException
 
 from ._async import finish_on_cancel
 from ._async import join_owned as _join
-from .deletion import _guard_process
 from .deletion import _guard_rows
 from .deletion import _quarantine_pending
 from .deletion import _release_bindings
+from .deletion import _release_process
 from .deletion import _remove_content
 from .deletion import _repoint_mains
 from .deletion import _selection
@@ -72,12 +72,11 @@ class SessionTrash:
         self._purge_after = _PURGE_START
 
     @contextmanager
-    def _idle(self, operation: str) -> Iterator[None]:
-        with self.state.idle():
-            if self.state.harness._busy:
+    def _mutation(self) -> Iterator[None]:
+        with self.state.idle(allow_running=True):
+            if self.state.harness._busy and not self.state.executions.in_use(self.state.harness):
                 raise HTTPException(409, "Harness busy. Finish the active operation before changing Trash.")
-            with self.state.harness.operation(operation):
-                yield
+            yield
 
     async def initialize(self) -> None:
         def initialize(db: sqlite3.Connection) -> None:
@@ -136,7 +135,7 @@ class SessionTrash:
                     raise HTTPException(409, "Trash settings changed. Refresh before saving again.")
             return self._snapshot(db)
 
-        with self._idle("change trash settings"), anyio.CancelScope(shield=True):
+        with self._mutation(), anyio.CancelScope(shield=True):
             result = await finish_on_cancel(self.store._transaction(change))
         return result
 
@@ -174,9 +173,9 @@ class SessionTrash:
             self._generation(db, session_id, existing.deletion_id)
             return _selection(db, selected), existing
         RoutingStore.root(db, session_id)
-        _guard_rows(db, session_id)
+        tables = _guard_rows(db, session_id)
         _release_bindings(db, session_id)
-        _quarantine_pending(db, session_id)
+        _quarantine_pending(db, session_id, tables)
         with closing(db.execute("SELECT title FROM harness_sessions WHERE id = ?", (session_id,))) as cursor:
             title = str(cursor.fetchone()[0])
         with closing(db.execute("SELECT retention_days FROM ngn_web_trash_policy WHERE id = 1")) as cursor:
@@ -205,7 +204,6 @@ class SessionTrash:
         state = self.state
 
         async def finish() -> dict[str, object]:
-            _guard_process(state, session_id)
             await self.store._transaction(lambda db: self._restore_rows(db, session_id, deletion_id))
             # Invalidate joined membership readers before the first post-commit await.
             state.session_revision += 1
@@ -213,7 +211,7 @@ class SessionTrash:
             state.bus.publish({"type": "sessions", "sessions": sessions})
             return {"restored_session_id": session_id, "sessions": sessions}
 
-        with self._idle("restore session"), anyio.CancelScope(shield=True):
+        with self._mutation(), anyio.CancelScope(shield=True):
             result = await finish_on_cancel(finish())
         return result
 
@@ -227,16 +225,21 @@ class SessionTrash:
         db.execute("DELETE FROM ngn_web_session_trash WHERE id = ? AND deletion_id = ?", (session_id, deletion_id))
 
     async def _purge(self, session_id: str, deletion_id: str, *, expired: bool = False) -> None:
-        _guard_process(self.state, session_id)
-        await self.store._transaction(lambda db: self._purge_rows(db, session_id, deletion_id, expired=expired))
+        async with self.state.tasks.admission:
+            # Reject stale generations before stopping any retained runtime.
+            await self.store._transaction(lambda db: self._generation(db, session_id, deletion_id))
+            await _release_process(self.state, session_id, journal=False)
+            await self.store._transaction(lambda db: self._purge_rows(db, session_id, deletion_id, expired=expired))
         _repoint_mains(self.state, session_id, self.state.selected_session_id)
         self.state.bus.delete_session(session_id)
         self.state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
         self.state.wakeups.forget_session(session_id)
+        await self.state.executions.dispose(session_id)
 
     async def purge(self, session_id: str, deletion_id: str) -> dict[str, object]:
-        with self._idle("purge session"), anyio.CancelScope(shield=True):
-            await finish_on_cancel(self._purge(session_id, deletion_id))
+        async with self.state.queued_mutation():
+            with anyio.CancelScope(shield=True):
+                await finish_on_cancel(self._purge(session_id, deletion_id))
         return {"purged_session_id": session_id}
 
     async def purge_expired(self) -> list[str]:
@@ -280,7 +283,7 @@ class SessionTrash:
                     purged.append(item.id)
             return purged
 
-        with self._idle("purge expired trash"), anyio.CancelScope(shield=True):
+        with self._mutation(), anyio.CancelScope(shield=True):
             result = await finish_on_cancel(finish())
         return result
 

@@ -1,10 +1,14 @@
-"""Root-only deletion at a web idle boundary, with one owned SQLite transaction."""
+"""Cancel a root's task tree before its owned deletion transaction."""
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 from contextlib import closing
+from contextlib import suppress
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 import anyio
@@ -13,6 +17,7 @@ from fastapi import HTTPException
 from nagents.session.deliveries import cleanup_deliveries
 
 from ._async import finish_on_cancel
+from ._async import join_owned
 from .routing import RoutingStore
 
 if TYPE_CHECKING:
@@ -67,7 +72,7 @@ def _release_bindings(db: sqlite3.Connection, session_id: str) -> None:
         pass
 
 
-def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
+def _quarantine_pending(db: sqlite3.Connection, session_id: str, tables: set[str]) -> None:
     """Make a soft-deleted root's pending work terminal and dedup-safe.
 
     Rows stay for restore/history joins, but a late connector redelivery of the
@@ -84,6 +89,21 @@ def _quarantine_pending(db: sqlite3.Connection, session_id: str) -> None:
         )
     ):
         pass
+    # A stopped runtime may have failed to journal its last lifecycle event.
+    # Restore must never present those saved descendants as still running.
+    tasks = (
+        db.execute("SELECT task_id, data FROM ngn_web_tasks WHERE root = ?", (session_id,)).fetchall()
+        if "ngn_web_tasks" in tables
+        else []
+    )
+    for task_id, data in tasks:
+        task = json.loads(data)
+        if task.get("status") == "running":
+            task.update(status="cancelled", phase="cancelled", error="Session removed before completion.")
+            db.execute(
+                "UPDATE ngn_web_tasks SET data = ? WHERE root = ? AND task_id = ?",
+                (json.dumps(task), session_id, task_id),
+            )
     with closing(
         db.execute(
             "UPDATE ngn_web_inbox SET status = 'interrupted' "
@@ -152,22 +172,49 @@ def _delete_rows(db: sqlite3.Connection, session_id: str, selected: str) -> str:
     return _selection(db, selected)
 
 
-def _guard_process(state: WebState, session_id: str) -> None:
+async def _release_process(state: WebState, session_id: str, *, journal: bool = True) -> None:
+    """Join the exact root before deleting data that its producers could recreate.
+
+    The caller owns the host mutation boundary and task-input admission lock.
+    Other execution lanes keep running; neither their task managers nor the
+    shared credential owner are shut down.
+    """
     harness = state.harness_for(session_id)
-    if any(info.session_id == session_id for info in harness.tasks._infos.values()):
-        raise HTTPException(
-            409,
-            "Session has retained descendant tasks. Finish or cancel them, then restart ngn before "
-            "deleting this root. Retained task handles expire on restart; child history is kept.",
-        )
-    if any(
-        not worker.done()
-        for owner in {state.harness, *state.executions.owners.values()}
-        for worker in owner.tasks._workers.values()
-    ):
-        raise HTTPException(409, "Descendant tasks are still running. Finish or cancel them before deleting.")
-    if any(item.session_id == session_id for item in state.wakeups.pending.values()):
-        raise HTTPException(409, "Session has pending wakeups. Let them finish or cancel their run before deleting.")
+    run = state.run_for(session_id)
+    state.wakeups.cancel_session(session_id)
+    if run is not None:
+        await state.stop(run)
+    if claim := state.channels.work_tasks.get(session_id):
+        # The producer can finish before its outer durable-inbox finalizer.
+        # Join that writer as well before deleting its session's rows.
+        with suppress(asyncio.CancelledError):
+            await join_owned(claim)
+    await state.channels.join_claim_cleanup(session_id)
+    owners = {harness, state.harness, *state.executions.owners.values()}
+    released = 0
+    for owner in owners:
+        # Persist even a child whose startup event had not reached the web
+        # journal when cancellation won. Ownership comes from the task manager,
+        # never a child-session name prefix.
+        if journal:
+            for info in tuple(owner.tasks._infos.values()):
+                if info.session_id == session_id:
+                    await state.tasks.store.save(session_id, state.tasks.task(asdict(info), owner))
+        infos = await owner.tasks.release_session(session_id)
+        released += len(infos)
+        if journal:
+            for info in infos:
+                await state.tasks.store.save(session_id, state.tasks.task(asdict(info), owner))
+    state.tasks.forget_session(session_id)
+    logger.info("Session task tree released: session=%s tasks=%d stopped_run=%s", session_id, released, run is not None)
+
+
+def _validate_removal(state: WebState, db: sqlite3.Connection, session_id: str, permanent: bool) -> None:
+    if not permanent and (item := state.trash._find(db, session_id)) is not None:
+        state.trash._generation(db, session_id, item.deletion_id)
+    else:
+        RoutingStore.root(db, session_id)
+    _guard_rows(db, session_id)
 
 
 def _repoint_mains(state: WebState, session_id: str, selected: str) -> None:
@@ -196,44 +243,45 @@ def _repoint_mains(state: WebState, session_id: str, selected: str) -> None:
 
 
 async def delete_session(state: WebState, session_id: str, *, permanent: bool = False) -> dict[str, object]:
-    async with state.queued_mutation(allow_running=False):
-        harness = state.harness
-        if harness._busy:
-            raise HTTPException(409, "Harness busy. Finish the active operation before deleting.")
-        with harness.operation("delete session"):
+    # Exclude new scheduler claims and join task-input admissions before stopping
+    # the target tree. Keep both boundaries through cancellation and the commit.
+    async with state.queued_mutation(), state.tasks.admission:
 
-            async def remove() -> dict[str, object]:
-                # Retained handles can resume descendants and carry notification
-                # queues. Fail closed rather than partially dismantling the task
-                # registry or guessing ownership of raw child rows after restart.
-                _guard_process(state, session_id)
-                extra: dict[str, object] = {}
-                if permanent:
-                    selected = await state.channels.store._transaction(
-                        lambda db: _delete_rows(db, session_id, state.selected_session_id)
-                    )
-                else:
-                    selected, item = await state.channels.store._transaction(
-                        lambda db: state.trash.remove_rows(db, session_id, state.selected_session_id)
-                    )
-                    extra["trash"] = item.wire()
-                # Repoint connector mains before memory invalidation so no reader
-                # ever sees a configured main that no longer exists.
-                _repoint_mains(state, session_id, selected)
-                # No await between commit acknowledgement and memory invalidation.
-                # The enclosing owned task joins this even if HTTP is cancelled.
-                state.selected_session_id = selected
-                state.session_revision += 1
-                if harness.session_id == session_id:
-                    harness.session_id = selected
-                    harness.tools.read_hashes.clear()
-                state.bus.delete_session(session_id)
-                state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
-                state.wakeups.forget_session(session_id)
-                result = await state.snapshot(selected)
-                state.bus.publish({"type": "sessions", "sessions": result["sessions"]})
-                return {**result, "deleted_session_id": session_id, **extra}
+        async def remove() -> dict[str, object]:
+            owner = state.harness_for(session_id)
+            if owner.session_id == session_id and owner._busy and state.run_for(session_id) is None:
+                raise HTTPException(409, "This chat is updating. Retry deletion when the update finishes.")
+            await state.channels.store._transaction(lambda db: _validate_removal(state, db, session_id, permanent))
+            await _release_process(state, session_id)
+            extra: dict[str, object] = {}
+            if permanent:
+                selected = await state.channels.store._transaction(
+                    lambda db: _delete_rows(db, session_id, state.selected_session_id)
+                )
+            else:
+                selected, item = await state.channels.store._transaction(
+                    lambda db: state.trash.remove_rows(db, session_id, state.selected_session_id)
+                )
+                extra["trash"] = item.wire()
+            # Repoint connector mains before memory invalidation so no reader
+            # ever sees a configured main that no longer exists.
+            _repoint_mains(state, session_id, selected)
+            # No await between commit acknowledgement and memory invalidation.
+            # The enclosing owned task joins this even if HTTP is cancelled.
+            state.selected_session_id = selected
+            state.session_revision += 1
+            harness = state.harness
+            if harness.session_id == session_id:
+                harness.session_id = selected
+                harness.tools.read_hashes.clear()
+            state.bus.delete_session(session_id)
+            state.observe_run(None, {"event": "session_deleted", "session_id": session_id})
+            state.wakeups.forget_session(session_id)
+            await state.executions.dispose(session_id)
+            result = await state.snapshot(selected)
+            state.bus.publish({"type": "sessions", "sessions": result["sessions"]})
+            return {**result, "deleted_session_id": session_id, **extra}
 
-            with anyio.CancelScope(shield=True):
-                result = await finish_on_cancel(remove())
-            return result
+        with anyio.CancelScope(shield=True):
+            result = await finish_on_cancel(remove())
+        return result

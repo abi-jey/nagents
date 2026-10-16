@@ -34,7 +34,7 @@ export function WorkspaceDialogs({ client, select, closePanel }: {
     {client.sessionAgent.open && <SessionAgentPicker {...client.sessionAgent} />}
     {client.trash.open && <TrashDialog state={client.trash} controller={client.trashController}
       permanent={(item) => client.deletionController.showTrash(item)} openSession={openRestored}
-       blocked={client.busy} openDisabled={false} />}
+       blocked={client.operating} openDisabled={false} />}
     {client.deletion.target && <DeleteSessionDialog state={client.deletion} controller={client.deletionController} currentSessionId={sessions.sessionId} />}
     {client.channels.open && <ChannelsDialog channels={client.channels} sessions={sessions.sessions} selected={sessions.sessionId} />}
     <ApprovalReview sessionId={sessions.sessionId} pending={chat.approval.pending}

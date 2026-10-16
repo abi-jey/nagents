@@ -62,9 +62,8 @@ async def rows(state: WebState, sql: str, *parameters: str) -> list[tuple[object
 
 
 @pytest.mark.parametrize("permanent", [False, True])
-@pytest.mark.parametrize("admit_run", [False, True])
 def test_deletion_waits_for_bookkeeping_and_rechecks_run_admission(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, permanent: bool, admit_run: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, permanent: bool
 ) -> None:
     async def check() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
@@ -80,7 +79,6 @@ def test_deletion_waits_for_bookkeeping_and_rechecks_run_admission(
                 return await original_wait()
 
             monkeypatch.setattr(state.mutation_released, "wait", observe_wait)
-            admitted = Run(root)
             try:
                 # Trash bookkeeping owns both guards. Admission also owns the
                 # host guard and can reserve a run before giving up that guard.
@@ -99,24 +97,16 @@ def test_deletion_waits_for_bookkeeping_and_rechecks_run_admission(
                             done, _ = await asyncio.wait((request, barrier), return_when=asyncio.FIRST_COMPLETED)
                         assert barrier in done and not request.done(), "Deletion must wait for the bookkeeping owner"
                         assert await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root) == [(root,)]
-                        if admit_run:
-                            state.executions.reserve(admitted)
                     finally:
                         barrier.cancel()
                         await asyncio.gather(barrier, return_exceptions=True)
                 response = await request
-                assert response.status_code == (409 if admit_run else 200), response.text
+                assert response.status_code == 200, response.text
                 roots = await rows(state, "SELECT id FROM harness_sessions WHERE id = ?", root)
-                if admit_run:
-                    assert roots == [(root,)] and state.run_for(root) is admitted
-                    assert await rows(state, "SELECT content FROM v2_messages WHERE session_id = ?", root) == [
-                        ("Retain until deletion wins",),
-                    ]
-                else:
-                    assert not roots and response.json()["deleted_session_id"] == root
+                assert not roots and response.json()["deleted_session_id"] == root
                 assert not state.mutating and not state.harness._busy
             finally:
-                state.executions.release(admitted)
+                pass
 
     asyncio.run(check())
 
@@ -211,23 +201,15 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("guard", ["active", "busy", "descendant", "retained", "wakeup"])
+@pytest.mark.parametrize("guard", ["busy"])
 def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
     async def run() -> None:
         async with client_app(tmp_path) as (app, client, headers, _):
             state = cast("WebState", app.state.web)
             await quiet(state)
             root = state.selected_session_id
-            if guard == "active":
-                state.active = Run("ngn-other-active")
-            elif guard == "busy":
+            if guard == "busy":
                 state.harness._busy = "compaction"
-            elif guard in {"descendant", "retained"}:
-                state.harness.tasks._infos["task"] = TaskInfo(
-                    "task", "child", session_id=root, status="running" if guard == "descendant" else "completed"
-                )
-            else:
-                state.wakeups.schedule(root, "run", Chain(), "", 86400, "later")
             try:
                 response = await client.request(
                     "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
@@ -238,7 +220,36 @@ def test_delete_rejects_process_owned_work(tmp_path: Path, guard: str) -> None:
             finally:
                 state.active = None
                 state.harness._busy = ""
-                state.harness.tasks._infos.clear()
+
+    asyncio.run(run())
+
+
+def test_deleting_one_root_leaves_an_unrelated_active_root_running(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with client_app(tmp_path) as (app, client, headers, _):
+            state = cast("WebState", app.state.web)
+            await quiet(state)
+            root = state.selected_session_id
+            await state.history.add_message(root, Message(role="user", content="Keep this root distinct"))
+            other = await state.harness.new_session()
+            assert other != root
+            run = Run(other)
+
+            async def hold() -> None:
+                await asyncio.Event().wait()
+
+            run.task = asyncio.create_task(hold())
+            state.executions.reserve(run)
+            try:
+                response = await client.request(
+                    "DELETE", f"/api/sessions/{root}", headers=headers, json={"permanent": True}
+                )
+                assert response.status_code == 200, response.text
+                assert state.run_for(other) is run and not run.task.done()
+            finally:
+                state.executions.release(run)
+                run.task.cancel()
+                await asyncio.gather(run.task, return_exceptions=True)
 
     asyncio.run(run())
 

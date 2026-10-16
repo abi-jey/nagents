@@ -51,7 +51,7 @@ function browser() {
   };
 }
 
-test("right-click opens the existing actions for that chat without selecting it", async () => {
+test("right-click opens deletion for a running chat without selecting it", async () => {
   const view = browser();
   try {
     await view.render();
@@ -67,7 +67,7 @@ test("right-click opens the existing actions for that chat without selecting it"
     assert.equal(menu.style.left, "170px"); assert.equal(menu.style.top, "348px");
     const items = [...menu.querySelectorAll<HTMLButtonElement>("button")];
     assert.equal(items.find(item => item.textContent?.includes("Fork"))!.disabled, true);
-    assert.equal(items.find(item => item.textContent?.includes("Delete"))!.disabled, true);
+    assert.equal(items.find(item => item.textContent?.includes("Delete"))!.disabled, false);
     assert.deepEqual(view.actions, []);
     await act(async () => items[0].click());
     assert.deepEqual(view.actions, ["rename:other"]);
