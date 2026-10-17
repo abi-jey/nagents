@@ -266,3 +266,4 @@
 .agent-navigator-dialog .an-summary .live-device-pickers select { min-height: 35px; border: 1px solid var(--border-control); border-radius: 6px; padding: 7px 8px; background: var(--surface-output); color: var(--text-reading); }
 .agent-navigator-dialog .an-summary .live-device-settings > p { line-height: 1.65; margin-top: 8px; }
 .agent-navigator-dialog .an-summary .live-device-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+@media (max-width: 700px) { .agent-navigator-dialog .an-save-bar { bottom: 0; } }
