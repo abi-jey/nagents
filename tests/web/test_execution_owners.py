@@ -29,6 +29,56 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
+@pytest.mark.requires_posix
+def test_stopping_finished_run_does_not_cancel_a_new_run_reusing_its_harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        entered = {name: asyncio.Event() for name in ("first", "second")}
+        release = {name: asyncio.Event() for name in entered}
+        second_cancelled = asyncio.Event()
+
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            name = str(messages[-1].content)
+            entered[name].set()
+            try:
+                await release[name].wait()
+            except asyncio.CancelledError:
+                if name == "second":
+                    second_cancelled.set()
+                raise
+            yield TextDoneEvent(text=f"{name} completed")
+
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, _, _, state, _, _):
+            root = state.selected_session_id
+            try:
+                await state.queued_inputs.submit(root, "first-run", "first")
+                async with asyncio.timeout(HANG_GUARD):
+                    await entered["first"].wait()
+                old = state.run_for(root)
+                assert old is not None and old.harness is not None
+                release["first"].set()
+                await until(lambda: state.run_for(root) is None and root not in state.channels.work_tasks)
+                assert old.finished and old.task.done()
+                await state.queued_inputs.submit(root, "second-run", "second")
+                async with asyncio.timeout(HANG_GUARD):
+                    await entered["second"].wait()
+                current = state.run_for(root)
+                assert current is not None and current.harness is old.harness
+                await state.stop(old)
+                assert state.run_for(root) is current and not current.task.done()
+                assert not second_cancelled.is_set()
+                release["second"].set()
+                await until(lambda: state.run_for(root) is None)
+                assert current.outcome == "completed" and not second_cancelled.is_set()
+                assert any(row["content"] == "second completed" for row in await state.history.snapshot(root))
+            finally:
+                for event in release.values():
+                    event.set()
+
+    asyncio.run(scenario())
+
+
 def test_borrowed_chatgpt_auth_coalesces_refresh_and_clone_close_preserves_shared_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
