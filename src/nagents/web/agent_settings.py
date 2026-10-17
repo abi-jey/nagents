@@ -168,6 +168,7 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
             "tools": list(inherited.tools) if inherited.tools_limited else sorted(names),
         },
         "origins": {"instructions": resolved.instructions_origin, "tools": resolved.tools_origin},
+        "inherited_origins": {"instructions": inherited.instructions_origin, "tools": inherited.tools_origin},
         "definition": {
             "instructions": profile.instructions,
             "tools": list(profile.tools) if profile.tools is not None else None,
@@ -186,6 +187,8 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
         "tools": sorted(tools, key=lambda tool: str(tool["name"])),
         "effective_tools": [name for name in desired if name in available],
         "source_path": str(preference.path),
+        "preferences_path": str(preference.path),
+        "definition_path": profile.source,
         "native_instructions": load_default_instructions(),
         "workspace_instructions": [{"path": path, "text": text} for path, text in sorted(harness.instructions.items())],
         "applies": "next_model_round",

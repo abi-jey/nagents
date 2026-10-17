@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { settingsValues } from "./testFixtures.js";
 import { AgentNavigator } from "./navigator/AgentNavigator.js";
+import type { VoiceInstructionsReply } from "./navigator/VoiceInstructionEditor.js";
 import { inheritField, voiceDraft, voiceOrigin, voiceWrite } from "./navigator/state.js";
 import type { AgentSettingsReply, NavigatorRequest, NavigatorVoiceReply, VoiceProfile } from "./navigator/state.js";
 
@@ -15,6 +16,12 @@ function live(scope: "global" | "workspace" | "agent", agent = ""): NavigatorVoi
     global_preferences: preferences, overrides: {}, agent_overrides: {}, definition_live: {}, saved_live_present: false, providers: ["openai"], voices: ["cove", "breeze"],
     key_configured: true, voice_auth: "chatgpt", live_supported: true, profile_name: "voice-provider", connections: [{ name: "voice-provider", provider: "openai", scope: "global" }],
     origins: { enabled: "global", model: "global", voice: "global", instructions: "global", context_mode: "global", backend_mode: "global", backend_model: "global" } };
+}
+function instructions(scope: "global" | "workspace" | "agent", agent = ""): VoiceInstructionsReply {
+  const builtin = "# Voice style\n\nSpeak naturally and keep answers concise.\nDelegate work to the assistant.";
+  return { scope, agent, revision: `instructions-${scope}-${agent}`, mode: "inherit", present: false,
+    text: builtin, inherited: builtin, inherited_source: scope === "global" ? "builtin" : "global", source: scope === "global" ? "builtin" : "global",
+    source_path: scope === "global" ? "builtin/voice.md" : "/fixture/global/voice.md", preferences_path: `/fixture/${scope}/voice.md`, builtin };
 }
 function prefs(scope: "global" | "workspace" | "agent", agent = ""): AgentSettingsReply {
   return { scope, agent, revision: `prefs-${scope}-${agent}`, preferences: {}, values: { instructions: "Native guidance", tools: ["read", "write"] }, inherited: { instructions: "Native guidance", tools: ["read", "write"] },
@@ -48,6 +55,189 @@ function browser() {
   };
 }
 
+test("instruction customization starts with inherited Markdown and saving it preserves a separate tool draft", async t => {
+  const ui = browser(); const writes: Record<string, unknown>[] = [];
+  const markdown = "# Working style\n\n- Explain decisions briefly.\n- Keep existing files.";
+  let reply = { ...prefs("agent", "reviewer"), preferences_path: "/fixture/agent-models/reviewer.md", inherited_origins: { instructions: "global", tools: "global" },
+    definition: { instructions: "", tools: null }, preferences: {}, values: { instructions: markdown, tools: ["read"] }, inherited: { instructions: markdown, tools: ["read"] }, origins: { instructions: "global", tools: "global" } } as AgentSettingsReply;
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path === "/api/agent-settings" && init.method === "PUT") {
+      const body = JSON.parse(String(init.body)); writes.push(body); reply = { ...reply, revision: `saved-${writes.length}`, preferences: body.preferences }; return Response.json(reply);
+    }
+    if (path.startsWith("/api/agent-settings")) return Response.json(reply);
+    if (path.startsWith("/api/live/settings")) return Response.json(live("agent", "reviewer"));
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "agent", agent: "reviewer", section: "Instructions", serial: 1 });
+    const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Additional instructions"]')[0];
+    assert.equal(input().value, markdown); assert.equal(input().readOnly, true); assert.equal(input().disabled, false);
+    assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Inherited from Global/);
+    assert.match(ui.visible<HTMLElement>(".an-instruction-storage")[0].textContent!, /reviewer\.md/);
+    await ui.click("Customize"); assert.equal(input().readOnly, false); assert.equal(input().value, markdown); assert.equal(writes.length, 0);
+    await ui.click("Tools"); await ui.click("Clear selection"); await ui.click("Instructions");
+    await ui.click("Save instructions");
+    assert.deepEqual(writes[0], { scope: "agent", agent: "reviewer", revision: "prefs-agent-reviewer", preferences: { instructions: markdown } });
+    await ui.click("Tools"); assert.equal(ui.visible<HTMLInputElement>('input[aria-label="Allow read"]')[0].checked, false); assert.equal(ui.button("Save tools").disabled, false);
+    await ui.click("Instructions"); await ui.click("Inherit workspace");
+    assert.equal(input().readOnly, true); assert.equal(input().value, markdown); assert.equal(writes.length, 1);
+    await ui.click("Save instructions"); assert.deepEqual(writes[1], { scope: "agent", agent: "reviewer", revision: "saved-1", preferences: {} });
+    await ui.click("Tools"); assert.equal(ui.button("Save tools").disabled, false);
+  } finally { await ui.close(); }
+});
+
+test("an explicit empty instruction remains custom until inheritance is deliberately restored", async t => {
+  const ui = browser();
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json({ ...prefs("agent", "reviewer"), preferences: { instructions: "" } });
+    if (path.startsWith("/api/live/settings")) return Response.json(live("agent", "reviewer"));
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "agent", agent: "reviewer", section: "Instructions", serial: 1 });
+    const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Additional instructions"]')[0];
+    assert.equal(input().value, ""); assert.equal(input().readOnly, false); assert.equal(ui.button("Customize").getAttribute("aria-pressed"), "true");
+    await ui.click("Use agent definition"); assert.equal(input().value, "Native guidance"); assert.equal(input().readOnly, true); assert.equal(ui.button("Save instructions").disabled, false);
+  } finally { await ui.close(); }
+});
+
+test("global Voice exposes the full built-in Markdown prompt and resets it independently of other voice preferences", async t => {
+  const ui = browser(); const writes: Record<string, unknown>[] = []; const voiceWrites: Record<string, unknown>[] = [];
+  let reply = instructions("global");
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(prefs("global"));
+    if (path.startsWith("/api/live/instructions")) {
+      if (init.method === "PUT") {
+        const body = JSON.parse(String(init.body)); writes.push(body);
+        reply = { ...reply, revision: `saved-${writes.length}`, mode: body.mode, present: true, text: body.mode === "custom" ? body.text : reply.inherited };
+      }
+      return Response.json(reply);
+    }
+    if (path.startsWith("/api/live/settings")) {
+      if (init.method !== "GET") voiceWrites.push(JSON.parse(String(init.body)));
+      return Response.json(live("global"));
+    }
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "global", agent: "", section: "Voice", serial: 1 });
+    const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0];
+    assert.equal(input().value, reply.builtin); assert.equal(input().readOnly, true); assert.equal(ui.button("Save voice instructions").disabled, true);
+    assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Built-in default/);
+    await ui.click("Customize"); assert.equal(input().readOnly, false); assert.equal(input().value, reply.builtin); assert.equal(writes.length, 0);
+    await act(async () => { const select = ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0]; select.value = "breeze"; select.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true })); });
+    await ui.click("Save voice instructions"); assert.deepEqual(writes[0], { scope: "global", revision: "instructions-global-", mode: "custom", text: reply.builtin });
+    assert.equal(voiceWrites.length, 0); assert.equal(ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0].value, "breeze"); assert.equal(ui.button("Save voice").disabled, false);
+    await ui.click("Use built-in default"); assert.equal(input().value, reply.builtin); assert.equal(input().readOnly, true); assert.equal(writes.length, 1);
+    await ui.click("Save voice instructions"); assert.deepEqual(writes[1], { scope: "global", revision: "saved-1", mode: "inherit", text: "" });
+    assert.equal(ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0].value, "breeze");
+    await ui.click("Save voice"); assert.equal((voiceWrites[0].preferences as { instructions: string }).instructions, voice.instructions, "Saving other Voice preferences preserves the old raw additional-instructions field");
+  } finally { await ui.close(); }
+});
+
+test("agent Voice starts with the resolved global prompt and reset follows its workspace parent", async t => {
+  const ui = browser(); const writes: Record<string, unknown>[] = [];
+  let reply = instructions("agent", "reviewer");
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(prefs("agent", "reviewer"));
+    if (path.startsWith("/api/live/instructions")) {
+      if (init.method === "PUT") {
+        const body = JSON.parse(String(init.body)); writes.push(body);
+        reply = { ...reply, revision: `saved-${writes.length}`, mode: body.mode, present: true, text: body.mode === "custom" ? body.text : reply.inherited };
+      }
+      return Response.json(reply);
+    }
+    if (path.startsWith("/api/live/settings")) return Response.json(live("agent", "reviewer"));
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    const opening: NavigatorRequest = { scope: "agent", agent: "reviewer", section: "Voice", serial: 1 };
+    await ui.render(opening);
+    const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0];
+    assert.equal(input().value, reply.inherited); assert.equal(input().readOnly, true);
+    assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Inherited from Global/);
+    await ui.click("Customize"); await ui.render(); await ui.render({ ...opening, serial: 2 });
+    assert.equal(input().value, reply.inherited); assert.equal(input().readOnly, false);
+    assert.match(document.querySelector(".an-drafts-note")!.textContent!, /1 unsaved section/);
+    await ui.click("Save voice instructions"); assert.deepEqual(writes[0], { scope: "agent", agent: "reviewer", revision: "instructions-agent-reviewer", mode: "custom", text: reply.inherited });
+    await ui.click("Inherit workspace"); assert.equal(input().readOnly, true); assert.equal(writes.length, 1);
+    await ui.click("Save voice instructions"); assert.deepEqual(writes[1], { scope: "agent", agent: "reviewer", revision: "saved-1", mode: "inherit", text: "" });
+  } finally { await ui.close(); }
+});
+
+test("a Voice instruction conflict keeps its draft without locking independent speech settings", async t => {
+  const ui = browser(); let writes = 0;
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(prefs("workspace"));
+    if (path.startsWith("/api/live/instructions")) {
+      if (init.method === "PUT") { writes++; return Response.json({ detail: "The global instructions changed." }, { status: 409 }); }
+      return Response.json(instructions("workspace"));
+    }
+    if (path.startsWith("/api/live/settings")) return Response.json(live("workspace"));
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "workspace", agent: "", section: "Voice", serial: 1 });
+    await ui.click("Customize"); await ui.click("Save voice instructions");
+    assert.equal(writes, 1); assert.equal(ui.button("Save voice instructions").disabled, true);
+    assert.equal(ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0].value, instructions("workspace").inherited);
+    const speech = ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0];
+    assert.equal(speech.disabled, false); assert.equal(speech.closest("fieldset")!.disabled, false);
+    await act(async () => { speech.value = "breeze"; speech.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true })); });
+    assert.equal(ui.button("Save voice").disabled, false);
+    await ui.click("Discard voice instruction draft and reload"); assert.equal(writes, 1);
+    assert.equal(ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0].readOnly, true);
+    assert.equal(speech.value, "breeze");
+  } finally { await ui.close(); }
+});
+
+test("an empty custom full Voice prompt stays empty and workspace reset restores Global text", async t => {
+  const ui = browser();
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(prefs("workspace"));
+    if (path.startsWith("/api/live/instructions")) return Response.json({ ...instructions("workspace"), mode: "custom", present: true, text: "" });
+    if (path.startsWith("/api/live/settings")) return Response.json(live("workspace"));
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "workspace", agent: "", section: "Voice", serial: 1 });
+    const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0];
+    assert.equal(input().value, ""); assert.equal(input().readOnly, false);
+    await ui.click("Inherit global"); assert.equal(input().value, instructions("workspace").inherited); assert.equal(input().readOnly, true);
+  } finally { await ui.close(); }
+});
+
+test("inheriting speech settings preserves existing raw instruction guidance and does not write the Markdown prompt", async t => {
+  const ui = browser(); const writes: Record<string, unknown>[] = []; let instructionWrites = 0;
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(prefs("workspace"));
+    if (path.startsWith("/api/live/instructions")) { if (init.method !== "GET") instructionWrites++; return Response.json(instructions("workspace")); }
+    if (path.startsWith("/api/live/settings")) {
+      if (init.method !== "GET") writes.push(JSON.parse(String(init.body)));
+      return Response.json({ ...live("workspace"), overrides: { voice: "breeze", instructions: "Existing source guidance" } });
+    }
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    await ui.render({ scope: "workspace", agent: "", section: "Voice", serial: 1 });
+    await ui.click("Inherit global speech settings"); assert.equal(writes.length, 0);
+    await ui.click("Save voice");
+    assert.deepEqual(writes, [{ scope: "workspace", revision: "voice-workspace-", overrides: { instructions: "Existing source guidance" } }]);
+    assert.equal(instructionWrites, 0);
+  } finally { await ui.close(); }
+});
+
 test("navigator retains agent and scope voice drafts through navigation and closing, lists unused definitions", async t => {
   const ui = browser(); const writes: Record<string, unknown>[] = [];
   t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
@@ -58,6 +248,7 @@ test("navigator retains agent and scope voice drafts through navigation and clos
       return Response.json(live(scope, agent));
     }
     if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
     throw new Error(`Unexpected request ${path}`);
   });
   try {
@@ -89,6 +280,7 @@ test("tool conflicts retain the selection, blocked reasons, and require explicit
     if (path.startsWith("/api/agent-settings")) return Response.json(prefs("agent", "reviewer"));
     if (path.startsWith("/api/live/settings")) return Response.json(live("agent", "reviewer"));
     if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
     throw new Error(`Unexpected request ${path}`);
   });
   try {
@@ -132,6 +324,7 @@ test("global behavior saves omit an agent target and keep explicit empty tool se
     if (path.startsWith("/api/agent-settings")) return Response.json(prefs("global"));
     if (path.startsWith("/api/live/settings")) return Response.json(live("global"));
     if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
     throw new Error(`Unexpected request ${path}`);
   });
   try {
@@ -177,6 +370,7 @@ test("catalog changes expose new definitions and keep a removed agent's dirty dr
       return Response.json(live("agent", "reviewer"));
     }
     if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) { const url = new URL(path, "https://localhost"); return Response.json(instructions((url.searchParams.get("scope") || "agent") as "global" | "workspace" | "agent", url.searchParams.get("agent") || "")); }
     throw new Error(`Unexpected request ${path}`);
   });
   try {

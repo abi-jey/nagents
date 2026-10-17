@@ -17,10 +17,11 @@ export interface AgentProfile { id: string; name: string; description: string; s
 export interface AgentSettingsReply {
   scope: NavigatorScope; agent: string; revision: string; preferences: AgentPreferences;
   values: { instructions: string; tools: string[] }; origins: { instructions: string; tools: string };
-  definition: { instructions: string; tools: string[] | null }; source_path: string;
+  definition: { instructions: string; tools: string[] | null }; source_path: string; definition_path?: string;
   profiles: AgentProfile[];
   tools: { name: string; description: string; parameters: Record<string, unknown>; category: string; available: boolean; reason: string }[];
   effective_tools?: string[]; inherited?: { instructions: string; tools: string[] };
+  inherited_origins?: { instructions: string; tools: string }; preferences_path?: string;
   native_instructions?: string; workspace_instructions?: { path: string; text: string }[];
 }
 export interface VoiceProfile {

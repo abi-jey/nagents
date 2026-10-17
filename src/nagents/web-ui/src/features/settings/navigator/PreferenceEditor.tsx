@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { request } from "../../../api/client.js";
 import { ToolsDialog } from "../../tools/ToolsDialog.js";
+import { InstructionField } from "./InstructionField.js";
 import { equal, inheritField, readJson, sourceLabel, targetQuery, useNavigatorDraft } from "./state.js";
 import type { AgentPreferences, AgentSettingsReply, NavigatorSection, NavigatorTarget } from "./state.js";
 
@@ -55,11 +56,9 @@ export function PreferenceEditor({ token, target, section, report, snapshotChang
     {snapshot && draft && <>
       <div hidden={section !== "Instructions"}>
         <div className="an-section-heading"><div><h3>Instructions</h3><p>Additional guidance for agents using these defaults.</p></div></div>
-        <label className="an-field"><span>Additional instructions</span><textarea rows={8} value={instructions} disabled={pending || recovery} placeholder="Add guidance for this agent…" onChange={event => editField("instructions", event.target.value)} /></label>
-        <p className="an-field-origin">{Object.hasOwn(draft, "instructions") ? `${target.scope === "agent" ? "Agent" : target.scope === "global" ? "Global" : "Workspace"} preference${instructionsDirty ? " · unsaved" : ""}` : instructionsDirty ? "Will use inherited guidance" : sourceLabel(snapshot.origins.instructions)}<button type="button" disabled={pending || recovery || !Object.hasOwn(draft, "instructions")} onClick={() => editor.edit(inheritField(draft, "instructions"))}>{snapshot.definition.instructions && target.scope === "agent" ? "Restore definition" : resetLabel}</button></p>
-        <p className="an-footnote">Clearing the text saves an explicit empty preference. Use the inheritance action to restore the parent guidance.</p>
+        <InstructionField label="Additional instructions" value={instructions} custom={Object.hasOwn(draft, "instructions")} source={sourceLabel(snapshot.inherited_origins?.instructions || snapshot.origins.instructions)} inheritLabel={snapshot.definition.instructions && target.scope === "agent" ? "Use agent definition" : target.scope === "agent" ? "Inherit workspace" : target.scope === "workspace" ? "Inherit global" : "Use built-in default"} scopeLabel={target.scope === "agent" ? target.agent : target.scope} disabled={pending || recovery} dirty={instructionsDirty} storagePath={snapshot.preferences_path} sourcePath={(snapshot.inherited_origins?.instructions || snapshot.origins.instructions) === "definition" ? snapshot.definition_path : undefined} description="Additional guidance is saved as Markdown; built-in and workspace instructions still apply." customize={() => editField("instructions", instructions)} inherit={() => editor.edit(inheritField(draft, "instructions"))} change={text => editField("instructions", text)} />
         <details className="an-source"><summary>Source instructions · read-only</summary>
-          {snapshot.source_path && <code>{snapshot.source_path}</code>}
+          {snapshot.definition_path && <code>{snapshot.definition_path}</code>}
           <h4>Agent definition</h4><pre>{snapshot.definition.instructions || "No additional instructions in the agent definition."}</pre>
           {snapshot.native_instructions && <><h4>Built-in instructions</h4><pre>{snapshot.native_instructions}</pre></>}
           {snapshot.workspace_instructions?.map(source => <div key={source.path}><h4>{source.path}</h4><pre>{source.text}</pre></div>)}

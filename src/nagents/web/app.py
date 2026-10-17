@@ -43,6 +43,7 @@ from . import agent_settings
 from . import built_assets
 from . import empty_sessions
 from . import is_loopback_host
+from . import live_instructions
 from . import local_authority
 from . import session_agents
 from . import skills
@@ -405,6 +406,7 @@ def create_app(
 
     register_agent_models(app, lambda: state)
     register_live(app, lambda: live, lambda: live_settings, lambda: state)
+    live_instructions.register(app, lambda: live_settings, lambda: state)
     from .local_delivery import register_assets
 
     register_assets(app, lambda: state)

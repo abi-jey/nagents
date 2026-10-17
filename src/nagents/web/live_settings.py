@@ -37,6 +37,11 @@ from nagents.provider.auth import validate_prefix
 from ._async import join_owned
 from .live_auth import LOGIN_VOICES
 from .live_auth import resolve_voice_auth
+from .live_instruction_settings import LegacyInstructions
+from .live_instruction_settings import ResolvedInstructions
+from .live_instruction_settings import resolve_instructions
+from .voice_instruction_store import InstructionScope
+from .voice_instruction_store import VoiceInstructionStore
 from .voice_preferences import MAX_VOICE_BYTES
 from .voice_preferences import ContextMode
 from .voice_preferences import Scope
@@ -170,6 +175,10 @@ class LiveConnection:
     voice_auth: VoiceAuth = "api-key"
     login_credentials: LoginCredentials | None = field(default=None, repr=False)
     agent_settings: dict[str, object] = field(default_factory=dict)
+    instruction_prompt: str = ""
+    instruction_prompt_captured: bool = False
+    instruction_settings: dict[str, object] = field(default_factory=dict)
+    instruction_preferences_revision: str = ""
 
     @property
     def voices(self) -> tuple[str, ...]:
@@ -284,6 +293,7 @@ class LiveSettings:
         self._admission: ContextVar[LiveConnection] = ContextVar("live_connection")
         self.providers = providers or ScopedProviderRegistryStore(db_path.parent)
         self.voice = VoicePreferenceStore(db_path, self.providers)
+        self.instructions = VoiceInstructionStore(self.providers)
         self.auth = auth or OpenAIAuth()
         self._session: ContextVar[str] = ContextVar("live_chat_session")
 
@@ -397,6 +407,8 @@ class LiveSettings:
                     else ("sol" if voice_auth == "chatgpt" else "marin"),
                 }
             )
+            instruction_settings = self._resolve_instructions(scope, global_values, overrides, revision, agent)
+            revision = instruction_settings.revision
             supported = profile is not None and profile.kind in NAMED_LIVE_PROVIDERS
             local_fields = overrides.selected() if scope == "workspace" else {}
             origins = {
@@ -477,6 +489,10 @@ class LiveSettings:
                 voice_auth=voice_auth,
                 login_credentials=credentials,
                 agent_settings=details,
+                instruction_prompt=instruction_settings.text,
+                instruction_prompt_captured=True,
+                instruction_settings=instruction_settings.snapshot(),
+                instruction_preferences_revision=instruction_settings.preference.revision,
                 connections=tuple(
                     (
                         identifier,
@@ -494,6 +510,37 @@ class LiveSettings:
         ):
             raise HTTPException(409, "Provider connection changed. Reload Voice settings before connecting.")
         return connection
+
+    def _resolve_instructions(
+        self,
+        scope: Scope,
+        global_values: VoicePreferences,
+        overrides: VoiceOverrides,
+        revision: str,
+        agent: AgentLiveLayer = _EMPTY_AGENT_LAYER,
+    ) -> ResolvedInstructions:
+        local = overrides.selected() if scope == "workspace" else {}
+        agent_fields = agent.overrides.selected() if agent.present else agent.definition.selected()
+        backend_mode = str(agent_fields.get("backend_mode", local.get("backend_mode", global_values.backend_mode)))
+        legacy = (
+            LegacyInstructions(
+                global_values.instructions,
+                "instructions" in global_values.model_fields_set,
+                "global",
+                str(self.voice.global_db),
+            ),
+            LegacyInstructions(
+                str(local.get("instructions", "")), "instructions" in local, "workspace", str(self.db_path)
+            ),
+            LegacyInstructions(
+                str(agent_fields.get("instructions", "")),
+                "instructions" in agent_fields,
+                "agent" if agent.present else "definition",
+                agent.path if agent.present else agent.source,
+            ),
+        )
+        target_scope: InstructionScope = "agent" if agent.agent else scope
+        return resolve_instructions(self.instructions, target_scope, agent.agent, backend_mode, revision, legacy)
 
     async def _owned(self, operation: Coroutine[object, object, T]) -> T:
         task = asyncio.create_task(operation)
@@ -617,6 +664,7 @@ class LiveSettings:
                     local_registry.revision,
                     name,
                 )
+                revision = self._resolve_instructions(scope, global_values, overrides, revision).revision
                 if revision != body.revision:
                     raise HTTPException(409, "Voice preferences changed. Reload settings before saving.")
                 if self.providers.load_scope("global").revision != global_registry.revision or (

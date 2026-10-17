@@ -112,7 +112,7 @@ class LocalOnly:
         )
         voice_scope = (
             scope["method"] == "GET"
-            and path == "/api/live/settings"
+            and path in {"/api/live/settings", "/api/live/instructions"}
             and (
                 scope["query_string"] in {b"scope=global", b"scope=workspace"}
                 or re.fullmatch(
