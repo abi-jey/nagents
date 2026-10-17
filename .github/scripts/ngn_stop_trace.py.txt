@@ -1,0 +1,161 @@
+"""Temporary sanitized Stop ownership probe; no production edits or retries."""
+from __future__ import annotations
+
+import asyncio
+import functools
+import itertools
+import json
+import logging
+import os
+import sys
+import time
+
+_START = time.monotonic()
+_COUNT = 0
+_PATCHES = []
+_ACTIVE = False
+_CASE = 0
+_VOICE = None
+
+
+def emit(event, **values):
+    global _COUNT
+    if not _ACTIVE or _COUNT >= 300:
+        return
+    _COUNT += 1
+    try:
+        sys.stderr.write("\nNGN_STOP_TRACE " + json.dumps({"event": event, "case_sequence": _CASE, "voice": _VOICE, "ms": round((time.monotonic() - _START) * 1000, 3), **values}) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def task_state(task):
+    if task is None:
+        return {"present": False}
+    if not isinstance(task, asyncio.Task):
+        return {"present": True, "kind": "placeholder"}
+    try:
+        return _inspect_task(task)
+    except Exception:
+        return {"present": True, "kind": "introspection_unavailable"}
+
+
+def _inspect_task(task):
+    frames = task.get_stack(limit=5)
+    try:
+        chain, current, seen = [], task.get_coro(), set()
+        while current is not None and id(current) not in seen and len(chain) < 24:
+            seen.add(id(current))
+            frame = getattr(current, "cr_frame", None) or getattr(current, "gi_frame", None) or getattr(current, "ag_frame", None)
+            if frame is not None:
+                chain.append({"function": frame.f_code.co_name, "line": frame.f_lineno})
+            current = getattr(current, "cr_await", None) or getattr(current, "gi_yieldfrom", None) or getattr(current, "ag_await", None)
+        return {
+            "present": True, "identity": id(task), "done": task.done(), "cancelled": task.cancelled(),
+            "cancelling": task.cancelling(),
+            "stack": [{"function": frame.f_code.co_name, "line": frame.f_lineno} for frame in frames],
+            "await_chain": chain,
+        }
+    finally:
+        del frames
+
+
+def trace(error):
+    locations = []
+    tb = error.__traceback__ if error is not None else None
+    try:
+        while tb is not None and len(locations) < 30:
+            locations.append({"function": tb.tb_frame.f_code.co_name, "line": tb.tb_lineno})
+            tb = tb.tb_next
+        return locations
+    finally:
+        del tb
+
+
+def patch(owner, name, replacement):
+    original = getattr(owner, name)
+    setattr(owner, name, replacement)
+    _PATCHES.append((owner, name, original, replacement))
+
+
+def pytest_configure(config):
+    if os.environ.get("NGN_STOP_TRACE") != "1":
+        return
+    from nagents.web.service import WebState
+    from nagents.harness.subagents import SubagentManager
+    from tests.support import providers
+
+    stop = WebState.stop
+
+    @functools.wraps(stop)
+    async def traced_stop(self, run, **kwargs):
+        if not _ACTIVE:
+            return await stop(self, run, **kwargs)
+        harness = run.harness or self.harness
+        owner = asyncio.current_task()
+        emit("stop_enter", owner=task_state(owner), producer=task_state(run.task), worker=task_state(harness._worker))
+
+        def stalled():
+            emit("stop_pending", owner=task_state(owner), producer=task_state(run.task), worker=task_state(harness._worker),
+                 owned_tasks=[task_state(task) for task in itertools.islice((task for task in asyncio.all_tasks() if task.get_name().startswith("ngn-")), 20)])
+
+        loop = asyncio.get_running_loop()
+        timers = [loop.call_later(delay, stalled) for delay in (2, 10)]
+        try:
+            return await stop(self, run, **kwargs)
+        finally:
+            for timer in timers:
+                timer.cancel()
+            emit("stop_exit", producer=task_state(run.task), worker=task_state(harness._worker), outcome=run.outcome)
+
+    patch(WebState, "stop", traced_stop)
+    publish = SubagentManager._publish
+
+    @functools.wraps(publish)
+    def traced_publish(self, info, event):
+        if _ACTIVE:
+            emit("child_publish", depth=info.depth, status=info.status, worker=task_state(asyncio.current_task()))
+        return publish(self, info, event)
+
+    patch(SubagentManager, "_publish", traced_publish)
+    balanced = providers.assert_balanced
+
+    @functools.wraps(balanced)
+    def traced_balanced(messages):
+        if not _ACTIVE:
+            return balanced(messages)
+        try:
+            return balanced(messages)
+        except AssertionError:
+            emit("assert_balanced_failed", task=task_state(asyncio.current_task()), traceback=trace(sys.exception()))
+            raise
+
+    patch(providers, "assert_balanced", traced_balanced)
+    warning = logging.Logger.warning
+
+    @functools.wraps(warning)
+    def traced_warning(self, message, *args, **kwargs):
+        if _ACTIVE and isinstance(message, str) and message.startswith("Run producer failed"):
+            emit("producer_exception", task=task_state(asyncio.current_task()), traceback=trace(sys.exception()))
+        return warning(self, message, *args, **kwargs)
+
+    patch(logging.Logger, "warning", traced_warning)
+
+
+def pytest_runtest_setup(item):
+    global _ACTIVE, _CASE, _VOICE, _COUNT
+    _ACTIVE = getattr(item, "originalname", "") == "test_stop_still_cancels_chat_and_voice_trees"
+    if _ACTIVE:
+        _CASE += 1
+        _COUNT = 0
+        parameters = getattr(getattr(item, "callspec", None), "params", {})
+        voice = parameters.get("voice")
+        _VOICE = voice if type(voice) is bool else None
+
+
+def pytest_unconfigure(config):
+    for owner, name, original, replacement in reversed(_PATCHES):
+        if getattr(owner, name) is replacement:
+            setattr(owner, name, original)
+    _PATCHES.clear()

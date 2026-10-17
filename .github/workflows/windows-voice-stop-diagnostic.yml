@@ -1,0 +1,50 @@
+name: Windows Voice Stop Cancellation Diagnostic
+
+on:
+  push:
+    branches:
+      - diag/voice-stop-ownership-win313-20261017
+
+permissions:
+  contents: read
+
+jobs:
+  windows-stop-diagnostic:
+    name: Windows py3.13 shard 2 cancellation diagnostic
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out diagnostic harness
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check out exact product commit
+        uses: actions/checkout@v4
+        with:
+          ref: f5af6038de5a226b9790193539bdd964ffc6fc58
+          path: product
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          allow-prereleases: true
+          cache: pip
+          cache-dependency-path: product/pyproject.toml
+
+      - name: Install exact product test dependencies
+        working-directory: product
+        run: python -m pip install -e ".[dev,tui,voice,web]"
+
+      - name: Run shard 2 with payload-free Stop ownership probe
+        run: python .github/scripts/run_windows_stop_diagnostic.py
+
+      - name: Upload filtered Stop trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-py313-shard2-stop-diagnostic-f5af603
+          path: ${{ runner.temp }}/ngn-voice-stop-trace.log
+          if-no-files-found: warn
+          retention-days: 3
