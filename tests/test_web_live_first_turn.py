@@ -18,12 +18,14 @@ from nagents.live.runtime import ClientDelegations
 from nagents.types import Message
 from nagents.web.live import create_agent
 from nagents.web.live import create_login_config
+from nagents.web.live import voice_instructions
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.live_handoff import LoginDelegations
 from nagents.web.live_login import normalize_event
 from nagents.web.live_settings import LiveConnection
 from nagents.web.live_settings import LiveValues
 from nagents.web.subscriptions import Subscriber
+from nagents.web.voice_instructions import default_voice_instructions
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import client_app
 from tests.test_web_live_bridge import _config
@@ -36,6 +38,53 @@ if TYPE_CHECKING:
     from nagents.live.delegation import ClientDelegationRequest
     from nagents.live.delegation import LiveAppendKind
     from nagents.provider.openai import CodexCredentials
+
+
+@pytest.mark.parametrize("prompt", ["", "# Speaking style\nGive detailed explanations when I ask."])
+@pytest.mark.parametrize("backend_mode", ["assistant", "hosted"])
+def test_captured_markdown_prompt_replaces_default_without_hidden_instructions(prompt: str, backend_mode: str) -> None:
+    connection = LiveConnection(
+        LiveValues.model_validate({**LiveValues.defaults().model_dump(), "backend_mode": backend_mode}),
+        "1" * 64,
+        SecretStr(""),
+        instruction_prompt=prompt,
+        instruction_prompt_captured=True,
+    )
+    assert voice_instructions(connection) == prompt
+    assert default_voice_instructions(backend_mode)
+
+
+@pytest.mark.parametrize("prompt", ["", "# Voice\nUse my saved Markdown guidance exactly."])
+@pytest.mark.parametrize("native", [False, True])
+def test_captured_markdown_reaches_both_live_transport_configurations(prompt: str, native: bool) -> None:
+    async def scenario() -> None:
+        async def handler(request: ClientDelegationRequest) -> str:
+            raise AssertionError("Configuration must not delegate")
+
+        async def credentials() -> CodexCredentials:
+            raise AssertionError("Configuration must not retrieve credentials")
+
+        connection = LiveConnection(
+            LiveValues.model_validate({**LiveValues.defaults().model_dump(), "enabled": True}),
+            "1" * 64,
+            SecretStr("" if native else "synthetic-api-key"),
+            profile=ProviderProfile(kind="openai", auth="chatgpt" if native else "api-key"),
+            credential_available=native,
+            voice_auth="chatgpt" if native else "api-key",
+            login_credentials=credentials if native else None,
+            instruction_prompt=prompt,
+            instruction_prompt_captured=True,
+        )
+        if native:
+            assert create_login_config(connection, "sol", handler).instructions == prompt
+        else:
+            agent = create_agent(connection, client_request_handler=handler)
+            try:
+                assert agent.live_configuration()["instructions"] == prompt
+            finally:
+                await agent.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("native", [False, True])

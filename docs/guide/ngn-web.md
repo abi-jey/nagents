@@ -175,7 +175,10 @@ choices are local to the browser, separate from reusable agent preferences.
 
 **Overview** shows saved effective values and their sources. **Instructions**
 edits additional profile instructions; bundled instructions and loaded workspace
-`AGENTS.md` files remain inspectable. **Tools** selects a reusable allowlist and
+`AGENTS.md` files remain inspectable. The inherited text is visible in the editor;
+**Customize** copies it into an editable draft, while inheritance restores the
+parent or authored definition. Saving writes the selected scope's Markdown
+preference without changing its model or tool selections. **Tools** selects a reusable allowlist and
 shows unavailable tools with reasons. Workspace tool policy, MCP configuration,
 and approval management remain accessible inside that section. A preference
 cannot grant a tool excluded by an authored definition, ancestor, runtime mode,
@@ -712,6 +715,8 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET agent-settings?scope=global\|workspace\|agent&agent=<name>` | Effective instruction/tool preferences, inherited values, sources, available tools, and composite revision; agent is optional outside agent scope |
 | `PUT agent-settings` | `{scope, agent?, revision, preferences}` replaces only instruction/tool preferences at that scope; omitted fields inherit and sibling model/Live sections are preserved |
+| `GET live/instructions?scope=global\|workspace\|agent&agent=<name>` | Effective full Markdown prompt, inherited text/source, customization mode, file paths, and revision; agent is required only at agent scope |
+| `PUT live/instructions` | `{scope, agent?, revision, mode: "inherit" or "custom", text}` saves only the Markdown instruction selection; inheritance requires empty text, while custom empty text is explicitly empty |
 | `GET live/settings?scope=global\|workspace\|agent&agent=<name>` | Scoped Voice preferences, field sources, revision, and provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, agent?, revision, overrides}` for workspace/agent fields; applies to the next call |
 | `DELETE live/settings` | `{scope: "agent", agent, revision}` removes only the operator Live section and restores the authored definition |
@@ -1212,12 +1217,30 @@ history, tools, and approval rules. The voice frontend receives the concise resu
 it does not gain direct tool execution. Hosted voice remains separate and does
 not receive the workspace chat's seed.
 
-**Voice instructions** configures speaking style and behavior, independently of
-the main assistant's instructions. The text is saved at Global, Workspace, or
-Agent scope; omitted fields inherit workspace, then global defaults.
-It is combined with the application's voice/delegation instructions at the next
-voice start. Active conversations keep their startup instructions. Instructions
-are limited to 6,000 Unicode characters and 12,000 UTF-8 bytes; oversized input
+**Voice instructions** shows the full effective Live prompt as Markdown,
+independently of the main assistant's instructions. **Inherit workspace** follows
+the workspace prompt, which in turn inherits **Global defaults** when it has no
+customization. The inherited text is visible and copyable. **Customize** starts
+with that text; **Save voice instructions** saves a Markdown override at the
+selected scope. Returning to inheritance removes the custom text and follows
+future changes to the parent. At Global scope, **Use built-in default** restores
+the packaged Markdown prompt.
+
+Global and workspace prompts are saved in `live-instructions.md` beside their
+model preferences, independently of external provider configuration paths.
+Agent prompts are saved under the workspace configuration
+directory in `agent-live-instructions/<agent>.md`. Each file has a small
+`mode: custom` or `mode: inherit` YAML header; custom instructions are the Markdown
+body. An empty custom body is explicitly empty and differs from inheritance.
+These operator files leave authored agent definitions, model selections, and
+other Voice preferences intact. Existing additional guidance is shown as part of
+its effective prompt until a Markdown override is saved.
+
+The saved full prompt is sent to the next voice conversation without a hidden
+default being prepended. Active conversations keep their captured instructions.
+The built-in prompt describes ngn's delegation and history behavior; customizing
+it does not change the backend's tool permissions or approval rules. Instructions
+are limited to 12,000 Unicode characters and 24,000 UTF-8 bytes; oversized input
 is rejected rather than silently truncated. History remains data, separate from
 these trusted, explicitly configured instructions.
 
