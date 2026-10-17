@@ -1,0 +1,437 @@
+"""Explicit diagnostic pytest plugin: NGN_SQLITE_TRACE=1 pytest -p ngn_sqlite_trace.
+
+Temporary instrumentation only. Never retains SQL, parameters, paths, frames,
+exceptions, connections, or cursors in its records. Reader flags are conservative:
+a fetched last row can already have released SQLite's lock before exhaustion is
+observed here. No retries, timeouts, transaction modes, or statement ordering are
+changed. A custom caller-supplied connection factory is left untouched.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import itertools
+import json
+import os
+import re
+import sqlite3
+import sys
+import threading
+import time
+import weakref
+from collections import deque
+from pathlib import Path
+
+_LIMIT = 2000
+_MAX_DUMPS = 3
+_SLOW_MS = 500
+_LOCK = threading.RLock()
+_RING = deque(maxlen=_LIMIT)
+_CONNECTIONS = {}
+_CURSORS = {}
+_SEQUENCE = itertools.count(1)
+_LOCAL = threading.local()
+_START = time.monotonic()
+_DUMPS = 0
+_ENABLED = False
+_CURRENT_TEST = ""
+_CONNECT = sqlite3.connect
+_AIO_EXECUTE = None
+_THIS_FILE = Path(__file__).name
+_VERBS = {
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "REPLACE",
+    "CREATE",
+    "ALTER",
+    "DROP",
+    "PRAGMA",
+    "BEGIN",
+    "COMMIT",
+    "END",
+    "ROLLBACK",
+    "SAVEPOINT",
+    "RELEASE",
+    "WITH",
+    "EXPLAIN",
+    "VACUUM",
+    "ATTACH",
+    "DETACH",
+}
+
+
+def _now():
+    return round((time.monotonic() - _START) * 1000, 3)
+
+
+def _source():
+    inherited = getattr(_LOCAL, "origin", ())
+    if inherited:
+        return inherited
+    frame = sys._getframe(1)
+    sources = []
+    try:
+        while frame is not None and len(sources) < 4:
+            name = Path(frame.f_code.co_filename).name
+            if name != _THIS_FILE:
+                sources.append((name, frame.f_code.co_name[:80], frame.f_lineno))
+            frame = frame.f_back
+        return tuple(sources)
+    finally:
+        del frame
+
+
+def _traceback(error):
+    trace = error.__traceback__
+    sources = []
+    try:
+        while trace is not None:
+            code = trace.tb_frame.f_code
+            sources.append((Path(code.co_filename).name, code.co_name[:80], trace.tb_lineno))
+            trace = trace.tb_next
+        return sources[-12:]
+    finally:
+        del trace
+
+
+def _sql(sql):
+    # Strip comments and all quoted strings/identifiers before extracting names.
+    # The SQLite callback expands bound values; none may enter the trace ring.
+    if not isinstance(sql, str):
+        return {"verb": "OTHER", "tables": []}
+    stripped = re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`[^`]*`|\[[^\]]*\]", "?", sql)
+    stripped = re.sub(r"/\*.*?\*/|--[^\n]*", " ", stripped, flags=re.S)
+    first = re.match(r"\s*([A-Za-z]+)", stripped)
+    verb = first.group(1).upper() if first else "OTHER"
+    if verb not in _VERBS:
+        verb = "OTHER"
+    names = []
+    patterns = []
+    if verb in {"SELECT", "WITH", "EXPLAIN", "DELETE"}:
+        patterns.append(r"\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)")
+    if verb in {"INSERT", "REPLACE"}:
+        patterns.append(r"\bINTO\s+([A-Za-z_][A-Za-z0-9_]*)")
+    if verb == "UPDATE":
+        patterns.append(r"^\s*UPDATE(?:\s+OR\s+\w+)?\s+([A-Za-z_][A-Za-z0-9_]*)")
+    if verb in {"CREATE", "ALTER", "DROP"}:
+        patterns.append(r"\bTABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)")
+        patterns.append(r"\bON\s+([A-Za-z_][A-Za-z0-9_]*)")
+    for pattern in patterns:
+        for match in re.finditer(pattern, stripped, flags=re.I):
+            name = match.group(1)
+            # Only framework-owned schema names are useful here. Do not expose
+            # arbitrary extension/user table names accidentally used as secrets.
+            if name not in names and (name == "schema_migrations" or name.startswith(("ngn_", "nagents_", "v2_"))):
+                names.append(name[:100])
+    return {"verb": verb, "tables": names[:4]}
+
+
+def _record(kind, **fields):
+    with _LOCK:
+        _RING.append({"ms": _now(), "thread": threading.get_ident(), "kind": kind, **fields})
+
+
+def _remember(mapping, identifier, record):
+    with _LOCK:
+        mapping[identifier] = record
+        while len(mapping) > _LIMIT:
+            mapping.pop(next(iter(mapping)))
+
+
+def _collected(kind, identifier):
+    mapping = _CONNECTIONS if kind == "connection" else _CURSORS
+    with _LOCK:
+        mapping.pop(identifier, None)
+    _record(f"{kind}_collected", id=identifier)
+
+
+def _dump(reason, error=None, **fields):
+    global _DUMPS
+    match = os.environ.get("NGN_SQLITE_TRACE_TEST_MATCH", "")
+    if reason == "sqlite_busy_or_locked" and match and not re.search(match, _CURRENT_TEST):
+        return
+    with _LOCK:
+        if _DUMPS >= _MAX_DUMPS:
+            return
+        _DUMPS += 1
+        snapshot = {
+            "reason": reason,
+            "test": _CURRENT_TEST.split("[", 1)[0],
+            "dump": _DUMPS,
+            "ms": _now(),
+            **fields,
+            "traceback": _traceback(error) if error is not None else [],
+            "connections": [dict(item) for item in _CONNECTIONS.values()],
+            "potentially_unfinished_cursors": [dict(item) for item in _CURSORS.values() if item.get("unfinished")],
+            "events": list(_RING),
+        }
+    sys.stderr.write("\nNGN_SQLITE_TRACE " + json.dumps(snapshot, separators=(",", ":")) + "\n")
+    sys.stderr.flush()
+
+
+def _state(connection):
+    identifier = connection._ngn_trace_id
+    with _LOCK:
+        record = _CONNECTIONS.get(identifier)
+        if record is not None:
+            try:
+                active = connection.in_transaction
+            except sqlite3.Error:
+                # Preserve the operation's own result/error if the user has
+                # already closed this connection or SQLite is closing it.
+                record["state_unavailable"] = True
+                return
+            if active and not record.get("in_transaction"):
+                record["transaction_since_ms"] = _now()
+            elif not active:
+                record.pop("transaction_since_ms", None)
+            record["in_transaction"] = active
+
+
+def _invoke(connection, operation, callback, *, cursor=0, statement=None):
+    started = _now()
+    origin = _source()
+    fields = {"connection": connection._ngn_trace_id, "operation": operation, "cursor": cursor, "source": origin}
+    if statement is not None:
+        fields["statement"] = statement
+    _record("start", **fields)
+    try:
+        result = callback()
+    except sqlite3.Error as error:
+        elapsed = round(_now() - started, 3)
+        _state(connection)
+        code = getattr(error, "sqlite_errorcode", -1)
+        safe_code = code if type(code) is int else -1
+        _record("error", **fields, elapsed_ms=elapsed, sqlite_code=safe_code)
+        if elapsed >= _SLOW_MS:
+            _record("slow_operation", **fields, elapsed_ms=elapsed, outcome="error")
+        if safe_code >= 0 and safe_code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+            _dump("sqlite_busy_or_locked", error, **fields, sqlite_code=safe_code)
+        elif elapsed >= _SLOW_MS:
+            _dump("slow_sqlite_error", error, **fields, elapsed_ms=elapsed)
+        raise
+    _state(connection)
+    elapsed = round(_now() - started, 3)
+    _record("end", **fields, elapsed_ms=elapsed)
+    if elapsed >= _SLOW_MS:
+        _record("slow_operation", **fields, elapsed_ms=elapsed)
+        _dump("slow_sqlite_operation", **fields, elapsed_ms=elapsed)
+    return result
+
+
+class TraceCursor(sqlite3.Cursor):
+    def __init__(self, connection):
+        super().__init__(connection)
+        self._ngn_trace_id = next(_SEQUENCE)
+        _remember(
+            _CURSORS,
+            self._ngn_trace_id,
+            {
+                "id": self._ngn_trace_id,
+                "connection": connection._ngn_trace_id,
+                "database": connection._ngn_trace_database,
+                "created_ms": _now(),
+                "source": _source(),
+                "unfinished": False,
+            },
+        )
+        weakref.finalize(self, _collected, "cursor", self._ngn_trace_id)
+
+    def _statement(self, operation, sql, callback):
+        summary = _sql(sql)
+        with _LOCK:
+            info = _CURSORS.get(self._ngn_trace_id)
+            if info is not None:
+                info.update(statement=summary, source=_source(), started_ms=_now(), unfinished=False)
+        result = _invoke(self.connection, operation, callback, cursor=self._ngn_trace_id, statement=summary)
+        with _LOCK:
+            info = _CURSORS.get(self._ngn_trace_id)
+            if info is not None:
+                info["unfinished"] = self.description is not None
+        return result
+
+    def execute(self, sql, parameters=()):
+        return self._statement("execute", sql, lambda: super(TraceCursor, self).execute(sql, parameters))
+
+    def executemany(self, sql, parameters):
+        return self._statement("executemany", sql, lambda: super(TraceCursor, self).executemany(sql, parameters))
+
+    def executescript(self, script):
+        return self._statement("executescript", script, lambda: super(TraceCursor, self).executescript(script))
+
+    def _exhausted(self):
+        with _LOCK:
+            info = _CURSORS.get(self._ngn_trace_id)
+            if info is not None:
+                info["unfinished"] = False
+
+    def fetchone(self):
+        result = _invoke(self.connection, "fetchone", super().fetchone, cursor=self._ngn_trace_id)
+        if result is None:
+            self._exhausted()
+        return result
+
+    def fetchall(self):
+        result = _invoke(self.connection, "fetchall", super().fetchall, cursor=self._ngn_trace_id)
+        self._exhausted()
+        return result
+
+    def fetchmany(self, size=None):
+        result = _invoke(
+            self.connection,
+            "fetchmany",
+            lambda: super(TraceCursor, self).fetchmany() if size is None else super(TraceCursor, self).fetchmany(size),
+            cursor=self._ngn_trace_id,
+        )
+        if len(result) < (self.arraysize if size is None else size):
+            self._exhausted()
+        return result
+
+    def __next__(self):
+        try:
+            return super().__next__()
+        except StopIteration:
+            self._exhausted()
+            raise
+
+    def close(self):
+        result = _invoke(self.connection, "cursor_close", super().close, cursor=self._ngn_trace_id)
+        self._exhausted()
+        with _LOCK:
+            _CURSORS.pop(self._ngn_trace_id, None)
+        return result
+
+
+class TraceConnection(sqlite3.Connection):
+    def __init__(self, database, *args, **kwargs):
+        self._ngn_trace_id = next(_SEQUENCE)
+        digest = hashlib.sha256(os.fsencode(database)).hexdigest()[:16]
+        self._ngn_trace_database = digest
+        _record("connection_open_start", connection=self._ngn_trace_id, database=digest, source=_source())
+        started = _now()
+        super().__init__(database, *args, **kwargs)
+        _remember(
+            _CONNECTIONS,
+            self._ngn_trace_id,
+            {
+                "id": self._ngn_trace_id,
+                "database": digest,
+                "created_ms": started,
+                "source": _source(),
+                "in_transaction": self.in_transaction,
+            },
+        )
+        weakref.finalize(self, _collected, "connection", self._ngn_trace_id)
+        self.set_trace_callback(None)
+        _record("connection_open_end", connection=self._ngn_trace_id, elapsed_ms=round(_now() - started, 3))
+
+    def set_trace_callback(self, callback):
+        identifier = self._ngn_trace_id
+
+        def traced(sql):
+            summary = _sql(sql)
+            with _LOCK:
+                record = _CONNECTIONS.get(identifier)
+                if record is not None:
+                    record.update(last_statement=summary, last_statement_ms=_now(), last_source=_source())
+            _record("sql", connection=identifier, statement=summary, source=_source())
+            if callback is not None:
+                callback(sql)
+
+        # The callback captures only an integer and the user's callback, never
+        # self. A self-capturing callback would itself manufacture a GC cycle.
+        return super().set_trace_callback(traced)
+
+    def cursor(self, factory=None):
+        return super().cursor(TraceCursor if factory is None else factory)
+
+    def execute(self, sql, parameters=()):
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql, parameters):
+        return self.cursor().executemany(sql, parameters)
+
+    def executescript(self, script):
+        return self.cursor().executescript(script)
+
+    def commit(self):
+        return _invoke(self, "commit", super().commit)
+
+    def rollback(self):
+        return _invoke(self, "rollback", super().rollback)
+
+    def close(self):
+        started = _now()
+        _record("connection_close_start", connection=self._ngn_trace_id, source=_source())
+        try:
+            return super().close()
+        finally:
+            with _LOCK:
+                _CONNECTIONS.pop(self._ngn_trace_id, None)
+            _record("connection_close_end", connection=self._ngn_trace_id, elapsed_ms=round(_now() - started, 3))
+
+    def __exit__(self, *args):
+        return _invoke(self, "context_exit", lambda: super(TraceConnection, self).__exit__(*args))
+
+
+def _connect(*args, **kwargs):
+    positional = list(args)
+    factory = positional[5] if len(positional) > 5 else kwargs.get("factory", sqlite3.Connection)
+    if factory is sqlite3.Connection:
+        if len(positional) > 5:
+            positional[5] = TraceConnection
+        else:
+            kwargs["factory"] = TraceConnection
+    elif factory is not TraceConnection:
+        _record("custom_connection_factory_untraced", source=_source())
+    return _CONNECT(*positional, **kwargs)
+
+
+async def _aio_execute(self, fn, *args, **kwargs):
+    origin = _source()
+
+    def annotated(*values, **options):
+        previous = getattr(_LOCAL, "origin", ())
+        _LOCAL.origin = origin
+        try:
+            return fn(*values, **options)
+        finally:
+            _LOCAL.origin = previous
+
+    return await _AIO_EXECUTE(self, annotated, *args, **kwargs)
+
+
+def pytest_configure(config):
+    global _ENABLED, _AIO_EXECUTE
+    if os.environ.get("NGN_SQLITE_TRACE") != "1":
+        return
+    _ENABLED = True
+    sqlite3.connect = _connect
+    try:
+        import aiosqlite
+    except ImportError:
+        pass
+    else:
+        _AIO_EXECUTE = aiosqlite.Connection._execute
+        aiosqlite.Connection._execute = _aio_execute
+
+
+def pytest_runtest_setup(item):
+    global _CURRENT_TEST
+    _CURRENT_TEST = item.nodeid
+
+
+def pytest_unconfigure(config):
+    if not _ENABLED:
+        return
+    if os.environ.get("NGN_SQLITE_TRACE_DUMP_AT_EXIT") == "1":
+        _dump("pytest_exit")
+    if sqlite3.connect is _connect:
+        sqlite3.connect = _CONNECT
+    if _AIO_EXECUTE is not None:
+        import aiosqlite
+
+        if aiosqlite.Connection._execute is _aio_execute:
+            aiosqlite.Connection._execute = _AIO_EXECUTE

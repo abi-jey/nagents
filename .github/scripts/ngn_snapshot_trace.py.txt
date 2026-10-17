@@ -1,0 +1,131 @@
+"""Temporary opt-in timing probe; never records call arguments or return values.
+
+Enable with NGN_SNAPSHOT_TRACE=1 pytest -p ngn_snapshot_trace. The original
+awaitable runs once in the caller's task. No timeouts, locks, retries, operation
+ordering, return values or exception propagation are changed by this probe.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import itertools
+import json
+import os
+import sys
+import time
+from collections import deque
+from contextvars import ContextVar
+
+_RING = deque(maxlen=512)
+_CALLS = itertools.count(1)
+_PARENT = ContextVar("ngn_snapshot_probe_parent", default=0)
+_START = time.monotonic()
+_PATCHES = []
+_SLOW_EMITTED = 0
+_DUMPS = 0
+_TEST = 0
+_ENABLED = False
+
+
+def _now():
+    return round((time.monotonic() - _START) * 1000, 3)
+
+
+def _emit(record):
+    try:
+        sys.stderr.write("\nNGN_SNAPSHOT_TRACE " + json.dumps(record, separators=(",", ":")) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        # Diagnostics cannot replace the observed operation's outcome.
+        pass
+
+
+def _dump(reason):
+    global _DUMPS
+    if _DUMPS >= 3:
+        return
+    _DUMPS += 1
+    _emit({"kind": "ring", "reason": reason, "test_sequence": _TEST, "ms": _now(), "events": list(_RING)})
+
+
+def _wrap(owner, method, label):
+    original = getattr(owner, method)
+
+    @functools.wraps(original)
+    async def timed(self, *args, **kwargs):
+        global _SLOW_EMITTED
+        call = next(_CALLS)
+        started = _now()
+        parent = _PARENT.get()
+        token = _PARENT.set(call)
+        identity = {"call": call, "parent": parent, "method": label, "test_sequence": _TEST}
+        _RING.append({"kind": "start", "ms": started, **identity})
+        outcome = "returned"
+        try:
+            return await original(self, *args, **kwargs)
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except TimeoutError:
+            outcome = "timeout"
+            raise
+        except BaseException:
+            outcome = "error"
+            raise
+        finally:
+            elapsed = round(_now() - started, 3)
+            record = {"kind": "end", "ms": _now(), "elapsed_ms": elapsed, "outcome": outcome, **identity}
+            _RING.append(record)
+            _PARENT.reset(token)
+            if elapsed >= 500 and _SLOW_EMITTED < 100:
+                _SLOW_EMITTED += 1
+                _emit(record)
+            if label == "EventBus.checkpoint" and outcome == "timeout":
+                _dump("checkpoint_timeout")
+
+    setattr(owner, method, timed)
+    _PATCHES.append((owner, method, original, timed))
+
+
+def pytest_configure(config):
+    global _ENABLED
+    if os.environ.get("NGN_SNAPSHOT_TRACE") != "1":
+        return
+    from nagents.harness.runtime import Harness
+    from nagents.web.history import WebHistory
+    from nagents.web.routing import RoutingStore
+    from nagents.web.service import WebState
+    from nagents.web.session_agents import SessionAgents
+    from nagents.web.subscriptions import EventBus
+    from nagents.web.tasks import Tasks
+
+    _ENABLED = True
+    for owner, method, label in (
+        (EventBus, "checkpoint", "EventBus.checkpoint"),
+        (WebState, "_snapshot", "WebState._snapshot"),
+        (WebState, "list_sessions", "WebState.list_sessions"),
+        (WebHistory, "snapshot", "WebHistory.snapshot"),
+        (Tasks, "index", "Tasks.index"),
+        (SessionAgents, "snapshot", "SessionAgents.snapshot"),
+        (SessionAgents, "ensure", "SessionAgents.ensure"),
+        (Harness, "list_sessions", "Harness.list_sessions"),
+        (RoutingStore, "initialize", "RoutingStore.initialize"),
+    ):
+        _wrap(owner, method, label)
+
+
+def pytest_runtest_setup(item):
+    global _TEST
+    _TEST += 1
+
+
+def pytest_unconfigure(config):
+    if not _ENABLED:
+        return
+    if os.environ.get("NGN_SNAPSHOT_TRACE_DUMP_AT_EXIT") == "1":
+        _dump("pytest_exit")
+    for owner, method, original, wrapped in reversed(_PATCHES):
+        if getattr(owner, method) is wrapped:
+            setattr(owner, method, original)
+    _PATCHES.clear()
