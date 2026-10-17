@@ -1068,9 +1068,23 @@ class WebState:
         with anyio.CancelScope(shield=True):
             if cancel:
                 self.wakeups.cancel(run.chain)
-            if not run.task.done() and not run.task.cancelling():
+            if not run.task.done():
                 run.outcome = "cancelled"
-                run.task.cancel()
+                # The event consumer may be joining an accepted journal write.
+                # Stop model/tool work now; its normal cleanup remains owned by
+                # that consumer and still joins the write before returning.
+                harness = run.harness
+                if (
+                    self.run_for(run.session_id) is run
+                    and harness is not None
+                    and harness.session_id == run.session_id
+                    and (worker := harness._worker) is not None
+                    and not worker.done()
+                    and not worker.cancelling()
+                ):
+                    worker.cancel()
+                if not run.task.cancelling():
+                    run.task.cancel()
             with suppress(asyncio.CancelledError):
                 await _join(run.task)
             await self.channels.join_claim_cleanup(run.session_id)

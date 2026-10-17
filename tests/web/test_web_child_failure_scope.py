@@ -18,6 +18,7 @@ from nagents.harness.config import HarnessConfig
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.live.delegation import ClientDelegationRequest
+from nagents.web._async import finish_on_cancel
 from nagents.web.live_bridge import MainAgentBridge
 from nagents.web.service import WebState
 from tests.harness.test_harness import ScriptedProvider
@@ -32,7 +33,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from nagents.events import Event
+    from nagents.types import Message
     from nagents.web.service import Run
+    from tests.support.providers import FakeProvider
 
 
 def fixture_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HarnessConfig:
@@ -252,3 +256,87 @@ async def test_stop_still_cancels_chat_and_voice_trees(
         assert len(scenario.providers) == 3 and all(provider.closed for provider in scenario.providers[1:])
         assert "DESCENDANT_PRIVATE" not in str(scenario.providers[0].requests)
         assert state.active is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("voice", [False, True])
+async def test_stop_reaches_providers_before_pending_task_evidence_commit_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, voice: bool
+) -> None:
+    scenario = ChildFailureScenario(monkeypatch, hold_child=True)
+    root_cancelled, descendant_cancelled = asyncio.Event(), asyncio.Event()
+    script = scenario.script
+
+    async def observed(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        try:
+            async for event in script(provider, messages):
+                yield event
+        except asyncio.CancelledError:
+            if provider.index == 0:
+                root_cancelled.set()
+            elif provider.index == 2:
+                descendant_cancelled.set()
+            raise
+
+    monkeypatch.setattr(scenario, "script", observed)
+    config = fixture_config(tmp_path, monkeypatch)
+    config.max_tool_rounds = 6
+    async with client_app(tmp_path, config=config, controlled=False) as (app, client, headers, harnesses):
+        state = cast("WebState", app.state.web)
+        harness = harnesses[0]
+        entered, release, committed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        save = state.tasks.store.save
+        held = False
+
+        async def delayed_save(root: str, data: dict[str, object]) -> None:
+            nonlocal held
+            if held:
+                await save(root, data)
+                return
+            held = True
+
+            async def committing() -> None:
+                entered.set()
+                await release.wait()
+                await save(root, data)
+                committed.set()
+
+            # Like the actual SQLite owner, finish an accepted operation even
+            # when the event consumer waiting for it receives cancellation.
+            await finish_on_cancel(committing())
+
+        monkeypatch.setattr(state.tasks.store, "save", delayed_save)
+        async with asyncio.timeout(HANG_GUARD), AsyncExitStack() as cleanup:
+            if voice:
+                reports, speech = await cleanup.enter_async_context(voice_request(state, harness.session_id))
+                await voice_progress(speech, reports, scenario.grandchild_started, scenario.root_preview)
+            else:
+                stream = LiveStream(app, headers, harness.session_id, "ROOT")
+                await scenario.grandchild_started.wait()
+                await scenario.root_preview.wait()
+            await entered.wait()
+            run = state.active
+            assert run is not None
+            stopping = asyncio.create_task(client.post("/api/cancel", headers=headers, json={"run_id": run.id}))
+            try:
+                # Provider code must observe cancellation while the accepted
+                # write is still held. This checks behavior, not Task flags or
+                # a particular scheduling/latency budget.
+                await root_cancelled.wait()
+                await descendant_cancelled.wait()
+                assert not release.is_set() and not committed.is_set() and not stopping.done()
+                assert [len(provider.requests) for provider in scenario.providers] == [2, 1, 1]
+            finally:
+                release.set()
+                response = await stopping
+            assert response.status_code == 200, response.text
+            assert committed.is_set(), "Stop must join the accepted evidence write"
+            if voice:
+                await speech
+                assert (await voice_terminal(reports))["status"] == "cancelled"
+            else:
+                assert (await stream.event("run_finished"))["status"] == "cancelled"
+            assert [len(provider.requests) for provider in scenario.providers] == [2, 1, 1]
+            assert {info.status for info in harness.tasks.list()} == {"cancelled"}
+            assert all(provider.closed for provider in scenario.providers[1:])
+            assert state.active is None and harness._worker is None
