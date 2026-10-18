@@ -4,13 +4,16 @@ import { TeamIcon } from "../team/TeamTree.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ResponseDetails } from "./ResponseDetails.js";
+import { RunDetails } from "./RunDetails.js";
+import { activityCategory, activityLabels, activityLayout, activityState, importantActivity } from "./activityLayout.js";
+import type { ChatAppearance } from "../settings/appearance.js";
 import { hasResponseDetails } from "./responseMetadata.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
 import { Icon } from "../../components/Icon.js";
 import { TextLinks } from "../../components/TextLinks.js";
-import { commandOutcomeDescription } from "./executionPresentation.js";
+import { executionTarget, commandOutcomeDescription } from "./executionPresentation.js";
 import { captionTime, conversationEntries } from "./captionPresentation.js";
 import { rememberDisclosure, revealAncestors } from "../../components/disclosures.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
@@ -46,24 +49,35 @@ export function TranscriptItems({
   disclosures,
   toggle,
   renderTask,
+  appearance,
+  insideGroup = false,
 }: {
   items: TranscriptItem[];
+  appearance?: ChatAppearance;
+  insideGroup?: boolean;
   names: Map<string, string>;
   disclosures: Map<string, boolean>;
   toggle: (key: string, open: boolean) => void;
   renderTask?: (thread: TaskThread) => ReactNode;
 }) {
-  const latestResponses = new Map<string, Entry>();
-  for (const item of items) {
-    if (item.kind !== "entry" || item.entry.kind !== "assistant") continue;
-    const metadata = item.entry.responseMetadata;
-    if (!metadata?.run_id) continue;
-    const key = `${metadata.response_session_id}:${metadata.run_id}`;
-    // Queued inputs and child activations can reset the model-round counter
-    // inside the same web run. Transcript order identifies the newest response.
-    latestResponses.set(key, item.entry);
-  }
-  return items.map((item) => {
+  const visibleItems = renderTask ? items.filter(item => item.kind !== "retained") : items;
+  return activityLayout(visibleItems, appearance, insideGroup).map((item) => {
+    if (item.kind === "run_footer") return <RunDetails key={item.id} metadata={item.metadata}
+      open={disclosures.get(item.id) ?? appearance?.runUsage === "expanded"}
+      toggle={open => toggle(item.id, open)} />;
+    if (item.kind === "activity_group") {
+      const { label, icon } = activityLabels[item.category];
+      const state = activityState(item.items);
+      const targets = [...new Set(item.items.flatMap(child => child.kind === "entry" ? [executionTarget(child.entry)] : child.kind === "thread" ? [child.thread.name] : []).filter(Boolean))].slice(0, 2).join(" · ");
+      return <details key={item.id} className="chat-activity-group" data-category={item.category}
+        data-state={state} data-record-key={item.id} data-disclosure-key={item.id}
+        open={disclosures.get(item.id) ?? (item.items.some(importantActivity) || appearance?.activity[item.category].details === "expanded")}
+        onToggle={event => toggle(item.id, event.currentTarget.open)}>
+        <summary><Icon name={icon} size={14} /><span className="chat-activity-label">{label}<span className="chat-activity-count">{item.items.length}</span></span>
+          {targets && <span className="chat-activity-target">{targets}</span>}{state && <span className="chat-activity-state" role="status">{state}</span>}</summary>
+        <div className="chat-activity-body"><TranscriptItems items={item.items} names={names} disclosures={disclosures} toggle={toggle} renderTask={renderTask} appearance={appearance} insideGroup /></div>
+      </details>;
+    }
     // Registry-only tasks have no proven location in this transcript. The team
     // tree still exposes them; do not attach them to its last user message.
     if (item.kind === "retained" && renderTask) return null;
@@ -90,6 +104,7 @@ export function TranscriptItems({
               disclosures={disclosures}
               toggle={toggle}
               renderTask={renderTask}
+              appearance={appearance}
             />
           </details>
         </section>
@@ -136,6 +151,7 @@ export function TranscriptItems({
                 disclosures={disclosures}
                 toggle={toggle}
                 renderTask={renderTask}
+                appearance={appearance}
               />
             </div>
           </details>
@@ -143,12 +159,20 @@ export function TranscriptItems({
       );
     }
     const entry = item.entry;
-    const showRunUsage = latestResponses.get(`${entry.responseMetadata?.response_session_id}:${entry.responseMetadata?.run_id}`) === entry;
-    if (entry.kind === "assistant" && !entry.text && !hasResponseDetails(entry.responseMetadata, showRunUsage)) return null;
+    const reasoning = appearance?.activity.reasoning;
+    const hasReasoning = reasoning?.placement !== "hidden" && hasResponseDetails(entry.responseMetadata) ||
+      !!entry.responseMetadata && ["failed", "cancelled"].includes(entry.responseMetadata.status);
+    if (entry.kind === "assistant" && !entry.text && !hasReasoning) return null;
+    const category = activityCategory(item);
+    const expanded = importantActivity(item) || !!category && appearance?.activity[category].details === "expanded";
+    const responseDetails = entry.kind === "assistant" && hasReasoning && <ResponseDetails metadata={entry.responseMetadata}
+      hideSummary={reasoning?.placement === "hidden"}
+      open={disclosures.get(`reasoning:${entry.responseId}`) ?? reasoning?.details === "expanded"}
+      toggle={open => toggle(`reasoning:${entry.responseId}`, open)} />;
     return (
       <article
         key={entry.id}
-        className={`entry ${entry.kind}`}
+        className={`entry ${entry.kind}${entry.kind === "assistant" && !entry.text ? " reasoning-only" : ""}${reasoning?.placement === "separate" ? " reasoning-separate" : ""}`}
         data-record-key={entry.id}
         data-level={entry.level}
         data-speaker={entry.liveCaption?.speaker}
@@ -168,17 +192,17 @@ export function TranscriptItems({
         entry.kind === "context" ? (
           <ExecutionRecord
             entry={entry}
-            open={entry.kind === "tool" ? disclosures.get(entry.id) : disclosures.get(entry.id) ?? false}
+            open={disclosures.get(entry.id) ?? (appearance ? expanded : entry.kind === "tool" ? undefined : false)}
             toggle={(open) => toggle(entry.id, open)}
             disclosures={disclosures}
             toggleDetail={toggle}
           />
         ) : entry.kind === "notification" || entry.kind === "wakeup" ? (
-          <ActivityRecord entry={entry} open={disclosures.get(entry.id) ?? false}
+          <ActivityRecord entry={entry} open={disclosures.get(entry.id) ?? expanded}
             toggle={(open) => toggle(entry.id, open)} />
         ) : (
           <>
-            <div className="entry-label">
+            <div className="entry-label" hidden={entry.kind === "assistant" && !entry.text}>
               {entry.kind === "assistant"
                 ? entry.taskId
                   ? names.get(entry.taskId) || entry.taskId
@@ -197,13 +221,9 @@ export function TranscriptItems({
               {entry.queued && <span className="origin-badge">{entry.admission === "queued" ? "Queued" : entry.admission === "sending" ? "Sending…" : "Delivery unconfirmed"}</span>}
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
-            <MessageContent text={entry.text} />
-            {entry.kind === "assistant" && <ResponseDetails metadata={entry.responseMetadata}
-              open={disclosures.get(`reasoning:${entry.responseId}`) ?? false}
-              toggle={open => toggle(`reasoning:${entry.responseId}`, open)}
-              showRunUsage={showRunUsage}
-              runOpen={disclosures.get(`run-usage:${entry.responseMetadata?.response_session_id}:${entry.responseMetadata?.run_id}`) ?? false}
-              toggleRun={open => toggle(`run-usage:${entry.responseMetadata?.response_session_id}:${entry.responseMetadata?.run_id}`, open)} />}
+            {reasoning?.placement === "separate" && responseDetails}
+            {entry.text && <MessageContent text={entry.text} />}
+            {reasoning?.placement !== "separate" && responseDetails}
              {entry.uploads?.map((upload) => <UploadAttachment key={upload.upload_id} upload={upload} ready={!entry.queued} />)}
             {entry.channel && <ChannelAttachments parts={entry.parts} />}
             {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}
@@ -229,6 +249,7 @@ export function Conversation({
   token = "",
   renderTask,
   active = true,
+  appearance,
 }: {
   entries: Entry[];
   sessionId: string;
@@ -239,6 +260,7 @@ export function Conversation({
   token?: string;
   renderTask?: (thread: TaskThread) => ReactNode;
   active?: boolean;
+  appearance?: ChatAppearance;
 }) {
   const feed = useRef<HTMLDivElement>(null);
   const isActive = useRef(active);
@@ -344,7 +366,7 @@ export function Conversation({
       lastUser.current = last.id;
     }
     restorePosition();
-  }, [entries]);
+  }, [entries, appearance]);
   useLayoutEffect(() => { if (active) restorePosition(); }, [active]);
   useLayoutEffect(() => {
     const element = feed.current, view = element?.ownerDocument.defaultView;
@@ -479,7 +501,7 @@ export function Conversation({
         <UploadSession.Provider value={sessionId}>
         {!!earlier.length && <section aria-label="Deliveries from earlier context">
           <h3>Deliveries from earlier context</h3>
-          <TranscriptItems items={earlier} names={names} disclosures={disclosures} toggle={toggle} />
+          <TranscriptItems items={earlier} names={names} disclosures={disclosures} toggle={toggle} appearance={appearance} />
         </section>}
         <TranscriptItems
           items={items}
@@ -487,6 +509,7 @@ export function Conversation({
           disclosures={disclosures}
           toggle={toggle}
           renderTask={renderTask}
+          appearance={appearance}
         />
         </UploadSession.Provider>
         </MediaToken.Provider>

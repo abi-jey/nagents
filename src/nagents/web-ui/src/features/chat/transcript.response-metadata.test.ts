@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import type { RetainedTask, Snapshot, WireEvent } from "../../types.js";
+import { defaultAppearance, type ChatAppearance } from "../settings/appearance.js";
 import { appendEvent, fromHistory, groupTranscript, type Entry } from "./transcript.js";
 import { applySnapshot, LiveSessions } from "./liveTranscript.js";
 import { TranscriptItems } from "./Conversation.js";
@@ -28,8 +29,8 @@ const row = (value: ResponseMetadata, content = "Answer"): Snapshot["history"][n
   response_id: value.response_id, response_metadata: value, content, name: "", tool_call_id: "", tool_calls: [],
 });
 const snapshot = (history: Snapshot["history"]): Snapshot => ({ session_id: "root", history, sessions: [], retained_tasks: [] });
-const render = (entries: Entry[], disclosures = new Map<string, boolean>()) => new JSDOM(renderToStaticMarkup(createElement(TranscriptItems, {
-  items: groupTranscript(entries), names: new Map(), disclosures, toggle() {},
+const render = (entries: Entry[], disclosures = new Map<string, boolean>(), appearance?: ChatAppearance) => new JSDOM(renderToStaticMarkup(createElement(TranscriptItems, {
+  items: groupTranscript(entries), names: new Map(), disclosures, toggle() {}, appearance,
 }))).window.document;
 
 test("reported thinking precedes one answer, with a separate collapsed summary and late usage", () => {
@@ -48,7 +49,7 @@ test("reported thinking precedes one answer, with a separate collapsed summary a
   assert.equal(doc.querySelector(".entry.assistant > .entry-content")?.textContent, "The answer.");
   assert.equal(doc.querySelector("details")?.open, false);
   assert.equal(doc.querySelector(".response-usage"), null);
-  assert.equal(doc.querySelector("summary")?.textContent, "Reasoning summary");
+  assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
   assert.match(doc.querySelector(".response-reasoning-content")?.textContent || "", /The provider is checking the available evidence/);
   assert.doesNotMatch(doc.querySelector(".response-details")?.textContent || "", /600|1,200|800/);
   const expanded = render(entries, new Map([["reasoning:response-one", true]]));
@@ -111,7 +112,7 @@ test("old positive counts can be known without flags, but absent zero counts sta
   const doc = render(appendEvent([], update(parsed!)));
   assert.equal(doc.querySelector(".response-usage"), null);
   assert.equal(doc.querySelector(".response-reasoning-count"), null);
-  assert.equal(doc.querySelector("summary")?.textContent, "Thinking");
+  assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Thinking");
 });
 
 test("provider output semantics remain in metadata without decorating the visible reasoning summary", () => {
@@ -121,7 +122,7 @@ test("provider output semantics remain in metadata without decorating the visibl
     assert.equal(entries[0].responseMetadata?.usage?.reasoning_in_output, meaning);
     assert.equal(entries[0].responseMetadata?.usage?.total_tokens, 15);
     const doc = render(entries);
-    assert.equal(doc.querySelector("summary")?.textContent, "Reasoning summary");
+    assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
     assert.equal(doc.querySelector(".response-usage"), null);
     assert.doesNotMatch(doc.body.textContent || "", /Input|Output|Total|Context/);
   }
@@ -134,7 +135,7 @@ test("reasoning phases retain their text and status while usage-only terminal fr
         usage: { ...reportedCounters, prompt_tokens: 10, completion_tokens: 5, total_tokens: 15,
           reasoning_tokens: 1, reasoning_reported: true, reasoning_in_output: "included" } });
       const doc = render(appendEvent([], update(value)));
-      if (summary || status === "thinking") {
+      if (summary || status === "thinking" || status === "cancelled" || status === "failed") {
         assert.match(doc.querySelector(".response-details")?.textContent || "", new RegExp(label));
       } else {
         assert.equal(doc.querySelector("article"), null);
@@ -214,7 +215,8 @@ test("cancelled reasoning-only response hydrates as display evidence without cre
   entries = appendEvent(entries, update(cancelled));
   const hydrated = applySnapshot({ entries }, snapshot([row(cancelled, "")]));
   assert.equal(hydrated.entries.length, 1); assert.equal(hydrated.entries[0].text, "");
-  assert.equal(render(hydrated.entries).querySelector("summary")?.textContent, "Reasoning summary Stopped");
+  assert.equal(render(hydrated.entries).querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
+  assert.equal(render(hydrated.entries).querySelector(".response-interrupted")?.textContent, "Stopped");
   assert.equal(render(hydrated.entries).querySelector(".response-thinking"), null);
 });
 
@@ -266,9 +268,11 @@ test("reliable run usage appears once on the newest response without summing sna
   const second = metadata({ response_id: "second", history_id: "42", round_number: 1, status: "completed", run_usage: runUsage });
   const state = applySnapshot({ entries: [] }, snapshot([row(first, "Before the tool."), row(second, "Final answer.")]));
   const again = applySnapshot(state, snapshot([row(first, "Before the tool."), row(second, "Final answer.")]));
-  const doc = render(again.entries);
+  const doc = render(again.entries, new Map(), defaultAppearance);
   assert.equal(doc.querySelectorAll(".response-run-usage").length, 1);
-  assert.equal(doc.querySelector(".response-run-usage")?.closest("[data-response-id]")?.getAttribute("data-response-id"), "second");
+  assert.equal(doc.querySelector(".response-run-usage")?.closest("article.entry"), null);
+  assert.equal(doc.querySelector(".response-run-usage")?.previousElementSibling?.getAttribute("data-record-key"), again.entries[1].id,
+    "The footer follows the latest response without becoming part of its row");
   assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 2 responses");
   assert.equal(doc.querySelector(".response-run-usage details[open]"), null);
   assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 30Output 12Reasoning 7 (in Output)");
@@ -279,7 +283,7 @@ test("partial run usage states coverage and never presents partial reasoning as 
   const value = metadata({ status: "completed", history_id: "42", run_usage: { ...reportedCounters, prompt_tokens: 30, completion_tokens: 12,
     total_tokens: 42, reasoning_tokens: 7, reasoning_reported: false, reasoning_in_output: "unknown", response_count: 3,
     usage_response_count: 2, reasoning_response_count: 1, prompt_response_count: 2, completion_response_count: 2, total_response_count: 2, complete: false } });
-  const doc = render(fromHistory(snapshot([row(value)])));
+  const doc = render(fromHistory(snapshot([row(value)])), new Map(), defaultAppearance);
   assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 3 responses · partial");
   assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 30 (2/3 responses)Output 12 (2/3 responses)");
   assert.match(doc.querySelector(".response-run-usage")?.textContent || "", /Input reported for 2 of 3 responses; Output for 2 of 3/);
@@ -291,7 +295,7 @@ test("run counter coverage preserves reported zero while hiding completely absen
     prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, reasoning_tokens: 7, reasoning_reported: false,
     reasoning_in_output: "unknown", response_count: 3, usage_response_count: 3, reasoning_response_count: 1,
     prompt_response_count: 2, completion_response_count: 0, total_response_count: 0, complete: false } });
-  const doc = render(fromHistory(snapshot([row(value)])));
+  const doc = render(fromHistory(snapshot([row(value)])), new Map(), defaultAppearance);
   assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 0 (2/3 responses)");
   assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 3 responses · partial");
   assert.match(doc.querySelector(".response-run-usage")?.textContent || "", /Input reported for 2 of 3 responses; Output for 0 of 3/);
@@ -312,9 +316,10 @@ test("queued followups with reset round numbers show the latest response's cumul
   // A late snapshot updates an earlier response in place; it must not take over
   // the run overview merely because its generation had a larger round number.
   entries = appendEvent(entries, update({ ...entries[1].responseMetadata!, revision: 2 }));
-  const doc = render(entries);
+  const doc = render(entries, new Map(), defaultAppearance);
   assert.equal(doc.querySelectorAll(".response-run-usage").length, 1);
-  assert.equal(doc.querySelector(".response-run-usage")?.closest("[data-response-id]")?.getAttribute("data-response-id"), "response-2");
+  assert.equal(doc.querySelector(".response-run-usage")?.closest("article.entry"), null);
+  assert.equal(doc.querySelector(".response-run-usage")?.previousElementSibling?.getAttribute("data-record-key"), entries[2].id);
   assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 3 responses");
   assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 30Output 15Reasoning 3 (in Output)");
 });

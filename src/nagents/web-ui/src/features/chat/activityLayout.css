@@ -1,0 +1,22 @@
+.chat-activity-group { margin: 5px 0; min-width: 0; color: var(--text-secondary); font-size: 12px; }
+.chat-activity-group > summary { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 6px 9px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; list-style: none; }
+.chat-activity-group > summary::-webkit-details-marker { display: none; }
+.chat-activity-group > summary::after { content: ""; margin-left: auto; flex: 0 0 9px; height: 9px; background: linear-gradient(currentColor, currentColor) center / 9px 1px no-repeat, linear-gradient(currentColor, currentColor) center / 1px 9px no-repeat; }
+.chat-activity-group[open] > summary::after { background-size: 9px 1px, 0 0; }
+.chat-activity-group > summary:hover { background: var(--surface-hover); color: var(--text-reading); }
+.chat-activity-group > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chat-activity-label { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.chat-activity-count { font-size: 10px; font-variant-numeric: tabular-nums; background: var(--surface-control); padding: 1px 5px; border-radius: 4px; }
+.chat-activity-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 11px; opacity: .8; }
+.chat-activity-state { flex-shrink: 0; margin-left: auto; font-size: 11px; }
+.chat-activity-group[data-state="Running"] > summary > svg { animation: response-thinking-pulse 1.2s ease-in-out infinite; }
+.chat-activity-group[data-state="Needs attention"] > summary { border-color: var(--border-group); color: var(--text-reading); }
+.chat-activity-body { margin: 2px 0 12px 15px; padding: 3px 0 3px 14px; border-left: 1px solid var(--border-group); }
+.chat-activity-body > .entry { margin-block: 6px; }
+.chat-activity-body .tool-record { box-shadow: none; }
+.chat-activity-body .task-thread { margin-block: 6px; }
+.entry.reasoning-only { margin-block: 8px; padding-block: 0; }
+.entry.reasoning-only .entry-label { display: none; }
+@media (max-width: 600px) { .chat-activity-target { max-width: 28vw; } .chat-activity-body { margin-left: 5px; padding-left: 10px; } }
+@media (pointer: coarse) { .chat-activity-group > summary { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .chat-activity-group[data-state="Running"] > summary > svg { animation: none; } }

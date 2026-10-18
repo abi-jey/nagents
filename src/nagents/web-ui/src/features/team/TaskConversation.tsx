@@ -8,6 +8,7 @@ import { TaskTimeline } from "./TaskTimeline.js";
 import { mergeTaskActivity, providerLabel, type TaskActivity, type TaskDetail, type TeamAgent } from "./model.js";
 import { isProfileTarget, type TeamController } from "./useTeam.js";
 import type { WireEvent } from "../../types.js";
+import type { ChatAppearance } from "../settings/appearance.js";
 
 export function taskEntries(detail: TaskDetail | undefined, streamed: TaskActivity[]): Entry[] {
   if (!detail) return [];
@@ -26,8 +27,9 @@ export function taskEntries(detail: TaskDetail | undefined, streamed: TaskActivi
   return entries;
 }
 
-export function TaskConversation({ team, agents, arrivals, token, sessionId, back }: {
+export function TaskConversation({ team, agents, arrivals, token, sessionId, back, appearance }: {
   team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; token: string; sessionId: string; back: () => void;
+  appearance?: ChatAppearance;
 }) {
   const agent = agents.find(item => item.id === team.selected);
   const removedProfile = team.loaded && isProfileTarget(team.selected) && !team.profile;
@@ -47,7 +49,7 @@ export function TaskConversation({ team, agents, arrivals, token, sessionId, bac
       {(team.detail?.activity_truncated || team.activity.some(event => event.sequence > (team.detail?.activity_cursor || 0) && event.payload.type === "resync_required")) && <p className="task-history-notice" role="status">Some live updates were interrupted. Recorded activity will refresh when this response is saved.</p>}
       {team.detail?.before && <button type="button" className="task-load-earlier" disabled={team.loadingEarlier} onClick={() => void team.loadEarlier()}>{team.loadingEarlier ? "Loading…" : "Load earlier messages"}</button>}
       {agent?.prompt && <details className="task-assignment"><summary>Assigned task</summary><p>{agent.prompt}</p></details>}
-      <Conversation key={team.selected} entries={entries} token={token} sessionId={sessionId} demo={false} canSubmit={false} submit={() => {}}
+      <Conversation appearance={appearance} key={team.selected} entries={entries} token={token} sessionId={sessionId} demo={false} canSubmit={false} submit={() => {}}
         renderTask={thread => agents.some(item => item.id === thread.id) ? <TaskTimeline id={thread.id} agents={agents} inspect={team.select} arrivals={arrivals} /> : undefined} />
       {!!team.detail?.receipts?.length && <div className="task-message-receipts" aria-label="Message delivery">
         {team.detail.receipts.filter(receipt => receipt.status !== "picked_up").slice(-6).map(receipt => <div key={receipt.message_id} className={`task-message-receipt receipt-${receipt.status}`}>
