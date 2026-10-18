@@ -58,10 +58,14 @@ class ChildFailureScenario:
         initialize = runtime.Harness.initialize
 
         async def observed_initialize(harness: runtime.Harness, *, create_session: bool = True) -> None:
-            if fail_descendant_initialization and harness.subagent_depth == 2:
-                self.descendant_initialization_failure = "injected descendant provider initialization failure"
-                raise RuntimeError(self.descendant_initialization_failure)
-            await initialize(harness, create_session=create_session)
+            try:
+                if fail_descendant_initialization and harness.subagent_depth == 2:
+                    raise RuntimeError("injected descendant provider initialization failure")
+                await initialize(harness, create_session=create_session)
+            except Exception as error:
+                if harness.subagent_depth == 2:
+                    self.descendant_initialization_failure = f"{type(error).__name__}: {error}"
+                raise
 
         async def read_file(tools: CodingTools, path: str) -> dict[str, str]:
             assert path == "owned-barrier"
