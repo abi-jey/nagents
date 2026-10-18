@@ -338,7 +338,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install build tools
-        run: pip install build hatch
+        run: pip install build hatch pyyaml
 
       - name: Stamp feature alpha version
         if: github.event_name == 'workflow_dispatch' && inputs.publish_alpha
@@ -355,7 +355,28 @@ jobs:
           from pathlib import Path
           import tarfile
           import zipfile
+          import yaml
 
+          def verify_assistant_document(content):
+              lines = content.decode("utf-8").splitlines()
+              assert lines and lines[0] == "---", "Assistant document needs YAML frontmatter"
+              try:
+                  closing = lines.index("---", 1)
+              except ValueError as error:
+                  raise AssertionError("Assistant document frontmatter is not closed") from error
+              metadata = yaml.safe_load("\n".join(lines[1:closing]))
+              assert isinstance(metadata, dict), "Assistant frontmatter must be a mapping"
+              assert metadata.get("name") == "assistant"
+              prompt = metadata.get("prompt")
+              assert isinstance(prompt, str) and prompt.strip(), "Bundled assistant prompt is empty"
+              live = metadata.get("live")
+              assert isinstance(live, dict), "Bundled live defaults are missing"
+              live_prompt = live.get("prompt")
+              assert isinstance(live_prompt, str) and live_prompt.strip(), "Bundled live prompt is empty"
+
+          instructions_path = "nagents/harness/instructions/assistant.md"
+          source_instructions = Path(f"src/{instructions_path}").read_bytes()
+          verify_assistant_document(source_instructions)
           with zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
               wheel_files = wheel.namelist()
               manifest = json.loads(wheel.read("nagents/web/static/build.json"))
@@ -363,10 +384,9 @@ jobs:
               assert manifest["sources"] and manifest["assets"]
               for path, digest in manifest["assets"].items():
                   assert hashlib.sha256(wheel.read(f"nagents/web/static/{path}")).hexdigest() == digest, path
-              instructions_path = "nagents/harness/instructions/AGENTS.md"
               instructions = wheel.read(instructions_path)
-              assert instructions == Path(f"src/{instructions_path}").read_bytes()
-              assert instructions.decode("utf-8").strip()
+              assert instructions == source_instructions
+              verify_assistant_document(instructions)
           with tarfile.open(next(Path("dist").glob("*.tar.gz"))) as sdist:
               sdist_files = [name.split("/", 1)[-1] for name in sdist.getnames()]
               prefix = sdist.getnames()[0].split("/", 1)[0]
@@ -374,9 +394,11 @@ jobs:
                   source = sdist.extractfile(f"{prefix}/src/nagents/web-ui/{path}")
                   assert source is not None, path
                   assert hashlib.sha256(source.read()).hexdigest() == digest, path
-              source = sdist.extractfile(f"{prefix}/src/{instructions_path}")
-              assert source is not None, instructions_path
-              assert source.read() == instructions
+              assistant_source = sdist.extractfile(f"{prefix}/src/{instructions_path}")
+              assert assistant_source is not None, instructions_path
+              sdist_instructions = assistant_source.read()
+              assert sdist_instructions == source_instructions
+              verify_assistant_document(sdist_instructions)
 
           assert "nagents/web/static/index.html" in wheel_files
           assert any(name.startswith("nagents/web/static/assets/") and name.endswith(".js") for name in wheel_files)
