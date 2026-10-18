@@ -35,6 +35,7 @@ from nagents.types import TextContent
 from .agent_behavior import AgentBehavior
 from .agent_behavior import load_behavior
 from .agent_catalog import AgentCatalog
+from .agent_documents import ensure_agent_documents
 from .auth import OpenAIAuth
 from .commands import CommandRegistry
 from .config import AgentProfile
@@ -336,9 +337,7 @@ class Harness:
             global_default = self.provider_store.model_store("global").load_binding()
         else:
             workspace = self.provider_store.model_binding("workspace")
-            global_default = self.provider_store.model_binding(
-                "global", legacy_provider=self._default_provider_name or self.providers.active
-            )
+            global_default = self.provider_store.model_binding("global")
         return workspace, global_default, builtin
 
     def default_model_binding(self) -> ResolvedModelBinding:
@@ -378,7 +377,7 @@ class Harness:
             agent_binding = preference.binding
         elif (profile.model or profile.provider) and route:
             agent_binding = ModelBinding(route, profile.model or workspace.id or global_default.id or builtin.id)
-            source = profile.source
+            source = dict(profile.field_sources).get("model", profile.source)
         else:
             agent_binding = ModelBinding()
             if profile.model:
@@ -459,7 +458,7 @@ class Harness:
         self._agent_generation_active = True
         self._generation_model_bindings = {}
         self._generation_model_errors = {}
-        for name in ("assistant", *sorted(self._generation_profiles)):
+        for name in dict.fromkeys(("assistant", *sorted(self._generation_profiles))):
             try:
                 binding = self._resolve_agent_model(name, self.delegation_profile(name)).binding
             except (OSError, ValueError) as error:
@@ -475,9 +474,9 @@ class Harness:
         return self._generation_source_profiles if self._agent_generation_active else self.config.agent_source_profiles
 
     def delegation_profile(self, name: str) -> AgentProfile:
-        if name == "assistant":
-            return self.config.profile(name)
         profiles = self.delegation_profiles()
+        if name == "assistant" and name not in profiles:
+            return AgentProfile(mode="reviewer" if self.config.read_only else "build")
         if name not in profiles:
             raise ValueError(f"Unknown agent profile {name!r}")
         return profiles[name]
@@ -538,7 +537,7 @@ class Harness:
         )
         return tuple(
             name
-            for name in ("assistant", *sorted(self.delegation_profiles()))
+            for name in dict.fromkeys(("assistant", *sorted(self.delegation_profiles())))
             if self.delegation_profile(name).subagent_available
             and all(profile.allowed_agents is None or name in profile.allowed_agents for profile in policies)
         )
@@ -598,8 +597,8 @@ class Harness:
         delegation_name = "delegate" if "delegate" in delegation_names else next(iter(delegation_names), "delegate")
         delegation_available = self.can_delegate and (self._defer_prompt_capabilities or bool(delegation_names))
         base = (
-            f"You are ngn, a coding assistant working in {self.workspace}. Active profile: {self.config.agent} ({self.mode}).\n"
-            f"\n{load_default_instructions()}\n\n"
+            f"Runtime context: workspace {self.workspace}; active profile {self.config.agent}; mode {self.mode}.\n"
+            f"\n{self._behavior.instructions if not self._defer_prompt_capabilities else profile.prompt if profile.prompt_present else load_default_instructions()}\n\n"
         )
         if scheduler_available:
             base += (
@@ -610,11 +609,11 @@ class Harness:
             )
         else:
             base += "No native wake-up scheduler is advertised; do not promise delayed self-follow-up without an advertised scheduler.\n"
-        profile_instructions = profile.instructions if self._defer_prompt_capabilities else self._behavior.instructions
+        profile_instructions = profile.instructions if self._defer_prompt_capabilities else ""
         if profile_instructions:
             base += f"\nTrusted profile instructions:\n{profile_instructions}\n"
         for instructions in self._inherited_profile_instructions:
-            if instructions != profile_instructions:
+            if instructions != profile.instructions:
                 base += f"\nParent profile instructions (your own permission ceiling applies):\n{instructions}\n"
         if self._parent_instructions:
             base += (
@@ -651,7 +650,7 @@ class Harness:
             base += f"\nApplicable project context ({path}):\n{content}\n"
         self.agent.system_prompt = base
         self._generated_system_prompt = base
-        self._prompt_profile_instructions = profile_instructions
+        self._prompt_profile_instructions = profile.instructions
 
     async def initialize(self, *, create_session: bool = True) -> None:
         """Initialize local sessions, instructions and trusted extensions. No provider I/O.
@@ -668,6 +667,7 @@ class Harness:
                 if self._initialization_error:
                     raise RuntimeError(self._initialization_error)
                 try:
+                    await asyncio.to_thread(ensure_agent_documents, self.provider_store)
                     # pathlib's parents=True ignores mode for intermediate directories.
                     missing: list[Path] = []
                     directory = self.config.data_dir
@@ -1232,12 +1232,13 @@ class Harness:
 
     def _model_connection_fixed(self, *, include_agent: bool = True) -> bool:
         """A complete model reference is independent of registry activation."""
+        self.refresh_agent_definitions()
         if include_agent:
             preference = self.provider_store.agent_models.load(self.config.agent)
             if preference.model_present:
                 if preference.binding.configured:
                     return bool(preference.binding.provider)
-            elif self.current_profile().provider:
+            elif self.config.profile(self.config.agent).provider:
                 return True
         if self.config.model_config_explicit:
             return bool(self._default_provider_name)
@@ -1256,7 +1257,9 @@ class Harness:
                 raise ValueError("Select global connections in global settings")
             effective_scope = scope == "workspace" or not self.provider_store.load_scope("workspace").active
             if effective_scope and not self._model_connection_fixed():
-                selected_model = self._resolve_agent_model(self.config.agent, self.current_profile()).binding.id
+                selected_model = self._resolve_agent_model(
+                    self.config.agent, self.config.profile(self.config.agent)
+                ).binding.id
                 await self._select_provider(name, model=selected_model)
             saved = self.provider_store.save_scope(
                 ProviderRegistry(active=name, providers=current.providers), expected=revision, scope=scope
@@ -1276,7 +1279,9 @@ class Harness:
             if not global_active:
                 raise ValueError("No global provider default is configured")
             if not self._model_connection_fixed():
-                selected_model = self._resolve_agent_model(self.config.agent, self.current_profile()).binding.id
+                selected_model = self._resolve_agent_model(
+                    self.config.agent, self.config.profile(self.config.agent)
+                ).binding.id
                 await self._select_provider(global_active, model=selected_model)
             saved = self.provider_store.save_scope(
                 ProviderRegistry(providers=current.providers), expected=revision, scope="workspace"

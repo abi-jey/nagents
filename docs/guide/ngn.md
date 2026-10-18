@@ -702,10 +702,10 @@ configuration precedence and runtime profile model selection.
 ## Default and workspace instructions
 
 Every coding Harness starts with ngn's bundled
-`nagents/harness/instructions/AGENTS.md`. The same Markdown resource ships in the
+`nagents/harness/instructions/assistant.md`, in its `prompt` field. The same Markdown resource ships in the
 wheel and source distribution; it contains the default coding, verification, and
 approval guidance. Framework maintainers can edit
-`src/nagents/harness/instructions/AGENTS.md` to change those defaults without
+`src/nagents/harness/instructions/assistant.md` to change those defaults without
 editing Python prompt strings. Active workspace, profile, tool capabilities, and
 delegation limits are added by the runtime.
 

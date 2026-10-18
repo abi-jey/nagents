@@ -11,16 +11,20 @@ import pytest
 from nagents.cli import main
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
+from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.harness.subagents import TaskInfo
 from nagents.harness.types import TaskCompleted
 from nagents.types import ToolCall
+from tests.support.providers import FakeProvider
 from tests.support.providers import collect
 from tests.support.providers import notifications
-from tests.support.providers import setup_harness
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -28,12 +32,21 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
-    from tests.support.providers import FakeProvider
 
 
-def manifest(path: Path, *, name: str = "research", description: str = "Find supporting evidence") -> Path:
+def manifest(
+    path: Path, *, name: str = "research", description: str = "Find supporting evidence", native: bool = False
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\nname: {name}\ndescription: {description}\n---\nReport your evidence.\n", encoding="utf-8")
+    if native:
+        path.write_text(
+            f'---\nname: {name}\ndescription: {description}\nprompt: "Report your evidence."\n---\n',
+            encoding="utf-8",
+        )
+    else:
+        path.write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\nReport your evidence.\n", encoding="utf-8"
+        )
     return path
 
 
@@ -44,7 +57,7 @@ def test_discovery_trust_sources_and_scope_precedence(tmp_path: Path, monkeypatc
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
-    personal = manifest(home / ".config/ngn/agents/research.md", description="Personal file")
+    personal = manifest(home / ".config/ngn/agents/research.md", description="Personal file", native=True)
     manifest(workspace / ".claude/agents/research.md", description="Project file")
     assert load_config(workspace).profile("research").source == str(personal)
     user_config = home / ".config/ngn/config.json"
@@ -162,10 +175,16 @@ def test_parent_policy_applies_to_advertising_execution_and_resume(tmp_path: Pat
 def test_imported_profile_delegates_through_normal_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    path = manifest(workspace / ".ngn/agents/research.md")
+    path = manifest(workspace / ".ngn/agents/research.md", native=True)
     path.write_text(
-        path.read_text().replace("description:", "tools: []\nuser_invocable: false\nmodel: child-model\ndescription:")
+        path.read_text().replace(
+            "description:",
+            "tools: []\nuser_invocable: false\nmodel: {provider: home, id: child-model}\ndescription:",
+        )
     )
+    providers_store = ScopedProviderRegistryStore(workspace)
+    profile = ProviderProfile(kind="openai", auth="api-key")
+    providers_store.global_store.save(ProviderRegistry(active="home", providers={"home": profile}), expected="0" * 64)
     config = load_config(workspace, trust_project=True)
 
     async def scenario() -> None:
@@ -184,8 +203,15 @@ def test_imported_profile_delegates_through_normal_lifecycle(tmp_path: Path, mon
             else:
                 yield TextDoneEvent(text="Waiting for evidence")
 
-        harness, providers = setup_harness(workspace, monkeypatch, script)
-        harness.config.profiles.update(config.profiles)
+        providers: list[FakeProvider] = []
+
+        def factory(profile: ProviderProfile, owner: HarnessConfig, auth: object) -> FakeProvider:
+            provider = FakeProvider(owner, len(providers), script)
+            providers.append(provider)
+            return provider
+
+        monkeypatch.setattr(runtime, "build_provider", factory)
+        harness = Harness(config)
         try:
             harness.refresh_instructions()
             definition = next(tool for tool in harness.agent.tool_registry.get_all() if tool.name == "delegate")

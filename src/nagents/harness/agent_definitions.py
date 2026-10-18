@@ -13,6 +13,7 @@ import stat
 import tomllib
 from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -26,6 +27,7 @@ from .reasoning import resolve_effort
 MAX_AGENT_FILES = 256
 MAX_AGENT_BYTES = 262144
 MAX_HEADER_BYTES = 32768
+MAX_NATIVE_HEADER_BYTES = 65536
 MAX_ITEMS = 512
 _NAME = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _TOOL = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}\Z")
@@ -50,6 +52,12 @@ class ParsedAgent:
     allowed_agents: tuple[str, ...] | None = None
     reasoning_effort: ReasoningPreference = ""
     live: LiveProfile = field(default_factory=LiveProfile)
+    prompt: str = ""
+    prompt_present: bool = False
+    fields_present: tuple[str, ...] = ()
+    auto_update: bool = False
+    default_revision: str = ""
+    field_sources: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -72,7 +80,6 @@ _FIELDS = {
         "name",
         "description",
         "model",
-        "provider",
         "tools",
         "denied_tools",
         "mode",
@@ -81,6 +88,9 @@ _FIELDS = {
         "allowed_agents",
         "reasoning_effort",
         "live",
+        "prompt",
+        "auto_update",
+        "default_revision",
     },
     "claude": {"name", "description", "model", "tools", "disallowedTools", "permissionMode"},
     "copilot": {"name", "description", "model", "tools", "user-invocable", "disable-model-invocation", "agents"},
@@ -251,9 +261,9 @@ def _tool_policy(data: dict[str, object], options: _Import) -> tuple[tuple[str, 
     return allowed, denied
 
 
-def _yaml_header(source: str) -> dict[str, object]:
-    if len(source.encode("utf-8")) > MAX_HEADER_BYTES:
-        raise ValueError("YAML frontmatter exceeds 32 KiB")
+def _yaml_header(source: str, *, max_bytes: int = MAX_HEADER_BYTES) -> dict[str, object]:
+    if len(source.encode("utf-8")) > max_bytes:
+        raise ValueError(f"YAML frontmatter exceeds {max_bytes // 1024} KiB")
     for index, token in enumerate(yaml.scan(source)):
         if index > 4096:
             raise ValueError("YAML frontmatter has too many tokens")
@@ -297,7 +307,13 @@ def _markdown(source: str, fmt: str) -> tuple[dict[str, object], str]:
         raise ValueError("expected YAML frontmatter beginning with ---")
     for index, line in enumerate(lines[1:], 1):
         if line.rstrip() == "---":
-            return _yaml_header("".join(lines[1:index])), "".join(lines[index + 1 :]).strip()
+            header = "".join(lines[1:index])
+            data = (
+                {}
+                if fmt == "native" and not header.strip()
+                else _yaml_header(header, max_bytes=MAX_NATIVE_HEADER_BYTES if fmt == "native" else MAX_HEADER_BYTES)
+            )
+            return data, "".join(lines[index + 1 :]).strip()
     raise ValueError("YAML frontmatter is missing its closing --- delimiter")
 
 
@@ -336,6 +352,8 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         body = _text(data.get("developer_instructions"), "developer_instructions", limit=MAX_AGENT_BYTES)
     else:
         data, body = _markdown(source, fmt)
+    if fmt == "native" and body:
+        raise ValueError("Native agent files must contain only frontmatter; put instructions in prompt: |")
     unknown = sorted(set(data) - _FIELDS[fmt])
     if unknown:
         raise ValueError(
@@ -344,16 +362,41 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
     fallback = path.parent.name if path.name == "agent.md" else path.stem.removesuffix(".agent")
     require_name = fmt in {"claude", "codex", "gemini", "antigravity"}
     name = _text(data.get("name", "" if require_name else fallback), "name", limit=128)
-    if not _NAME.fullmatch(name) or name == "assistant":
+    if not _NAME.fullmatch(name) or (name == "assistant" and fmt != "native"):
         raise ValueError("name must use letters, numbers, underscores or hyphens and must not replace assistant")
-    description = _text(data.get("description", ""), "description", optional=fmt in {"cursor", "copilot"})
-    body = _text(body, "instructions", limit=MAX_AGENT_BYTES)
+    description = _text(data.get("description", ""), "description", optional=fmt in {"native", "cursor", "copilot"})
+    body = _text(body, "instructions", optional=fmt == "native", limit=MAX_AGENT_BYTES)
+    prompt = ""
+    prompt_present = fmt == "native" and "prompt" in data
+    auto_update = False
+    default_revision = ""
+    fields_present: set[str] = set()
+    if fmt == "native":
+        fields_present.update(set(data) - {"name"})
+        if prompt_present:
+            prompt_value = data["prompt"]
+            _text(prompt_value, "prompt", optional=True, limit=24000)
+            assert isinstance(prompt_value, str)
+            try:
+                if len(prompt_value.encode("utf-8")) > 48000:
+                    raise ValueError("prompt exceeds the UTF-8 size limit")
+            except UnicodeError:
+                raise ValueError("prompt must contain valid Unicode text") from None
+            prompt = prompt_value
+            fields_present.add("prompt_present")
+        auto_update = _boolean(data, "auto_update", False)
+        default_revision_value = data.get("default_revision", "")
+        if not isinstance(default_revision_value, str) or (
+            "default_revision" in data and not re.fullmatch(r"[0-9a-f]{64}", default_revision_value)
+        ):
+            raise ValueError("default_revision must be a SHA-256 hexadecimal digest")
+        default_revision = default_revision_value
     raw_model = data.get("model", "")
-    if fmt == "native" and isinstance(raw_model, dict):
-        if "provider" in data:
-            raise ValueError("Put the provider inside model; do not also set an agent provider")
-        binding = ModelBinding.parse(raw_model)
+    if fmt == "native":
+        binding = ModelBinding.parse(raw_model) if "model" in data else ModelBinding()
         model, provider = binding.id, binding.provider
+        if "model" in data:
+            fields_present.add("provider")
     else:
         model = _text(raw_model, "model", optional=True, limit=256)
         provider = _text(data.get("provider", ""), "provider", optional=True, limit=64)
@@ -365,6 +408,10 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         model, provider = options.model, options.provider
     else:
         model, provider = options.model or model, options.provider or provider
+        if options.model:
+            fields_present.add("model")
+        if options.provider:
+            fields_present.add("provider")
     if provider and not _PROVIDER.fullmatch(provider):
         raise ValueError("provider must name an ngn provider connection")
     effort = _text(data.get("reasoning_effort", ""), "reasoning_effort", optional=True)
@@ -418,6 +465,15 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
     elif fmt == "antigravity":
         user_invocable = _boolean(data, "mainAgent", True)
         subagent_available = _boolean(data, "subagent", True)
+    live = LiveProfile.parse(data.get("live", {}))
+    source_fields = (
+        fields_present
+        if fmt == "native"
+        else set(ParsedAgent.__dataclass_fields__)
+        - {"name", "source", "source_format", "fields_present", "field_sources"}
+    )
+    field_sources = {field_name: str(path.absolute()) for field_name in source_fields}
+    field_sources.update({f"live.{field_name}": str(path.absolute()) for field_name in live.selected()})
     return ParsedAgent(
         name,
         description,
@@ -433,7 +489,37 @@ def _parse(path: Path, options: _Import) -> ParsedAgent:
         fmt,
         allowed_agents,
         cast("ReasoningPreference", effort),
-        LiveProfile.parse(data.get("live", {})),
+        live,
+        prompt,
+        prompt_present,
+        tuple(sorted(fields_present)),
+        auto_update,
+        default_revision,
+        tuple(sorted(field_sources.items())),
+    )
+
+
+def _merge_native_profile(previous: ParsedAgent, profile: ParsedAgent) -> ParsedAgent:
+    """Merge native fragments before discovery collapses a same-name source."""
+    changes = {name: getattr(profile, name) for name in profile.fields_present}
+    if "live" in changes:
+        changes["live"] = LiveProfile.parse({**previous.live.selected(), **profile.live.selected()})
+    previous_fields = (
+        set(previous.fields_present)
+        if previous.source_format == "native"
+        else set(previous.__dataclass_fields__) - {"name", "source", "source_format", "fields_present", "field_sources"}
+    )
+    previous_sources = {name: previous.source for name in previous_fields}
+    previous_sources.update({f"live.{name}": previous.source for name in previous.live.selected()})
+    previous_sources.update(dict(previous.field_sources))
+    previous_sources.update(dict(profile.field_sources))
+    return replace(
+        previous,
+        **changes,
+        source=profile.source,
+        source_format=profile.source_format,
+        fields_present=tuple(sorted(previous_fields | set(profile.fields_present))),
+        field_sources=tuple(sorted(previous_sources.items())),
     )
 
 
@@ -525,6 +611,8 @@ def discover_agents(base: Path, *, personal: bool = False) -> DefinitionBatch:
                 continue
             if profile.name in profiles:
                 diagnostics.append(f"{profile.source}: agent {profile.name!r} replaces {profiles[profile.name].source}")
+                if profile.source_format == "native" and profiles[profile.name].source_format == "native":
+                    profile = _merge_native_profile(profiles[profile.name], profile)
                 del profiles[profile.name]
             profiles[profile.name] = profile
     return DefinitionBatch(tuple(profiles.values()), tuple(diagnostics), failed)

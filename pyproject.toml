@@ -61,7 +61,7 @@ ignore = [ "E501",]
 quote-style = "double"
 
 [tool.hatch.build]
-artifacts = [ "/src/nagents/web/static/**", "/src/nagents/skills/bundled/**", "/src/nagents/harness/instructions/AGENTS.md", "/src/nagents/web/instructions/*.md",]
+artifacts = [ "/src/nagents/web/static/**", "/src/nagents/skills/bundled/**", "/src/nagents/harness/instructions/*.md", "/src/nagents/web/instructions/*.md",]
 
 [tool.ruff.lint.isort]
 force-single-line = true

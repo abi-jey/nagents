@@ -39,7 +39,7 @@ ToolName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z
 
 class BehaviorPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    instructions: str = Field(default="", max_length=12000)
+    instructions: str = Field(default="", max_length=24000)
     tools: list[ToolName] = Field(default_factory=list, max_length=512)
 
 
@@ -93,9 +93,10 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
     harness.refresh_agent_definitions()
     if agent not in harness.config.profile_names:
         raise HTTPException(404, "This agent definition is no longer available.")
-    profile = harness.config.profile(agent) if scope == "agent" else AgentProfile()
+    profile = harness.config.agent_authored_profiles.get(agent, AgentProfile()) if scope == "agent" else AgentProfile()
     layers = behavior_layers(harness.provider_store, agent, through_scope=scope)
     preference = layers[scope]
+    managed = layers["global"]
     revisions = [scope, agent, harness.profile_revision]
     for name in ("global", "workspace", "agent"):
         revisions.append(layers[name].revision)
@@ -160,7 +161,9 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
         "revision": revision,
         "preferences_revision": preference.revision,
         "preferences": {
-            key: value for key, value in preference.preferences.items() if key in {"instructions", "tools"}
+            ("instructions" if key == "prompt" else key): value
+            for key, value in preference.preferences.items()
+            if key in {"prompt", "tools"}
         },
         "values": {"instructions": resolved.instructions, "tools": desired},
         "inherited": {
@@ -169,8 +172,15 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
         },
         "origins": {"instructions": resolved.instructions_origin, "tools": resolved.tools_origin},
         "inherited_origins": {"instructions": inherited.instructions_origin, "tools": inherited.tools_origin},
+        "field_paths": {"instructions": resolved.instructions_path},
+        "inherited_paths": {"instructions": inherited.instructions_path},
+        "managed_defaults": {
+            "auto_update": managed.preferences.get("auto_update", False),
+            "path": str(managed.path),
+            "default_revision": managed.preferences.get("default_revision", ""),
+        },
         "definition": {
-            "instructions": profile.instructions,
+            "instructions": profile.prompt if profile.prompt_present else profile.instructions,
             "tools": list(profile.tools) if profile.tools is not None else None,
         },
         "profiles": [
@@ -200,7 +210,10 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     async def read(scope: BehaviorScope = "agent", agent: AgentName = "assistant") -> dict[str, object]:
         try:
             return snapshot(get(), scope, agent)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            logger.warning(
+                "Agent settings read failed: scope=%s agent=%s error_type=%s", scope, agent, type(error).__name__
+            )
             raise HTTPException(422, "Agent settings could not be read. Check the saved agent preferences.") from None
 
     @app.put("/api/agent-settings")
@@ -212,10 +225,11 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
                 if current["revision"] != body.revision:
                     raise HTTPException(409, "Agent settings changed. Reload before saving.")
                 store = behavior_store(state.harness.provider_store, body.scope)
+                values = body.preferences.model_dump(exclude_unset=True)
                 store.replace_fields(
-                    body.agent if body.scope == "agent" else "defaults",
-                    ("instructions", "tools"),
-                    body.preferences.model_dump(exclude_unset=True),
+                    body.agent if body.scope == "agent" else "assistant",
+                    ("prompt", "tools"),
+                    {("prompt" if key == "instructions" else key): value for key, value in values.items()},
                     expected=str(current["preferences_revision"]),
                 )
                 result = snapshot(state, body.scope, body.agent)

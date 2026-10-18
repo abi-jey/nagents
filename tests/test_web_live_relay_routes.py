@@ -117,16 +117,16 @@ def test_login_relay_routes_survive_reload_without_browser_sdp_or_api_key(
                                 harnesses[0].session_id, Message(role="user", content="A saved startup detail")
                             )
                             await configure(client, headers)
-                            preferences = (
-                                await client.get("/api/live/settings?scope=workspace", headers=headers)
+                            instructions = (
+                                await client.get("/api/live/instructions?scope=workspace", headers=headers)
                             ).json()
-                            configured = await client.post(
-                                "/api/live/settings",
+                            configured = await client.put(
+                                "/api/live/instructions",
                                 headers=headers,
                                 json={
                                     "scope": "workspace",
-                                    "revision": preferences["revision"],
-                                    "overrides": {**preferences["overrides"], "instructions": "Use brief replies."},
+                                    "revision": instructions["revision"],
+                                    "prompt": "Use brief replies.",
                                 },
                             )
                             assert configured.status_code == 200

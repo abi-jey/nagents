@@ -16,7 +16,6 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 
-from .voice_instruction_store import InstructionMode
 from .voice_instruction_store import InstructionScope
 from .voice_instruction_store import validate_instruction_text
 
@@ -37,43 +36,39 @@ class InstructionInput(BaseModel):
     scope: InstructionScope
     agent: AgentName = ""
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    mode: InstructionMode
-    text: InstructionText = ""
+    prompt: InstructionText = ""
 
     @model_validator(mode="after")
     def selection(self) -> InstructionInput:
         if (self.scope == "agent") != bool(self.agent):
             raise ValueError("Select an agent only for agent Voice instructions.")
-        if self.mode == "inherit" and self.text:
-            raise ValueError("Inherited instructions must not include custom text.")
         return self
 
 
 async def save_instructions(settings: LiveSettings, body: InstructionInput) -> dict[str, object]:
     with settings._idle(allow_active=True):
         scope: Scope = "global" if body.scope == "global" else "workspace"
-        layer = settings._agent_layer(body.agent)
 
         def save() -> dict[str, object]:
-            with settings.instructions.locked():
-                current = settings._scoped(scope, layer)
-                if current.revision != body.revision:
-                    raise HTTPException(409, "Voice instructions or their defaults changed. Reload before saving.")
-                profiles = (
-                    *settings.providers.load_scope("global").providers.values(),
-                    *settings.providers.load_scope("workspace").providers.values(),
-                )
-                keys = (os.environ.get(profile.key_env, "") for profile in profiles)
-                if any(key and key in body.text for key in keys):
-                    raise HTTPException(422, "Keep API keys out of Voice instructions.")
-                settings.instructions.save_locked(
-                    body.scope,
-                    body.agent,
-                    body.mode,
-                    body.text,
-                    expected=current.instruction_preferences_revision,
-                )
-                return settings._scoped(scope, layer).instruction_settings
+            layer = settings._agent_layer(body.agent)
+            current = settings._scoped(scope, layer)
+            if current.revision != body.revision:
+                raise HTTPException(409, "Voice instructions or their defaults changed. Reload before saving.")
+            profiles = (
+                *settings.providers.load_scope("global").providers.values(),
+                *settings.providers.load_scope("workspace").providers.values(),
+            )
+            keys = (os.environ.get(profile.key_env, "") for profile in profiles)
+            if any(key and key in body.prompt for key in keys):
+                raise HTTPException(422, "Keep API keys out of Voice instructions.")
+            settings.instructions.save(
+                body.scope,
+                body.agent,
+                body.prompt,
+                present="prompt" in body.model_fields_set,
+                expected=current.instruction_preferences_revision,
+            )
+            return settings._scoped(scope, settings._agent_layer(body.agent)).instruction_settings
 
         async def commit() -> dict[str, object]:
             try:
@@ -81,7 +76,9 @@ async def save_instructions(settings: LiveSettings, body: InstructionInput) -> d
             except HTTPException:
                 raise
             except ValueError as error:
-                raise HTTPException(409 if "changed" in str(error) else 422, str(error)) from None
+                raise HTTPException(
+                    409, "The agent Markdown file changed or could not be read. Reload before saving."
+                ) from error
             except OSError:
                 raise HTTPException(500, "Voice instructions could not be saved. Reload before retrying.") from None
 
@@ -101,5 +98,5 @@ def register(app: FastAPI, get: Callable[[], LiveSettings], state: Callable[[], 
         async with state().queued_mutation():
             result = await save_instructions(get(), body)
             state().changed()
-            logger.info("Voice instructions saved: scope=%s agent=%s mode=%s", body.scope, body.agent, body.mode)
+            logger.info("Voice instructions saved: scope=%s agent=%s", body.scope, body.agent)
             return result

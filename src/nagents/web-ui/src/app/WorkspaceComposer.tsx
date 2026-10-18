@@ -11,7 +11,6 @@ import "../features/live/composer.css";
 import "../features/live/voiceControls.css";
 import "../features/live/sharedComposer.css";
 import "../features/live/sphere.css";
-import "../features/live/settingsDialog.css";
 import "../features/live/inspection.css";
 import type { Client } from "./useClient";
 import type { NavigatorAudio } from "../features/settings/navigator/AgentNavigator.js";
@@ -63,12 +62,11 @@ export function WorkspaceComposer({ client, composer, submit, select, configureS
     {child && !team.canMessage && <p className="activity-warning">{team.task?.unavailable_reason || team.profile?.unavailable_reason || team.task?.message_unavailable_reason || "This agent is not available for messages."}</p>}
     {child && client.liveOpen && <p className="team-voice-notice">Voice remains in the main conversation.</p>}
     <div hidden={child} className="workspace-live-slot">{client.liveOpen && config && <LiveDialog key={`${config.token}:${sessionId}`} token={config.token} sessionId={sessionId}
-      assistant={client.sessionAgent.identity}
-      targets={voiceTargets} visible={!child}
+      targets={voiceTargets}
       autoStart={client.liveAutoStart}
       openSettingsInitially={client.liveIntent === "settings"} consumeStartIntent={client.consumeLiveStart}
       close={() => { client.closeLive(); requestAnimationFrame(() => document.getElementById("live-launch")?.focus()); }}
-      configureConnection={() => client.settings.show()} openAgentSettings={configureSettings} audioChanged={audioChanged} />}</div>
+      openAgentSettings={configureSettings} audioChanged={audioChanged} />}</div>
     <Composer inputRef={composer} prompt={child ? team.prompt : chat.prompt} setPrompt={child ? team.setPrompt : chat.setPrompt} demo={!!config?.demo}
       voiceLayout={client.liveOpen && !child} voiceRefs={voiceRefs}
       recipient={child ? recipient : "ngn"} commandsEnabled={!child} maxLength={child ? 16000 : 32000}

@@ -16,17 +16,24 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def write_agent(path: Path, header: str = "description: A coding assistant") -> None:
+def write_agent(path: Path, header: str = "description: A coding assistant", *, native: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\n{header}\n---\nFollow the assigned task and existing permission rules.\n", encoding="utf-8")
+    if native and "prompt:" not in header:
+        header += '\nprompt: "Follow the assigned task and existing permission rules."'
+    body = "" if native else "Follow the assigned task and existing permission rules.\n"
+    path.write_text(f"---\n{header}\n---\n{body}", encoding="utf-8")
 
 
 def test_imported_agent_directories_are_explicit_and_keep_native_precedence(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
-    write_agent(workspace / ".agents/agents/mini.md", "name: mini\ndescription: Foreign definition")
+    write_agent(workspace / ".agents/agents/mini.md", "name: mini\ndescription: Foreign definition", native=False)
     native = workspace / ".ngn/agents/mini.md"
     write_agent(native)
-    write_agent(workspace / ".claude/agents/other.md", "name: other\ndescription: Unselected definition")
+    write_agent(
+        workspace / ".claude/agents/other.md",
+        "name: other\ndescription: Unselected definition",
+        native=False,
+    )
     (workspace / ".ngn/config.json").write_text(json.dumps({"plugins": ["unapproved.py:setup"]}))
     trusted = tmp_path / "host.json"
     trusted.write_text(
@@ -113,4 +120,4 @@ def test_native_model_reference_rejects_separate_provider(tmp_path: Path) -> Non
     )
     batch = discover_agents(tmp_path)
     assert not batch.profiles
-    assert "inside model" in batch.diagnostics[0]
+    assert "unsupported native field" in batch.diagnostics[0]

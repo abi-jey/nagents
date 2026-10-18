@@ -24,9 +24,6 @@ export interface LiveComposerProps {
   unavailable: string;
   loading: boolean;
   voice: string;
-  settingsOpen: boolean;
-  settingsSaving: boolean;
-  settingsDialogId?: string;
   inspectionOpen: boolean;
   start(): void;
   end(): void;
@@ -68,7 +65,7 @@ function CurrentCaption({ caption }: { caption: Caption }) {
 }
 
 /** Stable slots share the actual composer without moving its textarea or media controller. */
-export function LiveComposer({ targets, state, status, elapsed, disabled, unavailable, loading, voice, settingsOpen, settingsSaving, settingsDialogId, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice, audio }: LiveComposerProps) {
+export function LiveComposer({ targets, state, status, elapsed, disabled, unavailable, loading, voice, inspectionOpen, start, end, close, configure, muteInput, muteOutput, play, refresh, viewChat, inspect, inspector, contextOpen = false, showContext, contextDetails, audioNotice, audio }: LiveComposerProps) {
   const connected = state.phase === "connected";
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const delegation = currentLiveDelegation(state.delegations);
@@ -79,7 +76,7 @@ export function LiveComposer({ targets, state, status, elapsed, disabled, unavai
   }[delegation.status] : "";
   const routineEnd = state.phase === "ended" && ["Live session closed. Finalization confirmed.", "Conversation ended. Your microphone is off."].includes(state.notice);
   const feedback = state.error || unavailable || (routineEnd ? "" : state.notice);
-  const startDisabled = disabled || settingsSaving || settingsOpen || loading;
+  const startDisabled = disabled || loading;
   const interactionDisabled = connected ? false : active || startDisabled;
   const caption = state.captions.findLast(item => item.speaker === "assistant" && item.text.trim());
   if (!targets.presence || !targets.caption || !targets.controls || !targets.details) return null;
@@ -98,13 +95,13 @@ export function LiveComposer({ targets, state, status, elapsed, disabled, unavai
     </div>, targets.caption)}
     {createPortal(<VoiceControls phase={state.phase} status={status} voice={voice} elapsed={elapsed}
       micMuted={state.micMuted} outputMuted={state.outputMuted} startDisabled={startDisabled}
-      settingsOpen={settingsOpen} settingsSaving={settingsSaving} settingsDialogId={settingsDialogId} start={start} end={end} close={close}
+      start={start} end={end} close={close}
       configure={configure} muteInput={muteInput} muteOutput={muteOutput} />, targets.controls)}
     {createPortal(<section id="voice-session" className={`voice-composer phase-${state.phase}`} aria-label="Voice in this chat" onKeyDown={event => {
       if (event.key === "Escape" && contextOpen) { event.stopPropagation(); showContext?.(); }
       else if (event.key === "Escape" && inspectionOpen) { event.stopPropagation(); inspect(); }
     }}>
-    {state.context && showContext && <button type="button" className="voice-context-trigger" aria-expanded={contextOpen} aria-controls="voice-inline-context" disabled={settingsSaving} onClick={showContext}>{contextLabel(state.context)}</button>}
+    {state.context && showContext && <button type="button" className="voice-context-trigger" aria-expanded={contextOpen} aria-controls="voice-inline-context" onClick={showContext}>{contextLabel(state.context)}</button>}
     {delegation && <div className="voice-delegation" data-status={delegation.status} aria-label="Voice delegation">
       <code className="voice-event-type">delegation</code><span role="status">{delegationLabel}{connected && pending > 1 ? ` · ${pending} requests` : ""}</span>
       <button type="button" className="voice-request-trigger" aria-expanded={inspectionOpen} aria-controls="voice-inline-delegation" onClick={inspect}>Request &amp; events<Icon name="chevron" size={12} /></button>

@@ -10,9 +10,6 @@ export interface VoiceControlsProps {
   micMuted: boolean;
   outputMuted: boolean;
   startDisabled: boolean;
-  settingsOpen: boolean;
-  settingsSaving: boolean;
-  settingsDialogId?: string;
   start(): void;
   end(): void;
   close(): void;
@@ -22,8 +19,8 @@ export interface VoiceControlsProps {
 }
 
 /** Expanding the capsule changes the controls, never the connection or audio. */
-export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputMuted, startDisabled, settingsOpen, settingsSaving, settingsDialogId = "voice-settings-dialog", start, end, close, configure, muteInput, muteOutput }: VoiceControlsProps) {
-  const [expanded, setExpanded] = useState(settingsOpen);
+export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputMuted, startDisabled, start, end, close, configure, muteInput, muteOutput }: VoiceControlsProps) {
+  const [expanded, setExpanded] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -39,9 +36,8 @@ export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputM
     trigger.current?.focus({ preventScroll: true });
   };
 
-  useEffect(() => { if (settingsOpen) setExpanded(true); }, [settingsOpen]);
   useEffect(() => {
-    if (!expanded || settingsOpen) return;
+    if (!expanded) return;
     const owner = root.current?.ownerDocument;
     if (!owner) return;
     const dismiss = (event: Event) => {
@@ -56,11 +52,11 @@ export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputM
       owner.removeEventListener("pointerdown", dismiss);
       owner.removeEventListener("focusin", dismiss);
     };
-  }, [expanded, settingsOpen]);
+  }, [expanded]);
 
   return <div ref={root} className="voice-controls" data-expanded={expanded} data-active={active} data-muted={micMuted} data-phase={phase}
     onKeyDown={event => {
-      if (event.key === "Escape" && expanded && !settingsOpen) {
+      if (event.key === "Escape" && expanded) {
         event.preventDefault();
         event.stopPropagation();
         collapse();
@@ -77,11 +73,11 @@ export function VoiceControls({ phase, status, voice, elapsed, micMuted, outputM
       <div className="voice-controls-panel-inner"><div className="voice-controls-actions" role="group" aria-label="Voice controls">
         <button type="button" className="voice-mic" aria-label={microphoneLabel} title={microphoneLabel} aria-pressed={micMuted} disabled={!connected} onClick={muteInput}><Icon name={micMuted ? "mic-off" : "mic"} size={16} /></button>
         <button type="button" className="voice-speaker" aria-label={speakerLabel} title={speakerLabel} aria-pressed={outputMuted} disabled={!connected} onClick={muteOutput}><Icon name={outputMuted ? "volume-off" : "volume"} size={16} /></button>
-        <button type="button" className="voice-settings-trigger" aria-label="Audio devices and voice settings" title="Audio devices and voice settings" aria-haspopup="dialog" aria-expanded={settingsDialogId === "voice-settings-dialog" ? settingsOpen : undefined} aria-controls={settingsDialogId} disabled={settingsSaving} onClick={configure}><Icon name="settings" size={16} /></button>
+        <button type="button" className="voice-settings-trigger" aria-label="Audio devices and voice settings" title="Audio devices and voice settings" aria-haspopup="dialog" aria-controls="agent-navigator-dialog" onClick={configure}><Icon name="settings" size={16} /></button>
         <span className="voice-controls-divider" aria-hidden="true" />
         {active ? <button type="button" className="voice-stop" aria-label={endLabel} title={endLabel} disabled={phase === "ending"} onClick={end}><Icon name="stop" size={14} /><span>{connected ? "Stop" : phase === "ending" ? "Ending" : "Cancel"}</span></button>
-          : <button type="button" className="voice-start" aria-label={startLabel} title={startLabel} disabled={startDisabled || settingsSaving || settingsOpen} onClick={start}><Icon name="wave" size={14} /><span>{startLabel}</span></button>}
-        <button type="button" className="voice-dismiss" aria-label="Close voice controls" title="Close voice and dismiss the sphere" disabled={settingsSaving} onClick={close}><Icon name="close" size={15} /></button>
+          : <button type="button" className="voice-start" aria-label={startLabel} title={startLabel} disabled={startDisabled} onClick={start}><Icon name="wave" size={14} /><span>{startLabel}</span></button>}
+        <button type="button" className="voice-dismiss" aria-label="Close voice controls" title="Close voice and dismiss the sphere" onClick={close}><Icon name="close" size={15} /></button>
       </div></div>
     </div>
   </div>;

@@ -174,32 +174,45 @@ connection remain mounted while navigating settings. Microphone and speaker
 choices are local to the browser, separate from reusable agent preferences.
 
 **Overview** shows saved effective values and their sources. **Instructions**
-edits additional profile instructions; bundled instructions and loaded workspace
-`AGENTS.md` files remain inspectable. The inherited text is visible in the editor;
+edits the full assistant prompt, replacing the packaged coding policy. Loaded
+workspace `AGENTS.md` context and runtime capability/permission messages still
+apply and remain inspectable. The inherited text is visible in the editor;
 **Customize** copies it into an editable draft, while inheritance restores the
 parent or authored definition. Saving writes the selected scope's Markdown
-preference without changing its model or tool selections. **Tools** selects a reusable allowlist and
-shows unavailable tools with reasons. Workspace tool policy, MCP configuration,
-and approval management remain accessible inside that section. A preference
+preference without changing its model or tool selections. Saved assistant prompts
+accept up to 24,000 Unicode characters and 48,000 UTF-8 bytes. **Tools** selects a
+reusable allowlist and shows unavailable tools with reasons. Workspace tool policy,
+MCP configuration, and approval management remain accessible inside that section. A preference
 cannot grant a tool excluded by an authored definition, ancestor, runtime mode,
 or workspace policy.
 
 Model, instructions, tools, and Voice have section-specific save actions. Drafts
 survive navigation and closing the panel; an unsaved marker identifies them.
 Concurrent changes require an explicit reload rather than replaying a stale
-save. Saving or resetting one section preserves the others. Empty instructions,
-an empty tool allowlist, and disabled Voice are explicit values, not inheritance.
-Removing an agent override restores its authored definition; Voice also offers
-**Use workspace defaults** to bypass that definition without deleting it.
+save. Saving or resetting one section preserves the others. Empty prompts,
+an empty tool allowlist, and disabled Voice are explicit values. Removing an
+override restores the inherited field or authored definition; missing fields
+and files inherit without a persisted `inherit` marker.
 
-Global and workspace instruction/tool defaults live in `agent-defaults/defaults.md`
-beside each scope's model preferences. Agent overrides use the existing
-`agent-models/<agent>.md` store, with `model`, `instructions`, `tools`, and `live`
-sections. These are operator preferences; editing them does not rewrite imported
-source definitions. Instructions refresh at the next model round, while model
+Global assistant defaults live in `$XDG_CONFIG_HOME/ngn/assistant.md`; workspace
+defaults live in `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md`.
+Agent overrides use that workspace configuration directory's
+`agents/<agent>.md`. Model, `prompt`, tools, and `live` share the same native
+document, and section saves preserve its other fields. The default config root
+is `~/.config` when `XDG_CONFIG_HOME` is unset. These operator documents also
+apply to terminal clients and remain separate from imported source definitions.
+Native `.ngn/agents/assistant.md` is allowed with trusted discovery and hot reload.
+Instructions refresh at the next model round, while model
 and Voice changes apply at their next activation. Permission checks can tighten
 tools during a run; existing children never gain a wider inherited permission
 ceiling from later changes.
+
+Startup creates the missing global `assistant.md` from the packaged asset with
+`auto_update: true` and its `default_revision` source hash. A changed bundled
+revision logs a warning and replaces the whole file, including manual edits
+while `auto_update` remains `true`. Set it to `false` to retain customizations
+across upgrades. Global assistant saves in the UI set it to `false` and show a
+notice. See the [native format and example](agent-definitions.md#native-format).
 
 ### Frontend Build
 
@@ -715,8 +728,8 @@ in `X-Ngn-Token`. POST, PUT, and DELETE requests also need
 | `GET live` | Dedicated GPT-Live readiness/reason, effective provider/model/backend/voice choices, and active voice session ID |
 | `GET agent-settings?scope=global\|workspace\|agent&agent=<name>` | Effective instruction/tool preferences, inherited values, sources, available tools, and composite revision; agent is optional outside agent scope |
 | `PUT agent-settings` | `{scope, agent?, revision, preferences}` replaces only instruction/tool preferences at that scope; omitted fields inherit and sibling model/Live sections are preserved |
-| `GET live/instructions?scope=global\|workspace\|agent&agent=<name>` | Effective full Markdown prompt, inherited text/source, customization mode, file paths, and revision; agent is required only at agent scope |
-| `PUT live/instructions` | `{scope, agent?, revision, mode: "inherit" or "custom", text}` saves only the Markdown instruction selection; inheritance requires empty text, while custom empty text is explicitly empty |
+| `GET live/instructions?scope=global\|workspace\|agent&agent=<name>` | Effective full Markdown prompt, inherited text/source, field presence, file paths, and revision; agent is required only at agent scope |
+| `PUT live/instructions` | `{scope, agent?, revision, prompt?}` changes only `live.prompt`; omitting `prompt` removes the override, while `prompt: ""` explicitly saves an empty prompt |
 | `GET live/settings?scope=global\|workspace\|agent&agent=<name>` | Scoped Voice preferences, field sources, revision, and provider connection reference |
 | `POST live/settings` | Revisioned `{scope, revision, preferences}` for global defaults or `{scope, agent?, revision, overrides}` for workspace/agent fields; applies to the next call |
 | `DELETE live/settings` | `{scope: "agent", agent, revision}` removes only the operator Live section and restores the authored definition |
@@ -1226,15 +1239,14 @@ selected scope. Returning to inheritance removes the custom text and follows
 future changes to the parent. At Global scope, **Use built-in default** restores
 the packaged Markdown prompt.
 
-Global and workspace prompts are saved in `live-instructions.md` beside their
-model preferences, independently of external provider configuration paths.
-Agent prompts are saved under the workspace configuration
-directory in `agent-live-instructions/<agent>.md`. Each file has a small
-`mode: custom` or `mode: inherit` YAML header; custom instructions are the Markdown
-body. An empty custom body is explicitly empty and differs from inheritance.
-These operator files leave authored agent definitions, model selections, and
-other Voice preferences intact. Existing additional guidance is shown as part of
-its effective prompt until a Markdown override is saved.
+Global and workspace voice prompts are `live.prompt: |` in their scoped
+`assistant.md` documents. Agent prompts share the agent's native
+`agents/<agent>.md` document with its other preferences. An empty `live.prompt`
+is explicitly empty; removing the key inherits. No `mode: inherit` marker is
+persisted. The framework reads and writes only these unified documents. An
+operator must convert settings from an earlier installation before using the
+new format; SQLite Voice preferences and separate prompt files are not imported.
+A prompt save preserves model, tools, and other Live fields.
 
 The saved full prompt is sent to the next voice conversation without a hidden
 default being prepended. Active conversations keep their captured instructions.
@@ -1463,8 +1475,9 @@ fields and invalid input are rejected without echoing values.
 `agent_overrides`, saved `overrides`, `saved_live_present`, and preference and
 accepted-definition revisions. The nested model is `{provider, id}` and must name
 an existing connection. `POST /api/live/settings` also accepts
-`{scope:"agent", agent, revision, overrides}`. This replaces the saved Live layer;
-`overrides: {}` explicitly inherits workspace/global values.
+`{scope:"agent", agent, revision, overrides}`. This replaces the saved Live
+overrides; omitted fields inherit from the source definition and then
+workspace/global values. `overrides: {}` supplies no overrides.
 `DELETE /api/live/settings` with `{scope:"agent", agent, revision}` removes only the saved
 Live section and restores the source definition. Other agent preference sections
 are preserved by every save/reset.
@@ -1472,14 +1485,16 @@ are preserved by every save/reset.
 Both reads and writes require an explicit scope. Configure authentication in the
 provider registry; Voice preferences select a connection and contain no API keys.
 
-Global and workspace scopes have revisioned SQLite records; agent Live preferences
-share the revisioned Markdown operator overlay. Global defaults live under the ngn
-configuration directory and workspace overrides in the workspace session DB;
-reads and writes span both in one SQLite transaction. Existing saved preferences
-are retained, including historical automatic connection selection. Retired
-workspace Live settings are imported only when no current workspace record
-exists. Provider credentials and registry files are never rewritten by Voice
-settings. Competing saves use the stored revision. A stale
+All three scopes use the revisioned native Markdown documents described in
+[Agent Navigator and inheritance](#agent-navigator-and-inheritance). Voice
+settings use `live` in the same document as the assistant's other preferences.
+The API may still expose `instructions` and customization `mode` as request or
+response fields; persisted full prompts use `live.prompt`, and inheritance is
+represented by omission. SQLite Voice preferences and separate prompt files are
+not read or automatically converted. Existing installations need a separate
+operator-managed conversion into the current native format.
+Provider credentials and registry files are never rewritten by Voice settings.
+Competing saves check the document and inherited-source revisions. A stale
 revision or a busy Live service returns `409`; reload settings before retrying.
 If a save acknowledgement is lost, fetch the settings again to see the committed
 state. Cancellation waits for an admitted transaction to finish.
@@ -1755,12 +1770,15 @@ prior history under the existing child continuation contract.
 
 `GET/PUT/DELETE /api/agent-models/{name}` reads, saves, and resets a reusable
 agent's model selection, including `assistant`. PUT carries
-`{revision, model: {provider, id}}`; both empty strings explicitly inherit
-workspace/global defaults. DELETE carries `{revision}` and removes the
-model-only override to reveal the source definition again. A missing override
+`{revision, model: {provider, id}}` with a complete, nonempty reference.
+DELETE carries `{revision}` and removes the
+model field to reveal the source definition again. A missing override
 is returned as `model: null`. Replies include `definition_model`, `inherited`,
 `effective`, `source`, `provider_origin`, `source_path`, and availability.
-These endpoints do not edit instructions, permissions, or provider credentials.
+The model field shares the agent's native Markdown document with prompt, tools,
+and Live settings; these endpoints preserve those other sections and provider
+credentials. Reset removes the persisted model field; empty model requests are
+rejected rather than saved as an inheritance sentinel.
 Saves publish `agent_profiles_changed` to refresh Team and model metadata.
 
 `compact_trigger = auto` leaves the provider's context-limit default in place,
@@ -1783,9 +1801,7 @@ during a save. Error `detail` is a safe string, never raw request/provider data.
 The versioned `ngn_web_settings` singleton row lives in the **existing workspace
 session SQLite database**, resolved by the Harness under `data_dir`. It stores only
 the approved preferences and revision, never a key value or the full
-configuration. Existing credential rows from older installations remain private
-and are not rewritten by ordinary preference saves; reset removes the stored
-workspace overrides and their old credential rows. The override applies
+configuration. Reset removes the stored workspace overrides. The override applies
 across sessions and web-server restarts for that resolved workspace. One process
 must own the workspace; this is not multi-process settings synchronization.
 ConfigMap/JSON, CLI, profile and initial authentication/model resolution
@@ -1794,20 +1810,12 @@ workspace override is applied. Reset deletes the workspace rows and inherits
 current global defaults. The
 CLI/TUI do not load this web-only override.
 
-Version-1 through version-4 rows without removed fields retain supported
-preferences and receive newer fields from trusted defaults. Version-5 rows
-store workspace differences. Unknown or removed fields fail loading. Check the
+Current settings rows store workspace differences. Unknown or removed fields
+fail loading. Check the
 [current configuration schema](ngn-configuration.md#complete-top-level-schema)
-before restarting an existing installation. Existing chat preferences and
-revision checks are retained when their rows are valid.
-
-Legacy built-in selections migrate to `assistant`. An old read-only selection
-remains read-only through the workspace restriction, rather than gaining write
-or shell access. Explicit custom profiles retain their configured identity.
-
-After a version-3 save, an older image cannot load that row. Roll back with a
-compatible image or use administrator-reviewed settings-row recovery; preserve
-the session database and credential store.
+before using an existing installation. Conversion of earlier configuration is
+a separate operator task; preserve session history and credential storage when
+preparing that conversion or rolling back.
 
 A save joins its local SQLite transaction even if its HTTP request is cancelled;
 on failure, live config, model, round limit and instructions are restored. If the

@@ -9,7 +9,7 @@ import { LiveDialog } from "./LiveDialog.js";
 import type { LiveComposerTargets } from "./LiveComposer.js";
 import { LiveController } from "./controller.js";
 import { readAudioDevices, saveAudioDevices } from "./devices.js";
-import type { LiveCapability, LiveDelegationDetails, LiveDelegationRecord, LiveSettingsSnapshot, LiveSnapshot } from "./types.js";
+import type { LiveCapability, LiveDelegationDetails, LiveDelegationRecord, LiveSnapshot } from "./types.js";
 
 const capability: LiveCapability = {
   available: true, reason: "", enabled: true, key_configured: true, revision: "voice-revision",
@@ -17,22 +17,14 @@ const capability: LiveCapability = {
   backend_mode: "assistant", backend_model: "gpt-test", voice: "cove", voices: ["cove", "breeze"],
   assistant: { agent: "assistant", provider: "openai", model: "gpt-test" }, active_session_id: "",
 };
-const preferences = { enabled: true, connection_id: "", backend_mode: "assistant" as const, model: "gpt-live-1-codex", backend_model: "gpt-test", voice: "cove" };
-const settings: LiveSettingsSnapshot = {
-  values: { ...preferences, provider: "openai", base_url: "" }, revision: "settings-revision", scope: "workspace",
-  global_preferences: preferences, overrides: {}, key_configured: true, voice_auth: "chatgpt",
-  providers: ["openai"], voices: ["cove", "breeze"], live_supported: true, profile_name: "chatgpt",
-  origins: { enabled: "global", connection_id: "global", backend_mode: "global", model: "global", backend_model: "global", voice: "global" },
-};
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
 
-function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = false, targets }: {
-  token?: string; sessionId?: string; hold?: boolean; targets: LiveComposerTargets;
+function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = false, targets, openAgentSettings = () => {} }: {
+  token?: string; sessionId?: string; hold?: boolean; targets: LiveComposerTargets; openAgentSettings?: () => void;
 }) {
   const voice = useVoicePresence();
   return createElement("div", {},
@@ -42,17 +34,18 @@ function VoiceParent({ token = "fixture-token", sessionId = "ngn-one", hold = fa
       key: `${token}:${sessionId}`, token, sessionId, targets, close: voice.close,
       autoStart: voice.shouldStart(token, sessionId), openSettingsInitially: voice.intent === "settings",
       consumeStartIntent: () => voice.consumeStart(voice.request),
+      openAgentSettings,
     }));
 }
 
-function view(options: { capability?: Promise<Response>; settings?: Promise<Response>; denied?: boolean; delegation?: boolean; voiceAuth?: LiveCapability["voice_auth"] } = {}) {
+function view(options: { capability?: Promise<Response>; denied?: boolean; delegation?: boolean; voiceAuth?: LiveCapability["voice_auth"] } = {}) {
   const dom = new JSDOM("<footer class='composer-area'><div id='root'></div><form id='text-form'><div id='presence'></div><div id='caption'></div><textarea id='composer'></textarea><div id='controls'></div><button type='submit'>Send</button><div id='details'></div></form></footer>", { url: "https://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
   dom.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
   const frames = new Map<number, FrameRequestCallback>();
-  let frameId = 0, captures = 0, creates = 0, closures = 0, sockets = 0, capabilityReads = 0, settingsReads = 0, dismissals = 0, submissions = 0;
-  let denied = !!options.denied, expectedToken = "fixture-token";
+  let frameId = 0, captures = 0, creates = 0, closures = 0, sockets = 0, capabilityReads = 0, dismissals = 0, submissions = 0;
+  let denied = !!options.denied, expectedToken = "fixture-token", settingsOpens = 0;
   let currentCapability: LiveCapability = { ...capability, voice_auth: options.voiceAuth || capability.voice_auth };
   const tracks: { enabled: boolean; readyState: string; stop(): void; addEventListener(): void }[] = [];
   const record: LiveDelegationRecord = {
@@ -126,7 +119,6 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
       assert.equal(init.mode, "same-origin");
       assert.equal(init.redirect, "error");
       if (path === "/api/live") { capabilityReads++; return options.capability && capabilityReads === 1 ? options.capability : Response.json(currentCapability); }
-      if (path.startsWith("/api/live/settings")) { settingsReads++; return options.settings && settingsReads === 1 ? options.settings : Response.json({ ...settings, voice_auth: currentCapability.voice_auth }); }
       if (path === "/api/live/sessions") {
         assert.equal(init.method, "POST"); creates++;
         assert.deepEqual(JSON.parse(String(init.body)), { voice: "cove", revision: "voice-revision", session_id: "ngn-one" });
@@ -153,15 +145,15 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
   const button = (name: string) => [...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(item => (item.getAttribute("aria-label") || item.textContent?.trim()) === name)!;
   return {
     dom, container: dom.window.document.body, textarea, tracks, button,
-    counts: () => ({ captures, creates, closures, sockets, capabilityReads, dismissals, submissions }),
+    counts: () => ({ captures, creates, closures, sockets, capabilityReads, dismissals, submissions, settingsOpens }),
     capability: (next: LiveCapability) => { currentCapability = next; },
     deny: (value: boolean) => { denied = value; },
     renderParent: async (props: Omit<ComponentProps<typeof VoiceParent>, "targets"> = {}) => {
       expectedToken = props.token || "fixture-token";
-      await act(async () => root.render(createElement(VoiceParent, { ...props, targets })));
+      await act(async () => root.render(createElement(VoiceParent, { openAgentSettings: props.openAgentSettings || (() => { settingsOpens++; }), ...props, targets })));
     },
     render: async (props: Partial<ComponentProps<typeof LiveDialog>> = {}) => act(async () => root.render(createElement(LiveDialog, {
-      token: "fixture-token", sessionId: "ngn-one", targets, close: () => { dismissals++; }, ...props,
+      token: "fixture-token", sessionId: "ngn-one", targets, close: () => { dismissals++; }, openAgentSettings: () => { settingsOpens++; }, ...props,
       key: `${props.token || "fixture-token"}:${props.sessionId || "ngn-one"}`,
     }))),
     click: async (name: string) => {
@@ -181,16 +173,11 @@ function view(options: { capability?: Promise<Response>; settings?: Promise<Resp
   };
 }
 
-test("voice settings use the conversation's agent rather than another tab's capability metadata", async () => {
+test("voice settings entry opens agent settings without starting voice", async () => {
   const ui = view();
   try {
-    await ui.render({ autoStart: false, openSettingsInitially: true,
-      assistant: { agent: "reviewer", provider: "review-connection", model: "review-model" } });
-    assert.match(ui.container.querySelector(".live-backend-note")!.textContent!, /reviewer · review-connection: review-model/);
-    assert.doesNotMatch(ui.container.querySelector(".live-backend-note")!.textContent!, /gpt-test/);
-    await ui.render({ autoStart: false, openSettingsInitially: true,
-      assistant: { agent: "writer", provider: "write-connection", model: "write-model" } });
-    assert.match(ui.container.querySelector(".live-backend-note")!.textContent!, /writer · write-connection: write-model/);
+    await ui.render({ autoStart: false, openSettingsInitially: true });
+    assert.equal(ui.counts().settingsOpens, 1);
     assert.equal(ui.counts().captures, 0);
     assert.equal(ui.counts().creates, 0);
   } finally { await ui.close(); }
@@ -273,51 +260,11 @@ test("parent settings intent survives token refresh without microphone access", 
   try {
     await ui.renderParent();
     await ui.click("Open voice settings");
+    assert.equal(ui.counts().settingsOpens, 1);
     await ui.renderParent({ token: "new-server-token" });
-    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, true);
+    assert.equal(ui.counts().settingsOpens, 2, "the parent settings route remains selected after token refresh");
     assert.equal(ui.counts().captures, 0);
     assert.equal(ui.counts().creates, 0);
-  } finally { await ui.close(); }
-});
-
-test("settings-only entry and saving preferences never start microphone or provider media", async (t) => {
-  const ui = view();
-  const start = t.mock.method(LiveController.prototype, "start");
-  try {
-    await ui.render({ autoStart: false });
-    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, true);
-    await ui.click("Save settings");
-    await ui.flushFrames();
-    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, false);
-    assert.ok(ui.counts().capabilityReads >= 2);
-    assert.equal(start.mock.calls.length, 0);
-    assert.equal(ui.counts().captures, 0);
-    assert.equal(ui.counts().creates, 0);
-    await ui.click("Start voice");
-    assert.equal(start.mock.calls.length, 1);
-    assert.equal(ui.counts().creates, 1, "starting afterward is an explicit separate action");
-  } finally { await ui.close(); }
-});
-
-test("settings-only quick device selection saves locally without requiring a connected call", async () => {
-  const ui = view();
-  try {
-    await ui.render({ autoStart: false });
-    const picker = ui.container.querySelector<HTMLSelectElement>('#voice-settings-dialog select[aria-label="Microphone"]')!;
-    assert.ok(picker);
-    assert.equal(picker.closest("#text-form"), null);
-    assert.equal(picker.closest("dialog")?.id, "voice-settings-dialog");
-    assert.equal(ui.container.querySelector("form form"), null);
-    assert.equal(ui.container.querySelector(".voice-preferences, .live-settings-advanced"), null);
-    await act(async () => {
-      picker.value = "microphone";
-      picker.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true }));
-    });
-    assert.equal(readAudioDevices().inputId, "microphone");
-    assert.equal(picker.value, "microphone");
-    assert.equal(ui.counts().captures, 0);
-    assert.equal(ui.counts().creates, 0);
-    assert.equal(ui.container.querySelector('.live-device-settings [role="alert"]'), null);
   } finally { await ui.close(); }
 });
 
@@ -402,72 +349,6 @@ for (const blocked of ["unavailable", "occupied"] as const) {
     } finally { await ui.close(); }
   });
 }
-
-test("opening and closing the Audio overlay and request details leaves the connected call mounted", async (t) => {
-  const ui = view({ delegation: true });
-  const end = t.mock.method(LiveController.prototype, "end");
-  const dispose = t.mock.method(LiveController.prototype, "dispose");
-  try {
-    await ui.render();
-    await ui.click("Audio devices and voice settings");
-    await ui.click("Back to conversation");
-    await ui.click("Audio devices and voice settings");
-    await act(async () => ui.container.querySelector("#voice-settings-dialog")!.dispatchEvent(new ui.dom.window.Event("cancel", { bubbles: true, cancelable: true })));
-    assert.equal(!!ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")?.open, false);
-    await ui.click("Request & events");
-    assert.ok(ui.container.querySelector(".delegation-inspector"));
-    await ui.click("Close delegation details");
-    await ui.click("Request & events");
-    await act(async () => ui.container.querySelector("#delegation-inspector-title")!.dispatchEvent(new ui.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    assert.equal(ui.container.querySelector(".delegation-inspector"), null);
-    assert.equal(end.mock.calls.length, 0);
-    assert.equal(dispose.mock.calls.length, 0);
-    assert.equal(ui.counts().creates, 1);
-    assert.equal(ui.counts().closures, 0);
-    assert.ok(ui.tracks.every(track => track.readyState === "live"));
-  } finally { await ui.close(); }
-});
-
-test("settings finishing their background load does not steal focus from typed chat", async () => {
-  const pending = deferred<Response>();
-  const ui = view({ settings: pending.promise });
-  try {
-    await ui.render({ autoStart: false });
-    await ui.click("Back to conversation");
-    ui.textarea.focus();
-    await act(async () => pending.resolve(Response.json(settings)));
-    assert.equal(ui.dom.window.document.activeElement, ui.textarea);
-    assert.equal(ui.counts().captures, 0);
-  } finally { await ui.close(); }
-});
-
-test("the settings overlay swaps an active microphone without restarting voice or losing mute", async () => {
-  const ui = view();
-  try {
-    await ui.render();
-    await ui.click("Mute microphone");
-    await ui.click("Audio devices and voice settings");
-    const dialog = ui.container.querySelector<HTMLDialogElement>("#voice-settings-dialog")!;
-    assert.equal(dialog.open, true);
-    const microphone = dialog.querySelector<HTMLSelectElement>('select[aria-label="Microphone"]')!;
-    assert.equal(microphone.disabled, false);
-    assert.equal(dialog.querySelector<HTMLFieldSetElement>(".live-voice-defaults")?.disabled, false, "Voice defaults remain editable during an active session");
-    await act(async () => {
-      microphone.value = "microphone";
-      microphone.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true }));
-    });
-    assert.equal(ui.counts().captures, 2, "only the explicit device change requests replacement media");
-    assert.equal(ui.counts().creates, 1);
-    assert.equal(ui.counts().closures, 0);
-    assert.equal(ui.tracks[0].readyState, "ended");
-    assert.equal(ui.tracks[1].readyState, "live");
-    assert.equal(ui.tracks[1].enabled, false);
-    await ui.click("Back to conversation");
-    assert.equal(dialog.open, false);
-    assert.equal(ui.counts().submissions, 0);
-    assert.equal(ui.tracks[1].readyState, "live");
-  } finally { await ui.close(); }
-});
 
 test("the inset sphere is a native non-submit button and toggles microphone without ending or submitting", async () => {
   const ui = view();

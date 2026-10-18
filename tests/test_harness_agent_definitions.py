@@ -9,6 +9,7 @@ import pytest
 from nagents.harness import agent_definitions
 from nagents.harness.agent_definitions import discover_agents
 from nagents.harness.agent_definitions import import_agents
+from nagents.harness.config import load_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,10 +32,11 @@ def test_native_multiline_body_metadata_and_tool_groups(tmp_path: Path) -> None:
         ".ngn/agents/research.md",
         _markdown(
             "description: |\n  Review the architecture.\n  Explain the evidence.\n"
-            "model: gpt-6-luna\nprovider: work-login\nmode: reviewer\n"
+            "model: {provider: work-login, id: gpt-6-luna}\nmode: reviewer\n"
             "tools: read_file, search, custom:lookup\ndenied_tools: [shell]\n"
-            "user_invocable: false\nsubagent_available: true\nallowed_agents: []",
-            "# Instructions\n\nKeep **Markdown** formatting.\n\n---\n\nThis rule belongs to the body.",
+            "user_invocable: false\nsubagent_available: true\nallowed_agents: []\n"
+            "prompt: |-\n  # Instructions\n\n  Keep **Markdown** formatting.\n\n  ---\n\n  This rule belongs to the prompt.",
+            "",
         ),
     )
     batch = discover_agents(tmp_path)
@@ -42,8 +44,8 @@ def test_native_multiline_body_metadata_and_tool_groups(tmp_path: Path) -> None:
     (profile,) = batch.profiles
     assert profile.name == "research"
     assert profile.description == "Review the architecture.\nExplain the evidence."
-    assert "**Markdown**" in profile.instructions
-    assert "---\n\nThis rule belongs" in profile.instructions
+    assert "**Markdown**" in profile.prompt
+    assert "---\n\nThis rule belongs" in profile.prompt
     assert (profile.model, profile.provider, profile.mode) == ("gpt-6-luna", "work-login", "reviewer")
     assert profile.tools == ("read_file", "search", "custom:lookup")
     assert profile.denied_tools == ("shell",)
@@ -53,9 +55,39 @@ def test_native_multiline_body_metadata_and_tool_groups(tmp_path: Path) -> None:
     assert (profile.source, profile.source_format) == (str(path), "native")
 
 
+def test_native_assistant_file_parses_partial_fields_and_tracks_field_provenance(tmp_path: Path) -> None:
+    path = _write(tmp_path, ".ngn/agents/assistant.md", _markdown("prompt: Customized assistant\nmode: reviewer", ""))
+
+    config = load_config(tmp_path, trust_project=True)
+
+    profile = config.profile("assistant")
+    sources = dict(profile.field_sources)
+    assert profile.prompt == "Customized assistant" and profile.prompt_present
+    assert profile.mode == "reviewer"
+    assert profile.source == str(path) and profile.source_format == "native"
+    assert sources["prompt"] == str(path)
+    assert sources["mode"] == str(path)
+    assert "tools" not in sources
+
+
+def test_native_agent_body_requires_prompt_frontmatter(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        ".ngn/agents/scan.md",
+        _markdown("description: Scan", "Body instructions are no longer accepted."),
+    )
+
+    batch = discover_agents(tmp_path)
+
+    assert not batch.profiles
+    assert len(batch.diagnostics) == 1
+    assert str(path) in batch.diagnostics[0]
+    assert "only frontmatter" in batch.diagnostics[0]
+
+
 @pytest.mark.parametrize("field, expected", [("", None), ("\ntools: []", ()), ("\ntools: ''", ())])
 def test_native_omitted_and_explicit_empty_tools_differ(tmp_path: Path, field: str, expected: object) -> None:
-    _write(tmp_path, ".ngn/agents/scan.md", _markdown("description: Scan safely" + field))
+    _write(tmp_path, ".ngn/agents/scan.md", _markdown("description: Scan safely" + field, ""))
     batch = discover_agents(tmp_path)
     assert batch.diagnostics == ()
     assert batch.profiles[0].tools == expected
@@ -65,24 +97,24 @@ def test_native_omitted_and_explicit_empty_tools_differ(tmp_path: Path, field: s
 def test_manifest_line_endings_normalize_without_losing_markdown(tmp_path: Path, separator: str) -> None:
     path = tmp_path / "review.md"
     body = "# Review\n\nKeep **formatting**.\n\n---\n\nMore instructions."
-    path.write_bytes(_markdown("description: Review", body).replace("\n", separator).encode("utf-8"))
+    header = "description: Review\nprompt: |-\n" + "\n".join(f"  {line}" if line else "" for line in body.split("\n"))
+    path.write_bytes(_markdown(header, "").replace("\n", separator).encode("utf-8"))
     batch = import_agents([{"path": str(path), "format": "native"}], tmp_path)
     assert batch.diagnostics == ()
-    assert batch.profiles[0].instructions == body
+    assert batch.profiles[0].prompt == body
 
 
 @pytest.mark.parametrize(
     "header, message",
     [
-        ("tools: [read_file]", "description"),
-        ("description: Scan\nname: assistant", "must not replace assistant"),
         ("description: Scan\nname: bad/name", "name must use"),
         ("description: Scan\nmode: admin", "mode must be"),
         ("description: Scan\nuser_invocable: 1", "must be a boolean"),
         ("description: Scan\nsubagent_available: null", "must be a boolean"),
         ("description: Scan\ntools: null", "must be a list"),
         ("description: Scan\ntools: ['*']", "invalid name"),
-        ("description: Scan\nprovider: OpenAI", "provider must name"),
+        ("description: Scan\nprovider: home", "unsupported native field"),
+        ("description: Scan\nlive: {voice: sol, instructions: legacy}", "Unsupported live profile fields"),
         ("description: Scan\npermission: allow", "unsupported native field"),
         ("description: Scan\ndescription: Duplicate", "unique strings"),
         ("description: Scan\ntools: &tools [read_file]", "aliases, anchors"),
@@ -93,7 +125,7 @@ def test_manifest_line_endings_normalize_without_losing_markdown(tmp_path: Path,
     ],
 )
 def test_invalid_native_data_is_diagnosed_with_source(tmp_path: Path, header: str, message: str) -> None:
-    path = _write(tmp_path, ".ngn/agents/bad.md", _markdown(header))
+    path = _write(tmp_path, ".ngn/agents/bad.md", _markdown(header, ""))
     batch = discover_agents(tmp_path)
     assert not batch.profiles
     assert len(batch.diagnostics) == 1
@@ -102,7 +134,7 @@ def test_invalid_native_data_is_diagnosed_with_source(tmp_path: Path, header: st
 
 
 def test_nested_yaml_is_rejected_before_recursive_composition(tmp_path: Path) -> None:
-    _write(tmp_path, ".ngn/agents/deep.md", _markdown("description: Deep\ntools: " + "[" * 600 + "]" * 600))
+    _write(tmp_path, ".ngn/agents/deep.md", _markdown("description: Deep\ntools: " + "[" * 600 + "]" * 600, ""))
     batch = discover_agents(tmp_path)
     assert not batch.profiles
     assert "too deeply nested" in batch.diagnostics[0]
@@ -110,7 +142,7 @@ def test_nested_yaml_is_rejected_before_recursive_composition(tmp_path: Path) ->
 
 def test_deep_toml_does_not_abort_loading_other_agents(tmp_path: Path) -> None:
     path = _write(tmp_path, ".codex/agents/deep.toml", "tools = " + "[" * 2000 + "0" + "]" * 2000)
-    _write(tmp_path, ".ngn/agents/valid.md", _markdown("description: Still available"))
+    _write(tmp_path, ".ngn/agents/valid.md", _markdown("description: Still available", ""))
     batch = discover_agents(tmp_path)
     assert [profile.name for profile in batch.profiles] == ["valid"]
     assert any("too deeply nested" in diagnostic for diagnostic in batch.diagnostics)
@@ -129,9 +161,9 @@ def test_malformed_markdown_reports_error(tmp_path: Path, source: str, message: 
 
 def test_discovery_order_and_collision_winner_are_deterministic(tmp_path: Path) -> None:
     _write(tmp_path, ".claude/agents/b.md", _markdown("name: same\ndescription: Foreign"))
-    _write(tmp_path, ".ngn/agents/z.md", _markdown("name: same\ndescription: Native winner"))
-    _write(tmp_path, ".ngn/agents/a.md", _markdown("description: Alphabetical first"))
-    earlier = _write(tmp_path, ".ngn/agents/m.md", _markdown("name: same\ndescription: Earlier native"))
+    _write(tmp_path, ".ngn/agents/z.md", _markdown("name: same\ndescription: Native winner", ""))
+    _write(tmp_path, ".ngn/agents/a.md", _markdown("description: Alphabetical first", ""))
+    earlier = _write(tmp_path, ".ngn/agents/m.md", _markdown("name: same\ndescription: Earlier native", ""))
     first = discover_agents(tmp_path)
     assert first == discover_agents(tmp_path)
     assert [profile.name for profile in first.profiles] == ["a", "same"]
@@ -305,14 +337,14 @@ def test_antigravity_nested_layout_defaults_to_no_tools(tmp_path: Path) -> None:
 
 
 def test_native_nested_package_name_comes_from_directory(tmp_path: Path) -> None:
-    _write(tmp_path, ".ngn/agents/reader/agent.md", _markdown("description: Inspect"))
+    _write(tmp_path, ".ngn/agents/reader/agent.md", _markdown("description: Inspect", ""))
     assert discover_agents(tmp_path).profiles[0].name == "reader"
 
 
 def test_personal_roots_use_xdg_and_gemini_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, config = tmp_path / "home", tmp_path / "config"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
-    _write(config, "ngn/agents/native.md", _markdown("description: User native"))
+    _write(config, "ngn/agents/native.md", _markdown("description: User native", ""))
     _write(config, "opencode/agents/global.md", _markdown("description: User OpenCode"))
     _write(home, ".gemini/config/agents/anti/agent.md", _markdown("name: anti\ndescription: User Antigravity"))
     _write(home, ".copilot/agents/copilot.md", _markdown("description: User Copilot"))
@@ -382,7 +414,7 @@ def test_invalid_import_entries_are_actionable(tmp_path: Path, value: object, me
 
 
 def test_import_failure_does_not_hide_an_independent_valid_entry(tmp_path: Path) -> None:
-    _write(tmp_path, "valid.md", _markdown("description: Valid agent"))
+    _write(tmp_path, "valid.md", _markdown("description: Valid agent", ""))
     batch = import_agents(
         [{"path": "missing.md", "format": "native"}, {"path": "valid.md", "format": "native"}], tmp_path
     )
@@ -417,7 +449,7 @@ def test_symlink_directory_inside_import_path_is_rejected(tmp_path: Path) -> Non
 def test_discovery_file_count_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_definitions, "MAX_AGENT_FILES", 2)
     for name in ("c", "a", "b"):
-        _write(tmp_path, f".ngn/agents/{name}.md", _markdown("description: Bounded"))
+        _write(tmp_path, f".ngn/agents/{name}.md", _markdown("description: Bounded", ""))
     batch = discover_agents(tmp_path)
     assert [profile.name for profile in batch.profiles] == ["a", "b"]
     assert "exceeded 2 files" in batch.diagnostics[0]
@@ -439,11 +471,11 @@ def test_oversized_and_binary_sources_are_rejected_in_directory_imports(tmp_path
 
 
 def test_oversized_frontmatter_does_not_hide_valid_neighbors(tmp_path: Path) -> None:
-    _write(tmp_path, ".ngn/agents/header.md", _markdown("description: " + "x" * agent_definitions.MAX_HEADER_BYTES))
-    _write(tmp_path, ".ngn/agents/valid.md", _markdown("description: Valid"))
+    _write(tmp_path, ".ngn/agents/header.md", _markdown("description: " + "x" * agent_definitions.MAX_HEADER_BYTES, ""))
+    _write(tmp_path, ".ngn/agents/valid.md", _markdown("description: Valid", ""))
     batch = discover_agents(tmp_path)
     assert [profile.name for profile in batch.profiles] == ["valid"]
-    assert "32 KiB" in batch.diagnostics[0]
+    assert "8192 characters" in batch.diagnostics[0]
 
 
 def test_foreign_executable_configuration_is_not_loaded(tmp_path: Path) -> None:

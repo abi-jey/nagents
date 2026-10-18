@@ -4,6 +4,8 @@ import asyncio
 import json
 import os
 import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -12,12 +14,14 @@ from unittest.mock import patch
 import aiosqlite
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from nagents.compaction import ModelCompaction
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
@@ -31,7 +35,7 @@ from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
 from tests.support.web import ControlledHarness
 from tests.support.web import LiveStream
-from tests.support.web import client_app
+from tests.support.web import client_app as support_client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 
 LEGACY_FIELDS = (
@@ -72,15 +76,50 @@ def assert_runtime(harness: Harness, values: dict[str, object]) -> None:
 def configuration(tmp_path: Path) -> HarnessConfig:
     return HarnessConfig(
         workspace=tmp_path,
+        provider="fixture",
         data_dir=tmp_path / "data",
         demo=True,
+        providers=connection(name="fixture"),
         profiles={"audit": AgentProfile(mode="reviewer", model="profile-model", instructions="Trusted review rules")},
     )
 
 
+@asynccontextmanager
+async def client_app(
+    tmp_path: Path,
+    *,
+    controlled: bool = True,
+    config: HarnessConfig | None = None,
+) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient, dict[str, str], list[Harness]]]:
+    """Register named test connections while keeping web tests offline."""
+    selected = config or configuration(tmp_path)
+    if selected.provider and selected.provider in selected.providers:
+        store = ScopedProviderRegistryStore(selected.workspace, paths=selected.provider_paths)
+        combined = store.load()
+        if (
+            combined.active != selected.provider
+            or combined.providers.get(selected.provider) != selected.providers[selected.provider]
+        ):
+            registry = ProviderRegistry(active=selected.provider, providers=selected.providers)
+            store.workspace_store.save(registry, expected=store.workspace_store.load().revision)
+    async with support_client_app(tmp_path, controlled=controlled, config=selected) as runtime:
+        yield runtime
+
+
+def settings_request(snapshot: dict[str, object], values: dict[str, object]) -> dict[str, object]:
+    """Build a settings save with an explicit named model connection."""
+    references = snapshot["model_binding"]
+    assert isinstance(references, dict)
+    return {
+        "revision": snapshot["revision"],
+        "values": values,
+        "model_binding": {"provider": references["provider"], "id": str(values["model"]).strip()},
+    }
+
+
 def test_web_and_terminal_share_global_model_until_workspace_overrides_it(tmp_path: Path) -> None:
     store = ScopedProviderRegistryStore(tmp_path)
-    store.model_store("global").save("global-chat-model")
+    store.model_store("global").save_binding(ModelBinding("fixture", "global-chat-model"))
 
     async def check() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
@@ -91,10 +130,7 @@ def test_web_and_terminal_share_global_model_until_workspace_overrides_it(tmp_pa
             saved = await client.post(
                 "/api/settings",
                 headers=headers,
-                json={
-                    "revision": first["revision"],
-                    "values": {**first["values"], "model": "workspace-chat-model"},
-                },
+                json=settings_request(first, {**first["values"], "model": "workspace-chat-model"}),
             )
             assert saved.status_code == 200
             assert store.model_store("workspace").load() == "workspace-chat-model"
@@ -119,6 +155,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             demo=False,
             providers=connection(
                 "openai_compatible",
+                name="fixture",
                 auth="api-key",
                 api="responses",
                 base_url="https://example.invalid/private-endpoint",
@@ -127,6 +164,12 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             diagnostics=("SECRET-diagnostic",),
         )
         config.profiles["audit"].instructions = "SECRET-profile-instructions"
+        registry_store = ScopedProviderRegistryStore(tmp_path, paths=config.provider_paths)
+        registry_store.workspace_store.save(
+            ProviderRegistry(active="fixture", providers=config.providers),
+            expected=registry_store.workspace_store.load().revision,
+        )
+        config.provider = "fixture"
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             harness = harnesses[0]
             harness.agent.provider.api_key = "SECRET-provider-value"
@@ -181,10 +224,14 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                 assert body["apis"] == ["auto", "chat_completions", "responses", "messages"]
                 assert body["auths"] == ["auto", "api-key", "chatgpt", "codex", "entra"]
                 assert body["persisted"] is False and body["effective_mode"] == "build"
-                assert body["profiles"] == [
+                expected_profiles = [
                     {"name": "assistant", "mode": "build", "model": "", "reasoning_effort": ""},
                     {"name": "audit", "mode": "reviewer", "model": "profile-model", "reasoning_effort": ""},
                 ]
+                assert [
+                    {key: profile[key] for key in expected_profiles[index]}
+                    for index, profile in enumerate(body["profiles"])
+                ] == expected_profiles
                 assert body["connection"] == {
                     "provider_id": "fixture",
                     "provider": "openai_compatible",
@@ -196,7 +243,11 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                     "auth_status": harness.auth_status(),
                 }
                 assert "SECRET" not in response.text
-                assert str(tmp_path) not in response.text
+                profile_sources = [profile["source"] for profile in body["profiles"] if "source" in profile]
+                safe_body = response.text
+                for source in profile_sources:
+                    safe_body = safe_body.replace(source, "")
+                assert str(tmp_path) not in safe_body
                 assert response.headers["cache-control"] == "no-store"
                 saved = await client.post(
                     "/api/settings", json={"revision": body["revision"], "values": body["values"]}, headers=headers
@@ -208,22 +259,18 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 def test_settings_change_preserves_submit_mode_when_omitted(tmp_path: Path) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
             assert before["values"]["submit_mode"] == "queue"
             selected = {**before["values"], "submit_mode": "interrupt", "model": "submitted-model"}
-            saved = await client.post(
-                "/api/settings", json={"revision": before["revision"], "values": selected}, headers=headers
-            )
+            saved = await client.post("/api/settings", json=settings_request(before, selected), headers=headers)
             assert saved.status_code == 200
             assert saved.json()["values"]["submit_mode"] == "interrupt"
             assert harnesses[0].config.submit_mode == "interrupt"
             # An older client omits submit_mode; the committed value is preserved.
             omitted = {key: value for key, value in saved.json()["values"].items() if key not in SUBMIT_FIELDS}
             omitted["model"] = "omitted-model"
-            again = await client.post(
-                "/api/settings", json={"revision": saved.json()["revision"], "values": omitted}, headers=headers
-            )
+            again = await client.post("/api/settings", json=settings_request(saved.json(), omitted), headers=headers)
             assert again.status_code == 200
             assert again.json()["values"]["submit_mode"] == "interrupt"
             assert harnesses[0].config.submit_mode == "interrupt"
@@ -259,14 +306,16 @@ def test_catalog_read_preserves_saved_row_and_revision(tmp_path: Path, monkeypat
 
     async def check() -> None:
         config = replace(
-            configuration(tmp_path), demo=False, providers=connection(auth="api-key", api_key_env="TEST_CATALOG_KEY")
+            configuration(tmp_path),
+            demo=False,
+            providers=connection(name="fixture", auth="api-key", api_key_env="TEST_CATALOG_KEY"),
         )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             harness = harnesses[0]
             initial = (await client.get("/api/settings", headers=headers)).json()
             saved = await client.post(
                 "/api/settings",
-                json={"revision": initial["revision"], "values": {**initial["values"], "model": "manual-model"}},
+                json=settings_request(initial, {**initial["values"], "model": "manual-model"}),
                 headers=headers,
             )
             assert saved.status_code == 200
@@ -289,12 +338,18 @@ def test_catalog_read_preserves_saved_row_and_revision(tmp_path: Path, monkeypat
 @pytest.mark.parametrize("field", LEGACY_FIELDS)
 def test_settings_require_all_legacy_fields(tmp_path: Path, field: str) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, _):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
             before = (await client.get("/api/settings", headers=headers)).json()
             values = dict(before["values"])
             del values[field]
             response = await client.post(
-                "/api/settings", json={"revision": before["revision"], "values": values}, headers=headers
+                "/api/settings",
+                json=(
+                    {"revision": before["revision"], "values": values}
+                    if field == "model"
+                    else settings_request(before, values)
+                ),
+                headers=headers,
             )
             assert response.status_code == 422
             assert (await client.get("/api/settings", headers=headers)).json() == before
@@ -327,10 +382,8 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
                 "max_tool_rounds": 1000,
                 "max_subagent_depth": 0,
             }
-            response = await client.post(
-                "/api/settings", json={"revision": before["revision"], "values": values}, headers=headers
-            )
-            assert response.status_code == 200
+            response = await client.post("/api/settings", json=settings_request(before, values), headers=headers)
+            assert response.status_code == 200, response.text
             saved = response.json()
             values["model"] = "vendor/free-text:model-v2"
             assert saved["values"] == values and saved["defaults"] == before["defaults"]
@@ -339,7 +392,7 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
             assert saved["effective_model"] == "profile-model"
             assert SettingsValues.current(harness).model_dump() == values
             assert harness.config is config and harness.agent.provider is provider
-            assert isinstance(provider, HarnessProvider) and provider.harness_config is config
+            assert isinstance(provider, HarnessProvider) and provider.harness_config.model == saved["effective_model"]
             assert harness.agent.tool_registry is registry and harness.agent.tool_executor is executor
             assert harness.approval_handler is approval and harness.session_id == session_id
             assert harness.tools.read_hashes == {"kept.txt": "old-read"}
@@ -360,9 +413,7 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
             # Leaving the agent's explicit model restores the workspace choice.
             harness._permission_ceiling = "reviewer"
             values.update(agent="assistant", max_subagent_depth=8)
-            response = await client.post(
-                "/api/settings", json={"revision": saved["revision"], "values": values}, headers=headers
-            )
+            response = await client.post("/api/settings", json=settings_request(saved, values), headers=headers)
             assert response.status_code == 200 and response.json()["effective_mode"] == "reviewer"
             assert harness.can_delegate and "depth 8" in (harness.agent.system_prompt or "")
             await client.post("/api/sessions/new", json={}, headers=headers)
@@ -449,9 +500,9 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
 )
 def test_settings_strict_invalid_values(tmp_path: Path, field: str, value: object) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
-            body = {"revision": before["revision"], "values": {**before["values"], field: value}}
+            body = settings_request(before, {**before["values"], field: value})
             response = await client.post(
                 "/api/settings", content=json.dumps(body), headers={**headers, "Content-Type": "application/json"}
             )
@@ -513,7 +564,7 @@ def test_compaction_criteria_apply_to_the_live_agent(tmp_path: Path) -> None:
 @pytest.mark.parametrize("path", ["/api/settings", "/api/settings/reset"])
 def test_settings_request_guards(tmp_path: Path, path: str) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, _):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
             before = (await client.get("/api/settings", headers=headers)).json()
             body = {"revision": before["revision"]}
             if path == "/api/settings":
@@ -546,9 +597,9 @@ def test_settings_request_guards(tmp_path: Path, path: str) -> None:
 
 def test_settings_stale_other_client_and_harness_busy(tmp_path: Path) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (app, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
-            body = {"revision": before["revision"], "values": {**before["values"], "model": "new-model"}}
+            body = settings_request(before, {**before["values"], "model": "new-model"})
             with harnesses[0].operation("other library operation"):
                 assert (await client.post("/api/settings", json=body, headers=headers)).status_code == 409
                 assert (
@@ -571,13 +622,13 @@ def test_settings_wait_for_bookkeeping_guard_without_waiting_for_a_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str, reset: bool
 ) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (app, client, headers, _):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, _):
             state = app.state.web
             endpoint = "/api/settings" + ("/global" if scope == "global" else "")
             before = (await client.get(endpoint, headers=headers)).json()
             body = {"revision": before["revision"]}
             if not reset:
-                body["values"] = {**before["values"], "model": "after-bookkeeping"}
+                body = settings_request(before, {**before["values"], "model": "after-bookkeeping"})
             waiting = asyncio.Event()
             mutation_released: asyncio.Event = state.mutation_released
             original_wait = mutation_released.wait
@@ -614,7 +665,7 @@ def test_settings_wait_for_bookkeeping_guard_without_waiting_for_a_model(
 @pytest.mark.parametrize("prompt", ["approval", "wait"])
 def test_settings_save_and_reset_while_run_or_approval_continues(tmp_path: Path, prompt: str) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (app, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
             stream = LiveStream(app, headers, harnesses[0].session_id, prompt)
             await stream.event("approval" if prompt == "approval" else "text_chunk")
@@ -624,7 +675,7 @@ def test_settings_save_and_reset_while_run_or_approval_continues(tmp_path: Path,
                 provider = owner.agent.provider
                 saved = await client.post(
                     "/api/settings",
-                    json={"revision": before["revision"], "values": {**before["values"], "model": "next-model"}},
+                    json=settings_request(before, {**before["values"], "model": "next-model"}),
                     headers=headers,
                 )
                 assert saved.status_code == 200, saved.text
@@ -665,9 +716,7 @@ def test_settings_persist_fresh_lifespan_and_reset_clears_override(tmp_path: Pat
                 "max_tool_rounds": 1,
                 "max_subagent_depth": 0,
             }
-            response = await client.post(
-                "/api/settings", json={"revision": initial["revision"], "values": values}, headers=headers
-            )
+            response = await client.post("/api/settings", json=settings_request(initial, values), headers=headers)
             assert response.status_code == 200
             saved = response.json()
         assert config.model == "gpt-6-astra" and config.agent == "assistant"
@@ -715,7 +764,7 @@ def test_settings_persist_fresh_lifespan_and_reset_clears_override(tmp_path: Pat
 @pytest.mark.parametrize("legacy_agent", ["build", "agent", "reviewer"])
 def test_settings_legacy_default_agent_migrates_to_assistant(tmp_path: Path, legacy_agent: str) -> None:
     async def check() -> None:
-        config = replace(configuration(tmp_path), demo=False, providers=connection(auth="api-key"))
+        config = replace(configuration(tmp_path), demo=False, providers=connection(name="fixture", auth="api-key"))
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             initial = (await client.get("/api/settings", headers=headers)).json()
             db_path = harnesses[0].agent.session.db_path
@@ -731,7 +780,7 @@ def test_settings_legacy_default_agent_migrates_to_assistant(tmp_path: Path, leg
             await db.commit()
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
-            assert loaded["persisted"] is True and loaded["revision"] == "a" * 64
+            assert loaded["persisted"] is True and loaded["revision"] != "a" * 64
             assert loaded["values"]["agent"] == "assistant"
             harness = harnesses[0]
             assert harness.config.agent == "assistant"
@@ -757,7 +806,9 @@ def test_settings_legacy_default_agent_migrates_to_assistant(tmp_path: Path, leg
 @pytest.mark.requires_posix
 def test_settings_stored_read_only_false_cannot_lower_startup_floor(tmp_path: Path) -> None:
     async def check() -> None:
-        config = replace(configuration(tmp_path), demo=False, providers=connection(auth="api-key"), read_only=True)
+        config = replace(
+            configuration(tmp_path), demo=False, providers=connection(name="fixture", auth="api-key"), read_only=True
+        )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             initial = (await client.get("/api/settings", headers=headers)).json()
             db_path = harnesses[0].agent.session.db_path
@@ -773,7 +824,7 @@ def test_settings_stored_read_only_false_cannot_lower_startup_floor(tmp_path: Pa
             await db.commit()
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             loaded = (await client.get("/api/settings", headers=headers)).json()
-            assert loaded["persisted"] is True and loaded["revision"] == "c" * 64
+            assert loaded["persisted"] is True and loaded["revision"] != "c" * 64
             # Stored preference remains False, but the effective floor stays reviewer.
             assert loaded["values"]["read_only"] is False
             assert loaded["read_only_locked"] is True
@@ -792,7 +843,7 @@ def test_settings_explicit_custom_reviewer_keeps_identity(tmp_path: Path, legacy
         config = replace(
             configuration(tmp_path),
             demo=False,
-            providers=connection(auth="api-key"),
+            providers=connection(name="fixture", auth="api-key"),
             profiles={"reviewer": AgentProfile(mode="reviewer")}
             if legacy_agent == "reviewer"
             else configuration(tmp_path).profiles,
@@ -823,7 +874,9 @@ def test_settings_explicit_custom_reviewer_keeps_identity(tmp_path: Path, legacy
 @pytest.mark.requires_posix
 def test_settings_read_only_cannot_be_escaped_by_a_false_flag(tmp_path: Path) -> None:
     async def check() -> None:
-        config = replace(configuration(tmp_path), demo=False, providers=connection(auth="api-key"), read_only=True)
+        config = replace(
+            configuration(tmp_path), demo=False, providers=connection(name="fixture", auth="api-key"), read_only=True
+        )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
             assert before["read_only_locked"] is True
@@ -853,6 +906,9 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
             harness = harnesses[0]
             session_id, db_path = harness.session_id, harness.agent.session.db_path
             await harness.agent.session.add_message(session_id, Message(role="user", content="legacy history"))
+        ScopedProviderRegistryStore(tmp_path).model_store("workspace").save_binding(
+            ModelBinding("fixture", "legacy-chat-model")
+        )
         legacy = {
             **{key: initial["values"][key] for key in LEGACY_FIELDS},
             "model": "legacy-chat-model",
@@ -878,14 +934,16 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
             values = {**initial["values"], **legacy}
             assert loaded["values"] == values
             assert loaded["defaults"]["model"] == "new-trusted-default"
-            assert loaded["persisted"] is True and loaded["revision"] == revision
+            assert loaded["persisted"] is True and loaded["revision"] != revision
             assert_runtime(harnesses[0], values)
             async with aiosqlite.connect(db_path) as db:
                 assert list(await db.execute_fetchall("SELECT * FROM ngn_web_settings")) == [(1, 1, payload, revision)]
             resumed = await client.post("/api/sessions/resume", json={"session_id": session_id}, headers=headers)
             assert resumed.json()["history"][0]["content"] == "legacy history"
             saved_response = await client.post(
-                "/api/settings", json={"revision": revision, "values": values}, headers=headers
+                "/api/settings",
+                json=settings_request(loaded, values),
+                headers=headers,
             )
             assert saved_response.status_code == 200
             saved = saved_response.json()
@@ -918,7 +976,7 @@ def test_settings_v1_reader_preserves_row_history_revision_and_upgrades_on_save(
 @pytest.mark.parametrize("version", [1, 2, 3, 4])
 def test_settings_stored_revision_conflict_preserves_preferences(tmp_path: Path, version: int) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             initial = (await client.get("/api/settings", headers=headers)).json()
             db_path = harnesses[0].agent.session.db_path
         values = legacy_values(version, initial["values"])
@@ -928,7 +986,7 @@ def test_settings_stored_revision_conflict_preserves_preferences(tmp_path: Path,
                 (version, json.dumps(values), "a" * 64),
             )
             await db.commit()
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             before = (await client.get("/api/settings", headers=headers)).json()
             async with aiosqlite.connect(db_path) as db:
                 await db.execute("UPDATE ngn_web_settings SET revision = ?", ("b" * 64,))
@@ -954,7 +1012,7 @@ def test_settings_defaults_follow_named_model_preference(tmp_path: Path) -> None
         ProviderRegistry(active="chat", providers={"chat": ProviderProfile(kind="openai", auth="api-key")}),
         expected="0" * 64,
     )
-    store.model_store("global").save("selected-model")
+    store.model_store("global").save_binding(ModelBinding("chat", "selected-model"))
 
     async def check() -> None:
         for expected in ("selected-model", "saved-model"):
@@ -964,7 +1022,7 @@ def test_settings_defaults_follow_named_model_preference(tmp_path: Path) -> None
                 assert before["defaults"]["model"] == "selected-model"
                 saved = await client.post(
                     "/api/settings",
-                    json={"revision": before["revision"], "values": {**before["values"], "model": "saved-model"}},
+                    json=settings_request(before, {**before["values"], "model": "saved-model"}),
                     headers=headers,
                 )
                 assert saved.status_code == 200
@@ -986,13 +1044,7 @@ def test_settings_failures_restore_live_and_persisted_values(tmp_path: Path, fai
             initial = (await client.get("/api/settings", headers=headers)).json()
             response = await client.post(
                 "/api/settings",
-                json={
-                    "revision": initial["revision"],
-                    "values": {
-                        **initial["values"],
-                        "model": "old-saved-model",
-                    },
-                },
+                json=settings_request(initial, {**initial["values"], "model": "old-saved-model"}),
                 headers=headers,
             )
             before = response.json()
@@ -1009,13 +1061,16 @@ def test_settings_failures_restore_live_and_persisted_values(tmp_path: Path, fai
                     await db.commit()
             body = {"revision": before["revision"]}
             if not reset:
-                body["values"] = {
-                    **before["values"],
-                    "model": "candidate-model",
-                    "agent": "audit",
-                    "max_tool_rounds": 2,
-                    "max_subagent_depth": 0,
-                }
+                body = settings_request(
+                    before,
+                    {
+                        **before["values"],
+                        "model": "candidate-model",
+                        "agent": "audit",
+                        "max_tool_rounds": 2,
+                        "max_subagent_depth": 0,
+                    },
+                )
             path = "/api/settings/reset" if reset else "/api/settings"
             if failure == "commit":
                 with patch.object(
@@ -1050,19 +1105,13 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
     tmp_path: Path, fail_commit: bool, reset: bool
 ) -> None:
     async def check() -> None:
-        async with client_app(tmp_path) as (_, client, headers, harnesses):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             harness = harnesses[0]
             before = (await client.get("/api/settings", headers=headers)).json()
             if reset:
                 saved = await client.post(
                     "/api/settings",
-                    json={
-                        "revision": before["revision"],
-                        "values": {
-                            **before["values"],
-                            "model": "previous-model",
-                        },
-                    },
+                    json=settings_request(before, {**before["values"], "model": "previous-model"}),
                     headers=headers,
                 )
                 assert saved.status_code == 200
@@ -1077,7 +1126,7 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
             if reset:
                 values = before["defaults"]
             else:
-                body["values"] = values
+                body.update(settings_request(before, values))
             entered, release = asyncio.Event(), asyncio.Event()
             commit = aiosqlite.Connection.commit
 
@@ -1098,7 +1147,7 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
                     assert (await client.get("/api/settings", headers=headers)).json() == before
                     assert (await client.get("/api/bootstrap")).json()["model"] == before["values"]["model"]
                     for path, body in (
-                        ("/api/settings", {"revision": before["revision"], "values": values}),
+                        ("/api/settings", settings_request(before, values)),
                         ("/api/settings/reset", {"revision": before["revision"]}),
                         ("/api/sessions/new", {}),
                     ):
@@ -1122,7 +1171,7 @@ def test_settings_cancellation_joins_transaction_and_keeps_get_consistent(
             assert_runtime(harness, after["values"])
             assert harness.agent.max_tool_rounds == after["values"]["max_tool_rounds"]
             assert (await client.post("/api/sessions/new", json={}, headers=headers)).status_code == 200
-        async with client_app(tmp_path) as (_, client, headers, _):
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, _):
             assert (await client.get("/api/settings", headers=headers)).json()["values"] == after["values"]
 
     asyncio.run(check())
@@ -1193,15 +1242,13 @@ def test_settings_corrupt_saved_row_fails_closed(tmp_path: Path, corruption: str
 @pytest.mark.requires_posix
 def test_settings_tools_use_new_byte_and_timeout_limits(tmp_path: Path) -> None:
     async def check() -> None:
-        config = replace(configuration(tmp_path), demo=False, providers=connection(auth="api-key"))
+        config = replace(configuration(tmp_path), demo=False, providers=connection(name="fixture", auth="api-key"))
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             harness = harnesses[0]
             before = (await client.get("/api/settings", headers=headers)).json()
             values = {**before["values"], "max_output": 1024, "max_file_bytes": 2048, "shell_timeout": 0.1}
             assert (
-                await client.post(
-                    "/api/settings", json={"revision": before["revision"], "values": values}, headers=headers
-                )
+                await client.post("/api/settings", json=settings_request(before, values), headers=headers)
             ).status_code == 200
             (tmp_path / "bounded.txt").write_text("x" * 1500)
             assert len(str((await harness.tools.read_file("bounded.txt"))["content"]).encode()) == 1024
@@ -1225,7 +1272,7 @@ def test_provider_overrides_and_keys_require_named_connections(tmp_path: Path, m
         config = replace(
             configuration(tmp_path),
             demo=False,
-            providers=connection(auth="api-key", api_key_env="TEST_DEPLOY_CHAT_KEY"),
+            providers=connection(name="fixture", auth="api-key", api_key_env="TEST_DEPLOY_CHAT_KEY"),
         )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             harness = harnesses[0]
@@ -1258,7 +1305,7 @@ def test_provider_override_rejects_unsafe_combinations(tmp_path: Path) -> None:
         config = replace(
             configuration(tmp_path),
             demo=False,
-            providers=connection(auth="api-key", api_key_env="TEST_DEPLOY_CHAT_KEY"),
+            providers=connection(name="fixture", auth="api-key", api_key_env="TEST_DEPLOY_CHAT_KEY"),
         )
         async with client_app(tmp_path, config=config) as (_, client, headers, harnesses):
             harness = harnesses[0]

@@ -7,11 +7,9 @@ import { currentLiveDelegation, LiveController } from "./controller.js";
 import { DelegationInspector } from "./DelegationInspector.js";
 import { LiveComposer } from "./LiveComposer.js";
 import type { LiveComposerTargets } from "./LiveComposer.js";
-import { VoiceSettingsDialog } from "./VoiceSettingsDialog.js";
 import { VoiceContextDetails } from "./VoiceContextDetails.js";
 import { OutputDeviceNotice } from "./OutputDeviceNotice.js";
-import { LiveSettings } from "./LiveSettings.js";
-import type { LiveCapability, LivePhase, LiveSettingsSnapshot } from "./types.js";
+import type { LiveCapability, LivePhase } from "./types.js";
 import type { NavigatorAudio } from "../settings/navigator/AgentNavigator.js";
 import { settingsChanged } from "../settings/navigator/state.js";
 
@@ -26,13 +24,12 @@ function duration(seconds: number) {
 
 // Voice lives inside the composer. Captions use the same authenticated chat
 // event stream as typed messages; opening settings never remounts the call.
-export function LiveDialog({ token, sessionId, assistant, targets, visible = true, close, configureConnection, autoStart = true,
+export function LiveDialog({ token, sessionId, targets, close, autoStart = true,
   openSettingsInitially = !autoStart, consumeStartIntent, openAgentSettings, audioChanged }: {
-  token: string; sessionId: string; close: () => void; configureConnection?: () => void; autoStart?: boolean;
-  targets: LiveComposerTargets; visible?: boolean;
-  assistant?: LiveCapability["assistant"];
+  token: string; sessionId: string; close: () => void; autoStart?: boolean;
+  targets: LiveComposerTargets;
   openSettingsInitially?: boolean; consumeStartIntent?: () => void;
-  openAgentSettings?: () => void; audioChanged?: (audio?: NavigatorAudio) => void;
+  openAgentSettings: () => void; audioChanged?: (audio?: NavigatorAudio) => void;
 }) {
   const loadingRequest = useRef<AbortController | undefined>(undefined);
   const [controller] = useState(() => new LiveController({ ...liveApi(token), token, media: browserMedia }));
@@ -42,16 +39,13 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [settingsOpen, setSettingsOpen] = useState(openSettingsInitially && !openAgentSettings);
-  const [settingsVisited, setSettingsVisited] = useState(openSettingsInitially && !openAgentSettings);
-  const [settingsSaving, setSettingsSaving] = useState(false);
   const [inspectionOpen, setInspectionOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [inspectedId, setInspectedId] = useState("");
   const inspected = state.delegations.find(item => item.id === inspectedId) || currentLiveDelegation(state.delegations);
   const firstLoad = useRef(true);
   const acceptedAudio = useRef({ voice: "", model: "" });
-  const startIntent = useRef(autoStart);
+  const startIntent = useRef(autoStart && !openSettingsInitially);
   const active = ["permission", "connecting", "connected", "ending"].includes(state.phase);
   const connected = state.phase === "connected";
   const main = config?.backend_mode === "assistant";
@@ -74,7 +68,7 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
       setConfig(next); setVoice(current => active ? current : next.voice);
       if (firstLoad.current) {
         firstLoad.current = false;
-        if (!next.enabled || !next.key_configured) { if (openAgentSettings) openAgentSettings(); else { setSettingsVisited(true); setSettingsOpen(true); } }
+        if (openSettingsInitially || !next.enabled || !next.key_configured) openAgentSettings();
       }
       return next;
     } catch (cause) {
@@ -82,20 +76,11 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
     } finally { if (!abort.signal.aborted) setLoading(false); }
   }
 
-  async function saved(snapshot: LiveSettingsSnapshot) {
-    if (!active) setVoice(snapshot.values.voice);
-    const next = await refresh();
-    if (next?.available) {
-      setSettingsOpen(false);
-      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".voice-controls .voice-start, .voice-controls-trigger")?.focus({ preventScroll: true }));
-    }
-  }
   function configure() {
     startIntent.current = false;
     setContextOpen(false);
-    if (openAgentSettings) { setInspectionOpen(false); openAgentSettings(); return; }
-    if (settingsOpen) { closeSettings(); return; }
-    setInspectionOpen(false); setSettingsVisited(true); setSettingsOpen(true);
+    setInspectionOpen(false);
+    openAgentSettings();
   }
   function closeInspection() {
     setInspectionOpen(false);
@@ -104,10 +89,7 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
   function inspect() {
     setContextOpen(false);
     if (inspectionOpen) { closeInspection(); return; }
-    setSettingsOpen(false); setInspectedId(currentLiveDelegation(state.delegations)?.id || ""); setInspectionOpen(true);
-  }
-  function closeSettings() {
-    setSettingsOpen(false);
+    setInspectedId(currentLiveDelegation(state.delegations)?.id || ""); setInspectionOpen(true);
   }
   function showContext() {
     if (contextOpen) {
@@ -115,7 +97,7 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
       requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".voice-context-trigger")?.focus({ preventScroll: true }));
       return;
     }
-    setSettingsOpen(false); setInspectionOpen(false); setContextOpen(true);
+    setInspectionOpen(false); setContextOpen(true);
     requestAnimationFrame(() => document.getElementById("voice-context-title")?.focus({ preventScroll: true }));
   }
   function viewChat(runId: string) {
@@ -166,26 +148,17 @@ export function LiveDialog({ token, sessionId, assistant, targets, visible = tru
     return () => clearInterval(timer);
   }, [connected]);
   useEffect(() => { if (state.phase === "ended" || state.phase === "error") void refresh(); }, [state.phase]);
-  return <><LiveComposer targets={targets} state={state} audio={controller.audio} status={status} elapsed={duration(elapsed)}
-    disabled={settingsOpen || settingsSaving || loading || !config?.available || !!unavailable}
+  return <LiveComposer targets={targets} state={state} audio={controller.audio} status={status} elapsed={duration(elapsed)}
+    disabled={loading || !config?.available || !!unavailable}
     unavailable={unavailable} loading={loading} voice={voice}
-    settingsOpen={settingsOpen} settingsSaving={settingsSaving} settingsDialogId={openAgentSettings ? "agent-navigator-dialog" : undefined} inspectionOpen={inspectionOpen} inspect={inspect}
+    inspectionOpen={inspectionOpen} inspect={inspect}
     contextOpen={contextOpen} showContext={showContext}
-    audioNotice={<OutputDeviceNotice connected={connected} outputId={state.devices.outputId} hidden={settingsOpen}
+    audioNotice={<OutputDeviceNotice connected={connected} outputId={state.devices.outputId} hidden={false}
       useDefault={() => controller.switchDevice("output", "")} />}
     contextDetails={contextOpen && state.context && <VoiceContextDetails context={state.context} token={token} sessionId={state.sessionId} close={showContext} />}
     inspector={inspectionOpen && inspected && <DelegationInspector token={token} delegation={inspected} delegations={state.delegations} select={setInspectedId} close={closeInspection} viewChat={viewChat} />}
     start={() => { setInspectionOpen(false); setContextOpen(false); if (config) void controller.start(voice, config.revision, sessionId, config.transport); }}
-    end={() => { startIntent.current = false; void controller.end(); }} close={() => { if (!settingsSaving) { startIntent.current = false; close(); } }} configure={configure}
+    end={() => { startIntent.current = false; void controller.end(); }} close={() => { startIntent.current = false; close(); }} configure={configure}
     muteInput={() => controller.muteInput()} muteOutput={() => controller.muteOutput()}
-    play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat} />
-    {settingsVisited && <VoiceSettingsDialog open={settingsOpen && visible} saving={settingsSaving} close={closeSettings}>
-      <LiveSettings token={token} assistant={assistant} transport={config?.transport}
-        audioDisabled={["permission", "connecting", "ending"].includes(state.phase)} audioActive={connected} audioSelection={state.devices}
-        applyDevice={connected ? (kind, id) => controller.switchDevice(kind, id) : undefined}
-        hidden={!settingsOpen} onSavingChange={setSettingsSaving}
-        configureConnection={configureConnection && (() => { closeSettings(); configureConnection(); })}
-        blocked={false} saved={snapshot => void saved(snapshot)} back={closeSettings} />
-    </VoiceSettingsDialog>}
-  </>;
+    play={() => void controller.play()} refresh={() => { startIntent.current = false; void refresh(); }} viewChat={viewChat} />;
 }

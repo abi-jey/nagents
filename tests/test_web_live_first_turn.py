@@ -48,7 +48,6 @@ def test_captured_markdown_prompt_replaces_default_without_hidden_instructions(p
         "1" * 64,
         SecretStr(""),
         instruction_prompt=prompt,
-        instruction_prompt_captured=True,
     )
     assert voice_instructions(connection) == prompt
     assert default_voice_instructions(backend_mode)
@@ -73,7 +72,6 @@ def test_captured_markdown_reaches_both_live_transport_configurations(prompt: st
             voice_auth="chatgpt" if native else "api-key",
             login_credentials=credentials if native else None,
             instruction_prompt=prompt,
-            instruction_prompt_captured=True,
         )
         if native:
             assert create_login_config(connection, "sol", handler).instructions == prompt
@@ -96,9 +94,7 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
         async def credentials() -> CodexCredentials:
             raise AssertionError("Constructing settings must not retrieve credentials")
 
-        values = LiveValues.model_validate(
-            {**LiveValues.defaults().model_dump(), "enabled": True, "instructions": "Speak concisely in English."}
-        )
+        values = LiveValues.model_validate({**LiveValues.defaults().model_dump(), "enabled": True})
         connection = LiveConnection(
             values,
             "1" * 64,
@@ -107,6 +103,7 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
             credential_available=native,
             voice_auth="chatgpt" if native else "api-key",
             login_credentials=credentials if native else None,
+            instruction_prompt=default_voice_instructions(values.backend_mode),
         )
         if native:
             instructions = create_login_config(connection, "sol", handler).instructions
@@ -125,7 +122,7 @@ def test_effective_client_policy_delegates_first_greeting_once_without_history_r
         assert "do not resume or repeat actions from saved chat history" in instructions
         assert "substantive request" in instructions and "same delegation" in instructions
         assert "Do not send a second context-only delegation" in instructions
-        assert "Speak concisely in English." in instructions
+        assert "voice of the assistant in the selected chat" in instructions
 
     asyncio.run(scenario())
 

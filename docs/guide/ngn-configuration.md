@@ -7,9 +7,10 @@ release notes before assuming every current field or behavior is available.
 
 ## Quick example
 
-Configuration is JSON. Keep general settings in `config.json` and named connections
-in `providers.json`. `profiles` and the optional `providers` file reference are
-the nested settings in the general config:
+Keep general settings in JSON `config.json`, named connections in
+`providers.json`, and reusable assistant behavior in native Markdown
+`assistant.md`. Existing JSON `profiles` remain supported. `profiles` and the
+optional `providers` file reference are nested settings in the general config:
 
 ```json
 {
@@ -87,9 +88,9 @@ process's edits. A separate connection can be selected for a trusted agent profi
 
 Provider connections contain kind, authentication source, endpoint where needed,
 HTTP API and **environment variable names**. Chat models are chosen separately:
-the `model` field in global `$XDG_CONFIG_HOME/ngn/config.json` or workspace
-`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/config.json` provides shared
-defaults for the CLI, TUI and web UI. Trusted JSON model selections, agent-profile models,
+the `model` field in global `$XDG_CONFIG_HOME/ngn/assistant.md` or workspace
+`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md` provides shared
+defaults for the CLI, TUI and web UI. Explicit trusted JSON model selections, agent-profile models,
 `NGN_MODEL` and explicit `--model` overrides retain their precedence. Switching
 connections does not change the chat model. Voice duplex preferences are edited
 separately in **GPT-Live → Voice settings**: Global supplies defaults, and the
@@ -211,9 +212,11 @@ reference to a missing file starts with an empty registry; the UI creates that
 file on save. The references must name distinct `.json` files. The full resolved
 provider definitions are visible as `config.providers` during CLI startup.
 
-Voice defaults are stored in `$XDG_CONFIG_HOME/ngn/voice.db`, and workspace
-overrides in the workspace session database. Provider connections contain no
-chat or Voice model and no API-key values.
+Voice defaults and full prompts share the `live` section of the scoped
+`assistant.md` files described below. The framework uses only this native format;
+an existing installation needs operator-managed conversion of prior settings.
+It does not import Voice SQLite records or separate prompt files. Provider
+connections contain no chat or Voice model and no API-key values.
 
 Create a named connection in the web UI or TUI and set its environment variable;
 the provider editor does not offer an API-key-value field.
@@ -225,8 +228,10 @@ the provider editor does not offer an API-key-value field.
 | Global/user JSON | `$XDG_CONFIG_HOME/ngn/config.json`; defaults to `~/.config/ngn/config.json` when `XDG_CONFIG_HOME` is unset or empty | Automatically trusted and loaded if present. |
 | Global provider registry | `$XDG_CONFIG_HOME/ngn/providers.json`; defaults to `~/.config/ngn/providers.json` | Shared across workspaces by web, TUI, and headless ngn; no API key values. |
 | Workspace provider registry | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/providers.json` | Workspace-only connections and selection; inherits global connections and default. |
-| Workspace chat-model preference | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/config.json` | The workspace `model` field overrides the global model preference; no credentials. |
-| Agent model overrides | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agent-models/<name>.md` | Model-only Markdown references saved from Team settings, including `assistant`; no instruction or permission overrides. |
+| Global assistant defaults | `$XDG_CONFIG_HOME/ngn/assistant.md` | Native Markdown containing the assistant prompt, model/tool selections, and `live` settings; created from the packaged asset on startup if absent. |
+| Workspace assistant defaults | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md` | Supplied fields override global defaults; missing fields and missing files inherit. |
+| Agent UI overrides | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agents/<name>.md` | One native document for an agent's model, prompt, tools, and Live overrides, including `assistant`; section saves preserve other fields. |
+| Native project agents | `<workspace>/.ngn/agents/<name>.md` or `<name>/agent.md` | Requires trusted project discovery; `assistant.md` is allowed and hot-reloads with other definitions. |
 | Project JSON | `<workspace>/.ngn/config.json` | Ignored with a diagnostic unless `--trust-project` is supplied or that exact file is selected explicitly. |
 | Explicit JSON | `--config /any/path/settings.json` | Any filename/location ending in `.json` is accepted. Selecting it explicitly trusts it, including endpoint and plugin settings. |
 | Workspace | `--workspace PATH` or `-C PATH`; defaults to the shell's current directory | Must already be a directory. Determines project configuration, file-tool boundaries, and session scope. |
@@ -259,8 +264,9 @@ Model preferences store a complete reference, for example
 agent's model, then the workspace default, then the global default. Each layer
 selects a connection and model together from the merged global/workspace
 registry. A missing named connection is an error, not a fallback to a different
-provider. Existing string model preferences remain readable. Native agent
-frontmatter accepts the same map; see [agent definitions](agent-definitions.md).
+provider. Native agent frontmatter requires the same complete map; see
+[agent definitions](agent-definitions.md). Startup `config.json` model settings
+remain explicit runtime configuration, separate from these reusable documents.
 
 Agent definitions refresh before each model call, while already issued calls
 keep their accepted definitions. Team refreshes newly discovered and renamed
@@ -442,8 +448,25 @@ environment-variable convention, and no `NGN_CONFIG`, `NGN_WORKSPACE`, or
 
 ## Agent profiles
 
-`assistant` is the only built-in agent and is reserved. Other agents come from
-JSON `profiles` or [discovered Markdown and TOML definitions](agent-definitions.md).
+`assistant` is the only built-in agent. Its native `assistant.md` definition is
+customizable; other agents come from JSON `profiles` or
+[discovered Markdown and TOML definitions](agent-definitions.md).
+
+Native Markdown contains only a YAML header enclosed by `---`; body text is rejected.
+`name` defaults to the filename, and missing fields inherit. The canonical
+`prompt: |` field replaces the packaged coding policy; `live.prompt: |` replaces
+the complete voice prompt. Explicit empty prompts remain empty. Project
+`AGENTS.md` context and runtime capability/permission messages still apply.
+Use `model: {provider: connection-name, id: exact-model-id}` for one complete model
+reference; provider connections and credentials are configured separately.
+See the [complete native example](agent-definitions.md#native-format).
+
+Startup creates the global `$XDG_CONFIG_HOME/ngn/assistant.md` from the packaged
+asset when missing, with `auto_update: true` and a `default_revision` SHA-256
+source digest. When that bundled revision changes, ngn logs a warning and
+replaces the whole global file, including manual edits if `auto_update` is still
+`true`. Set `auto_update: false` to keep a custom document across upgrades.
+Global assistant edits in the UI set it to `false` and show a notice.
 
 Use `read_only: true` (or `NGN_READ_ONLY=true`) to constrain the assistant and its
 children to read-only operation. This startup restriction cannot be relaxed by
@@ -455,13 +478,14 @@ explicitly configured custom profiles.
 | --- | --- | --- |
 | `assistant` | `build` | Default interactive agent and default delegation target. Guarded changes and shell require approval; child agents inherit their parent's permission ceiling. |
 
-Custom profile names match `[A-Za-z0-9_-]{1,128}`. Each profile accepts these fields:
+Custom profile names match `[A-Za-z0-9_-]{1,128}`. JSON profiles accept these fields;
+native Markdown additionally supports the full prompts and update metadata above:
 
 | Profile field | Default | Meaning |
 | --- | --- | --- |
 | `mode` | `"build"` | `"build"` for normal guarded operation or `"reviewer"` for read-only operation. These are permission modes, not additional built-in agents. |
 | `instructions` | `""` | Trusted profile instructions, appended to the harness context. They do not grant extra permissions. |
-| `model` | omitted | Optional `{provider, id}` model reference on profile activation. Omission inherits workspace, then global defaults. Older string overrides remain readable. |
+| `model` | omitted | Optional `{provider, id}` model reference on profile activation. Omission inherits workspace, then global defaults. |
 | `description` | `""` | Description shown to the model and agent picker. |
 | `tools` | omitted | Tool-name array; omission inherits, `[]` permits no tools. |
 | `denied_tools` | `[]` | Additional tool-name denials. |
@@ -470,8 +494,8 @@ Custom profile names match `[A-Za-z0-9_-]{1,128}`. Each profile accepts these fi
 | `subagent_available` | `true` | Boolean controlling delegation eligibility. |
 
 A model reference names an existing global or workspace connection; the agent
-does not define credentials or its own provider. Older scalar model definitions
-with a separate provider connection ID remain readable.
+does not define credentials or its own provider. Native Markdown rejects scalar
+model values and separate `provider` fields.
 
 ```json
 {
@@ -497,10 +521,15 @@ to govern it. In-process `/model` changes are runtime state, not edits to JSON.
 
 ### Merge and replacement rules
 
-Profiles merge **by name**, not recursively by field. Different names from
-different files remain available, but a later `profiles.audit` entry constructs a
-new profile and replaces the earlier `audit` completely. Omitted fields in that
-replacement return to the profile defaults.
+Native same-name definitions merge their supplied fields, including individual
+`live` keys. Missing files or keys inherit; restoring inheritance removes the
+key, with no persisted `inherit` sentinel. An empty prompt, `tools: []`, or
+`live.enabled: false` is an explicit value.
+
+JSON profiles merge **by name**, with whole-profile replacement. Different names
+from different files remain available, but a later `profiles.audit` entry
+constructs a new profile and replaces the earlier `audit` completely. Omitted
+fields in that JSON replacement return to the profile defaults.
 
 For example, if global JSON defines `audit` with `mode: reviewer` and a model,
 then a trusted project file containing only:
@@ -668,8 +697,9 @@ command interfaces.
 ## Provider recipes
 
 These snippets are provider **entries** under `providers.json` → `providers.NAME`;
-the active name belongs in that file's `active` field. Set the chat `model` in
-`config.json` or the model selector. Put API-key values in your shell or secret
+the active name belongs in that file's `active` field. Set reusable chat model
+defaults in `assistant.md` or the model selector; `config.json` can supply an
+explicit startup model. Put API-key values in your shell or secret
 manager, not in these files, URLs, or command arguments.
 
 ### OpenAI API key

@@ -32,8 +32,8 @@ AgentName = Annotated[str, PathParameter(min_length=1, max_length=128, pattern=r
 
 class ModelReferenceInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-    provider: str = Field(max_length=64)
-    id: str = Field(max_length=200)
+    provider: str = Field(min_length=1, max_length=64)
+    id: str = Field(min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def complete_reference(self) -> Self:
@@ -68,9 +68,7 @@ def _default(harness: Harness) -> ResolvedModelBinding:
         # The editor must remain usable when a referenced connection is removed.
         # Preserve the unavailable pair instead of substituting a working route.
         workspace = harness.provider_store.model_binding("workspace")
-        global_default = harness.provider_store.model_binding(
-            "global", legacy_provider=harness._default_provider_name or harness.providers.active
-        )
+        global_default = harness.provider_store.model_binding("global")
         if workspace.configured:
             return ResolvedModelBinding(
                 workspace, "workspace", str(harness.provider_store.model_store("workspace").path)

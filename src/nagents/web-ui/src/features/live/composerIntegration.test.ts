@@ -55,7 +55,7 @@ function view(initialPrompt = "Keep the original draft here") {
     state: { phase: "connected", sessionId: "voice-one", error: "", notice: "", micMuted: false, outputMuted: false,
       playbackBlocked: false, startedAt: 1, endedAt: 0, captions: [], delegations: [], devices: { inputId: "", outputId: "" }, inputLevel: 0, outputLevel: 0 },
     status: "Live in this chat", elapsed: "00:05", disabled: false, unavailable: "", loading: false, voice: "sol",
-    settingsOpen: false, settingsSaving: false, inspectionOpen: false,
+    inspectionOpen: false,
     start: () => actions.push("start"), end: () => actions.push("end"), close: () => actions.push("close"),
     configure: () => actions.push("configure"), muteInput: () => actions.push("mute-input"), muteOutput: () => actions.push("mute-output"),
     play: () => actions.push("play"), refresh: () => actions.push("refresh"), inspect: () => actions.push("inspect"), viewChat: id => actions.push(`view-chat:${id}`),
@@ -97,8 +97,7 @@ test("voice entry, caption updates, mute and settings preserve the editable draf
     const changes = [
       () => { ui.live.state.captions = [{ id: 1, speaker: "assistant" as const, text: "This is spoken output.", start: 0, end: 100 }]; },
       () => { ui.live.state.micMuted = true; },
-      () => { ui.live.settingsOpen = true; },
-      () => { ui.live.settingsOpen = false; ui.live.state.phase = "ended"; },
+      () => { ui.live.state.phase = "ended"; },
     ];
     for (const change of changes) {
       change(); await ui.render();

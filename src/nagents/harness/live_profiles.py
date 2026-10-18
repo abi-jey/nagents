@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .model_bindings import ModelBinding
 
-LIVE_FIELDS = frozenset({"enabled", "model", "voice", "instructions", "context_mode", "backend_mode", "backend_model"})
+LIVE_FIELDS = frozenset({"enabled", "model", "voice", "prompt", "context_mode", "backend_mode", "backend_model"})
 LIVE_VOICES = frozenset(
     {"marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"}
 )
@@ -35,14 +35,14 @@ class LiveProfile:
                 item = ModelBinding.parse(item)
                 if not _MODEL.fullmatch(item.id):
                     raise ValueError("live.model.id must be a bounded model identifier")
-            elif name == "instructions":
-                if not isinstance(item, str) or len(item) > 6000 or "\x00" in item:
-                    raise ValueError("live.instructions must be a bounded string")
+            elif name == "prompt":
+                if not isinstance(item, str) or len(item) > 12000 or "\x00" in item:
+                    raise ValueError(f"live.{name} must be a bounded string")
                 try:
-                    if len(item.encode("utf-8")) > 12000:
-                        raise ValueError("live.instructions exceeds the UTF-8 size limit")
+                    if len(item.encode("utf-8")) > 24000:
+                        raise ValueError(f"live.{name} exceeds the UTF-8 size limit")
                 except UnicodeError:
-                    raise ValueError("live.instructions must contain valid Unicode text") from None
+                    raise ValueError(f"live.{name} must contain valid Unicode text") from None
             elif name == "backend_model":
                 if not isinstance(item, str) or not _MODEL.fullmatch(item):
                     raise ValueError("live.backend_model must be a bounded model identifier")

@@ -36,6 +36,7 @@ from nagents.web.live_settings import LIVE_VOICES
 from nagents.web.live_settings import LiveConnection
 from nagents.web.live_settings import LiveSettings
 from nagents.web.live_settings import LiveValues
+from nagents.web.voice_instructions import default_voice_instructions
 from tests.support.config import connection
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.web import URL
@@ -239,7 +240,13 @@ def test_factory_uses_only_committed_key_and_tool_free_hosted_agent(
             kind=provider,
             base_url=values.base_url if provider != "openai" else "",
         )
-        connection = LiveConnection(values, "1" * 64, SecretStr(SECRET), profile=profile)
+        connection = LiveConnection(
+            values,
+            "1" * 64,
+            SecretStr(SECRET),
+            profile=profile,
+            instruction_prompt=default_voice_instructions(values.backend_mode),
+        )
         agent, second = create_agent(connection), create_agent(connection, "marin")
         try:
             assert agent.provider is not second.provider and agent.session is not second.session
@@ -289,7 +296,13 @@ def test_factory_configures_voice_as_the_existing_assistants_frontend() -> None:
             {**LiveValues.defaults().model_dump(), "enabled": True, "backend_mode": "assistant"}
         )
         agent = create_agent(
-            LiveConnection(values, "1" * 64, SecretStr(SECRET), profile=ProviderProfile(kind="openai")),
+            LiveConnection(
+                values,
+                "1" * 64,
+                SecretStr(SECRET),
+                profile=ProviderProfile(kind="openai"),
+                instruction_prompt=default_voice_instructions(values.backend_mode),
+            ),
             client_request_handler=handle,
         )
         try:
@@ -324,6 +337,7 @@ def test_login_factory_binds_voice_to_existing_assistant_without_api_key() -> No
         credential_available=True,
         voice_auth="chatgpt",
         login_credentials=credentials,
+        instruction_prompt=default_voice_instructions(values.backend_mode),
     )
     config = create_login_config(connection, "ember", handle)
     assert config.handler is handle and config.credentials is credentials and config.voice == "ember"
@@ -746,12 +760,23 @@ def test_voice_preferences_save_during_active_calls_but_stale_revisions_and_prov
                 json={
                     "scope": "workspace",
                     "revision": settings_revision,
-                    "overrides": {**current["overrides"], "voice": "cove", "instructions": "Speak concisely."},
+                    "overrides": {**current["overrides"], "voice": "cove"},
                 },
             )
             assert changed.status_code == 200 and SECRET not in changed.text
             next_settings_revision = changed.json()["revision"]
             assert next_settings_revision != settings_revision
+            prompt_before = (await client.get("/api/live/instructions?scope=workspace", headers=headers)).json()
+            prompt_saved = await client.put(
+                "/api/live/instructions",
+                headers=headers,
+                json={
+                    "scope": "workspace",
+                    "revision": prompt_before["revision"],
+                    "prompt": "Speak concisely.",
+                },
+            )
+            assert prompt_saved.status_code == 200, prompt_saved.text
             next_live_revision = (await client.get("/api/live", headers=headers)).json()["revision"]
             assert changed.json()["values"]["voice"] == "cove"
             assert service.active_session_id == SESSION and service.configs == [accepted]

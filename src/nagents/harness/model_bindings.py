@@ -7,8 +7,10 @@ import os
 import re
 import stat
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
+from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
@@ -28,7 +30,36 @@ _REVISION = re.compile(r"[0-9a-f]{64}\Z")
 _EMPTY_REVISION = "0" * 64
 _MAX_BYTES = 65536
 _EMPTY_MAPPING: Mapping[str, str] = MappingProxyType({})
+_DOCUMENT_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "mode",
+        "model",
+        "live",
+        "prompt",
+        "tools",
+        "denied_tools",
+        "allowed_agents",
+        "user_invocable",
+        "subagent_available",
+        "reasoning_effort",
+        "auto_update",
+        "default_revision",
+    }
+)
 ModelLayer = Literal["invocation", "agent", "workspace", "global", "builtin"]
+
+
+class _AgentDumper(yaml.SafeDumper):
+    """Keep multiline prompts readable and directly editable as Markdown YAML."""
+
+
+def _text_block(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None)
+
+
+_AgentDumper.add_representer(str, _text_block)
 
 
 @dataclass(frozen=True)
@@ -130,8 +161,9 @@ class AgentModelStore:
     Overlays cannot define providers, credentials, hooks, or permissions.
     """
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, disable_auto_update: bool = False) -> None:
         self.directory = Path(os.path.abspath(directory))
+        self.disable_auto_update = disable_auto_update
 
     def _path(self, agent: str) -> Path:
         if not isinstance(agent, str) or not _AGENT.fullmatch(agent):
@@ -166,34 +198,79 @@ class AgentModelStore:
     def _validate(value: object) -> dict[str, object]:
         from .live_profiles import LiveProfile
 
-        if not isinstance(value, dict) or set(value) - {"model", "live", "instructions", "tools"}:
+        if not isinstance(value, dict) or set(value) - _DOCUMENT_FIELDS:
             raise ValueError("Agent preference contains unsupported fields")
         result: dict[str, object] = {}
         for name, item in value.items():
             if name == "model":
-                binding = ModelBinding() if item == {"provider": "", "id": ""} else ModelBinding.parse(item)
+                binding = ModelBinding.parse(item)
                 result[name] = binding.as_dict()
             elif name == "live":
+                if isinstance(item, dict) and "instructions" in item:
+                    raise ValueError("Use live.prompt for the full Voice prompt")
                 result[name] = LiveProfile.parse(item).selected()
-            elif name == "instructions":
-                if not isinstance(item, str) or len(item.encode("utf-8")) > 12000 or "\x00" in item:
+            elif name == "prompt":
+                if (
+                    not isinstance(item, str)
+                    or len(item) > 24000
+                    or len(item.encode("utf-8")) > 48000
+                    or "\x00" in item
+                ):
                     raise ValueError("Agent instructions must be a bounded string")
                 result[name] = item
-            elif name == "tools":
+            elif name in {"tools", "denied_tools", "allowed_agents"}:
                 if (
                     not isinstance(item, list)
                     or len(item) > 512
                     or any(
-                        not isinstance(tool, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}", tool)
+                        not isinstance(tool, str)
+                        or not re.fullmatch(
+                            r"[A-Za-z0-9_-]{1,128}" if name == "allowed_agents" else r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}",
+                            tool,
+                        )
                         for tool in item
                     )
                 ):
                     raise ValueError("Agent tools must be a bounded array of tool names")
                 result[name] = list(dict.fromkeys(item))
+            elif name in {"auto_update", "user_invocable", "subagent_available"}:
+                if type(item) is not bool:
+                    raise ValueError(f"{name} must be a boolean")
+                result[name] = item
+            elif name == "default_revision":
+                if not isinstance(item, str) or not _REVISION.fullmatch(item):
+                    raise ValueError("default_revision must be a SHA-256 revision")
+                result[name] = item
+            elif name == "name":
+                if not isinstance(item, str) or not _AGENT.fullmatch(item):
+                    raise ValueError("Invalid agent name")
+                result[name] = item
+            elif name == "mode":
+                if item not in {"build", "reviewer"}:
+                    raise ValueError("Invalid agent mode")
+                result[name] = item
+            elif name == "reasoning_effort":
+                from .reasoning import resolve_effort
+
+                if not isinstance(item, str):
+                    raise ValueError("reasoning_effort must be a string")
+                resolve_effort(item)
+                result[name] = item
+            elif name == "description":
+                if not isinstance(item, str) or len(item) > 8192 or "\x00" in item:
+                    raise ValueError("Invalid agent description")
+                result[name] = item
         return result
 
     @staticmethod
     def _preferences(raw: bytes) -> dict[str, object]:
+        # Re-read files at every boundary, but parse identical content only once.
+        # Each caller owns its nested values; cached settings must never be mutated.
+        return deepcopy(AgentModelStore._parsed_preferences(raw))
+
+    @staticmethod
+    @lru_cache(maxsize=128)
+    def _parsed_preferences(raw: bytes) -> dict[str, object]:
         try:
             lines = raw.decode("utf-8").splitlines()
         except UnicodeError:
@@ -236,7 +313,8 @@ class AgentModelStore:
 
             if node is not None:
                 unique(node)
-            return AgentModelStore._validate(yaml.safe_load(header))
+            parsed = yaml.safe_load(header)
+            return AgentModelStore._validate({} if parsed is None else parsed)
         except (yaml.YAMLError, RecursionError):
             raise ValueError("Invalid agent preference frontmatter") from None
 
@@ -246,6 +324,8 @@ class AgentModelStore:
         if not exists:
             return AgentModelPreference(agent, ModelBinding(), _EMPTY_REVISION, path)
         preferences = self._preferences(raw)
+        if "name" in preferences and preferences["name"] != agent:
+            raise ValueError("Agent name must match its Markdown filename")
         model = preferences.get("model", {"provider": "", "id": ""})
         binding = ModelBinding() if model == {"provider": "", "id": ""} else ModelBinding.parse(model)
         return AgentModelPreference(
@@ -256,7 +336,11 @@ class AgentModelStore:
         """Save an explicit model choice without replacing other preferences."""
         if binding.configured and not binding.provider:
             raise ValueError("Saved agent models must name a configured provider connection")
-        return self.patch(agent, {"model": binding.as_dict()}, expected=expected)
+        return (
+            self.patch(agent, {"model": binding.as_dict()}, expected=expected)
+            if binding.configured
+            else self.reset(agent, expected=expected)
+        )
 
     def reset(self, agent: str, *, expected: str) -> AgentModelPreference:
         """Remove only the model override, revealing the source definition."""
@@ -267,7 +351,7 @@ class AgentModelStore:
 
     def remove(self, agent: str, fields: Iterable[str], *, expected: str) -> AgentModelPreference:
         selected = tuple(fields)
-        if set(selected) - {"model", "live", "instructions", "tools"}:
+        if set(selected) - _DOCUMENT_FIELDS:
             raise ValueError("Unsupported agent preference fields")
         return self._change(agent, {}, selected, expected=expected)
 
@@ -276,13 +360,30 @@ class AgentModelStore:
     ) -> AgentModelPreference:
         """Atomically replace one section group, preserving all other preferences."""
         selected = tuple(fields)
-        if set(selected) - {"model", "live", "instructions", "tools"} or set(values) - set(selected):
+        if set(selected) - _DOCUMENT_FIELDS or set(values) - set(selected):
             raise ValueError("Unsupported agent preference fields")
         return self._change(
             agent,
             self._validate(dict(values)),
             tuple(name for name in selected if name not in values),
             expected=expected,
+        )
+
+    def patch_live(
+        self, agent: str, changes: Mapping[str, object], *, removed: Iterable[str] = (), expected: str
+    ) -> AgentModelPreference:
+        """Change Live fields under the same whole-document CAS as every editor."""
+        current = self.load(agent)
+        live = current.preferences.get("live", {})
+        if not isinstance(live, dict):
+            raise ValueError("Invalid Live profile")
+        selected = {**live, **changes}
+        for key in removed:
+            selected.pop(key, None)
+        return (
+            self.patch(agent, {"live": selected}, expected=expected)
+            if selected
+            else self.remove(agent, ("live",), expected=expected)
         )
 
     def _change(
@@ -313,11 +414,15 @@ class AgentModelStore:
                 preferences.pop(name, None)
             if preferences == current.preferences:
                 return current
+            if self.disable_auto_update:
+                preferences["auto_update"] = False
             if not preferences:
                 path.unlink(missing_ok=True)
                 self._sync_directory()
                 return self.load(agent)
-            payload = ("---\n" + yaml.safe_dump(preferences, sort_keys=False) + "---\n").encode()
+            payload = (
+                "---\n" + yaml.dump(preferences, Dumper=_AgentDumper, sort_keys=False, allow_unicode=True) + "---\n"
+            ).encode()
             if len(payload) > _MAX_BYTES:
                 raise ValueError("Agent preference exceeds the storage limit")
             descriptor, temporary = tempfile.mkstemp(prefix=".model-", dir=self.directory)

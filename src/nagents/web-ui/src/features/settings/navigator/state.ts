@@ -22,13 +22,15 @@ export interface AgentSettingsReply {
   tools: { name: string; description: string; parameters: Record<string, unknown>; category: string; available: boolean; reason: string }[];
   effective_tools?: string[]; inherited?: { instructions: string; tools: string[] };
   inherited_origins?: { instructions: string; tools: string }; preferences_path?: string;
+  field_paths?: { instructions?: string; tools?: string }; inherited_paths?: { instructions?: string; tools?: string };
+  managed_defaults?: { auto_update: boolean; path: string; default_revision: string };
   native_instructions?: string; workspace_instructions?: { path: string; text: string }[];
 }
 export interface VoiceProfile {
   enabled: boolean; model: ModelBinding; voice: string; instructions: string; context_mode: VoiceContextMode;
   backend_mode: "assistant" | "hosted"; backend_model: string;
 }
-export type VoiceDraft = Partial<VoiceProfile>;
+export type VoiceDraft = Partial<VoiceProfile> & { prompt?: string };
 export type NavigatorVoiceReply = Omit<LiveSettingsSnapshot, "scope" | "overrides" | "origins"> & {
   scope: NavigatorScope; agent?: string; overrides: VoiceDraft | LiveSettingsSnapshot["overrides"];
   effective?: VoiceProfile; inherited?: VoiceProfile; definition_effective?: VoiceProfile;
@@ -49,20 +51,28 @@ export function voiceDraft(reply: NavigatorVoiceReply): VoiceDraft {
   if (reply.scope === "global") {
     const raw = reply.global_preferences;
     return { enabled: raw.enabled, model: { provider: raw.connection_id || "", id: raw.model }, voice: raw.voice,
-      instructions: raw.instructions || "", context_mode: raw.context_mode || "recent", backend_mode: raw.backend_mode, backend_model: raw.backend_model };
+      context_mode: raw.context_mode || "recent", backend_mode: raw.backend_mode, backend_model: raw.backend_model };
   }
-  if (reply.scope === "agent") return { ...(reply.agent_overrides || reply.overrides as VoiceDraft) };
+  if (reply.scope === "agent") {
+    const result = { ...(reply.agent_overrides || reply.overrides as VoiceDraft) };
+    delete result.instructions;
+    delete result.prompt;
+    return result;
+  }
   const values = reply.overrides as LiveSettingsSnapshot["overrides"];
   const result: VoiceDraft = {};
-  for (const key of ["enabled", "voice", "instructions", "context_mode", "backend_mode", "backend_model"] as const)
+  for (const key of ["enabled", "voice", "context_mode", "backend_mode", "backend_model"] as const)
     if (Object.hasOwn(values, key)) Object.assign(result, { [key]: values[key] });
   // Connection and model form one binding, even for legacy partial overrides.
   if (Object.hasOwn(values, "model") || Object.hasOwn(values, "connection_id")) result.model = { provider: values.connection_id ?? reply.global_preferences.connection_id ?? "", id: values.model ?? reply.global_preferences.model };
   return result;
 }
 export function voiceWrite(target: NavigatorTarget, revision: string, draft: VoiceDraft, snapshot?: NavigatorVoiceReply) {
-  if (target.scope === "agent") return { scope: target.scope, agent: target.agent, revision, overrides: draft };
-  const { model, ...rest } = draft;
+  const speech = { ...draft };
+  delete speech.instructions;
+  delete speech.prompt;
+  if (target.scope === "agent") return { scope: target.scope, agent: target.agent, revision, overrides: speech };
+  const { model, ...rest } = speech;
   let binding: { connection_id?: string; model?: string } = model ? { connection_id: model.provider, model: model.id } : {};
   if (model && target.scope === "workspace" && snapshot?.scope === "workspace" && equal(model, voiceDraft(snapshot).model)) {
     // Legacy files may override only half of the binding. An unrelated edit must

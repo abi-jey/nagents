@@ -8,7 +8,9 @@ endpoint. New settings requests cannot write keys or change connection fields.
 
 import asyncio
 import copy
+import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -24,6 +26,8 @@ from pydantic import field_validator
 from pydantic import model_validator
 
 from nagents.compaction import ModelCompaction
+from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.model_bindings import AgentModelStore
 from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import API_NAMES
 from nagents.harness.providers import PROVIDERS
@@ -40,9 +44,11 @@ if TYPE_CHECKING:
 
     from nagents.harness import Harness
     from nagents.harness.config import HarnessConfig
+    from nagents.harness.model_bindings import AgentModelPreference
     from nagents.harness.model_catalog import ModelCatalog
 
 MAX_SETTINGS_BYTES = 16384
+logger = logging.getLogger(__name__)
 _INHERIT_MODEL = ModelBinding()
 MAX_API_KEY_BYTES = 4096
 PROVIDER_APIS: tuple[str, ...] = API_NAMES
@@ -287,7 +293,6 @@ class WebSettings:
         )
         self._pinned_startup_model = harness.config.model_config_explicit
         self._startup_model = startup_model
-        self._startup_global_binding = harness.provider_store.model_binding("global")
         self._startup_binding = ModelBinding(
             harness._default_provider_name
             if "" in harness.config.providers
@@ -295,6 +300,8 @@ class WebSettings:
             self.defaults.model,
         )
         self._published_bindings: dict[str, tuple[ModelBinding, str]] = {}
+        self._uncommitted_document_revisions: dict[str, str] = {}
+        self._committed_settings_snapshots: dict[str, dict[str, object]] = {}
         self._publish_bindings()
         self.global_path = harness.config.data_dir / "web-defaults.db"
         self.global_revision = "0" * 64
@@ -324,24 +331,51 @@ class WebSettings:
         global_binding = (
             store.model_store("global").load_binding()
             if unnamed and scope == "workspace"
-            else store.model_binding(
-                "global",
-                legacy_provider=(self.harness._default_provider_name or self.harness.providers.active)
-                if scope == "workspace"
-                else "",
-            )
+            else store.model_binding("global")
         )
         if global_binding.configured:
             return global_binding, "global"
         if scope == "global":
             return ModelBinding(
-                self._startup_global_binding.provider or self._startup_binding.provider,
+                store.load_scope("global").active or self._startup_binding.provider,
                 self._global_startup_model,
             ), "startup"
-        return self._startup_binding, "startup"
+        # An unbound startup model follows explicit provider selections made
+        # after startup. Saved model pairs above retain their own connection.
+        return ModelBinding(self.harness._default_provider_name, self._startup_binding.id), "startup"
 
     def _publish_bindings(self) -> None:
+        if self._uncommitted_document_revisions:
+            return
         self._published_bindings = {scope: self._scope_binding(scope) for scope in ("global", "workspace")}
+
+    def _settings_revision(self, scope: Literal["global", "workspace"]) -> str:
+        parts = [self.global_revision if scope == "global" else self.revision]
+        layers: tuple[Literal["global", "workspace"], ...] = ("global", "workspace")
+        for layer in layers:
+            document_revision = self._uncommitted_document_revisions.get(layer)
+            if document_revision is None:
+                document_revision = agent_document_store(self.harness.provider_store, layer).load("assistant").revision
+            parts.append(document_revision)
+            if scope == "global":
+                break
+        return hashlib.sha256(":".join(parts).encode()).hexdigest()
+
+    def _restore_model_document(self, document: "AgentModelPreference", written_revision: str) -> None:
+        """Undo our file write if the SQLite transaction fails, without replacing a later edit."""
+        if not written_revision or written_revision == document.revision:
+            return
+        store = AgentModelStore(document.path.parent)
+        try:
+            current = store.load("assistant")
+            store.replace_fields(
+                "assistant",
+                current.preferences.keys() | document.preferences.keys(),
+                document.preferences,
+                expected=written_revision,
+            )
+        except (OSError, ValueError):
+            logger.error("Could not restore assistant model after settings transaction failure: path=%s", document.path)
 
     def _requested_binding(self, scope: str, values: SettingsValues, binding: ModelBinding) -> ModelBinding:
         if binding.configured and binding.id != values.model:
@@ -357,7 +391,8 @@ class WebSettings:
             self._published_bindings["global"][0]
             if scope == "workspace"
             else ModelBinding(
-                self._startup_global_binding.provider or self._startup_binding.provider, self._global_startup_model
+                self.harness.provider_store.load_scope("global").active or self._startup_binding.provider,
+                self._global_startup_model,
             )
         )
         registry = self.harness.provider_store.load()
@@ -482,6 +517,8 @@ class WebSettings:
         self._env_present.discard(env)
 
     def snapshot(self) -> dict[str, object]:
+        if self._uncommitted_document_revisions:
+            return copy.deepcopy(self._committed_settings_snapshots["workspace"])
         config = self.harness.config
         profile = (
             config.profile(self.values.agent)
@@ -518,7 +555,7 @@ class WebSettings:
                 for name in config.selectable_profile_names
             ],
             **({"agent_diagnostics": list(config.agent_diagnostics)} if config.agent_diagnostics else {}),
-            "revision": self.revision,
+            "revision": self._settings_revision("workspace"),
             "persisted": self.persisted,
             "effective_mode": self.effective_mode,
             "effective_model": effective_model,
@@ -772,11 +809,8 @@ class WebSettings:
                     differences.pop("model", None)
                 else:
                     model_store = self.harness.provider_store.model_store("workspace")
-                    if (version < 5 and values.model != self.defaults.model) or "model" in differences:
-                        model_store.save(values.model, only_if_missing=True)
                     selected_model = self.harness.provider_store.model()
-                    if selected_model:
-                        values = values.model_copy(update={"model": selected_model})
+                    values = values.model_copy(update={"model": selected_model or self.defaults.model})
                     local_model = model_store.load()
                     if version == 5 and local_model:
                         differences["model"] = local_model
@@ -835,6 +869,8 @@ class WebSettings:
 
     async def load_global(self) -> None:
         """Defaults shared by workspaces using the same application data directory."""
+        if self._uncommitted_document_revisions:
+            return
         self.defaults = self.startup_defaults.model_copy(update={"model": self._global_startup_model})
         current_model = self.harness.provider_store.model_store("global").load()
         if current_model and not self._pinned_startup_model:
@@ -867,12 +903,9 @@ class WebSettings:
         if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
             raise ValueError("Invalid global settings fields")
         values = {key: value for key, value in values.items() if key not in _CONNECTION_FIELDS}
-        if self._pinned_startup_model:
-            values.pop("model", None)
+        values.pop("model", None)
         self.defaults = SettingsValues.model_validate({**self.defaults.model_dump(), **values})
         model_store = self.harness.provider_store.model_store("global")
-        if "model" in values and not self._pinned_startup_model:
-            model_store.save(self.defaults.model, only_if_missing=True)
         selected_model = model_store.load()
         if selected_model and not self._pinned_startup_model:
             self.defaults = self.defaults.model_copy(update={"model": selected_model})
@@ -881,6 +914,8 @@ class WebSettings:
         self._publish_bindings()
 
     def global_snapshot(self) -> dict[str, object]:
+        if self._uncommitted_document_revisions:
+            return copy.deepcopy(self._committed_settings_snapshots["global"])
         result = self.snapshot()
         result.update(
             scope="global",
@@ -888,7 +923,7 @@ class WebSettings:
             defaults=self.startup_defaults.model_copy(update={"model": self._global_startup_model}).model_dump(),
             effective_model=self.defaults.model,
             effective_reasoning_effort=self.defaults.reasoning_effort,
-            revision=self.global_revision,
+            revision=self._settings_revision("global"),
             persisted=self.global_persisted,
             connection={
                 "provider": self.defaults.provider,
@@ -911,6 +946,9 @@ class WebSettings:
         reset: bool = False,
         model_binding: ModelBinding = _INHERIT_MODEL,
     ) -> None:
+        model_store = agent_document_store(self.harness.provider_store, "global")
+        model_document = model_store.load("assistant")
+        committed_snapshots = {"workspace": self.snapshot(), "global": self.global_snapshot()}
         # Profiles and write-only keys belong to a workspace. Global defaults
         # carry provider credential references, never copied secret values.
         if "reasoning_effort" not in values.model_fields_set:
@@ -922,57 +960,66 @@ class WebSettings:
         values = values.model_copy(update={"agent": self.startup_defaults.agent})
         if any(getattr(values, name) != getattr(self.defaults, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
-        if revision != self.global_revision:
+        if revision != self._settings_revision("global"):
             raise HTTPException(409, "Global settings changed. Refresh before saving.")
         try:
             binding = self._requested_binding("global", values, model_binding)
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
+        if values.model != self.defaults.model and not binding.provider:
+            raise HTTPException(422, "Choose a provider connection before changing the model.")
         self.validate(values, model_binding=binding)
-        merged_catalog = model_binding.configured or bool(
-            self.harness.provider_store.model_store("global").load_binding().provider
-        )
+        global_connections = self.harness.provider_store.load_scope("global").providers
+        catalog_scope = "global" if not binding.provider or binding.provider in global_connections else "workspace"
         await self.validate_reasoning(
             values,
             scope="global",
             model_binding=binding,
-            catalog_scope="workspace" if merged_catalog else "global",
+            catalog_scope=catalog_scope,
         )
         payload = values.model_dump_json(exclude={"agent", *_CONNECTION_FIELDS})
         next_revision = secrets.token_hex(32)
         self.global_path.parent.mkdir(parents=True, exist_ok=True)
         self.global_path.touch(mode=0o600, exist_ok=True)
-        async with aiosqlite.connect(self.global_path, timeout=5) as db:
-            await db.execute(_GLOBAL_SETTINGS_TABLE)
-            await db.commit()
-            await db.execute("BEGIN IMMEDIATE")
-            async with db.execute("SELECT revision FROM ngn_web_global_settings WHERE id = 1") as cursor:
-                current = await cursor.fetchone()
-            if (current[0] if current else "0" * 64) != revision:
-                raise HTTPException(409, "Global settings changed. Refresh before saving.")
-            if reset:
-                await db.execute("DELETE FROM ngn_web_global_settings WHERE id = 1")
-            else:
-                await db.execute(
-                    "INSERT INTO ngn_web_global_settings VALUES (1, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET values_json=excluded.values_json, revision=excluded.revision",
-                    (payload, next_revision),
-                )
-            await db.commit()
-        global_model_store = self.harness.provider_store.model_store("global")
+        written_revision = ""
+        try:
+            async with aiosqlite.connect(self.global_path, timeout=5) as db:
+                await db.execute(_GLOBAL_SETTINGS_TABLE)
+                await db.commit()
+                await db.execute("BEGIN IMMEDIATE")
+                async with db.execute("SELECT revision FROM ngn_web_global_settings WHERE id = 1") as cursor:
+                    current = await cursor.fetchone()
+                if (current[0] if current else "0" * 64) != self.global_revision:
+                    raise HTTPException(409, "Global settings changed. Refresh before saving.")
+                if reset:
+                    await db.execute("DELETE FROM ngn_web_global_settings WHERE id = 1")
+                else:
+                    await db.execute(
+                        "INSERT INTO ngn_web_global_settings VALUES (1, 1, ?, ?) ON CONFLICT(id) DO UPDATE SET values_json=excluded.values_json, revision=excluded.revision",
+                        (payload, next_revision),
+                    )
+                if revision != self._settings_revision("global"):
+                    raise HTTPException(409, "Global settings changed. Refresh before saving.")
+                if (not self._pinned_startup_model or model_binding.configured) and (reset or binding.provider):
+                    self._committed_settings_snapshots = committed_snapshots
+                    self._uncommitted_document_revisions["global"] = model_document.revision
+                    try:
+                        written = model_store.save(
+                            "assistant", ModelBinding() if reset else binding, expected=model_document.revision
+                        )
+                    except ValueError:
+                        raise HTTPException(409, "Global settings changed. Refresh before saving.") from None
+                    written_revision = written.revision
+                await db.commit()
+        except BaseException:
+            self._restore_model_document(model_document, written_revision)
+            raise
+        finally:
+            self._uncommitted_document_revisions.pop("global", None)
         if model_binding.configured:
             self._pinned_startup_model = False
             self.harness.config.model_config_explicit = False
             self._provider_admin.model_config_explicit = False
-        if not self._pinned_startup_model:
-            if reset:
-                if self._startup_global_binding.provider:
-                    global_model_store.save_binding(self._startup_global_binding)
-                else:
-                    global_model_store.save(self._startup_global_model)
-            elif model_binding.configured:
-                global_model_store.save_binding(binding)
-            else:
-                global_model_store.save(values.model)
         await self.load_global()
         if self.persisted:
             inherited = SettingsValues.model_validate({**self.defaults.model_dump(), **self.workspace_overrides})
@@ -1001,6 +1048,7 @@ class WebSettings:
         reset: bool = False,
         model_binding: ModelBinding = _INHERIT_MODEL,
     ) -> None:
+        model_document = agent_document_store(self.harness.provider_store, "workspace").load("assistant")
         if any(getattr(values, name) != getattr(self.values, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
         if "reasoning_effort" not in values.model_fields_set:
@@ -1009,7 +1057,7 @@ class WebSettings:
             values = values.model_copy(update={"submit_mode": self.values.submit_mode})
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.values.read_only})
-        if revision != self.revision:
+        if revision != self._settings_revision("workspace"):
             raise HTTPException(409, "Settings changed. Reload settings before saving.")
         try:
             binding = (
@@ -1017,6 +1065,8 @@ class WebSettings:
                 if reset
                 else self._requested_binding("workspace", values, model_binding)
             )
+            if not reset and values.model != self.values.model and not binding.provider:
+                raise ValueError("Choose a provider connection before changing the model.")
             values = self._effective_values(values, model_binding=binding)
             self.validate(values, model_binding=binding)
             await self.validate_reasoning(values, model_binding=binding)
@@ -1031,6 +1081,7 @@ class WebSettings:
             detail = (
                 str(error)
                 if str(error).startswith("Model references unavailable provider connection")
+                or str(error) == "Choose a provider connection before changing the model."
                 else "Invalid settings or unavailable agent profile."
             )
             raise HTTPException(422, detail) from None
@@ -1045,6 +1096,8 @@ class WebSettings:
                             reset=reset,
                             model_binding=binding,
                             explicit_binding=model_binding.configured,
+                            model_document=model_document,
+                            settings_revision=revision,
                         )
                     )
                 )
@@ -1060,11 +1113,16 @@ class WebSettings:
         reset: bool,
         model_binding: ModelBinding,
         explicit_binding: bool,
+        model_document: "AgentModelPreference",
+        settings_revision: str,
     ) -> None:
         harness = self.harness
         config = harness.config
         revision = secrets.token_hex(32)
         provider = values.provider
+        written_revision = ""
+        committed = False
+        committed_snapshots = {"workspace": self.snapshot(), "global": self.global_snapshot()}
         try:
             async with aiosqlite.connect(harness.agent.session.db_path, timeout=5) as db:
                 await db.execute("BEGIN IMMEDIATE")
@@ -1115,7 +1173,27 @@ class WebSettings:
                         model_binding=ModelBinding(candidate.provider, candidate.model),
                         default_model_binding=model_binding,
                     )
+                    if settings_revision != self._settings_revision("workspace"):
+                        raise HTTPException(409, "Settings changed. Reload settings before saving.")
+                    if not self._pinned_startup_model or explicit_binding:
+                        store = agent_document_store(harness.provider_store, "workspace")
+                        if reset or (
+                            model_binding.provider
+                            and (explicit_binding or "model" in overrides or model_document.model_present)
+                        ):
+                            self._committed_settings_snapshots = committed_snapshots
+                            self._uncommitted_document_revisions["workspace"] = model_document.revision
+                            try:
+                                written = store.save(
+                                    "assistant",
+                                    ModelBinding() if reset else model_binding,
+                                    expected=model_document.revision,
+                                )
+                            except ValueError:
+                                raise HTTPException(409, "Settings changed. Reload settings before saving.") from None
+                            written_revision = written.revision
                     await db.commit()
+                    committed = True
                 except BaseException:
                     (
                         config.model,
@@ -1138,12 +1216,18 @@ class WebSettings:
                     self._restore_key()
                     if previous_secret:
                         self._install_key(previous_env, previous_secret)
-                    await db.rollback()
+                    try:
+                        await db.rollback()
+                    finally:
+                        self._restore_model_document(model_document, written_revision)
                     raise
         except HTTPException:
             raise
         except Exception:
             raise HTTPException(500, "Settings could not be persisted. Reload settings before trying again.") from None
+        finally:
+            if not committed:
+                self._uncommitted_document_revisions.pop("workspace", None)
         # The commit established the saved state. Provider swaps close the
         # previous client, so they happen only after a successful commit; a
         # failure here is repaired by reloading the saved settings.
@@ -1152,15 +1236,6 @@ class WebSettings:
                 self._pinned_startup_model = False
                 harness.config.model_config_explicit = False
                 self._provider_admin.model_config_explicit = False
-            if not self._pinned_startup_model:
-                store = harness.provider_store.model_store("workspace")
-                if reset:
-                    store.save_binding(ModelBinding())
-                elif explicit_binding or "model" in overrides or store.load():
-                    if explicit_binding:
-                        store.save_binding(model_binding)
-                    else:
-                        store.save(values.model)
             await harness.reconfigure_provider(self.provider_config(values, model_binding=model_binding))
         except HTTPException:
             raise
@@ -1168,6 +1243,8 @@ class WebSettings:
             raise HTTPException(
                 500, "Settings were saved but could not be applied. Reload settings before continuing."
             ) from None
+        finally:
+            self._uncommitted_document_revisions.pop("workspace", None)
         # Publish without an await after commit. GETs see the previous
         # committed snapshot throughout the transaction, never a draft.
         self.values = values

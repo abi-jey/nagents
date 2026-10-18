@@ -35,6 +35,7 @@ from .model_bindings import AgentModelStore
 from .model_bindings import ModelBinding
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from collections.abc import Iterator
     from collections.abc import Mapping
     from typing import BinaryIO
@@ -337,113 +338,61 @@ class ProviderRegistry:
         }
 
 
-class ModelPreferenceStore:
-    """Scoped model reference inside config.json, without connection credentials."""
+class ScopedModelStore:
+    """Scoped model defaults in the canonical assistant.md document."""
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        provider: Callable[[], str],
+        disable_auto_update: bool = False,
+    ) -> None:
+        self._provider = provider
+        self._disable_auto_update = disable_auto_update
+        self._documents = AgentModelStore(directory, disable_auto_update=disable_auto_update)
+        self.path = self._documents.directory / "assistant.md"
 
-    def _document(self) -> dict[str, object]:
-        try:
-            info = self.path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
-                raise ValueError("Configuration must be a regular, bounded file")
-            raw = self.path.read_bytes()
-            if len(raw) > MAX_BYTES:
-                raise ValueError("Configuration is too large")
-            data: object = json.loads(raw)
-            if not isinstance(data, dict):
-                raise ValueError("Invalid configuration format")
-            return data
-        except FileNotFoundError:
-            return {}
-        except (json.JSONDecodeError, UnicodeError, OSError):
-            raise ValueError("Configuration is unreadable or invalid") from None
+    def _selection(self) -> ModelBinding:
+        return self._documents.load("assistant").binding
 
     def load(self) -> str:
-        return self._model(self._document())
+        return self._selection().id
 
-    def load_binding(self, *, provider: str = "") -> ModelBinding:
-        """Resolve old bare IDs against their configured connection selection."""
-        model = self._document().get("model", "")
-        if isinstance(model, dict):
-            return ModelBinding.parse(model)
-        identifier = self._model({"model": model})
-        return ModelBinding(provider, identifier.strip()) if identifier else ModelBinding()
-
-    @staticmethod
-    def _model(document: dict[str, object]) -> str:
-        model = document.get("model", "")
-        if isinstance(model, dict):
-            return ModelBinding.parse(model).id
-        if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
-            raise ValueError("Invalid model preference")
-        return model
+    def load_binding(self) -> ModelBinding:
+        return self._selection()
 
     def save(self, model: str, *, only_if_missing: bool = False) -> str:
-        """Update an ID while retaining an existing complete binding's provider."""
         if not isinstance(model, str) or (model and (not model.strip() or len(model) > 200 or not model.isprintable())):
             raise ValueError("Invalid model preference")
-        return self._model(self._save(model, only_if_missing=only_if_missing))
+        current = self.load_binding()
+        if only_if_missing and current.configured:
+            return current.id
+        if not model:
+            return self._save_binding(ModelBinding(), only_if_missing=only_if_missing).id
+        provider = current.provider or self._provider()
+        if not provider:
+            raise ValueError("Choose a named provider connection before saving a model default")
+        return self._save_binding(ModelBinding(provider, model.strip()), only_if_missing=only_if_missing).id
 
     def save_binding(self, binding: ModelBinding, *, only_if_missing: bool = False) -> ModelBinding:
-        """Persist a complete pair, or remove this layer to inherit defaults."""
         if binding.configured and not binding.provider:
             raise ValueError("Saved models must name a configured provider connection")
-        document = self._save(binding, only_if_missing=only_if_missing)
-        model = document.get("model", "")
-        if isinstance(model, dict):
-            return ModelBinding.parse(model)
-        identifier = self._model(document)
-        # only_if_missing can retain an old ID-only document. Its connection is
-        # still the caller's configured selection, never the rejected new pair.
-        return ModelBinding("", identifier.strip()) if identifier else ModelBinding()
+        return self._save_binding(binding, only_if_missing=only_if_missing)
 
-    def _save(self, model: str | ModelBinding, *, only_if_missing: bool) -> dict[str, object]:
-        directory = self.path.parent
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock = directory / ".models.lock"
-        if lock.is_symlink():
-            raise ValueError("Model preference lock must not be a symlink")
-        with lock.open("a+b") as stream, _exclusive_lock(stream):
-            document = self._document()
-            self._model(document)
-            if only_if_missing and "model" in document:
-                return document
-            previous = document.get("model", "")
-            if isinstance(model, ModelBinding):
-                value: str | dict[str, str] = model.as_dict() if model.configured else ""
-            elif model and isinstance(previous, dict):
-                value = ModelBinding(ModelBinding.parse(previous).provider, model.strip()).as_dict()
-            else:
-                value = model
-            if previous == value:
-                return document
-            if value:
-                document["model"] = value
-            else:
-                document.pop("model", None)
-            payload = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            if len(payload) > MAX_BYTES:
-                raise ValueError("Configuration is too large")
-            descriptor, temporary = tempfile.mkstemp(prefix=".models-", dir=directory)
-            try:
-                with os.fdopen(descriptor, "wb") as output:
-                    if os.name != "nt":
-                        os.fchmod(output.fileno(), 0o600)
-                    output.write(payload)
-                    output.flush()
-                    os.fsync(output.fileno())
-                os.replace(temporary, self.path)
-                if os.name != "nt":
-                    directory_fd = os.open(directory, os.O_RDONLY)
-                    try:
-                        os.fsync(directory_fd)
-                    finally:
-                        os.close(directory_fd)
-            finally:
-                Path(temporary).unlink(missing_ok=True)
-            return document
+    def _save_binding(self, binding: ModelBinding, *, only_if_missing: bool) -> ModelBinding:
+        current = self._documents.load("assistant")
+        if only_if_missing and current.model_present:
+            return current.binding
+        values: dict[str, object] = {"name": "assistant"}
+        if binding.configured:
+            values["model"] = binding.as_dict()
+        if self._disable_auto_update:
+            values["auto_update"] = False
+        saved = self._documents.replace_fields(
+            "assistant", values.keys() | {"model"}, values, expected=current.revision
+        )
+        return saved.binding
 
 
 class ProviderRegistryStore:
@@ -457,10 +406,6 @@ class ProviderRegistryStore:
         if self.path.suffix != ".json":
             raise ValueError("Provider registry path must end in .json")
         self.allow_external_active = allow_external_active
-
-    @property
-    def model_store(self) -> ModelPreferenceStore:
-        return ModelPreferenceStore(self.path.with_name("config.json"))
 
     def load(self) -> ProviderRegistry:
         try:
@@ -556,10 +501,6 @@ class ScopedProviderRegistryStore:
         default_global = ProviderRegistryStore().path
         identifier = hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest()[:32]
         default_workspace = default_global.parent / "workspaces" / identifier / "providers.json"
-        self._models = {
-            "global": ModelPreferenceStore(default_global.with_name("config.json")),
-            "workspace": ModelPreferenceStore(default_workspace.with_name("config.json")),
-        }
         self.global_store = ProviderRegistryStore(paths.get("global", default_global))
         self.workspace_store = ProviderRegistryStore(
             paths.get("workspace", default_workspace),
@@ -567,6 +508,14 @@ class ScopedProviderRegistryStore:
         )
         if self.global_store.path.resolve() == self.workspace_store.path.resolve():
             raise ValueError("Global and workspace providers must use different files")
+        self._models: dict[str, ScopedModelStore] = {
+            "global": ScopedModelStore(
+                default_global.parent,
+                provider=lambda: self.load_scope("global").active,
+                disable_auto_update=True,
+            ),
+            "workspace": ScopedModelStore(default_workspace.parent, provider=lambda: self.load().active),
+        }
 
     @property
     def path(self) -> Path:
@@ -582,18 +531,17 @@ class ScopedProviderRegistryStore:
     def load_scope(self, scope: str) -> ProviderRegistry:
         return self.store(scope).load()
 
-    def model_store(self, scope: str) -> ModelPreferenceStore:
+    def model_store(self, scope: str) -> ScopedModelStore:
         self.store(scope)
         return self._models[scope]
 
     @property
     def agent_models(self) -> AgentModelStore:
-        return AgentModelStore(self.model_store("workspace").path.parent / "agent-models")
+        return AgentModelStore(self.model_store("workspace").path.parent / "agents")
 
-    def model_binding(self, scope: str, *, legacy_provider: str = "") -> ModelBinding:
-        """Read one model layer; only legacy bare IDs use its active connection."""
-        selected = legacy_provider or (self.load_scope("global").active if scope == "global" else self.load().active)
-        return self.model_store(scope).load_binding(provider=selected)
+    def model_binding(self, scope: str) -> ModelBinding:
+        """Read a complete provider/model reference from one canonical scope."""
+        return self.model_store(scope).load_binding()
 
     def model(self) -> str:
         return self.model_store("workspace").load() or self.model_store("global").load()

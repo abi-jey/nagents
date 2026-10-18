@@ -112,9 +112,9 @@ def test_nested_children_inherit_authored_context_once(tmp_path: Path, monkeypat
                     "Child authored instruction",
                     "Inspect before changing.",
                 ):
-                    assert prompt.count(instruction) == 1
+                    assert prompt.count(instruction) == 1, f"{current.config.agent}: {instruction}"
                 assert current.mode == "reviewer"
-                assert "(reviewer)" in prompt
+                assert "mode reviewer" in prompt
                 assert current.instructions == harness.instructions
                 current.refresh_instructions()
                 assert current.agent.system_prompt == prompt
