@@ -945,13 +945,14 @@ def test_descendant_notification_waves_do_not_reset_root_budget(
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         try:
-            events = await asyncio.wait_for(collect(harness), 10)
+            # This checks budget continuity across persisted child waves, not latency.
+            events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert len(providers) == subagents.MAX_TASKS + 1
             assert harness.tasks._used == subagents.MAX_TASKS
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == subagents.MAX_TASKS
             child = harness.tasks.list()[0]
             assert any("budget exhausted" in str(message.content) for message in await harness.task_history(child.id))
-            again = await collect(harness, "An unrelated root turn")
+            again = await asyncio.wait_for(collect(harness, "An unrelated root turn"), HANG_GUARD)
             assert not any(isinstance(event, TaskStarted | TaskCompleted) for event in again)
             assert harness.tasks._used == 0
             assert len(harness.tasks.list()) == subagents.MAX_TASKS
