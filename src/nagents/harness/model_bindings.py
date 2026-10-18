@@ -7,8 +7,10 @@ import os
 import re
 import stat
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
+from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
@@ -262,6 +264,13 @@ class AgentModelStore:
 
     @staticmethod
     def _preferences(raw: bytes) -> dict[str, object]:
+        # Re-read files at every boundary, but parse identical content only once.
+        # Each caller owns its nested values; cached settings must never be mutated.
+        return deepcopy(AgentModelStore._parsed_preferences(raw))
+
+    @staticmethod
+    @lru_cache(maxsize=128)
+    def _parsed_preferences(raw: bytes) -> dict[str, object]:
         try:
             lines = raw.decode("utf-8").splitlines()
         except UnicodeError:

@@ -6,6 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from typing import TYPE_CHECKING
+from typing import cast
 
 import pytest
 
@@ -166,6 +167,45 @@ def test_agent_model_files_cannot_smuggle_definitions_or_unbounded_data(tmp_path
     (tmp_path / "mini.md").write_text(contents)
     with pytest.raises(ValueError):
         store.load("mini")
+
+
+def test_cached_agent_preferences_isolate_nested_values_and_reload_changed_or_invalid_bytes(tmp_path: Path) -> None:
+    store = AgentModelStore(tmp_path)
+    path = tmp_path / "assistant.md"
+    path.write_text(
+        "---\nmodel:\n  provider: home\n  id: first-model\n"
+        "live:\n  prompt: First prompt\n  voice: sol\ntools:\n  - read_file\n---\n",
+        encoding="utf-8",
+    )
+
+    first = store.load("assistant")
+    first_model = first.preferences["model"]
+    first_live = first.preferences["live"]
+    first_tools = first.preferences["tools"]
+    assert isinstance(first_model, dict) and isinstance(first_live, dict) and isinstance(first_tools, list)
+    cast("dict[str, object]", first_model)["id"] = "mutated-model"
+    cast("dict[str, object]", first_live)["prompt"] = "Mutated prompt"
+    cast("list[str]", first_tools).append("shell")
+
+    repeated = store.load("assistant")
+    assert repeated.binding == ModelBinding("home", "first-model")
+    assert repeated.preferences["model"] == {"provider": "home", "id": "first-model"}
+    assert repeated.preferences["live"] == {"prompt": "First prompt", "voice": "sol"}
+    assert repeated.preferences["tools"] == ["read_file"]
+
+    path.write_text(
+        "---\nmodel:\n  provider: home\n  id: second-model\n"
+        "live:\n  prompt: Second prompt\n  voice: cedar\ntools:\n  - search\n---\n",
+        encoding="utf-8",
+    )
+    changed = store.load("assistant")
+    assert changed.binding == ModelBinding("home", "second-model")
+    assert changed.preferences["live"] == {"prompt": "Second prompt", "voice": "cedar"}
+    assert changed.preferences["tools"] == ["search"]
+
+    path.write_text("---\nmodel: [broken\n---\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid agent preference frontmatter"):
+        store.load("assistant")
 
 
 def test_agent_model_paths_reject_traversal_and_symlinks(tmp_path: Path) -> None:
