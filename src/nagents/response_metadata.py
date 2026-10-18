@@ -35,6 +35,8 @@ class ResponseTrace:
     _summary_parts: dict[tuple[int, int], str] = field(default_factory=dict, init=False, repr=False)
 
     def _summary(self, event: ReasoningChunkEvent) -> tuple[str, bool]:
+        if not event.chunk:
+            return self.summary, self.summary_truncated
         # The provider's displayable parts may interleave or get their remaining
         # body only at item completion. Rebuild presentation order without moving
         # this response's identity or exposing opaque protocol reasoning.

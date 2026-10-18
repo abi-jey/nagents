@@ -58,6 +58,18 @@ def test_keyed_summary_retention_is_bounded_and_tool_rounds_stay_isolated() -> N
     assert first_snapshot.response_id != second_snapshot.response_id
 
 
+def test_empty_thinking_phase_does_not_consume_a_summary_part_slot() -> None:
+    trace = ResponseTrace("response", "session", 0)
+    trace.observe(ReasoningChunkEvent(displayable=True, chunk=""))
+    for summary_index in range(1024):
+        trace.observe(part_event(0, summary_index, "x"))
+
+    snapshot = trace.snapshot()
+    assert snapshot.summary == "\n\n".join(["x"] * 1024)
+    assert len(snapshot.summary) == 3070
+    assert not snapshot.summary_truncated
+
+
 def test_agent_keeps_summary_parts_on_their_own_tool_round(tmp_path: Path) -> None:
     async def scenario() -> None:
         provider = OfflineProvider(
