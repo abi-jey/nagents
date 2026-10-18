@@ -74,6 +74,32 @@ async def test_child_budget_failure_cancels_descendant_without_poisoning_recover
 
 
 @pytest.mark.asyncio
+async def test_descendant_initialization_failure_releases_barrier_and_reports_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = ChildFailureScenario(monkeypatch, fail_descendant_initialization=True)
+    harness = Harness(
+        HarnessConfig(tmp_path, data_dir=tmp_path / "state", providers=connection(auth="api-key"), max_tool_rounds=6)
+    )
+    try:
+        async with asyncio.timeout(HANG_GUARD):
+            await collect(harness)
+        assert scenario.descendant_started_or_terminal.is_set()
+        assert not scenario.grandchild_started.is_set()
+        with pytest.raises(
+            AssertionError,
+            match=r"descendant terminated before provider startup.*injected descendant provider initialization failure",
+        ):
+            scenario.assert_recovered()
+    finally:
+        await harness.close()
+    assert all(provider.closed for provider in scenario.providers)
+    task_infos = harness.tasks.list()
+    assert task_infos
+    assert all(info.status in {"completed", "failed", "cancelled"} for info in task_infos)
+
+
+@pytest.mark.asyncio
 async def test_root_cancellation_still_cancels_and_joins_the_whole_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
