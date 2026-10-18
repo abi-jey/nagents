@@ -97,7 +97,9 @@ async def test_saved_agent_valid_model_shadows_missing_default_after_restart(
     definition = workspace / ".ngn/agents/mini.md"
     definition.parent.mkdir(parents=True)
     definition.write_text(
-        "---\nname: mini\ndescription: A helper\nmodel: {provider: home, id: mini-model}\n---\nHelp with the task.\n"
+        "---\nname: mini\ndescription: A helper\nmodel: {provider: home, id: mini-model}\n"
+        "prompt: |\n  Help with the task.\n---\n",
+        encoding="utf-8",
     )
     config = load_config(workspace, trust_project=True)
     config.demo = True
@@ -158,7 +160,9 @@ async def test_saved_agent_missing_connection_survives_restart_and_repairs_befor
 
     def write_definition(provider: str, model: str) -> None:
         definition.write_text(
-            f"---\nname: mini\ndescription: A small helper\nmodel:\n  provider: {provider}\n  id: {model}\n---\nHelp with the assigned task.\n"
+            f"---\nname: mini\ndescription: A small helper\nmodel:\n  provider: {provider}\n"
+            f"  id: {model}\nprompt: |\n  Help with the assigned task.\n---\n",
+            encoding="utf-8",
         )
 
     write_definition("home", "mini-model")
