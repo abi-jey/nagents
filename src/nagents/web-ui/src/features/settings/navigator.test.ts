@@ -42,7 +42,10 @@ function browser() {
   const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true,
     navigator: { mediaDevices: { enumerateDevices: async () => [], addEventListener() {}, removeEventListener() {} } } };
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-  Object.assign(dom.window.HTMLElement.prototype, { attachEvent() {}, detachEvent() {} });
+  Object.assign(dom.window.HTMLElement.prototype, {
+    attachEvent(this: HTMLElement, type: string, listener: EventListener) { this.addEventListener(type.replace(/^on/, ""), listener); },
+    detachEvent(this: HTMLElement, type: string, listener: EventListener) { this.removeEventListener(type.replace(/^on/, ""), listener); },
+  });
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
   const root = createRoot(document.getElementById("root")!);
@@ -51,6 +54,17 @@ function browser() {
   const render = async (request?: NavigatorRequest, catalogRevision = "") => act(async () => root.render(createElement(AgentNavigator, { request, catalogRevision, token: "token", close() {}, changed() {} })));
   return { dom, root, visible, button, render,
     click: async (label: string) => { assert.ok(button(label), `Missing button ${label}`); await act(async () => button(label).click()); },
+    type: async (label: string, value: string) => act(async () => {
+      const element = visible<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)[0];
+      element.focus();
+      const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(element, value);
+      const propertyChange = new dom.window.Event("propertychange", { bubbles: true });
+      Object.defineProperty(propertyChange, "propertyName", { value: "value" });
+      element.dispatchEvent(propertyChange);
+      element.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      element.blur();
+    }),
     async close() { await act(async () => root.unmount()); dom.window.close(); for (const key of Object.keys(globals)) { if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key); } },
   };
 }
@@ -73,18 +87,20 @@ test("prompt customization starts with inherited Markdown and saving it preserve
   try {
     await ui.render({ scope: "agent", agent: "reviewer", section: "Instructions", serial: 1 });
     const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')[0];
-    assert.equal(input().value, markdown); assert.equal(input().readOnly, true); assert.equal(input().disabled, false);
+    assert.equal(input().value, markdown); assert.equal(input().readOnly, false); assert.equal(input().disabled, false);
     assert.equal(input().maxLength, 24000);
     assert.match(document.getElementById(input().getAttribute("aria-describedby")!.split(" ")[1])!.textContent!, /replaces the default prompt/);
     assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Inherited from Global/);
     assert.match(ui.visible<HTMLElement>(".an-instruction-storage")[0].textContent!, /reviewer\.md/);
-    await ui.click("Customize"); assert.equal(input().readOnly, false); assert.equal(input().value, markdown); assert.equal(writes.length, 0);
+    await act(async () => input().focus()); assert.equal(writes.length, 0, "Focusing inherited text does not create an override");
+    await ui.type("Prompt", `${markdown}\n- Keep this custom line.`); assert.equal(writes.length, 0);
     await ui.click("Tools"); await ui.click("Clear selection"); await ui.click("Instructions");
     await ui.click("Save prompt");
-    assert.deepEqual(writes[0], { scope: "agent", agent: "reviewer", revision: "prefs-agent-reviewer", preferences: { instructions: markdown } });
+    const edited = `${markdown}\n- Keep this custom line.`;
+    assert.deepEqual(writes[0], { scope: "agent", agent: "reviewer", revision: "prefs-agent-reviewer", preferences: { instructions: edited } });
     await ui.click("Tools"); assert.equal(ui.visible<HTMLInputElement>('input[aria-label="Allow read"]')[0].checked, false); assert.equal(ui.button("Save tools").disabled, false);
     await ui.click("Instructions"); await ui.click("Inherit workspace");
-    assert.equal(input().readOnly, true); assert.equal(input().value, markdown); assert.equal(writes.length, 1);
+    assert.equal(input().readOnly, false); assert.equal(input().value, markdown); assert.equal(writes.length, 1);
     await ui.click("Save prompt"); assert.deepEqual(writes[1], { scope: "agent", agent: "reviewer", revision: "saved-1", preferences: {} });
     await ui.click("Tools"); assert.equal(ui.button("Save tools").disabled, false);
   } finally { await ui.close(); }
@@ -103,9 +119,44 @@ test("an explicit empty prompt remains custom until inheritance is deliberately 
     await ui.render({ scope: "agent", agent: "reviewer", section: "Instructions", serial: 1 });
     const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')[0];
     assert.equal(input().value, ""); assert.equal(input().readOnly, false); assert.equal(ui.button("Customize").getAttribute("aria-pressed"), "true");
-    await ui.click("Use agent file prompt"); assert.equal(input().value, "Native guidance"); assert.equal(input().readOnly, true); assert.equal(ui.button("Save prompt").disabled, false);
+    await ui.click("Use agent file prompt"); assert.equal(input().value, "Native guidance"); assert.equal(input().readOnly, false); assert.equal(ui.button("Save prompt").disabled, false);
   } finally { await ui.close(); }
 });
+
+for (const scope of ["global", "workspace"] as const) {
+  test(`${scope} main prompt edits inherited text directly and saves only that scope`, async t => {
+    const ui = browser(); const writes: Record<string, unknown>[] = [];
+    const inherited = `Inherited ${scope} prompt`;
+    let reply: AgentSettingsReply = { ...prefs(scope), values: { instructions: inherited, tools: ["read"] }, inherited: { instructions: inherited, tools: ["read"] }, origins: { instructions: scope === "global" ? "builtin" : "global", tools: "global" } };
+    t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+      if (path === "/api/agent-settings" && init.method === "PUT") {
+        const body = JSON.parse(String(init.body)); writes.push(body);
+        reply = { ...reply, revision: `saved-${writes.length}`, preferences: body.preferences };
+        return Response.json(reply);
+      }
+      if (path.startsWith("/api/agent-settings")) return Response.json(reply);
+      if (path.startsWith("/api/live/settings")) return Response.json(live(scope));
+      if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+      if (path.startsWith("/api/live/instructions")) return Response.json(instructions(scope));
+      throw new Error(`Unexpected request ${path}`);
+    });
+    try {
+      await ui.render({ scope, agent: "", section: "Instructions", serial: 1 });
+      const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Prompt"]')[0];
+      assert.equal(input().value, inherited); assert.equal(input().readOnly, false);
+      await act(async () => input().focus()); assert.equal(writes.length, 0);
+      const edited = `${inherited} with a local addition`;
+      await ui.type("Prompt", edited);
+      assert.equal(writes.length, 0);
+      await ui.click("Save prompt");
+      assert.deepEqual(writes[0], { scope, revision: `${scope === "global" ? "prefs-global-" : "prefs-workspace-"}`, preferences: { instructions: edited } });
+      await ui.click(scope === "global" ? "Use built-in default" : "Inherit global");
+      assert.equal(input().value, inherited); assert.equal(input().readOnly, false);
+      await ui.click("Save prompt");
+      assert.deepEqual(writes[1], { scope, revision: "saved-1", preferences: {} });
+    } finally { await ui.close(); }
+  });
+}
 
 test("global Voice exposes the full built-in Markdown prompt and resets it independently of other voice preferences", async t => {
   const ui = browser(); const writes: Record<string, unknown>[] = []; const voiceWrites: Record<string, unknown>[] = [];
@@ -131,13 +182,15 @@ test("global Voice exposes the full built-in Markdown prompt and resets it indep
   try {
     await ui.render({ scope: "global", agent: "", section: "Voice", serial: 1 });
     const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0];
-    assert.equal(input().value, reply.builtin); assert.equal(input().readOnly, true); assert.equal(ui.button("Save voice instructions").disabled, true);
+    assert.equal(input().value, reply.builtin); assert.equal(input().readOnly, false); assert.equal(ui.button("Save voice instructions").disabled, true);
     assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Built-in default/);
-    await ui.click("Customize"); assert.equal(input().readOnly, false); assert.equal(input().value, reply.builtin); assert.equal(writes.length, 0);
+    await act(async () => input().focus()); assert.equal(writes.length, 0, "Focusing inherited voice text does not create an override");
+    const editedPrompt = `${reply.builtin}\nSpeak with warmth.`;
+    await ui.type("Voice instructions", editedPrompt); assert.equal(writes.length, 0);
     await act(async () => { const select = ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0]; select.value = "breeze"; select.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true })); });
-    await ui.click("Save voice instructions"); assert.deepEqual(writes[0], { scope: "global", revision: "instructions-global-", prompt: reply.builtin });
+    await ui.click("Save voice instructions"); assert.deepEqual(writes[0], { scope: "global", revision: "instructions-global-", prompt: editedPrompt });
     assert.equal(voiceWrites.length, 0); assert.equal(ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0].value, "breeze"); assert.equal(ui.button("Save voice").disabled, false);
-    await ui.click("Use built-in default"); assert.equal(input().value, reply.builtin); assert.equal(input().readOnly, true); assert.equal(writes.length, 1);
+    await ui.click("Use built-in default"); assert.equal(input().value, reply.builtin); assert.equal(input().readOnly, false); assert.equal(writes.length, 1);
     await ui.click("Save voice instructions"); assert.deepEqual(writes[1], { scope: "global", revision: "saved-1" });
     assert.equal(ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0].value, "breeze");
     await ui.click("Save voice"); assert.equal(Object.hasOwn(voiceWrites[0].preferences as object, "instructions"), false, "Saving speech preferences never sends legacy prompt fields");
@@ -166,19 +219,68 @@ test("agent Voice starts with the resolved global prompt and reset follows its w
     const opening: NavigatorRequest = { scope: "agent", agent: "reviewer", section: "Voice", serial: 1 };
     await ui.render(opening);
     const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0];
-    assert.equal(input().value, reply.inherited); assert.equal(input().readOnly, true);
-    assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Inherited from Global/);
-    await ui.click("Customize"); await ui.render(); await ui.render({ ...opening, serial: 2 });
     assert.equal(input().value, reply.inherited); assert.equal(input().readOnly, false);
+    assert.match(ui.visible<HTMLElement>(".an-instruction-origin")[0].textContent!, /Inherited from Global/);
+    const editedPrompt = `${reply.inherited}\nKeep responses brief.`;
+    await ui.type("Voice instructions", editedPrompt); await ui.render(); await ui.render({ ...opening, serial: 2 });
+    assert.equal(input().value, editedPrompt); assert.equal(input().readOnly, false);
     assert.match(document.querySelector(".an-drafts-note")!.textContent!, /1 unsaved section/);
-    await ui.click("Save voice instructions"); assert.deepEqual(writes[0], { scope: "agent", agent: "reviewer", revision: "instructions-agent-reviewer", prompt: reply.inherited });
-    await ui.click("Inherit workspace"); assert.equal(input().readOnly, true); assert.equal(writes.length, 1);
+    await ui.click("Save voice instructions"); assert.deepEqual(writes[0], { scope: "agent", agent: "reviewer", revision: "instructions-agent-reviewer", prompt: editedPrompt });
+    await ui.click("Inherit workspace"); assert.equal(input().readOnly, false); assert.equal(input().value, reply.inherited); assert.equal(writes.length, 1);
     await ui.click("Save voice instructions"); assert.deepEqual(writes[1], { scope: "agent", agent: "reviewer", revision: "saved-1" });
+  } finally { await ui.close(); }
+});
+
+test("Voice origins show a shared source once, then label genuine overrides and mixed inherited sources", async t => {
+  const ui = browser();
+  let snapshot = live("agent", "reviewer");
+  t.mock.method(globalThis, "fetch", async (path: string) => {
+    if (path.startsWith("/api/agent-settings")) return Response.json(prefs("agent", "reviewer"));
+    if (path.startsWith("/api/live/settings")) return Response.json(snapshot);
+    if (path.startsWith("/api/agent-models/") || path === "/api/settings" || path === "/api/settings/global") return Response.json(modelReply(path));
+    if (path.startsWith("/api/live/instructions")) return Response.json(instructions("agent", "reviewer"));
+    throw new Error(`Unexpected request ${path}`);
+  });
+  try {
+    const opening: NavigatorRequest = { scope: "agent", agent: "reviewer", section: "Voice", serial: 1 };
+    await ui.render(opening);
+    const ownership = () => ui.visible<HTMLElement>(".an-ownership span")[0].textContent!;
+    const badges = () => ui.visible<HTMLElement>(".an-field-origin").map(element => element.textContent || "");
+    assert.equal(ownership(), "Speech defaults from Global");
+    assert.deepEqual(badges(), [], "A shared inherited source appears only in the group ownership line");
+
+    snapshot = live("global");
+    await ui.render({ ...opening, scope: "global", agent: "", serial: 2 });
+    assert.equal(ownership(), "Global speech defaults");
+    assert.equal(badges().some(label => label.includes("Global default")), false, "Global defaults do not repeat beside each field");
+
+    snapshot = { ...live("workspace"), overrides: { voice: "breeze" }, saved_live_present: true,
+      origins: { enabled: "global", model: "global", voice: "workspace", context_mode: "global", backend_mode: "global", backend_model: "global" } };
+    await ui.render({ ...opening, scope: "workspace", agent: "", serial: 3 });
+    assert.equal(ownership(), "Speech defaults from Global · 1 explicit setting");
+    const workspaceBadges = badges();
+    assert.ok(workspaceBadges.some(label => label.startsWith("Workspace override")), "The explicit voice override keeps its field label");
+    assert.equal(workspaceBadges.some(label => label.includes("From Global")), false, "The shared source is not repeated beside every field");
+
+    const voice = ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0];
+    await act(async () => { voice.value = "cove"; voice.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true })); });
+    const changedBadges = badges();
+    assert.equal(changedBadges.length, 1, "Changing Voice marks only that field");
+    assert.ok(changedBadges[0].startsWith("Unsaved override"));
+
+    snapshot = { ...live("agent", "reviewer"), origins: { enabled: "workspace", model: "global", voice: "workspace", context_mode: "workspace", backend_mode: "global" },
+      field_sources: { enabled: "definition" }, definition_live: { enabled: false }, agent_overrides: { enabled: false }, saved_live_present: true };
+    await ui.render({ ...opening, scope: "agent", agent: "reviewer", serial: 4 });
+    assert.equal(ownership(), "Speech defaults from Workspace · 1 explicit setting");
+    const mixedBadges = badges();
+    assert.ok(mixedBadges.some(label => label.startsWith("Agent file")), "A native agent definition keeps its field label");
+    assert.ok(mixedBadges.some(label => label.startsWith("From Global")), "Inherited exceptions from another level remain labeled");
   } finally { await ui.close(); }
 });
 
 test("a Voice instruction conflict keeps its draft without locking independent speech settings", async t => {
   const ui = browser(); let writes = 0;
+  const conflictedPrompt = `${instructions("workspace").inherited}\nPreserve this draft.`;
   t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
     if (path.startsWith("/api/agent-settings")) return Response.json(prefs("workspace"));
     if (path.startsWith("/api/live/instructions")) {
@@ -191,15 +293,15 @@ test("a Voice instruction conflict keeps its draft without locking independent s
   });
   try {
     await ui.render({ scope: "workspace", agent: "", section: "Voice", serial: 1 });
-    await ui.click("Customize"); await ui.click("Save voice instructions");
+    await ui.type("Voice instructions", conflictedPrompt); await ui.click("Save voice instructions");
     assert.equal(writes, 1); assert.equal(ui.button("Save voice instructions").disabled, true);
-    assert.equal(ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0].value, instructions("workspace").inherited);
+    assert.equal(ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0].value, conflictedPrompt);
     const speech = ui.visible<HTMLSelectElement>('select[aria-label="Voice"]')[0];
     assert.equal(speech.disabled, false); assert.equal(speech.closest("fieldset")!.disabled, false);
     await act(async () => { speech.value = "breeze"; speech.dispatchEvent(new ui.dom.window.Event("change", { bubbles: true })); });
     assert.equal(ui.button("Save voice").disabled, false);
     await ui.click("Discard voice instruction draft and reload"); assert.equal(writes, 1);
-    assert.equal(ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0].readOnly, true);
+    assert.equal(ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0].readOnly, false);
     assert.equal(speech.value, "breeze");
   } finally { await ui.close(); }
 });
@@ -221,7 +323,7 @@ test("an explicitly empty Voice prompt stays custom and inheritance omits the pr
     await ui.render({ scope: "workspace", agent: "", section: "Voice", serial: 1 });
     const input = () => ui.visible<HTMLTextAreaElement>('textarea[aria-label="Voice instructions"]')[0];
     assert.equal(input().value, ""); assert.equal(input().readOnly, false);
-    await ui.click("Inherit global"); assert.equal(input().value, instructions("workspace").inherited); assert.equal(input().readOnly, true);
+    await ui.click("Inherit global"); assert.equal(input().value, instructions("workspace").inherited); assert.equal(input().readOnly, false);
     await ui.click("Save voice instructions");
     assert.deepEqual(writes[0], { scope: "workspace", revision: "instructions-workspace-" });
   } finally { await ui.close(); }

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { request, RequestError } from "../../../api/client.js";
 import { ProviderLogo } from "../../../components/ProviderLogo.js";
 import { VoiceInstructionEditor } from "./VoiceInstructionEditor.js";
-import { inheritField, nestedVoice, readJson, sourceLabel, targetQuery, useNavigatorDraft, voiceDraft, voiceWrite } from "./state.js";
+import { inheritField, nestedVoice, readJson, sourceLabel, targetQuery, useNavigatorDraft, voiceDraft, voiceOrigin, voiceWrite } from "./state.js";
 import type { NavigatorTarget, NavigatorVoiceReply, VoiceDraft, VoiceProfile } from "./state.js";
 
 const providerLabel = (name: string) => ({ openai: "OpenAI", openai_compatible: "OpenAI-compatible", azure_openai_compatible_v1: "Azure OpenAI", foundry: "Azure AI Foundry" })[name] || name;
@@ -34,15 +34,25 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
   useEffect(() => { report(dirty || instructionsDirty); }, [dirty, instructionsDirty, report]);
   useEffect(() => { if (snapshot) snapshotChanged(snapshot); }, [snapshot, snapshotChanged]);
   const values = snapshot && draft && resolved(snapshot, draft);
+  const saved = snapshot && voiceDraft(snapshot);
   const speechOverrides = draft ? Object.keys(draft).length : 0;
+  const inheritedSources = snapshot && draft ? (["voice", "enabled", "model", "context_mode", "backend_mode", ...(values?.backend_mode === "hosted" ? ["backend_model"] as const : [])] as const)
+    .filter(key => !Object.hasOwn(draft, key) && !Object.hasOwn(saved || {}, key))
+    .map(key => voiceOrigin(snapshot, key) || (target.scope === "agent" ? "workspace" : "global")) : [];
+  const sharedSource = inheritedSources.reduce((most, source) => inheritedSources.filter(value => value === source).length > inheritedSources.filter(value => value === most).length ? source : most, inheritedSources[0] || "");
   const disabled = pending || recovery;
   function edit<K extends keyof VoiceProfile>(key: K, value: VoiceProfile[K]) { if (draft) editor.edit({ ...draft, [key]: value }); }
   function field(key: keyof VoiceProfile, title: string, control: ReactNode, help = "") {
     if (!draft || !snapshot) return null;
     const custom = Object.hasOwn(draft, key);
     const inheritedSource = target.scope === "agent" ? Object.hasOwn(snapshot.definition_live || {}, key) ? "agent file" : "workspace" : "global";
-    const origin = dirty && custom ? "Unsaved preference" : custom ? target.scope === "global" ? "Global default" : snapshot.saved_live_present === false && target.scope === "agent" ? "Agent definition" : `${target.scope === "agent" ? "Agent" : "Workspace"} override` : Object.hasOwn(voiceDraft(snapshot), key) ? `Will use ${inheritedSource}` : sourceLabel(snapshot.origins[key] || (target.scope === "agent" ? "workspace" : "global"));
-    return <div className="an-voice-field"><div className="an-field-title"><span>{title}</span><span className="an-field-origin">{origin}{target.scope !== "global" && custom && <button type="button" disabled={disabled} onClick={() => editor.edit(inheritField(draft, key))}>Use {inheritedSource}</button>}</span></div>{control}{help && <p className="an-footnote">{help}</p>}</div>;
+    const changed = JSON.stringify(draft[key]) !== JSON.stringify(saved?.[key]);
+    const source = voiceOrigin(snapshot, key) || (target.scope === "agent" ? "workspace" : "global");
+    const origin = changed ? custom ? target.scope === "global" ? "Unsaved default" : "Unsaved override" : `Will use ${inheritedSource}`
+      : custom ? target.scope === "global" ? "" : source === "definition" ? "Agent file" : `${target.scope === "agent" ? "Agent" : "Workspace"} override`
+        : source !== sharedSource ? `From ${sourceLabel(source)}` : "";
+    const canReset = target.scope !== "global" && custom;
+    return <div className="an-voice-field"><div className="an-field-title"><span>{title}</span>{(origin || canReset) && <span className="an-field-origin">{origin}{canReset && <button type="button" disabled={disabled} onClick={() => editor.edit(inheritField(draft, key))}>Use {inheritedSource}</button>}</span>}</div>{control}{help && <p className="an-footnote">{help}</p>}</div>;
   }
   return <section className="an-voice-editor">
     <div className="an-section-heading"><div><h3>Voice</h3><p>{target.scope === "agent" ? `How ${target.agent} speaks in live conversations.` : "Speech defaults inherited by agents."}</p></div></div>
@@ -51,7 +61,7 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
     {error && <p role="alert" className="error-text">{error}</p>}
     {(recovery || (!snapshot && error)) && <div className="an-recovery"><p>Your draft is kept. Reload saved voice preferences before saving again.</p><button type="button" disabled={pending} onClick={() => void editor.reload()}>{dirty ? "Discard voice draft and reload" : "Reload saved voice settings"}</button></div>}
     {snapshot && draft && values && <>
-      <div className="an-ownership"><span>{target.scope === "global" ? "Global speech defaults" : speechOverrides ? `${speechOverrides} explicit speech settings` : "Speech settings inherited"}</span>{target.scope !== "global" && <button type="button" disabled={disabled || !speechOverrides} onClick={() => editor.edit({})}>Use inherited speech settings</button>}</div>
+      <div className="an-ownership"><span>{target.scope === "global" ? "Global speech defaults" : sharedSource ? `Speech defaults from ${sourceLabel(sharedSource)}${speechOverrides ? ` · ${speechOverrides} explicit setting${speechOverrides === 1 ? "" : "s"}` : ""}` : `${speechOverrides} explicit speech setting${speechOverrides === 1 ? "" : "s"}`}</span>{target.scope !== "global" && <button type="button" disabled={disabled || !speechOverrides} onClick={() => editor.edit({})}>Use inherited speech settings</button>}</div>
       <fieldset className="an-fields" disabled={disabled}>
         <div className="an-voice-pair">
           {field("voice", "Voice", <select aria-label="Voice" value={values.voice} onChange={event => edit("voice", event.target.value)}>{!snapshot.voices.includes(values.voice) && <option value={values.voice}>{values.voice} · unavailable</option>}{snapshot.voices.map(voice => <option key={voice}>{voice}</option>)}</select>)}

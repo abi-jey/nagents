@@ -196,7 +196,6 @@
 .an-instruction-origin { color: var(--text-secondary); font-size: 10px; line-height: 1.6; margin: 10px 0 8px !important; }
 .an-instruction-origin > span { color: var(--accent-amber); }
 .an-instruction-field textarea { display: block; width: 100%; min-width: 0; margin-bottom: 9px; padding: 12px; color: var(--text-reading); background: var(--surface-output); border: 1px solid var(--border-control); border-radius: 6px; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.75; }
-.an-instruction-field textarea[readonly] { background: var(--surface-navigation); border-style: dashed; cursor: text; }
 .an-instruction-field textarea:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
 .an-instruction-storage { color: var(--text-secondary); font-size: 10px; margin-top: 10px; line-height: 1.7; }
 .an-instruction-storage summary { cursor: pointer; }
