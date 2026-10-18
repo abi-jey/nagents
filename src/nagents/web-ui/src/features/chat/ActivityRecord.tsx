@@ -18,7 +18,7 @@ export function ActivityRecord({ entry, open, toggle }: {
   ];
   return (
     <details className="activity-record" data-activity-kind={notification ? "notification" : "wakeup"} data-disclosure-key={entry.id} open={open}
-      onToggle={(event) => toggle(event.currentTarget.open)}>
+      onToggle={(event) => { if (event.currentTarget.open !== open) toggle(event.currentTarget.open); }}>
       <summary>
         <span className="execution-summary">
           <span className="activity-heading">

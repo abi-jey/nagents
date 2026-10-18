@@ -21,12 +21,10 @@
 .appearance-category-list { margin-top: 17px; }
 .appearance-category { display: grid; grid-template-columns: minmax(140px, 1fr) 124px 124px; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border-group); }
 .appearance-category label { font-size: 12px; min-width: 0; }
-.appearance-category select, .appearance-usage select { width: 100%; font-size: 12px; padding: 8px 9px; border: 1px solid var(--border-group); border-radius: 6px; background: var(--surface-control); color: var(--text-reading); }
+.appearance-category select { width: 100%; font-size: 12px; padding: 8px 9px; border: 1px solid var(--border-group); border-radius: 6px; background: var(--surface-control); color: var(--text-reading); }
 .appearance-show { display: flex; align-items: center; gap: 11px; }
 .appearance-show input { accent-color: var(--accent-teal); width: 15px; height: 15px; }
 .appearance-category[data-hidden] .appearance-show span { color: var(--text-secondary); }
-.appearance-usage { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; margin-top: 18px; }
-.appearance-usage select { width: 154px; }
 .appearance-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-block: 22px 9px; }
 .appearance-footer > span { font-size: 10px; color: var(--text-secondary); }
 .appearance-footer button { font-size: 11px; white-space: nowrap; }
@@ -34,4 +32,4 @@
 @media(max-width: 720px) { .appearance-settings { padding: 22px 18px; } .appearance-preset-card { padding: 17px 13px; } .appearance-category { grid-template-columns: 1fr 1fr; gap: 9px; } .appearance-show { grid-column: 1 / -1; } .appearance-category select { min-height: 40px; } .appearance-preview-activity small { display: none; } .appearance-footer { align-items: start; } .an-appearance-link { margin-top: 8px; padding-top: 8px; } }
 .appearance-scroll { overflow-y: auto; min-height: 0; flex: 1; }
 .an-tabs[hidden] { display: none; }
-@media (pointer: coarse) { .appearance-levels button, .appearance-category select, .appearance-usage select { min-height: 44px; } }
+@media (pointer: coarse) { .appearance-levels button, .appearance-category select { min-height: 44px; } }

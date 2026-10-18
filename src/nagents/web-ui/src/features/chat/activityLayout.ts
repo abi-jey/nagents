@@ -1,7 +1,6 @@
 import type { IconName } from "../../components/Icon.js";
 import type { ActivityCategory, ChatAppearance } from "../settings/appearance.js";
 import { toolPresentation } from "./toolPresentation.js";
-import type { ResponseMetadata } from "./responseMetadata.js";
 import type { Entry, TranscriptItem } from "./transcript.js";
 
 export const activityLabels: Record<Exclude<ActivityCategory, "reasoning">, { label: string; icon: IconName }> = {
@@ -35,36 +34,12 @@ export function itemKey(item: TranscriptItem): string {
   return item.kind === "entry" ? item.entry.id : item.kind === "thread" ? `task:${item.thread.id}` : item.id;
 }
 export type ActivityGroup = { kind: "activity_group"; id: string; category: Exclude<ActivityCategory, "reasoning">; scope: string; items: TranscriptItem[] };
-export type PresentationItem = TranscriptItem | ActivityGroup | { kind: "run_footer"; id: string; metadata: ResponseMetadata };
+export type PresentationItem = TranscriptItem | ActivityGroup;
 
 /** Derive reading layout without changing transcript identities or execution state. */
 export function activityLayout(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
-  const footers = new Map<string, { index: number; metadata: ResponseMetadata; taskId: string }>();
-  const atIndex = new Map<number, PresentationItem[]>();
-  if (!insideGroup && appearance?.runUsage !== "hidden") {
-    items.forEach((item, index) => {
-      if (item.kind !== "entry" || !item.entry.responseMetadata?.run_id) return;
-      const metadata = item.entry.responseMetadata;
-      const id = `run-usage:${metadata.response_session_id}:${metadata.run_id}`;
-      footers.set(id, { index, metadata, taskId: item.entry.taskId || "" });
-    });
-    // Include subsequent activity proven to belong to the same run. A task's
-    // private transcript gets its own footer instead of inflating the root run.
-    const lastActivity = new Map<string, number>();
-    items.forEach((item, index) => {
-      if (item.kind !== "entry" || !item.entry.runId) return;
-      lastActivity.set(`${item.entry.runId}:${item.entry.taskId || ""}`, index);
-    });
-    for (const [id, footer] of footers) {
-      const index = Math.max(footer.index, lastActivity.get(`${footer.metadata.run_id}:${footer.taskId}`) ?? -1);
-      if ((footer.metadata.run_usage?.response_count || 0) <= 1 || !footer.metadata.run_usage?.usage_response_count) continue;
-      const existing = atIndex.get(index) || [];
-      existing.push({ kind: "run_footer", id, metadata: footer.metadata });
-      atIndex.set(index, existing);
-    }
-  }
   const result: PresentationItem[] = [];
-  items.forEach((item, index) => {
+  items.forEach((item) => {
     const category = activityCategory(item), rule = category && appearance?.activity[category];
     const hidden = rule?.placement === "hidden" && !importantActivity(item);
     if (!hidden) {
@@ -74,7 +49,6 @@ export function activityLayout(items: TranscriptItem[], appearance?: ChatAppeara
         else result.push({ kind: "activity_group", id: `activity:${itemKey(item)}`, category, scope: itemScope, items: [item] });
       } else result.push(item);
     }
-    result.push(...(atIndex.get(index) || []));
   });
   return result;
 }

@@ -36,8 +36,10 @@ const render = (entries: Entry[], disclosures = new Map<string, boolean>(), appe
 test("reported thinking precedes one answer, with a separate collapsed summary and late usage", () => {
   let entries = appendEvent([], update());
   assert.equal(entries.length, 1); assert.equal(entries[0].text, "");
-  assert.equal(render(entries).querySelector("details")?.open, false);
-  assert.match(render(entries).querySelector("summary")?.textContent || "", /Thinking/);
+  const thinking = render(entries);
+  assert.equal(thinking.querySelector("details")?.open, false);
+  assert.match(thinking.querySelector("summary")?.getAttribute("aria-label") || "", /^Show reasoning:/);
+  assert.equal(thinking.querySelector('[role="status"]')?.textContent, "Thinking");
   entries = appendEvent(entries, text("text_chunk", "The "));
   entries = appendEvent(entries, update(metadata({ revision: 2, status: "responding" })));
   entries = appendEvent(entries, text("text_done", "The answer."));
@@ -49,7 +51,11 @@ test("reported thinking precedes one answer, with a separate collapsed summary a
   assert.equal(doc.querySelector(".entry.assistant > .entry-content")?.textContent, "The answer.");
   assert.equal(doc.querySelector("details")?.open, false);
   assert.equal(doc.querySelector(".response-usage"), null);
-  assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
+  assert.equal(doc.querySelector(".response-reasoning-title")?.textContent, "Reasoning");
+  assert.equal(doc.querySelector(".response-reasoning-preview")?.textContent, "The provider is checking the available evidence.");
+  assert.equal(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label"),
+    "Show reasoning: Reasoning. The provider is checking the available evidence.");
+  assert.equal(doc.querySelector('[role="status"]'), null, "completed reasoning no longer announces an active thinking state");
   assert.match(doc.querySelector(".response-reasoning-content")?.textContent || "", /The provider is checking the available evidence/);
   assert.doesNotMatch(doc.querySelector(".response-details")?.textContent || "", /600|1,200|800/);
   const expanded = render(entries, new Map([["reasoning:response-one", true]]));
@@ -112,7 +118,8 @@ test("old positive counts can be known without flags, but absent zero counts sta
   const doc = render(appendEvent([], update(parsed!)));
   assert.equal(doc.querySelector(".response-usage"), null);
   assert.equal(doc.querySelector(".response-reasoning-count"), null);
-  assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Thinking");
+  assert.equal(doc.querySelector(".response-reasoning-title")?.textContent, "Reasoning");
+  assert.equal(doc.querySelector('.response-reasoning [role="status"]')?.textContent, "Thinking");
 });
 
 test("provider output semantics remain in metadata without decorating the visible reasoning summary", () => {
@@ -122,7 +129,7 @@ test("provider output semantics remain in metadata without decorating the visibl
     assert.equal(entries[0].responseMetadata?.usage?.reasoning_in_output, meaning);
     assert.equal(entries[0].responseMetadata?.usage?.total_tokens, 15);
     const doc = render(entries);
-    assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
+    assert.equal(doc.querySelector(".response-reasoning-title")?.textContent, "Reasoning");
     assert.equal(doc.querySelector(".response-usage"), null);
     assert.doesNotMatch(doc.body.textContent || "", /Input|Output|Total|Context/);
   }
@@ -139,6 +146,15 @@ test("reasoning phases retain their text and status while usage-only terminal fr
         assert.match(doc.querySelector(".response-details")?.textContent || "", new RegExp(label));
       } else {
         assert.equal(doc.querySelector("article"), null);
+      }
+      assert.equal(doc.querySelector(".response-details")?.getAttribute("data-phase"), status === "thinking" ? "thinking" : status);
+      if (status === "thinking") {
+        assert.equal(doc.querySelector('.response-details [role="status"]')?.textContent, "Thinking");
+        if (summary) assert.match(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label") || "",
+          /^Show reasoning: Reasoning\. A provider-supplied summary\.$/);
+      } else {
+        assert.equal(doc.querySelector(".response-interrupted")?.getAttribute("role"), "status");
+        assert.equal(doc.querySelector(".response-interrupted")?.textContent, label);
       }
       assert.equal(doc.querySelector(".response-reasoning-count"), null);
       assert.equal(doc.querySelector(".response-usage"), null);
@@ -215,7 +231,7 @@ test("cancelled reasoning-only response hydrates as display evidence without cre
   entries = appendEvent(entries, update(cancelled));
   const hydrated = applySnapshot({ entries }, snapshot([row(cancelled, "")]));
   assert.equal(hydrated.entries.length, 1); assert.equal(hydrated.entries[0].text, "");
-  assert.equal(render(hydrated.entries).querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
+  assert.equal(render(hydrated.entries).querySelector(".response-reasoning-title")?.textContent, "Reasoning");
   assert.equal(render(hydrated.entries).querySelector(".response-interrupted")?.textContent, "Stopped");
   assert.equal(render(hydrated.entries).querySelector(".response-thinking"), null);
 });
@@ -260,7 +276,7 @@ test("focused child conversation displays only its own safe metadata and keeps l
   assert.ok(entries.every(entry => !entry.taskId));
 });
 
-test("reliable run usage appears once on the newest response without summing snapshot totals again", () => {
+test("reliable run usage stays in response metadata without duplicate chat counters", () => {
   const runUsage = { ...reportedCounters, prompt_tokens: 30, completion_tokens: 12, total_tokens: 42, reasoning_tokens: 7,
     reasoning_reported: true, reasoning_in_output: "included" as const, response_count: 2,
     usage_response_count: 2, reasoning_response_count: 2, prompt_response_count: 2, completion_response_count: 2, total_response_count: 2, complete: true };
@@ -269,13 +285,8 @@ test("reliable run usage appears once on the newest response without summing sna
   const state = applySnapshot({ entries: [] }, snapshot([row(first, "Before the tool."), row(second, "Final answer.")]));
   const again = applySnapshot(state, snapshot([row(first, "Before the tool."), row(second, "Final answer.")]));
   const doc = render(again.entries, new Map(), defaultAppearance);
-  assert.equal(doc.querySelectorAll(".response-run-usage").length, 1);
-  assert.equal(doc.querySelector(".response-run-usage")?.closest("article.entry"), null);
-  assert.equal(doc.querySelector(".response-run-usage")?.previousElementSibling?.getAttribute("data-record-key"), again.entries[1].id,
-    "The footer follows the latest response without becoming part of its row");
-  assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 2 responses");
-  assert.equal(doc.querySelector(".response-run-usage details[open]"), null);
-  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 30Output 12Reasoning 7 (in Output)");
+  assert.equal(doc.querySelector(".response-run-usage"), null);
+  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]'), null);
   assert.equal(again.entries[1].responseMetadata?.run_usage?.total_tokens, 42);
 });
 
@@ -284,10 +295,10 @@ test("partial run usage states coverage and never presents partial reasoning as 
     total_tokens: 42, reasoning_tokens: 7, reasoning_reported: false, reasoning_in_output: "unknown", response_count: 3,
     usage_response_count: 2, reasoning_response_count: 1, prompt_response_count: 2, completion_response_count: 2, total_response_count: 2, complete: false } });
   const doc = render(fromHistory(snapshot([row(value)])), new Map(), defaultAppearance);
-  assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 3 responses · partial");
-  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 30 (2/3 responses)Output 12 (2/3 responses)");
-  assert.match(doc.querySelector(".response-run-usage")?.textContent || "", /Input reported for 2 of 3 responses; Output for 2 of 3/);
-  assert.match(doc.querySelector(".response-run-usage")?.textContent || "", /Reasoning was reported for 1 of 3/);
+  assert.equal(doc.querySelector(".response-run-usage"), null);
+  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]'), null);
+  assert.equal(responseMetadata(value)?.run_usage?.prompt_response_count, 2);
+  assert.equal(responseMetadata(value)?.run_usage?.reasoning_response_count, 1);
 });
 
 test("run counter coverage preserves reported zero while hiding completely absent counters", () => {
@@ -296,10 +307,11 @@ test("run counter coverage preserves reported zero while hiding completely absen
     reasoning_in_output: "unknown", response_count: 3, usage_response_count: 3, reasoning_response_count: 1,
     prompt_response_count: 2, completion_response_count: 0, total_response_count: 0, complete: false } });
   const doc = render(fromHistory(snapshot([row(value)])), new Map(), defaultAppearance);
-  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 0 (2/3 responses)");
-  assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 3 responses · partial");
-  assert.match(doc.querySelector(".response-run-usage")?.textContent || "", /Input reported for 2 of 3 responses; Output for 0 of 3/);
-  assert.match(doc.querySelector(".response-run-usage")?.textContent || "", /Reasoning was reported for 1 of 3/);
+  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]'), null);
+  assert.equal(value.run_usage?.prompt_tokens, 0, "reported zero remains in the retained metadata");
+  assert.equal(responseMetadata(value)?.run_usage?.prompt_response_count, 2);
+  assert.equal(responseMetadata(value)?.run_usage?.completion_response_count, 0);
+  assert.equal(responseMetadata(value)?.run_usage?.reasoning_response_count, 1);
 });
 
 test("queued followups with reset round numbers show the latest response's cumulative run usage", () => {
@@ -317,11 +329,10 @@ test("queued followups with reset round numbers show the latest response's cumul
   // the run overview merely because its generation had a larger round number.
   entries = appendEvent(entries, update({ ...entries[1].responseMetadata!, revision: 2 }));
   const doc = render(entries, new Map(), defaultAppearance);
-  assert.equal(doc.querySelectorAll(".response-run-usage").length, 1);
-  assert.equal(doc.querySelector(".response-run-usage")?.closest("article.entry"), null);
-  assert.equal(doc.querySelector(".response-run-usage")?.previousElementSibling?.getAttribute("data-record-key"), entries[2].id);
-  assert.equal(doc.querySelector(".response-run-usage summary")?.textContent, "Recorded run usage · 3 responses");
-  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]')?.textContent, "Input 30Output 15Reasoning 3 (in Output)");
+  assert.equal(doc.querySelector(".response-run-usage"), null);
+  assert.equal(doc.querySelector('[aria-label="Provider-reported run tokens"]'), null);
+  assert.equal(entries[2].responseMetadata?.run_usage?.total_tokens, 45,
+    "a late older response cannot replace the newest run metadata");
 });
 
 test("bounded safe summaries never render protocol objects or fabricate content from raw reasoning", () => {
@@ -345,6 +356,7 @@ test("retained usage survives expired summary without bringing the old text back
   assert.equal(doc.querySelector("details"), null);
   assert.match(doc.querySelector(".response-reasoning-expired")?.getAttribute("title") || "", /latest 100 responses/);
   assert.equal(doc.querySelector(".response-reasoning-meta")?.textContent, "Summary no longer retained");
+  assert.ok(doc.querySelector(".response-reasoning-expired"), "summary expiry remains visible without the old body");
   assert.equal(state.entries[0].responseMetadata?.usage?.reasoning_tokens, 600);
   assert.equal(doc.querySelector(".response-usage"), null);
 });

@@ -430,6 +430,7 @@ main {
   margin-bottom: 4px;
   color: var(--text-secondary);
 }
+.entry-label[hidden], .chat-live-caption-label > span[hidden] { display: none; }
 .entry.assistant > .entry-label {
   color: var(--agent-color, var(--accent-teal));
 }
@@ -682,9 +683,9 @@ main {
   overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 2px;
-  min-height: 40px;
+  gap: 7px;
+  padding: 3px 0;
+  min-height: 31px;
   list-style: none;
   border-radius: inherit;
   transition: background-color 120ms ease;
@@ -692,9 +693,11 @@ main {
 .tool-record > summary::-webkit-details-marker { display: none; }
 .tool-record > summary:hover { background: color-mix(in srgb, var(--surface-hover) 55%, transparent); }
 .tool-record > summary:focus-visible { outline-offset: -3px; }
-.tool-symbol, .tool-chevron { display: flex; align-items: center; flex-shrink: 0; color: var(--text-secondary); }
-.tool-chevron { transition: transform 120ms ease; }
-.tool-record[open] > summary .tool-chevron { transform: rotate(90deg); }
+.tool-symbol { display: flex; align-items: center; flex-shrink: 0; color: var(--text-secondary); }
+.tool-symbol svg { width: 12px; height: 12px; }
+.tool-record:is([data-tone="active"], [data-preparing="true"]) .execution-name { color: var(--accent-teal); animation: activity-breathe 1.7s ease-in-out infinite; }
+.tool-record[data-tone="complete"] .execution-name { color: var(--text-secondary); }
+.tool-record .execution-state:is([data-state="Preparing"], [data-state="Requested"], [data-state="Starting"], [data-state="Running"], [data-state="Receiving output"], [data-state="Completed"], [data-state="Recorded result"]) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .tool-heading {
   display: flex;
   align-items: baseline;
@@ -702,9 +705,9 @@ main {
   gap: 8px;
   min-width: 0;
 }
-.tool-heading .execution-name { font-size: 14px; font-weight: 500; flex-shrink: 0; max-width: 55%; }
+.tool-heading .execution-name { font-size: 12px; font-weight: 450; flex-shrink: 0; max-width: 55%; }
 .tool-heading .execution-name:only-child { flex-shrink: 1; max-width: 100%; }
-.tool-heading .execution-target { font-family: inherit; font-size: 13px; line-height: 1.5; }
+.tool-heading .execution-target { font-family: inherit; font-size: 11px; line-height: 1.5; }
 .tool-heading .execution-target {
   min-width: 0;
   overflow: hidden;
@@ -720,12 +723,12 @@ main {
   max-width: 50%;
   min-width: 0;
   line-height: 1.4;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-secondary);
 }
 .tool-outcome .execution-state {
   color: var(--tool-tone);
-  font-size: 12px;
+  font-size: 10px;
   max-width: 100%;
   text-align: right;
 }
@@ -743,16 +746,6 @@ main {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.tool-record[data-busy] > summary::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--tool-tone) 55%, transparent), transparent);
-  background-size: 45% 100%;
-  background-repeat: no-repeat;
-  animation: tool-progress 2.2s ease-in-out infinite;
-}
 .tool-skeleton { display: flex; flex-direction: column; gap: 4px; width: clamp(40px, 10vw, 130px); flex-shrink: 1; }
 .tool-skeleton i {
   display: block;
@@ -768,39 +761,35 @@ main {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-secondary);
 }
-.tool-input-note { margin: 6px 10px 2px; font-size: 12px; color: var(--text-secondary); }
-@keyframes tool-progress { from { background-position: -85% 0; } to { background-position: 185% 0; } }
+.tool-input-note { margin: 6px 0; font-size: 10px; color: var(--text-secondary); }
 @keyframes tool-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .tool-inspector {
-  margin: 0 0 6px 26px;
-  border-left: 1px solid color-mix(in srgb, var(--border-group) 65%, transparent);
-  background: color-mix(in srgb, var(--surface-output) 45%, transparent);
-  border-radius: 0 5px 5px 0;
+  margin: 1px 0 9px 19px;
   min-width: 0;
 }
 .tool-tabs {
   display: flex;
-  gap: 8px;
-  padding-inline: 4px;
+  gap: 10px;
+  padding: 0;
   overflow-x: auto;
   scrollbar-width: thin;
   border-bottom: 1px solid color-mix(in srgb, var(--border-group) 45%, transparent);
 }
 .tool-tabs > button {
   flex-shrink: 0;
-  min-height: 32px;
+  min-height: 27px;
   min-width: 44px;
-  padding: 5px 6px;
+  padding: 4px 0;
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 10px;
 }
 .tool-tabs > button:hover { background: transparent; color: var(--text-reading); border-color: var(--border-group); }
 .tool-tabs > button[aria-selected="true"] { border-bottom-color: var(--accent-teal); color: var(--text-reading); }
@@ -811,30 +800,30 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 6px 0 10px;
+  padding: 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 9px;
 }
 .tool-value-toolbar > button {
-  min-height: 30px;
+  min-height: 25px;
   min-width: 44px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 10px;
   padding: 4px 6px;
 }
 .tool-value-toolbar > button:hover:not(:disabled) { border-color: var(--border-group); }
 .tool-value pre, .tool-error pre {
   margin: 0;
-  padding: 4px 10px 10px;
+  padding: 6px 0;
   max-height: min(24rem, 55vh);
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border-group) transparent;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: 13px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font: 11px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
   color: var(--text-code);
   tab-size: 2;
 }
@@ -854,8 +843,9 @@ main {
   .tool-tabs > button { min-height: 44px; }
 }
 @media (pointer: coarse) {
-  .tool-record > summary, .tool-tabs > button { min-height: 44px; }
+  .tool-record > summary, .tool-tabs > button, .tool-value-toolbar > button { min-height: 44px; }
 }
+@media (prefers-reduced-motion: reduce) { .tool-record .execution-name { animation: none !important; } }
 .request-identity {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);

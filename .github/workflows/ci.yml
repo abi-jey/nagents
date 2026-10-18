@@ -323,11 +323,12 @@ jobs:
       - name: Test browser voice E2E recorder
         run: node --test examples/live/browser_e2e/*.test.mjs
 
-      - name: Check subagent interaction demos
+      - name: Check interaction demos
         working-directory: src/nagents/web-ui
         run: |
           npm run demo:subagents:build -- --outDir "$RUNNER_TEMP/ngn-subagent-concepts"
           npm run demo:subagents:test
+          npm run demo:chat-flow:build -- --outDir "$RUNNER_TEMP/ngn-chat-flow"
 
       - name: Build web assets
         working-directory: src/nagents/web-ui

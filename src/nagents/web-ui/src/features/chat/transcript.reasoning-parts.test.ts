@@ -17,8 +17,8 @@ const metadata = (summary: string, extra: Partial<ResponseMetadata> = {}): Respo
   ...extra,
 });
 
-const render = (entries: Entry[]) => new JSDOM(renderToStaticMarkup(createElement(TranscriptItems, {
-  items: groupTranscript(entries), names: new Map(), disclosures: new Map(), toggle() {},
+const render = (entries: Entry[], disclosures = new Map<string, boolean>()) => new JSDOM(renderToStaticMarkup(createElement(TranscriptItems, {
+  items: groupTranscript(entries), names: new Map(), disclosures, toggle() {},
 }))).window.document;
 
 test("reconciled heading and body render as a normal reasoning summary", () => {
@@ -26,16 +26,28 @@ test("reconciled heading and body render as a normal reasoning summary", () => {
   entries = appendEvent(entries, { event: "response_metadata", run_id: "run", ...metadata("## Plan\n\nInspect input.\nThen answer.", { revision: 2 }) });
 
   const doc = render(entries);
-  assert.equal(doc.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Reasoning summary");
-  assert.match(doc.querySelector(".response-reasoning-content")?.textContent || "", /Inspect input\./);
-  assert.match(doc.querySelector(".response-reasoning-content")?.textContent || "", /Then answer\./);
-  assert.doesNotMatch(doc.querySelector(".response-reasoning-content")?.textContent || "", /without further summary text/);
+  assert.equal(doc.querySelector(".response-reasoning-title")?.textContent, "Plan");
+  assert.equal(doc.querySelector(".response-reasoning-preview")?.textContent, "Inspect input.");
+  assert.equal(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label"), "Show reasoning: Plan. Inspect input.");
+  assert.equal(doc.querySelector(".response-reasoning")?.hasAttribute("open"), false);
+  const expanded = render(entries, new Map([["reasoning:summary-response", true]]));
+  assert.equal(expanded.querySelector(".response-reasoning")?.hasAttribute("open"), true);
+  assert.equal(expanded.querySelectorAll(".response-reasoning-title").length, 1, "the opening heading is not repeated in the expanded body");
+  assert.match(expanded.querySelector(".response-reasoning-content")?.textContent || "", /Inspect input\./);
+  assert.match(expanded.querySelector(".response-reasoning-content")?.textContent || "", /Then answer\./);
+  assert.doesNotMatch(expanded.querySelector(".response-reasoning-content")?.textContent || "", /without further summary text/);
 });
 
 test("a heading-only summary is labeled honestly and usage-only metadata leaves no disclosure", () => {
   const heading = render(appendEvent([], { event: "response_metadata", run_id: "run", ...metadata("## Plan") }));
-  assert.equal(heading.querySelector(".response-reasoning > summary > span:first-child")?.textContent, "Summary heading");
-  assert.match(heading.querySelector(".response-reasoning-content")?.textContent || "", /without further summary text/);
+  assert.equal(heading.querySelector(".response-reasoning-title")?.textContent, "Plan");
+  assert.equal(heading.querySelector(".response-reasoning-preview")?.textContent, "Plan");
+  assert.equal(heading.querySelector(".response-reasoning-content")?.textContent?.includes("Plan"), false);
+  const expandedHeading = render(appendEvent([], { event: "response_metadata", run_id: "run", ...metadata("## Plan") }),
+    new Map([["reasoning:summary-response", true]]));
+  assert.equal(expandedHeading.querySelector(".response-reasoning-title")?.textContent, "Plan");
+  assert.match(expandedHeading.querySelector(".response-reasoning-content")?.textContent || "", /without further summary text/);
+  assert.equal(expandedHeading.querySelector(".response-reasoning-content")?.textContent?.includes("## Plan"), false);
 
   const usageOnly = render(appendEvent([], { event: "response_metadata", run_id: "run", ...metadata("", {
     usage_reported: true,

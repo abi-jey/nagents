@@ -8,19 +8,18 @@ export interface ActivityAppearance { placement: ActivityPlacement; details: Det
 export interface ChatAppearance {
   version: 1;
   activity: Record<ActivityCategory, ActivityAppearance>;
-  runUsage: "hidden" | DetailExpansion;
 }
 const rule = (placement: ActivityPlacement, details: DetailExpansion = "collapsed"): ActivityAppearance => ({ placement, details });
-const preset = (placement: ActivityPlacement, details: DetailExpansion, runUsage: ChatAppearance["runUsage"]): ChatAppearance => ({
-  version: 1, activity: Object.fromEntries(activityCategories.map(category => [category, rule(placement, details)])) as ChatAppearance["activity"], runUsage,
+const preset = (placement: ActivityPlacement, details: DetailExpansion): ChatAppearance => ({
+  version: 1, activity: Object.fromEntries(activityCategories.map(category => [category, rule(placement, details)])) as ChatAppearance["activity"],
 });
-const compact = preset("grouped", "collapsed", "collapsed");
+const compact = preset("grouped", "collapsed");
 export const appearancePresets = [
-  { id: "messages", label: "Messages only", description: "Keep the conversation to messages and delivered files.", value: preset("hidden", "collapsed", "hidden") },
-  { id: "quiet", label: "Quiet", description: "Keep file changes and your team in small groups. Tuck other activity away.", value: { ...preset("hidden", "collapsed", "collapsed"), activity: { ...preset("hidden", "collapsed", "collapsed").activity, files: rule("grouped"), agents: rule("grouped") } } },
+  { id: "messages", label: "Messages only", description: "Keep the conversation to messages and delivered files.", value: preset("hidden", "collapsed") },
+  { id: "quiet", label: "Quiet", description: "Keep file changes and your team in small groups. Tuck other activity away.", value: { ...preset("hidden", "collapsed"), activity: { ...preset("hidden", "collapsed").activity, files: rule("grouped"), agents: rule("grouped") } } },
   { id: "compact", label: "Compact", description: "Group activity into small rows. Open reasoning and details when you need them.", value: compact },
   { id: "detailed", label: "Detailed", description: "Give commands and file changes their own space, with their details open.", value: { ...compact, activity: { ...compact.activity, shell: rule("separate", "expanded"), files: rule("separate", "expanded"), agents: rule("separate") } } },
-  { id: "everything", label: "Everything", description: "Show activity separately, with reasoning, results, and run details open.", value: preset("separate", "expanded", "expanded") },
+  { id: "everything", label: "Everything", description: "Show activity separately, with reasoning and results open.", value: preset("separate", "expanded") },
 ] satisfies { id: string; label: string; description: string; value: ChatAppearance }[];
 export const defaultAppearance: ChatAppearance = compact;
 export const appearanceStorageKey = "ngn:chat-appearance:v1";
@@ -44,13 +43,11 @@ export function parseAppearance(raw: string | null): ChatAppearance {
         typeof item.details !== "string" || !["collapsed", "expanded"].includes(item.details)) continue;
       activity[category] = { placement: item.placement as ActivityPlacement, details: item.details as DetailExpansion };
     }
-    const runUsage = "runUsage" in value ? value.runUsage : undefined;
-    return { version: 1, activity, runUsage: typeof runUsage === "string" && ["hidden", "collapsed", "expanded"].includes(runUsage)
-      ? runUsage as ChatAppearance["runUsage"] : defaultAppearance.runUsage };
+    return { version: 1, activity };
   } catch { return defaultAppearance; }
 }
 export function selectedAppearancePreset(value: ChatAppearance) {
-  return appearancePresets.find(preset => preset.value.runUsage === value.runUsage && activityCategories.every(category =>
+  return appearancePresets.find(preset => activityCategories.every(category =>
     preset.value.activity[category].placement === value.activity[category].placement &&
     (value.activity[category].placement === "hidden" || preset.value.activity[category].details === value.activity[category].details)));
 }

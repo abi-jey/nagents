@@ -38,6 +38,59 @@ function browser() {
   };
 }
 
+const shellDetails = (details: "collapsed" | "expanded") => ({
+  ...defaultAppearance,
+  activity: { ...defaultAppearance.activity, shell: { placement: "grouped" as const, details } },
+});
+
+test("appearance defaults update mounted disclosures while explicit opens survive later changes", async () => {
+  const ui = browser();
+  const prompt = user("question", "Run the check");
+  const command = tool("command");
+  try {
+    await ui.render([prompt, command], shellDetails("expanded"));
+    const group = ui.container.querySelector<HTMLDetailsElement>('.chat-activity-group[data-category="shell"]')!;
+    const article = ui.container.querySelector<HTMLElement>('[data-record-key="command"]')!;
+    const details = article.querySelector<HTMLDetailsElement>("details.execution-record")!;
+    assert.equal(group.open, true);
+    assert.equal(details.open, true);
+
+    // With no user toggles, changing the default disclosure policy affects the
+    // mounted nodes and does not get mistaken for a user preference.
+    await ui.render([prompt, command], shellDetails("collapsed"));
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('[data-record-key="command"]'), article);
+    assert.equal(article.querySelector("details.execution-record"), details);
+    assert.equal(group.open, false);
+    assert.equal(details.open, false);
+
+    await ui.render([prompt, command], shellDetails("expanded"));
+    assert.equal(group.open, true, "an untouched group follows the expanded default again");
+    assert.equal(details.open, true, "an untouched tool disclosure follows the expanded default again");
+    await ui.render([prompt, command], shellDetails("collapsed"));
+    assert.equal(group.open, false);
+    assert.equal(details.open, false);
+
+    // Simulate native user toggles and let React flush the toggle handlers.
+    await act(async () => {
+      group.open = true;
+      group.dispatchEvent(new ui.dom.window.Event("toggle"));
+    });
+    await act(async () => {
+      details.open = true;
+      details.dispatchEvent(new ui.dom.window.Event("toggle"));
+    });
+    assert.equal(group.open, true);
+    assert.equal(details.open, true);
+    await ui.render([prompt, command], shellDetails("expanded"));
+    await ui.render([prompt, command], shellDetails("collapsed"));
+    assert.equal(ui.container.querySelector('.chat-activity-group[data-category="shell"]'), group);
+    assert.equal(ui.container.querySelector('[data-record-key="command"]'), article);
+    assert.equal(group.open, true, "an explicit open overrides later collapsed defaults");
+    assert.equal(details.open, true, "an explicit tool open overrides later collapsed defaults");
+  } finally { await ui.close(); }
+});
+
 test("Compact keeps messages and preserves grouped tool rows, open details, and scroll through completion and hydration", async () => {
   const ui = browser();
   const prompt = user("question", "Keep the user request visible");
@@ -133,7 +186,7 @@ test("Messages only hides routine activity while errors, warnings, and approvals
   } finally { await ui.close(); }
 });
 
-test("reasoning stays collapsed until opened, then keeps disclosure through completion and history; run usage is a sibling", async () => {
+test("reasoning stays collapsed through completion and history without duplicate run counters", async () => {
   const ui = browser();
   const usage = { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20, reasoning_tokens: 3,
     prompt_reported: true, completion_reported: true, total_reported: true, reasoning_reported: true,
@@ -141,7 +194,7 @@ test("reasoning stays collapsed until opened, then keeps disclosure through comp
     reasoning_response_count: 2, prompt_response_count: 2, completion_response_count: 2,
     total_response_count: 2, complete: true };
   const responding: ResponseMetadata = { response_id: "response", response_session_id: "root", run_id: "root-run",
-    revision: 1, round_number: 0, history_id: "", status: "responding", summary: "A provider explanation.",
+    revision: 1, round_number: 0, history_id: "", status: "responding", summary: "A provider explanation. The remaining details stay in the opened note.",
     summary_truncated: false, summary_expired: false, usage_reported: true, run_usage: usage };
   const current = entry("current-answer", "assistant", "Partial answer", { runId: "root-run", responseId: "response",
     streaming: true, responseMetadata: responding });
@@ -152,17 +205,18 @@ test("reasoning stays collapsed until opened, then keeps disclosure through comp
     const article = ui.container.querySelector<HTMLElement>('[data-record-key="current-answer"]')!;
     const reasoning = article.querySelector<HTMLDetailsElement>("details.response-reasoning")!;
     assert.equal(reasoning.open, false, "Compact reasoning starts collapsed");
-    const footer = ui.container.querySelector<HTMLDetailsElement>("details.response-run-usage")!;
-    const childArticle = ui.container.querySelector<HTMLElement>('[data-record-key="child-answer"]')!;
-    assert.equal(footer.closest("article.entry"), null, "Run statistics are not nested in a response row");
-    const rootActivity = ui.container.querySelector('.chat-activity-group[data-category="shell"]')!;
-    assert.ok(rootActivity.compareDocumentPosition(footer) & ui.dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "Run statistics follow root activity in their own row");
-    assert.ok(footer.compareDocumentPosition(childArticle) & ui.dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
-      "Root run statistics do not move into the child response");
+    assert.equal(article.querySelector(".entry-label:not([hidden])")?.textContent?.trim(), "Assistant",
+      "The response keeps its single agent byline");
+    assert.equal(reasoning.querySelector(".response-reasoning-title")?.textContent, "Reasoning");
+    assert.equal(reasoning.querySelector(".response-reasoning-preview")?.textContent, "A provider explanation.");
+    assert.equal(reasoning.querySelector("summary")?.getAttribute("aria-label"),
+      "Show reasoning: Reasoning. A provider explanation.");
+    assert.equal(ui.container.querySelector("details.response-run-usage"), null);
+    assert.equal(ui.container.querySelector('[aria-label="Provider-reported run tokens"]'), null);
 
     await act(async () => { reasoning.open = true; reasoning.dispatchEvent(new ui.dom.window.Event("toggle")); });
     assert.equal(reasoning.open, true);
+    assert.match(reasoning.querySelector(".response-reasoning-content")?.textContent || "", /The remaining details stay in the opened note/);
     const completedMetadata = { ...responding, revision: 2, history_id: "answer-row", status: "completed" as const };
     const completed = { ...current, text: "The final answer", streaming: false, historyId: "answer-row", responseMetadata: completedMetadata };
     await ui.render([user("question", "Question"), completed, uiEntries[2], child]);
@@ -170,12 +224,15 @@ test("reasoning stays collapsed until opened, then keeps disclosure through comp
     assert.equal(article.textContent?.includes("The final answer"), true);
     assert.equal(article.querySelector("details.response-reasoning"), reasoning);
     assert.equal(reasoning.open, true);
+    assert.equal(article.querySelector(".response-run-usage"), null);
+    assert.equal(completed.responseMetadata?.run_usage?.total_tokens, 20);
 
     const hydrated = { ...completed, recorded: true, historyIndex: 1 };
     await ui.render([user("question", "Question"), hydrated, uiEntries[2], child]);
     assert.equal(ui.container.querySelector('[data-record-key="current-answer"]'), article);
     assert.equal(reasoning.open, true, "History hydration preserves the user's disclosure choice");
-    assert.equal(ui.container.querySelectorAll("details.response-run-usage").length, 1);
+    assert.equal(ui.container.querySelector("details.response-run-usage"), null);
+    assert.equal(hydrated.responseMetadata?.run_usage?.total_tokens, 20, "History retains usage metadata without rendering it twice");
   } finally { await ui.close(); }
 });
 
@@ -190,7 +247,7 @@ test("Messages only keeps compact failure outcomes even without assistant text",
       const article = ui.container.querySelector<HTMLElement>(`[data-record-key="${status}-answer"]`)!;
       assert.ok(article, `${status} outcome remains visible without an answer body`);
       assert.match(article.textContent || "", new RegExp(visibleStatus));
-      assert.doesNotMatch(article.textContent || "", /A summary hidden by this preset|Reasoning summary|Thinking/);
+      assert.doesNotMatch(article.textContent || "", /A summary hidden by this preset|Reasoning|Thinking/);
       assert.equal(article.querySelector("details.response-reasoning"), null);
     }
   } finally { await ui.close(); }

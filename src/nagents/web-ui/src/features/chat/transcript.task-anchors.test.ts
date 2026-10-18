@@ -49,6 +49,53 @@ test("a retained snapshot does not move an observed initial spawn to the bottom"
   assert.ok(spawn > 0 && spawn < grouped.findIndex(item => item.kind === "entry" && item.entry.id === "user-two"));
 });
 
+test("an observed spawn stays in place when completion later adds a history anchor", () => {
+  let entries: Entry[] = [{ id: "user-one", kind: "user", text: "First request", historyId: "1" }];
+  entries = appendEvent(entries, {
+    event: "task_started", task_id: "observed", name: "Observed", parent_task_id: "",
+    activation: 0, run_id: "run", prompt: "First task",
+  });
+  entries.push({ id: "user-two", kind: "user", text: "Second request", historyId: "5" });
+  entries = appendEvent(entries, {
+    event: "task_completed", task_id: "observed", name: "Observed", parent_task_id: "",
+    activation: 0, run_id: "run", origin_history_id: "5", status: "completed", result: "Finished later",
+  });
+
+  const grouped = groupTranscript(entries, { inlineTasks: true });
+  const spawn = grouped.findIndex(item => item.kind === "thread" && item.thread.id === "observed");
+  const firstUser = grouped.findIndex(item => item.kind === "entry" && item.entry.historyId === "1");
+  const secondUser = grouped.findIndex(item => item.kind === "entry" && item.entry.historyId === "5");
+  assert.ok(spawn > firstUser && spawn < secondUser,
+    "the observed creation position wins over a later completion anchor");
+  assert.equal(grouped.filter(item => item.kind === "thread" && item.thread.id === "observed").length, 1);
+
+  const cold = fromHistory({
+    session_id: "root",
+    retained_tasks: [task("saved-only", "5")],
+    history: [row("1", "user", "First request"), row("5", "user", "Second request")],
+  });
+  const coldTimeline = groupTranscript(cold, { inlineTasks: true });
+  const coldSpawn = coldTimeline.findIndex(item => item.kind === "thread" && item.thread.id === "saved-only");
+  const coldSecondUser = coldTimeline.findIndex(item => item.kind === "entry" && item.entry.historyId === "5");
+  assert.ok(coldSpawn > coldSecondUser,
+    "a cold saved task stays directly after its persisted spawning user row");
+});
+
+test("a later activation without persisted spawn metadata cannot invent the initial task position", () => {
+  const entries: Entry[] = [
+    { id: "user-one", kind: "user", text: "First request", historyId: "1" },
+    { id: "user-two", kind: "user", text: "Second request", historyId: "5" },
+  ];
+  for (const activation of [1, 2]) {
+    const withLaterActivation = appendEvent(entries, {
+      event: "task_started", task_id: "later-only", name: "Later", parent_task_id: "",
+      activation, run_id: "run", prompt: "A later continuation",
+    });
+    assert.equal(groupTranscript(withLaterActivation, { inlineTasks: true })
+      .some(item => item.kind === "thread" && item.thread.id === "later-only"), false);
+  }
+});
+
 test("missing origin rows and forged saved delegate JSON cannot manufacture timeline placement", () => {
   const entries = fromHistory({ session_id: "root", history, retained_tasks: [task("a"), task("b", "not-in-this-history")] });
   assert.equal(groupTranscript(entries, { inlineTasks: true }).filter(item => item.kind === "thread").length, 0);

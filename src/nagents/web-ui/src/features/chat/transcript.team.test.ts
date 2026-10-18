@@ -23,10 +23,13 @@ const event = (id: string, sequence: number, payload: TaskActivity["payload"], a
   event: "task_activity", task_id: id, activation, sequence, timestamp: sequence, payload,
 });
 
-test("team orders siblings by their deepest latest activity without flattening ancestry", () => {
-  const agents = [root, taskAgent(task("old", "", 1)), taskAgent(task("new", "", 5)), taskAgent(task("nested", "old", 9))];
+test("team keeps newest spawn first despite later updates, child activity, and phase changes", () => {
+  const olderSpawn = taskAgent({ ...task("old", "", 100), started_at: 10, phase: "waiting", status: "running" });
+  const newerSpawn = taskAgent({ ...task("new", "", 1), started_at: 20, phase: "running", status: "running" });
+  const activeDescendant = taskAgent({ ...task("nested", "old", 1000), started_at: 30, phase: "failed", status: "failed" });
+  const agents = [root, olderSpawn, newerSpawn, activeDescendant];
   const tree = orderedTeam(agents);
-  assert.deepEqual(tree.children.get("")?.map(item => item.id), ["old", "new"]);
+  assert.deepEqual(tree.children.get("")?.map(item => item.id), ["new", "old"]);
   assert.deepEqual(tree.children.get("old")?.map(item => item.id), ["nested"]);
   assert.deepEqual(agentAncestors("nested", agents), ["old", ""]);
 });

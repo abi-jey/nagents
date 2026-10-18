@@ -48,7 +48,7 @@ test("hidden activity is omitted but errors, warnings, and approval work stay vi
   assert.equal(activityCategory(ordinary), "shell");
 });
 
-test("run usage is a sibling footer after root activity and does not move into child activity", () => {
+test("run usage metadata does not add a duplicate item to the conversation layout", () => {
   const runUsage = {
     prompt_tokens: 4, completion_tokens: 3, total_tokens: 7, reasoning_tokens: 1,
     prompt_reported: true, completion_reported: true, total_reported: true, reasoning_reported: true,
@@ -63,12 +63,9 @@ test("run usage is a sibling footer after root activity and does not move into c
   const rootTool = item(entry("root-tool", "tool", "", { title: "shell", runId: "run" }));
   const childTool = item(entry("child-tool", "tool", "", { title: "shell", runId: "run", taskId: "worker" }));
   const presentation = activityLayout([answer, rootTool, childTool], defaultAppearance);
-  const footerIndex = presentation.findIndex(value => value.kind === "run_footer");
-  const rootIndex = presentation.findIndex(value => value.kind === "activity_group" && value.items.includes(rootTool));
-  const childIndex = presentation.findIndex(value => value.kind === "activity_group" && value.items.includes(childTool));
-  assert.ok(footerIndex > rootIndex);
-  assert.ok(footerIndex < childIndex);
-  assert.equal(presentation.filter(value => value.kind === "run_footer").length, 1);
-  const withoutUsage = activityLayout([answer, rootTool], { ...defaultAppearance, runUsage: "hidden" });
-  assert.equal(withoutUsage.some(value => value.kind === "run_footer"), false);
+  assert.deepEqual(presentation.map(value => value.kind), ["entry", "activity_group", "activity_group"]);
+  assert.equal(presentation[0], answer);
+  assert.equal(response.run_usage?.total_tokens, 7);
+  assert.equal((presentation[1].kind === "activity_group" && presentation[1].items[0]), rootTool);
+  assert.equal((presentation[2].kind === "activity_group" && presentation[2].items[0]), childTool);
 });

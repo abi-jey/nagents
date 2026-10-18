@@ -118,7 +118,7 @@ export function ExecutionRecord({
   if (entry.kind === "tool") return <ToolExecution entry={entry} open={open} toggle={toggle} metadata={metadata} statusDescription={state} />;
   return (
     <details className="execution-record" data-disclosure-key={entry.id} open={open}
-      onToggle={(event) => toggle?.(event.currentTarget.open)}>
+      onToggle={(event) => { if (open === undefined || event.currentTarget.open !== open) toggle?.(event.currentTarget.open); }}>
       <summary>
         <span className="execution-summary">
           <span className="execution-heading">
