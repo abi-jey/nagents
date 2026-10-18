@@ -9,6 +9,7 @@ import type { AudioDeviceSelection, LivePhase, LiveTransport } from "../../live/
 import { AgentModelDialog } from "../../team/AgentModelDialog.js";
 import type { AgentModelReply } from "../../team/AgentModelDialog.js";
 import { SettingsDialog } from "../SettingsDialog.js";
+import { AppearanceSettings } from "../AppearanceSettings.js";
 import { useSettings } from "../useSettings.js";
 import type { ModelBinding, SettingsReply } from "../types.js";
 import { PreferenceEditor } from "./PreferenceEditor.js";
@@ -34,6 +35,7 @@ export function AgentNavigator({ request: opening, token, audio, close, changed,
   const title = useRef<HTMLHeadingElement>(null);
   const [target, setTarget] = useState<NavigatorTarget>({ scope: "workspace", agent: "" });
   const [section, setSection] = useState<NavigatorSection>("Overview");
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [visited, setVisited] = useState<NavigatorTarget[]>([]);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Partial<Record<NavigatorSection, boolean>>>>({});
@@ -41,6 +43,7 @@ export function AgentNavigator({ request: opening, token, audio, close, changed,
   const id = useId();
   const opened = !!opening;
   const select = useCallback((next: NavigatorTarget, nextSection?: NavigatorSection) => {
+    setAppearanceOpen(false);
     setTarget(next);
     if (nextSection) setSection(nextSection);
     setVisited(current => current.some(item => targetKey(item) === targetKey(next)) ? current : [...current, next]);
@@ -85,7 +88,7 @@ export function AgentNavigator({ request: opening, token, audio, close, changed,
   const name = target.scope === "workspace" ? workspaceName : scopeName(target);
   function node(item: NavigatorTarget, label: string, icon: IconName, detail = "") {
     const itemKey = targetKey(item), dirty = Object.values(drafts[itemKey] || {}).some(Boolean);
-    return <button type="button" className={`an-node${key === itemKey ? " selected" : ""}`} aria-current={key === itemKey ? "page" : undefined} onClick={() => select(item)}><Icon name={icon} size={16} /><span>{label}{detail && <small>{detail}</small>}</span>{dirty && <span className="an-dirty-dot" aria-label="Unsaved changes" />}</button>;
+    return <button type="button" className={`an-node${!appearanceOpen && key === itemKey ? " selected" : ""}`} aria-current={!appearanceOpen && key === itemKey ? "page" : undefined} onClick={() => select(item)}><Icon name={icon} size={16} /><span>{label}{detail && <small>{detail}</small>}</span>{dirty && <span className="an-dirty-dot" aria-label="Unsaved changes" />}</button>;
   }
   return createPortal(<dialog ref={dialog} className="agent-navigator-dialog" id="agent-navigator-dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`} onCancel={event => { event.preventDefault(); close(); }}>
     <div className="agent-navigator">
@@ -95,12 +98,14 @@ export function AgentNavigator({ request: opening, token, audio, close, changed,
           <div className="an-agent-tree">{agents.map(profile => <div key={profile.id}>{node({ scope: "agent", agent: profile.id }, profile.name || profile.id, "team")}</div>)}</div>
         </div>
         <p className="an-navigation-note">Defaults flow down.<br />Customize what needs to differ.</p>
+        <div className="an-appearance-link"><button type="button" className={`an-node${appearanceOpen ? " selected" : ""}`} aria-current={appearanceOpen ? "page" : undefined} onClick={() => setAppearanceOpen(true)}><Icon name="settings" size={16} /><span>Appearance<small>This browser</small></span></button></div>
         {unsaved > 0 && <p className="an-drafts-note" role="status">{unsaved} unsaved {unsaved === 1 ? "section" : "sections"}. Drafts stay here while you navigate or close settings.</p>}
       </nav>
       <div className="an-content">
-        <header className="an-header"><div><span className="an-eyebrow">{target.scope === "agent" ? `Agent · ${workspaceName}` : target.scope === "global" ? "All workspaces" : "Workspace settings"}</span><h2 ref={title} tabIndex={-1} id={`${id}-title`}><Icon name={target.scope === "agent" ? "team" : target.scope === "global" ? "channels" : "folder"} size={23} />{name}</h2><p id={`${id}-description`}>{target.scope === "agent" ? agents.find(profile => profile.id === target.agent)?.description || "Agent configuration and inherited defaults." : target.scope === "global" ? "The starting point for every workspace and agent." : "Defaults for agents in this workspace."}</p></div><button type="button" className="an-close" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
-        <div className="an-tabs" role="tablist" aria-label={`${name} settings sections`} ref={tabs} onKeyDown={navigate}>{sections.map(item => <button type="button" key={item} id={`${id}-${item}-tab`} role="tab" aria-selected={section === item} aria-controls={`${id}-panel-${key}`} tabIndex={section === item ? 0 : -1} onClick={() => setSection(item)}>{item === "Voice" && <Icon name="wave" size={14} />}{item}{drafts[key]?.[item] && <span className="an-dirty-dot" aria-label="Unsaved changes" />}</button>)}</div>
-        {visited.map(item => <TargetPane key={targetKey(item)} target={item} active={opened && targetKey(item) === key} section={section} id={`${id}-panel-${targetKey(item)}`} labelledBy={`${id}-${section}-tab`} token={token}
+        <header className="an-header"><div><span className="an-eyebrow">{appearanceOpen ? "Personal preferences" : target.scope === "agent" ? `Agent · ${workspaceName}` : target.scope === "global" ? "All workspaces" : "Workspace settings"}</span><h2 ref={title} tabIndex={-1} id={`${id}-title`}><Icon name={appearanceOpen ? "settings" : target.scope === "agent" ? "team" : target.scope === "global" ? "channels" : "folder"} size={23} />{appearanceOpen ? "Appearance" : name}</h2><p id={`${id}-description`}>{appearanceOpen ? "Shape how you read conversations. Model and agent settings stay the same." : target.scope === "agent" ? agents.find(profile => profile.id === target.agent)?.description || "Agent configuration and inherited defaults." : target.scope === "global" ? "The starting point for every workspace and agent." : "Defaults for agents in this workspace."}</p></div><button type="button" className="an-close" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
+        <div className="an-tabs" hidden={appearanceOpen} role="tablist" aria-label={`${name} settings sections`} ref={tabs} onKeyDown={navigate}>{sections.map(item => <button type="button" key={item} id={`${id}-${item}-tab`} role="tab" aria-selected={section === item} aria-controls={`${id}-panel-${key}`} tabIndex={section === item ? 0 : -1} onClick={() => setSection(item)}>{item === "Voice" && <Icon name="wave" size={14} />}{item}{drafts[key]?.[item] && <span className="an-dirty-dot" aria-label="Unsaved changes" />}</button>)}</div>
+        {appearanceOpen && <div className="appearance-scroll"><AppearanceSettings /></div>}
+        {visited.map(item => <TargetPane key={targetKey(item)} target={item} active={opened && !appearanceOpen && targetKey(item) === key} section={section} id={`${id}-panel-${targetKey(item)}`} labelledBy={`${id}-${section}-tab`} token={token}
           audio={audio} catalog={catalog} report={report} select={select} openSection={setSection} changed={changed} acceptSettings={acceptSettings} />)}
       </div>
     </div>

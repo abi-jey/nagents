@@ -214,6 +214,26 @@ while `auto_update` remains `true`. Set it to `false` to retain customizations
 across upgrades. Global assistant saves in the UI set it to `false` and show a
 notice. See the [native format and example](agent-definitions.md#native-format).
 
+### Conversation Appearance
+
+Open **Settings → Appearance** to choose **Messages only**, **Quiet**,
+**Compact**, **Detailed**, or **Everything**. Compact is the default: messages
+stay prominent, consecutive activity of the same kind shares a small expandable
+row, and provider reasoning summaries start collapsed beside their answer.
+Expanded summaries use a separate reading surface. Recorded run statistics have
+their own footer, outside individual answers.
+
+**Customize activity** controls commands, file changes, reasoning, agents,
+notices, and other tools separately. Choose visibility, grouped or separate
+placement, and the initial disclosure state. Reasoning can stay with its answer
+or appear before it. Individual disclosures keep your choice while content
+streams and saved history reconciles. Errors, interrupted responses, and approval
+requests remain visible at every detail level.
+
+These are presentation preferences saved in this browser, across conversations.
+They do not change model requests, agent Markdown, or global/workspace defaults.
+**Reset appearance** restores Compact.
+
 ### Frontend Build
 
 Local source checkouts, CI packages, and Docker use the same React/TypeScript

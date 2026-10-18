@@ -15,11 +15,13 @@ import { isProfileTarget, profileTarget } from "../features/team/useTeam.js";
 import { TaskTimeline } from "../features/team/TaskTimeline.js";
 import { TaskConversation } from "../features/team/TaskConversation.js";
 import { WorkspaceActivity } from "./WorkspaceActivity.js";
+import { useAppearance } from "../features/settings/appearance.js";
 import "../features/team/team.css";
 import "../features/settings/navigator/agentNavigator.css";
 
 export function App() {
   const client = useClient();
+  const appearance = useAppearance();
   const [navOpen, setNavOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [teamOpen, setTeamOpen] = useState(() => typeof matchMedia !== "undefined" && matchMedia("(min-width: 1101px)").matches);
@@ -81,8 +83,8 @@ export function App() {
         <WorkspaceSidebar client={client} composer={composer} open={navOpen} close={closeNavigation}
           select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />
         <WorkspaceActivity sessionId={client.sessions.sessionId}
-          task={client.team.selected && <TaskConversation team={client.team} agents={agents} arrivals={arrivals} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
-          conversation={{ token: client.sessions.config?.token || "", active: !client.team.selected,
+          task={client.team.selected && <TaskConversation appearance={appearance} team={client.team} agents={agents} arrivals={arrivals} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
+          conversation={{ appearance, token: client.sessions.config?.token || "", active: !client.team.selected,
             entries: client.chat.entries, sessionId: client.sessions.sessionId, demo: !!client.sessions.config?.demo,
             providerSetup: client.sessions.config?.provider_setup, canSubmit: client.available.submit, submit: value => void submit(value),
             renderTask: thread => agents.some(agent => agent.id === thread.id) ? <TaskTimeline id={thread.id} agents={agents} inspect={client.team.select} arrivals={arrivals} /> : undefined }}

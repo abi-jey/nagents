@@ -98,9 +98,8 @@ export function latestResponseMetadata(saved?: ResponseMetadata, previous?: Resp
   return saved.revision >= previous.revision ? saved : previous;
 }
 
-export function hasResponseDetails(value?: ResponseMetadata, includeRunUsage = false): boolean {
-  return !!value && (!!value.summary || value.status === "thinking" || value.summary_expired ||
-    includeRunUsage && !!value.run_id && (value.run_usage?.response_count || 0) > 1 && (value.run_usage?.usage_response_count || 0) > 0);
+export function hasResponseDetails(value?: ResponseMetadata): boolean {
+  return !!value && (!!value.summary || value.status === "thinking" || value.summary_expired);
 }
 
 export function hasVisibleUsage(usage?: ResponseUsage): boolean {

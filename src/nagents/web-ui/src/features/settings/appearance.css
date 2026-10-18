@@ -1,0 +1,37 @@
+.appearance-settings { padding: 27px 30px 32px; max-width: 920px; width: 100%; margin-inline: auto; overflow: auto; }
+.appearance-heading { display: flex; align-items: start; justify-content: space-between; gap: 14px; margin-bottom: 24px; }
+.appearance-heading h3 { font-size: 17px; font-weight: 550; }
+.appearance-heading p, .appearance-description { font-size: 12px; color: var(--text-secondary); line-height: 1.7; margin-top: 7px; }
+.appearance-location { color: var(--text-secondary); font-size: 10px; white-space: nowrap; padding-top: 4px; }
+.appearance-preset-card { border: 1px solid var(--border-group); border-radius: 13px; padding: 22px; background: var(--surface-output); }
+.appearance-current { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 19px; }
+.appearance-current strong { font-size: 17px; font-weight: 550; }
+.appearance-current > span { font-size: 10px; color: var(--text-secondary); }
+.appearance-preset-card input[type="range"] { width: 100%; accent-color: var(--accent-teal); height: 25px; cursor: pointer; }
+.appearance-levels { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; margin: 5px -8px 18px; }
+.appearance-levels button { padding: 8px 3px; min-width: 0; font-size: 10px; line-height: 1.5; border-color: transparent; background: transparent; color: var(--text-secondary); }
+.appearance-levels button[aria-pressed="true"] { color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 9%, transparent); }
+.appearance-preview { margin-top: 22px; padding: 18px; border: 1px solid var(--border-group); border-radius: 9px; background: var(--surface-reading); }
+.appearance-preview > div { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.appearance-preview-dot { width: 5px; height: 5px; background: var(--accent-teal); border-radius: 50%; }
+.appearance-preview .appearance-preview-activity { margin-top: 14px; margin-left: 14px; color: var(--text-secondary); font-size: 10px; }
+.appearance-preview-activity small { margin-left: auto; font-size: 9px; }
+.appearance-advanced { margin-top: 26px; }
+.appearance-advanced > summary { padding-block: 10px; font-size: 12px; font-weight: 550; cursor: pointer; }
+.appearance-category-list { margin-top: 17px; }
+.appearance-category { display: grid; grid-template-columns: minmax(140px, 1fr) 124px 124px; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border-group); }
+.appearance-category label { font-size: 12px; min-width: 0; }
+.appearance-category select, .appearance-usage select { width: 100%; font-size: 12px; padding: 8px 9px; border: 1px solid var(--border-group); border-radius: 6px; background: var(--surface-control); color: var(--text-reading); }
+.appearance-show { display: flex; align-items: center; gap: 11px; }
+.appearance-show input { accent-color: var(--accent-teal); width: 15px; height: 15px; }
+.appearance-category[data-hidden] .appearance-show span { color: var(--text-secondary); }
+.appearance-usage { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; margin-top: 18px; }
+.appearance-usage select { width: 154px; }
+.appearance-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-block: 22px 9px; }
+.appearance-footer > span { font-size: 10px; color: var(--text-secondary); }
+.appearance-footer button { font-size: 11px; white-space: nowrap; }
+.an-appearance-link { margin-top: 22px; border-top: 1px solid var(--border-group); padding-top: 14px; }
+@media(max-width: 720px) { .appearance-settings { padding: 22px 18px; } .appearance-preset-card { padding: 17px 13px; } .appearance-category { grid-template-columns: 1fr 1fr; gap: 9px; } .appearance-show { grid-column: 1 / -1; } .appearance-category select { min-height: 40px; } .appearance-preview-activity small { display: none; } .appearance-footer { align-items: start; } .an-appearance-link { margin-top: 8px; padding-top: 8px; } }
+.appearance-scroll { overflow-y: auto; min-height: 0; flex: 1; }
+.an-tabs[hidden] { display: none; }
+@media (pointer: coarse) { .appearance-levels button, .appearance-category select, .appearance-usage select { min-height: 44px; } }
