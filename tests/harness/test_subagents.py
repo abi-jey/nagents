@@ -234,7 +234,7 @@ def test_children_are_concurrent_parent_keeps_working_and_late_results_wake_pare
 
         task = asyncio.create_task(consume())
         try:
-            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), 3)
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), HANG_GUARD)
             await asyncio.wait_for(productive.wait(), HANG_GUARD)
             await asyncio.wait_for(preliminary.wait(), HANG_GUARD)
             assert not task.done()
@@ -316,7 +316,7 @@ def test_ready_results_are_batched_and_custom_context_hooks_still_run(
         task = asyncio.create_task(collect(harness))
         try:
             await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
-            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
+            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             continue_parent.set()
             events = await asyncio.wait_for(task, HANG_GUARD)
             assert len([event for event in events if isinstance(event, TaskCompleted)]) == 2
@@ -645,7 +645,7 @@ def test_task_limits_names_and_shared_recursive_budget(tmp_path: Path, monkeypat
             finally:
                 await child.close()
             release.set()
-            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
+            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             monkeypatch.setattr(subagents, "MAX_TASKS", 3)
             with pytest.raises(ValueError, match="budget exhausted"):
                 await harness.tasks.delegate("New wave must not reset total budget")
@@ -995,7 +995,7 @@ def test_general_children_use_root_serialized_approval_and_no_custom_tools(
             await harness.tasks.delegate("Create a file")
             await harness.tasks.delegate("Run a command")
             await harness.tools.write("parent.txt", "parent")
-            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 5)
+            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             assert peak == 1 and len(requests) == 3
             assert (tmp_path / "child.txt").read_text() == "child"
             assert (tmp_path / "parent.txt").read_text() == "parent"
@@ -1124,7 +1124,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
         task = asyncio.create_task(collect(harness))
         try:
             await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
-            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
+            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             info = harness.tasks.list()[0]
             monkeypatch.setattr(subagents, "MAX_TASKS", 1)
             with pytest.raises(ValueError, match="budget exhausted"):
@@ -1139,7 +1139,7 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             assert harness.tasks._used == 2 and harness.tasks.list()[0].followups == 1
             assert not notifications(await harness.history())
             release_child.set()
-            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), 3)
+            await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             release_parent.set()
             events = await asyncio.wait_for(task, HANG_GUARD)
             assert len([event for event in events if isinstance(event, TaskMessage)]) == 1
@@ -1688,7 +1688,7 @@ def test_idle_followup_cannot_reset_exhausted_budget_but_new_root_run_can(
 
         harness.approval_handler = approve
         try:
-            await asyncio.wait_for(collect(harness), 10)
+            await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert harness.tasks._used == subagents.MAX_TASKS == 8
             info = harness.tasks.list()[0]
             workers = dict(harness.tasks._workers)
