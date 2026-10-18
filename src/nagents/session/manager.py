@@ -4,8 +4,10 @@ SQLite-based session and message history management.
 
 import json
 import logging
+import sqlite3
 from dataclasses import asdict
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import aiosqlite
@@ -234,22 +236,43 @@ class SessionManager:
         """
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """INSERT INTO v2_messages
-                   (session_id, role, content, tool_calls, tool_call_id, name)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                self._message_values(session_id, message),
+        phase, started = "connect", monotonic()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                phase = "insert"
+                cursor = await db.execute(
+                    """INSERT INTO v2_messages
+                       (session_id, role, content, tool_calls, tool_call_id, name)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    self._message_values(session_id, message),
+                )
+                message_id = cursor.lastrowid
+                assert message_id is not None
+                phase = "updated_at"
+                await db.execute(
+                    "UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (session_id,),
+                )
+                if message.role == "assistant":
+                    phase = "response_anchor"
+                    await anchor_response(db, session_id, message_id)
+                phase = "commit"
+                await db.commit()
+                phase = "close"
+        except sqlite3.Error as error:
+            try:
+                code = getattr(error, "sqlite_errorcode", None)
+            except BaseException:
+                # Diagnostic accessors must not replace the database failure.
+                code = None
+            logger.warning(
+                "Session message write failed: phase=%s elapsed_ms=%.1f exception=%s sqlite_code=%s",
+                phase,
+                (monotonic() - started) * 1000,
+                type(error).__name__[:80],
+                code if type(code) is int and 0 <= code <= 2**31 - 1 else "unavailable",
             )
-            message_id = cursor.lastrowid
-            assert message_id is not None
-            await db.execute(
-                "UPDATE v2_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (session_id,),
-            )
-            if message.role == "assistant":
-                await anchor_response(db, session_id, message_id)
-            await db.commit()
+            raise
 
         return message_id
 
