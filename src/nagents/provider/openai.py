@@ -787,8 +787,14 @@ class OpenAIProvider(Provider):
                             _remember_completed_arguments(completed_arguments, index, merged_item["arguments"])
                         if kind == "response.output_item.done":
                             finished.add(index)
-                        if stream and kind.endswith(".added") and merged_item.get("type") == "reasoning":
-                            yield ReasoningChunkEvent(displayable=True)
+                        if merged_item.get("type") == "reasoning":
+                            summaries.finish_item(index, merged_item)
+                            if stream:
+                                updates = summaries.finish()
+                                for update in updates:
+                                    yield update
+                                if not updates and kind.endswith(".added"):
+                                    yield ReasoningChunkEvent(displayable=True)
                         if stream and merged_item.get("type") == "function_call":
                             for preview in progress.preview(
                                 index,
@@ -840,7 +846,12 @@ class OpenAIProvider(Provider):
                                 raise _ProtocolError("Codex returned inconsistent completed text.")
                             texts[text_key] = text
                             texts_done.add(text_key)
-                    elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+                    elif kind in {
+                        "response.reasoning_summary_text.delta",
+                        "response.reasoning_summary_text.done",
+                        "response.reasoning_summary_part.added",
+                        "response.reasoning_summary_part.done",
+                    }:
                         for summary_event in summaries.add(event):
                             yield summary_event
                     elif kind == "response.completed":

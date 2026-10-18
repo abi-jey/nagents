@@ -188,8 +188,11 @@ class ResponseAccumulator:
                 self.finished.add(index)
             if self.streaming and self.items[index].get("type") == "function_call":
                 return self._preview(index)
-            if self.streaming and kind.endswith(".added") and item.get("type") == "reasoning":
-                return [ReasoningChunkEvent(displayable=True)]
+            if self.items[index].get("type") == "reasoning":
+                self.summaries.finish_item(index, self.items[index])
+                if self.streaming:
+                    updates = self.summaries.finish()
+                    return list(updates) or ([ReasoningChunkEvent(displayable=True)] if kind.endswith(".added") else [])
         elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
             index = _index(event.get("output_index"))
             self.items.setdefault(index, {})
@@ -233,7 +236,12 @@ class ResponseAccumulator:
                 raise ProtocolError("Responses returned inconsistent completed text.")
             self.texts[key] = text
             self.texts_done.add(key)
-        elif kind in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+        elif kind in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
+        }:
             return list(self.summaries.add(event))
         elif kind in {"response.completed", "response.incomplete"}:
             result = object_data(event.get("response"))

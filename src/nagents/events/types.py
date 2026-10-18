@@ -160,6 +160,9 @@ class ReasoningChunkEvent(Event):
     type: EventType = field(default=EventType.REASONING_CHUNK)
     chunk: str = ""
     displayable: bool = False
+    # A Responses summary part, ordered by (output_index, summary_index).
+    # Empty for providers that emit one unkeyed stream. The chunk remains a delta.
+    summary_part: tuple[int, int] | tuple[()] = ()
 
 
 @dataclass
