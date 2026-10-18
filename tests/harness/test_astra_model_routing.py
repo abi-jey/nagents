@@ -11,6 +11,8 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.provider import HarnessProvider
 from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
+from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
 from nagents.provider.gateway import GatewayHTTPClient
 from nagents.provider.openai import CodexCredentials
@@ -24,11 +26,21 @@ if TYPE_CHECKING:
 
 
 def configuration(path: Path, *, kind: str = "openai", api: str = "auto", base_url: str = "") -> HarnessConfig:
+    profile = ProviderProfile(kind=kind, auth="api-key", api=api, base_url=base_url)
+    store = ScopedProviderRegistryStore(path)
+    current = store.global_store.load()
+    # The store represents a named connection for SettingsInput validation.
+    # The HarnessConfig below retains the deliberately varied routing profile.
+    store.global_store.save(
+        ProviderRegistry(active="test", providers={"test": ProviderProfile(kind="openai", auth="api-key")}),
+        expected=current.revision,
+    )
     return HarnessConfig(
         workspace=path,
         data_dir=path / "state",
         demo=True,
-        providers={"": ProviderProfile(kind=kind, auth="api-key", api=api, base_url=base_url)},
+        provider="test",
+        providers={"test": profile},
         # Start with a native Chat model so these tests exercise an actual
         # contract transition. GPT-6 Luna now uses Responses for reasoning/tools.
         model="gpt-4o",
@@ -128,7 +140,11 @@ async def test_saved_web_model_changes_keep_the_contract_after_restart(tmp_path:
             saved = await client.post(
                 "/api/settings",
                 headers=headers,
-                json={"revision": before["revision"], "values": {**before["values"], "model": model}},
+                json={
+                    "revision": before["revision"],
+                    "values": {**before["values"], "model": model},
+                    "model_binding": {"provider": "test", "id": model},
+                },
             )
             assert saved.status_code == 200, saved.text
             assert (provider.model, provider.api) == (model, api)

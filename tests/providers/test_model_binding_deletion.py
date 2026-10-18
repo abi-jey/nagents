@@ -91,7 +91,8 @@ def test_deletion_rechecks_new_definitions_without_a_restart(tmp_path: Path) -> 
             directory = tmp_path / ".ngn" / "agents"
             directory.mkdir(parents=True)
             (directory / "fresh.md").write_text(
-                "---\nname: fresh\ndescription: Newly discovered agent\nmodel: {provider: bound, id: fresh-model}\n---\nHelp with the task.\n"
+                "---\nname: fresh\ndescription: Newly discovered agent\nmodel: {provider: bound, id: fresh-model}\n"
+                "prompt: Help with the task.\n---\n"
             )
             with pytest.raises(ValueError, match="model bindings"):
                 await harness.delete_provider("bound", saved.revision, "global")

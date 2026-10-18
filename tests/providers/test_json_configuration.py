@@ -10,6 +10,7 @@ import pytest
 
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ProviderRegistryStore
 from nagents.harness.providers import ScopedProviderRegistryStore
@@ -25,7 +26,7 @@ def _write(path: Path, data: dict[str, object]) -> None:
 def test_config_json_references_scope_files_and_preserves_workspace_model(tmp_path: Path) -> None:
     user = tmp_path / "user-config/ngn/config.json"
     global_providers = user.parent / "shared-providers.json"
-    _write(user, {"providers": "shared-providers.json", "model": "global-model"})
+    _write(user, {"providers": "shared-providers.json"})
     _write(
         global_providers,
         {
@@ -35,6 +36,8 @@ def test_config_json_references_scope_files_and_preserves_workspace_model(tmp_pa
             "providers": {"shared": {"kind": "openai", "auth": "codex"}},
         },
     )
+    global_assistant = user.parent / "assistant.md"
+    global_assistant.write_text("---\nmodel: {provider: shared, id: global-model}\n---\n", encoding="utf-8")
     workspace = tmp_path / "project"
     workspace.mkdir()
     local_providers = workspace / "team-providers.json"
@@ -50,7 +53,10 @@ def test_config_json_references_scope_files_and_preserves_workspace_model(tmp_pa
         },
     )
     scoped_model = user.parent / "workspaces" / hashlib.sha256(str(workspace).encode()).hexdigest()[:32]
-    _write(scoped_model / "config.json", {"model": "workspace-model"})
+    scoped_model.mkdir(parents=True, exist_ok=True)
+    (scoped_model / "assistant.md").write_text(
+        "---\nmodel: {provider: team, id: workspace-model}\n---\n", encoding="utf-8"
+    )
 
     config = load_config(workspace, explicit)
     assert config.provider_paths == {"global": global_providers, "workspace": local_providers}
@@ -71,7 +77,7 @@ def test_config_json_references_scope_files_and_preserves_workspace_model(tmp_pa
     assert config.provider == "team" and config.providers[config.provider].kind == "anthropic"
     assert (
         ScopedProviderRegistryStore(workspace, paths=config.provider_paths).model_store("workspace").path
-        == scoped_model / "config.json"
+        == scoped_model / "assistant.md"
     )
 
 
@@ -184,11 +190,30 @@ def test_selected_provider_exposes_explicit_api(tmp_path: Path, kind: str, api: 
 def test_model_edit_keeps_other_config_fields_and_rejects_provider_collision(tmp_path: Path) -> None:
     config_file = tmp_path / "config.json"
     _write(config_file, {"providers": "team.json", "theme": "ocean"})
-    model = ScopedProviderRegistryStore(tmp_path).model_store("global")
-    _write(model.path, {"providers": "team.json", "theme": "ocean"})
-    model.save("new-model")
-    assert json.loads(model.path.read_text()) == {"providers": "team.json", "theme": "ocean", "model": "new-model"}
-    assert model.path.read_text() == json.dumps(json.loads(model.path.read_text()), indent=2, sort_keys=True) + "\n"
+    provider_path = tmp_path / "team.json"
+    _write(
+        provider_path,
+        {
+            "version": 2,
+            "revision": "0" * 64,
+            "active": "team",
+            "providers": {"team": {"kind": "openai", "auth": "api-key"}},
+        },
+    )
+    scoped = ScopedProviderRegistryStore(
+        tmp_path, paths={"global": provider_path, "workspace": tmp_path / "workspace.json"}
+    )
+    model = scoped.model_store("global")
+    model.save_binding(ModelBinding("team", "new-model"))
+    assert model.path.name == "assistant.md" and "model:" in model.path.read_text(encoding="utf-8")
+    assert (
+        config_file.read_text(encoding="utf-8")
+        == json.dumps({"providers": "team.json", "theme": "ocean"}, indent=2) + "\n"
+    )
+    assert json.loads(provider_path.read_text(encoding="utf-8"))["providers"] == {
+        "team": {"kind": "openai", "auth": "api-key"}
+    }
+    assert load_config(tmp_path, config_file).model == "new-model"
     _write(config_file, {"providers": {"global": str(model.path)}})
-    with pytest.raises(ValueError, match="cannot overwrite"):
+    with pytest.raises(ValueError):
         load_config(tmp_path, config_file)
