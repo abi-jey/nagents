@@ -48,6 +48,13 @@ interrupted or reasoning-only responses can have no assistant row.
 `summary` contains only text explicitly marked for display, capped at 16,384
 characters. Custom providers opt in with `ReasoningChunkEvent(displayable=True)`;
 the default `False` keeps private framework reasoning out of display metadata.
+
+Responses summary chunks also carry `summary_part=(output_index, summary_index)`.
+Each `chunk` is still a delta for that part; an empty tuple denotes an unkeyed
+stream. The response trace assembles nonempty parts in index order with paragraph
+separators, including late body text for an earlier part. Consumers that need the
+assembled display text can use cumulative `ResponseMetadataEvent.summary`.
+
 `summary_truncated` indicates this cap. Status `thinking` is emitted
 only after a provider reports a thinking phase or summary; `responding` means the
 reported phase has ended or no thinking phase has been reported. Neither status

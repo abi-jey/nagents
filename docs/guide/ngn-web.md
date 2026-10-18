@@ -789,6 +789,13 @@ to disable that request. Explicit library callers can use
 `GenerationConfig(reasoning_summary="auto")` or `"off"`. Unsupported models keep
 their normal request shape.
 
+Responses and ChatGPT/Codex summary parts retain their output/part identity.
+Heading deltas, completed part bodies, and final-only summaries are reconciled
+without repeating snapshots. Distinct parts have paragraph boundaries; late text
+for an earlier part stays in that part. A completed Markdown heading without body
+text is labeled **Summary heading**. Counts alone never imply a displayable
+summary, and opaque reasoning state is never shown as prose.
+
 The web protocol uses revisioned `response_metadata` snapshots. Each has a unique
 `response_id`, actual `response_session_id`, `run_id`, and `turn_id`; child activity
 also retains its task and activation scope. A completed record is attached by its
