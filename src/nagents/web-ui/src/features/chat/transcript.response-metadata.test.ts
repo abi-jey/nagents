@@ -36,8 +36,10 @@ const render = (entries: Entry[], disclosures = new Map<string, boolean>(), appe
 test("reported thinking precedes one answer, with a separate collapsed summary and late usage", () => {
   let entries = appendEvent([], update());
   assert.equal(entries.length, 1); assert.equal(entries[0].text, "");
-  assert.equal(render(entries).querySelector("details")?.open, false);
-  assert.match(render(entries).querySelector("summary")?.textContent || "", /Thinking/);
+  const thinking = render(entries);
+  assert.equal(thinking.querySelector("details")?.open, false);
+  assert.match(thinking.querySelector("summary")?.getAttribute("aria-label") || "", /^Show reasoning:/);
+  assert.equal(thinking.querySelector('[role="status"]')?.textContent, "Thinking");
   entries = appendEvent(entries, text("text_chunk", "The "));
   entries = appendEvent(entries, update(metadata({ revision: 2, status: "responding" })));
   entries = appendEvent(entries, text("text_done", "The answer."));
@@ -51,8 +53,9 @@ test("reported thinking precedes one answer, with a separate collapsed summary a
   assert.equal(doc.querySelector(".response-usage"), null);
   assert.equal(doc.querySelector(".response-reasoning-title")?.textContent, "Reasoning");
   assert.equal(doc.querySelector(".response-reasoning-preview")?.textContent, "The provider is checking the available evidence.");
-  assert.equal(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label"), "Show reasoning: Reasoning");
-  assert.equal(doc.querySelector('[role="status"]')?.textContent, "Thinking");
+  assert.equal(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label"),
+    "Show reasoning: Reasoning. The provider is checking the available evidence.");
+  assert.equal(doc.querySelector('[role="status"]'), null, "completed reasoning no longer announces an active thinking state");
   assert.match(doc.querySelector(".response-reasoning-content")?.textContent || "", /The provider is checking the available evidence/);
   assert.doesNotMatch(doc.querySelector(".response-details")?.textContent || "", /600|1,200|800/);
   const expanded = render(entries, new Map([["reasoning:response-one", true]]));
@@ -146,8 +149,9 @@ test("reasoning phases retain their text and status while usage-only terminal fr
       }
       assert.equal(doc.querySelector(".response-details")?.getAttribute("data-phase"), status === "thinking" ? "thinking" : status);
       if (status === "thinking") {
-        assert.equal(doc.querySelector('.response-reasoning [role="status"]')?.textContent, "Thinking");
-        assert.match(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label") || "", /^Show reasoning:/);
+        assert.equal(doc.querySelector('.response-details [role="status"]')?.textContent, "Thinking");
+        if (summary) assert.match(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label") || "",
+          /^Show reasoning: Reasoning\. A provider-supplied summary\.$/);
       } else {
         assert.equal(doc.querySelector(".response-interrupted")?.getAttribute("role"), "status");
         assert.equal(doc.querySelector(".response-interrupted")?.textContent, label);

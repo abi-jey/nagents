@@ -3,8 +3,8 @@ import type { WireEvent } from "../../../src/types.js";
 export { reasoningParts } from "../../../src/features/chat/reasoningSummary.js";
 
 export type TimedEvent = { at: number; label: string; event: WireEvent };
-type Actor = { task_id: string; parent_task_id: string; task_name: string; depth: number };
-const explorer: Actor = { task_id: "explorer", parent_task_id: "", task_name: "Explorer", depth: 1 };
+type Actor = { task_id: string; parent_task_id: string; task_name: string; depth: number; activation: number };
+const explorer: Actor = { task_id: "explorer", parent_task_id: "", task_name: "Explorer", depth: 1, activation: 0 };
 export const demoAgents = { explorer: { name: "Explorer", parent: "Assistant", provider: "OpenAI", model: "gpt-6-luna", prompt: "Locate attachment styles and report their narrow-screen behavior." } };
 export const DURATION = 36;
 const run = "image-change", session = "chat-flow-demo";

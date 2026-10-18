@@ -28,7 +28,7 @@ test("reconciled heading and body render as a normal reasoning summary", () => {
   const doc = render(entries);
   assert.equal(doc.querySelector(".response-reasoning-title")?.textContent, "Plan");
   assert.equal(doc.querySelector(".response-reasoning-preview")?.textContent, "Inspect input.");
-  assert.equal(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label"), "Show reasoning: Plan");
+  assert.equal(doc.querySelector(".response-reasoning > summary")?.getAttribute("aria-label"), "Show reasoning: Plan. Inspect input.");
   assert.equal(doc.querySelector(".response-reasoning")?.hasAttribute("open"), false);
   const expanded = render(entries, new Map([["reasoning:summary-response", true]]));
   assert.equal(expanded.querySelector(".response-reasoning")?.hasAttribute("open"), true);

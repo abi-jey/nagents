@@ -862,7 +862,7 @@ export function groupTranscript(entries: Entry[], options: { inlineTasks?: boole
     task.retained = true;
     const origin = entries.find(entry => entry.taskId === task.id && entry.originHistoryId)?.originHistoryId;
     const anchor = origin ? entries.findLastIndex(entry => !entry.taskId && entry.historyId === origin) : -1;
-    const observed = entries.findIndex(entry => entry.taskId === task.id && entry.kind === "task" && entry.started && !entry.recorded && !entry.activation);
+    const observed = entries.findIndex(entry => entry.taskId === task.id && entry.kind === "task" && entry.started && !entry.recorded && (entry.activation || 0) === 0);
     // Keep an observed spawn at its original place through status changes and
     // later saved metadata. Cold history uses the exact saved root-row anchor;
     // an unrelated activation never supplies a creation position.

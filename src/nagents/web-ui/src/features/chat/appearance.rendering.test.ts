@@ -209,7 +209,8 @@ test("reasoning stays collapsed through completion and history without duplicate
       "The response keeps its single agent byline");
     assert.equal(reasoning.querySelector(".response-reasoning-title")?.textContent, "Reasoning");
     assert.equal(reasoning.querySelector(".response-reasoning-preview")?.textContent, "A provider explanation.");
-    assert.equal(reasoning.querySelector("summary")?.getAttribute("aria-label"), "Show reasoning: Reasoning");
+    assert.equal(reasoning.querySelector("summary")?.getAttribute("aria-label"),
+      "Show reasoning: Reasoning. A provider explanation.");
     assert.equal(ui.container.querySelector("details.response-run-usage"), null);
     assert.equal(ui.container.querySelector('[aria-label="Provider-reported run tokens"]'), null);
 

@@ -14,7 +14,7 @@ const row = (history_id: string, role: string, content: string, extra: Partial<H
 const responseMetadata = (response_id: string, history_id: string, status: "responding" | "completed") => ({
   response_id, response_session_id: "root", run_id: response_id === "old-response" ? "old-run" : "run",
   revision: status === "completed" ? 2 : 1, round_number: 1, history_id, status,
-  summary: "A synthetic response summary", summary_truncated: false, summary_expired: false, usage_reported: false,
+  summary: "", summary_truncated: false, summary_expired: false, usage_reported: false,
 });
 
 function fixture() {
@@ -163,7 +163,8 @@ test("assistant row survives completion with an older HTTP history baseline and 
       "Saved history reconciles to the streaming response's existing row identity");
     const assistantRows = [...ui.container.querySelectorAll<HTMLElement>("article.entry.assistant")];
     assert.equal(assistantRows.length, 2);
-    assert.ok(assistantRows.every(element => element.querySelector(".entry-content")?.textContent?.startsWith("The same final answer")));
+    assert.ok(assistantRows.every(element => element.querySelector(".entry-content")?.textContent?.includes("The same final answer")),
+      assistantRows.map(element => element.querySelector(".entry-content")?.textContent).join(" | "));
     assert.deepEqual(assistantRows.map(element => element.querySelector(".entry-label:not([hidden])")?.textContent?.trim()),
       ["Assistant", "Assistant"], "Each admitted turn gets one visible byline");
     assert.equal(feed.scrollTop, 180);

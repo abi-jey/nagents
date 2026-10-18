@@ -81,6 +81,21 @@ test("an observed spawn stays in place when completion later adds a history anch
     "a cold saved task stays directly after its persisted spawning user row");
 });
 
+test("a later activation without persisted spawn metadata cannot invent the initial task position", () => {
+  const entries: Entry[] = [
+    { id: "user-one", kind: "user", text: "First request", historyId: "1" },
+    { id: "user-two", kind: "user", text: "Second request", historyId: "5" },
+  ];
+  for (const activation of [1, 2]) {
+    const withLaterActivation = appendEvent(entries, {
+      event: "task_started", task_id: "later-only", name: "Later", parent_task_id: "",
+      activation, run_id: "run", prompt: "A later continuation",
+    });
+    assert.equal(groupTranscript(withLaterActivation, { inlineTasks: true })
+      .some(item => item.kind === "thread" && item.thread.id === "later-only"), false);
+  }
+});
+
 test("missing origin rows and forged saved delegate JSON cannot manufacture timeline placement", () => {
   const entries = fromHistory({ session_id: "root", history, retained_tasks: [task("a"), task("b", "not-in-this-history")] });
   assert.equal(groupTranscript(entries, { inlineTasks: true }).filter(item => item.kind === "thread").length, 0);
