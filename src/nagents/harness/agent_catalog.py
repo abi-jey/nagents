@@ -13,16 +13,36 @@ from .config import AgentDefinitionSource
 from .config import AgentProfile
 from .config import HarnessConfig
 from .config import _install_agents
+from .config import _install_assistant_metadata
 from .config import _install_profile
 from .config import _json_profile
+from .providers import ScopedProviderRegistryStore
 
 
 class AgentCatalog:
     """One runtime's catalog; accepted model generations keep separate snapshots."""
 
     def __init__(self, config: HarnessConfig) -> None:
-        self.sources = config.agent_sources or (
+        sources = config.agent_sources or (
             (AgentDefinitionSource("workspace", config.workspace),) if config.trust_project else ()
+        )
+        providers = ScopedProviderRegistryStore(config.workspace, paths=config.provider_paths)
+        if not any(source.kind == "defaults" for source in sources):
+            sources = (
+                *(
+                    AgentDefinitionSource("defaults", providers.model_store(scope).path.parent / "assistant.md")
+                    for scope in ("global", "workspace")
+                ),
+                *sources,
+            )
+        canonical = providers.agent_models.directory
+        self.sources = (
+            sources
+            if any(source.kind == "native" for source in sources)
+            else (
+                *sources,
+                AgentDefinitionSource("native", canonical),
+            )
         )
         # Explicit Python profiles and child routing overrides remain authoritative.
         self.overrides = {
@@ -57,10 +77,21 @@ class AgentCatalog:
         # diagnostics too; there is no discovery pass that can replace them.
         diagnostics: list[str] = [] if self.sources else list(config.agent_diagnostics)
         failed = False
+        authored = {name: replace(profile) for name, profile in self.overrides.items()}
         for source in self.sources:
             before = dict(candidate.profiles)
             notes_before = len(diagnostics)
             try:
+                if source.kind == "defaults":
+                    failed = _install_assistant_metadata(candidate, source.path, diagnostics) or failed
+                    continue
+                if source.kind == "native":
+                    authored = {name: replace(profile) for name, profile in candidate.profiles.items()}
+                    if source.path.exists():
+                        batch = import_agents([{"path": str(source.path), "format": "native"}], source.path.parent)
+                        failed = failed or batch.failed
+                        _install_agents(candidate, batch, diagnostics, overlay=True)
+                    continue
                 if source.kind in {"personal", "workspace"}:
                     batch = discover_agents(source.path, personal=source.kind == "personal")
                     failed = failed or batch.failed
@@ -111,6 +142,7 @@ class AgentCatalog:
         changed = revision != self.revision
         config.profiles = candidate.profiles
         config.agent_source_profiles = source_profiles
+        config.agent_authored_profiles = {**authored, **self.overrides}
         config.agent_diagnostics = notes
         # Source selection itself is immutable and inherited by child runtimes.
         config.agent_sources = self.sources

@@ -34,7 +34,7 @@ export function AgentModelDialog({ agent, token, changed, close, embedded = fals
   function receive(reply: AgentModelReply) {
     setSnapshot(reply); onSnapshot?.(reply);
     const configured = reply.model ?? reply.definition_model;
-    setMode(configured?.id ? "custom" : "inherit");
+    setMode(reply.model !== null ? "custom" : "inherit");
     setBinding(configured?.id ? configured : reply.inherited);
     setDirty(false); setError(""); setRecovery(false);
   }
@@ -60,13 +60,13 @@ export function AgentModelDialog({ agent, token, changed, close, embedded = fals
     window.addEventListener(settingsChanged, refreshClean);
     return () => window.removeEventListener(settingsChanged, refreshClean);
   }, [embedded, dirty, pending, recovery]);
-  async function save(reset = false) {
+  async function save() {
     if (!snapshot || pending || recovery || writing.current) return;
     writing.current = true; setPending(true); setError(""); setNotice("");
     try {
       const reply = await (await request(path, token, { revision: snapshot.revision,
-        ...(!reset ? { model: mode === "inherit" ? { provider: "", id: "" } : { provider: binding.provider, id: binding.id.trim() } } : {}),
-      }, undefined, reset ? "DELETE" : "PUT")).json() as AgentModelReply;
+        ...(mode === "custom" ? { model: { provider: binding.provider, id: binding.id.trim() } } : {}),
+      }, undefined, mode === "inherit" ? "DELETE" : "PUT")).json() as AgentModelReply;
       receive(reply); changed(); setNotice("Saved. New activations use this model; running agents keep their accepted configuration.");
     } catch (cause) {
       const failure = settingsFailure(cause, true); setError(failure.message); setRecovery(failure.needsRefresh || (cause instanceof RequestError && cause.status === 404));
@@ -80,20 +80,19 @@ export function AgentModelDialog({ agent, token, changed, close, embedded = fals
       {!snapshot.available && <p className="error-text" role="status">{snapshot.unavailable_reason || "The configured connection is unavailable."}</p>}
       <p className="agent-model-priority">Agent settings take priority over Workspace, then Global defaults.</p>
       <fieldset className="agent-model-mode" disabled={pending || recovery}><legend>Model for this agent</legend>
-        <label><input type="radio" name={embedded ? `${instance}-model-mode` : "agent-model-mode"} checked={mode === "inherit"} onChange={() => { setMode("inherit"); setDirty(true); }} />Use workspace default<small>{label(snapshot.inherited)}</small></label>
+        <label><input type="radio" name={embedded ? `${instance}-model-mode` : "agent-model-mode"} checked={mode === "inherit"} onChange={() => { setMode("inherit"); setDirty(true); }} />{snapshot.definition_model ? "Use agent file model" : "Use workspace default"}<small>{label(snapshot.definition_model || snapshot.inherited)}</small></label>
         <label><input type="radio" name={embedded ? `${instance}-model-mode` : "agent-model-mode"} checked={mode === "custom"} onChange={() => { setMode("custom"); setDirty(true); }} />Choose a provider and model</label>
       </fieldset>
       {mode === "custom" && <ModelBindingPicker idPrefix={embedded ? instance : ""} token={token} value={binding} disabled={pending || recovery} named
         change={value => { setBinding(value); setDirty(true); setNotice(""); }} />}
       {snapshot.source_path && <details className="agent-model-source"><summary>Definition</summary><code>{snapshot.source_path}</code>
         <p>{snapshot.definition_model ? `Definition model: ${label(snapshot.definition_model)}` : "The definition inherits the workspace model."}</p></details>}
-      {snapshot.model !== null && <button type="button" disabled={pending || recovery} onClick={() => void save(true)}>{snapshot.definition_model ? "Restore definition model" : "Remove agent override"}</button>}
     </>}
     {pending && !snapshot && <p role="status">Loading model settings…</p>}
     {error && <p className="error-text" role="alert">{error}</p>}
     {(recovery || (!snapshot && error)) && <button type="button" disabled={pending} onClick={() => refresh(value => value + 1)}>Reload saved settings</button>}
     {notice && <p role="status">{notice}</p>}
-    <footer className="agent-model-actions"><button type="button" disabled={pending} onClick={embedded ? () => { if (snapshot) { setBinding((snapshot.model ?? snapshot.definition_model)?.id ? (snapshot.model ?? snapshot.definition_model)! : snapshot.inherited); setMode((snapshot.model ?? snapshot.definition_model)?.id ? "custom" : "inherit"); setDirty(false); } } : close}>{embedded ? "Discard model draft" : dirty ? "Discard changes" : "Close"}</button>
+    <footer className="agent-model-actions"><button type="button" disabled={pending} onClick={embedded ? () => { if (snapshot) { setBinding((snapshot.model ?? snapshot.definition_model)?.id ? (snapshot.model ?? snapshot.definition_model)! : snapshot.inherited); setMode(snapshot.model !== null ? "custom" : "inherit"); setDirty(false); } } : close}>{embedded ? "Discard model draft" : dirty ? "Discard changes" : "Close"}</button>
       <button type="button" className="primary" disabled={pending || recovery || !dirty || (mode === "custom" && (!binding.provider || !binding.id.trim()))} onClick={() => void save()}>{pending && snapshot ? "Saving…" : "Save agent model"}</button></footer>
   </Surface>;
 }

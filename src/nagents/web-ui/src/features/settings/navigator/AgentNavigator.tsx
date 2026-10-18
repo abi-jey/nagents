@@ -147,16 +147,17 @@ function TargetPane({ target, active, section, id, labelledBy, token, audio, cat
   const live = voice && nestedVoice(voice);
   const overview: { section: NavigatorSection; value: string; source: string }[] = [
     { section: "Model", value: model?.binding.id || "Open model settings", source: model?.source || "" },
-    { section: "Instructions", value: preferences?.values.instructions || "No additional instructions", source: preferences?.origins.instructions || "" },
+    { section: "Instructions", value: preferences ? preferences.values.instructions || "Empty prompt" : "Loading prompt…", source: preferences?.origins.instructions || "" },
     { section: "Tools", value: preferences ? `${preferences.effective_tools?.length ?? preferences.values.tools.length} available tools` : "Loading tools…", source: preferences?.origins.tools || "" },
     { section: "Voice", value: live ? live.enabled ? `${live.voice} · ${live.model.id}` : "Live voice disabled" : "Loading voice…", source: voice ? voiceOrigin(voice, live?.enabled ? "voice" : "enabled") : "" },
   ];
   return <div className="an-target" hidden={!active} id={id} role="tabpanel" aria-labelledby={labelledBy} tabIndex={0}>
     <div className={`an-scroll${section === "Model" && target.scope !== "agent" ? " an-wide-model" : ""}`} ref={scroll}>
       <div className="an-form">
+        {target.scope === "global" && preferences?.managed_defaults && <p className="an-footnote" role="note">{preferences.managed_defaults.auto_update ? "Automatic updates are enabled for the global assistant. Bundled updates replace this file at startup with a warning. Saving changes disables automatic updates for the global assistant." : "Automatic updates are disabled for the global assistant. Saved customizations are preserved when bundled defaults change."}</p>}
         <div hidden={section !== "Overview"}><div className="an-section-heading"><div><h3>{target.scope === "agent" ? "Agent overview" : "Defaults overview"}</h3><p>Saved effective settings. Section badges identify unsaved drafts.</p></div></div>
           <div className="an-overview-list">{overview.map(item => <button type="button" key={item.section} onClick={() => openSection(item.section)}><Icon name={icons[item.section]} size={17} /><span><strong>{item.section}</strong><span>{item.value}</span><small>{sourceLabel(item.source)}</small></span><Icon name="chevron" size={13} /></button>)}</div>
-          {preferences?.source_path && <details className="an-source"><summary>Preferences file</summary><code>{preferences.source_path}</code></details>}
+          {preferences?.source_path && <details className="an-source"><summary>Agent Markdown file</summary><code>{preferences.source_path}</code></details>}
         </div>
         <div hidden={section !== "Model"}>{modelVisited && (target.scope === "agent" ? <><div className="an-section-heading"><div><h3>Conversation model</h3><p>Provider connection and model are saved as one binding.</p></div></div><AgentModelDialog embedded token={token} agent={target.agent} close={() => {}} changed={savedModel} onDraftChange={reportModel} onSnapshot={agentModel} /></> : <ScopeModel token={token} scope={target.scope} changed={savedModel} report={reportModel} snapshotChanged={scopeModel} acceptSettings={acceptSettings} openGlobal={() => select({ scope: "global", agent: "" }, "Model")} />)}</div>
         <div hidden={section !== "Instructions" && section !== "Tools"}><PreferenceEditor token={token} target={target} section={section} report={reportPreferences} snapshotChanged={receivePreferences} /></div>

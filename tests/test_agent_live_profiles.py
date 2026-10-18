@@ -21,13 +21,8 @@ from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.web.live_settings import AgentVoiceInput
-from nagents.web.live_settings import GlobalVoiceInput
 from nagents.web.live_settings import LiveSettings
-from nagents.web.live_settings import WorkspaceVoiceInput
 from nagents.web.session_agents import Choice
-from nagents.web.voice_preferences import Scope
-from nagents.web.voice_preferences import VoiceOverrides
-from nagents.web.voice_preferences import VoicePreferences
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
 
@@ -44,7 +39,7 @@ def test_native_and_json_live_profiles_preserve_explicit_empty_and_false(tmp_pat
     path.write_text(
         "---\ndescription: Reader\nmodel: {provider: text, id: normal}\n"
         "live:\n  enabled: false\n  model: {provider: voice, id: gpt-live-1}\n"
-        "  instructions: ''\n  context_mode: none\n---\nRead carefully.\n"
+        "  prompt: ''\n  context_mode: none\n---\n"
     )
     parsed = discover_agents(tmp_path)
     assert not parsed.failed and not parsed.diagnostics
@@ -53,7 +48,7 @@ def test_native_and_json_live_profiles_preserve_explicit_empty_and_false(tmp_pat
     assert profile.live.selected() == {
         "enabled": False,
         "model": {"provider": "voice", "id": "gpt-live-1"},
-        "instructions": "",
+        "prompt": "",
         "context_mode": "none",
     }
     source = tmp_path / "profiles.json"
@@ -73,7 +68,7 @@ def test_native_and_json_live_profiles_preserve_explicit_empty_and_false(tmp_pat
         {"instructions": None},
         {"context_mode": "full"},
         {"voice": "unknown"},
-        {"instructions": "x" * 6001},
+        {"prompt": "x" * 12001},
     ],
 )
 def test_live_profile_rejects_partial_connections_and_invalid_fields(invalid: object) -> None:
@@ -85,7 +80,7 @@ def test_invalid_live_reload_keeps_accepted_catalog_and_deletion_removes_agent(t
     directory = tmp_path / ".ngn" / "agents"
     directory.mkdir(parents=True)
     path = directory / "reader.md"
-    valid = "---\ndescription: Reader\nlive:\n  voice: cedar\n---\nRead.\n"
+    valid = "---\ndescription: Reader\nlive:\n  voice: cedar\nprompt: Read.\n---\n"
     path.write_text(valid)
     config = load_config(tmp_path, trust_project=True)
     catalog = AgentCatalog(config)
@@ -105,33 +100,31 @@ def test_invalid_live_reload_keeps_accepted_catalog_and_deletion_removes_agent(t
 
 def test_shared_overlay_preserves_sections_and_model_presence(tmp_path: Path) -> None:
     store = AgentModelStore(tmp_path / "preferences")
-    live = store.patch("reader", {"live": {"enabled": False, "instructions": ""}}, expected=EMPTY)
+    live = store.patch("reader", {"live": {"enabled": False, "prompt": ""}}, expected=EMPTY)
     assert not live.model_present and live.revision != EMPTY
     model = store.save("reader", ModelBinding("text", "normal"), expected=live.revision)
     assert model.model_present and model.preferences["live"] == live.preferences["live"]
     behavior = store.replace_fields(
-        "reader", ("instructions", "tools"), {"instructions": "Read", "tools": []}, expected=model.revision
+        "reader", ("prompt", "tools"), {"prompt": "Read", "tools": []}, expected=model.revision
     )
     reset = store.reset("reader", expected=behavior.revision)
     assert not reset.model_present and reset.preferences == {
-        "live": {"enabled": False, "instructions": ""},
-        "instructions": "Read",
+        "live": {"enabled": False, "prompt": ""},
+        "prompt": "Read",
         "tools": [],
     }
     with pytest.raises(ValueError, match="changed"):
         store.remove("reader", ("live",), expected=model.revision)
     remaining = store.remove("reader", ("live",), expected=reset.revision)
-    assert remaining.preferences == {"instructions": "Read", "tools": []}
+    assert remaining.preferences == {"prompt": "Read", "tools": []}
 
 
 def test_shared_overlay_instruction_markdown_delimiters_round_trip(tmp_path: Path) -> None:
     store = AgentModelStore(tmp_path)
     instructions = "First line\n\n---\n\nKeep this section."
-    saved = store.patch(
-        "reader", {"live": {"instructions": instructions}, "instructions": instructions}, expected=EMPTY
-    )
+    saved = store.patch("reader", {"live": {"prompt": instructions}, "prompt": instructions}, expected=EMPTY)
     assert store.load("reader") == saved
-    assert saved.preferences["live"] == {"instructions": instructions}
+    assert saved.preferences["live"] == {"prompt": instructions}
 
 
 def test_invalid_json_live_reload_keeps_accepted_catalog(tmp_path: Path) -> None:
@@ -162,7 +155,7 @@ def configuration(workspace: Path) -> HarnessConfig:
             "reader": AgentProfile(
                 provider="text",
                 model="normal-model",
-                live=LiveProfile.parse({"voice": "cedar", "instructions": "Source voice"}),
+                live=LiveProfile.parse({"voice": "cedar", "prompt": "Source voice"}),
             ),
             "writer": AgentProfile(live=LiveProfile.parse({"voice": "marin"})),
         },
@@ -174,7 +167,7 @@ def test_live_settings_layer_reset_atomic_model_and_normal_model_independence(tm
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             harness = harnesses[0]
             source = (await client.get("/api/live/settings?scope=agent&agent=reader", headers=headers)).json()
-            assert source["effective"]["voice"] == "cedar" and source["origins"]["voice"] == "agent"
+            assert source["effective"]["voice"] == "cedar" and source["origins"]["voice"] == "definition"
             assert source["effective"]["model"]["provider"] == "voice"
             assert not source["saved_live_present"]
             empty = await client.post(
@@ -189,8 +182,8 @@ def test_live_settings_layer_reset_atomic_model_and_normal_model_independence(tm
             )
             assert empty.status_code == 200, empty.text
             inherited = empty.json()
-            assert inherited["saved_live_present"] and inherited["effective"]["voice"] == "marin"
-            assert inherited["effective"]["instructions"] == ""
+            assert not inherited["saved_live_present"] and inherited["effective"]["voice"] == "cedar"
+            assert inherited["effective"]["instructions"] == "Source voice"
             assert harness.resolved_model_binding("reader").binding == ModelBinding("text", "normal-model")
             settings_snapshot = (await client.get("/api/settings", headers=headers)).json()
             assert settings_snapshot["effective_model"] == "normal-model"
@@ -210,7 +203,6 @@ def test_live_settings_layer_reset_atomic_model_and_normal_model_independence(tm
                     "revision": inherited["revision"],
                     "overrides": {
                         "enabled": False,
-                        "instructions": "",
                         "model": {"provider": "voice", "id": "voice-custom"},
                     },
                 },
@@ -293,40 +285,6 @@ def test_admission_binds_chat_agent_generation_and_captures_immutable_profile(tm
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("scope", ["global", "workspace"])
-def test_legacy_voice_instruction_values_save_and_remain_readable_after_restart(tmp_path: Path, scope: Scope) -> None:
-    async def scenario() -> None:
-        instructions = "Legacy text\x00with a control character"
-        owner = LiveSettings(tmp_path / "sessions.db", demo=True, active=lambda: "")
-        await owner.load()
-        before = await owner.snapshot(scope)
-        body = (
-            GlobalVoiceInput(
-                scope="global",
-                revision=str(before["revision"]),
-                preferences=VoicePreferences(instructions=instructions),
-            )
-            if scope == "global"
-            else WorkspaceVoiceInput(
-                scope="workspace", revision=str(before["revision"]), overrides=VoiceOverrides(instructions=instructions)
-            )
-        )
-        saved = await owner.change(body)
-        values = saved["values"]
-        assert isinstance(values, dict) and values["instructions"] == instructions
-        await owner.shutdown()
-        restarted = LiveSettings(tmp_path / "sessions.db", demo=True, active=lambda: "")
-        await restarted.load()
-        restored = await restarted.snapshot(scope)
-        assert restored["revision"] == saved["revision"]
-        assert restored["values"] == values
-        await restarted.shutdown()
-        with pytest.raises(ValueError, match="instructions"):
-            LiveProfile.parse({"instructions": instructions})
-
-    asyncio.run(scenario())
-
-
 def test_agent_voice_rejects_escaped_credential_text_without_saving(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -337,19 +295,19 @@ def test_agent_voice_rejects_escaped_credential_text_without_saving(
         async with client_app(tmp_path, config=configuration(tmp_path)) as (_, client, headers, harnesses):
             store = harnesses[0].provider_store.agent_models
             before = store.load("reader")
-            snapshot = (await client.get("/api/live/settings?scope=agent&agent=reader", headers=headers)).json()
-            response = await client.post(
-                "/api/live/settings",
+            snapshot = (await client.get("/api/live/instructions?scope=agent&agent=reader", headers=headers)).json()
+            response = await client.put(
+                "/api/live/instructions",
                 headers=headers,
                 json={
                     "scope": "agent",
                     "agent": "reader",
                     "revision": snapshot["revision"],
-                    "overrides": {"instructions": "Accidentally pasted " + secret},
+                    "prompt": "Accidentally pasted " + secret,
                 },
             )
             assert response.status_code == 422
-            assert response.json() == {"detail": "Keep API keys out of Voice preferences."}
+            assert response.json() == {"detail": "Keep API keys out of Voice instructions."}
             assert store.load("reader") == before
             assert not before.path.exists()
 

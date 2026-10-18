@@ -23,6 +23,7 @@ from nagents.types import ReasoningEffort
 from .agent_definitions import DefinitionBatch
 from .agent_definitions import discover_agents
 from .agent_definitions import import_agents
+from .live_profiles import LIVE_FIELDS
 from .live_profiles import LiveProfile
 from .model_bindings import ModelBinding
 from .providers import ProviderProfile
@@ -57,6 +58,12 @@ class AgentProfile:
     source_format: str = field(default="", compare=False)
     reasoning_effort: ReasoningPreference = ""
     live: LiveProfile = field(default_factory=LiveProfile)
+    prompt: str = ""
+    prompt_present: bool = False
+    fields_present: tuple[str, ...] = ()
+    auto_update: bool = False
+    default_revision: str = ""
+    field_sources: tuple[tuple[str, str], ...] = ()
 
     def validate(self) -> None:
         resolve_effort(self.reasoning_effort)
@@ -65,15 +72,34 @@ class AgentProfile:
         LiveProfile.parse(self.live.selected())
         if self.mode not in {"build", "reviewer"}:
             raise ValueError("mode must be build or reviewer")
-        for name in ("instructions", "description", "model", "provider", "source", "source_format"):
+        for name in ("instructions", "description", "model", "provider", "source", "source_format", "prompt"):
             value = getattr(self, name)
             if not isinstance(value, str) or len(value.encode("utf-8")) > 262144:
                 raise ValueError(f"{name} must be a bounded string")
         if self.provider and not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", self.provider):
             raise ValueError("Invalid provider connection")
-        for name in ("user_invocable", "subagent_available"):
+        for name in ("user_invocable", "subagent_available", "prompt_present", "auto_update"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
+        if not isinstance(self.default_revision, str) or (
+            self.default_revision and not re.fullmatch(r"[0-9a-f]{64}", self.default_revision)
+        ):
+            raise ValueError("default_revision must be a SHA-256 hexadecimal digest")
+        native_fields = set(self.__dataclass_fields__) - {"source", "source_format", "fields_present", "field_sources"}
+        if not isinstance(self.fields_present, tuple) or any(
+            not isinstance(name, str) or name not in native_fields for name in self.fields_present
+        ):
+            raise ValueError("fields_present must contain agent profile field names")
+        source_fields = native_fields | {f"live.{name}" for name in LIVE_FIELDS}
+        if not isinstance(self.field_sources, tuple) or any(
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or item[0] not in source_fields
+            or not isinstance(item[1], str)
+            for item in self.field_sources
+        ):
+            raise ValueError("field_sources must contain agent profile field names and source paths")
         for name in ("tools", "denied_tools", "allowed_agents"):
             items = getattr(self, name)
             if items is None and name != "denied_tools":
@@ -91,7 +117,7 @@ class AgentProfile:
 class AgentDefinitionSource:
     """An operator-selected definition source, retained in precedence order."""
 
-    kind: Literal["personal", "workspace", "configuration"]
+    kind: Literal["personal", "workspace", "configuration", "native", "defaults"]
     path: Path
     resolve: bool = False
 
@@ -122,6 +148,7 @@ class HarnessConfig:
     agent_diagnostics: tuple[str, ...] = ()
     agent_sources: tuple[AgentDefinitionSource, ...] = ()
     agent_source_profiles: dict[str, AgentProfile] = field(default_factory=dict, repr=False, compare=False)
+    agent_authored_profiles: dict[str, AgentProfile] = field(default_factory=dict, repr=False, compare=False)
     config_paths: tuple[Path, ...] = ()
     # Explicit symlink configs historically resolve relative references beside
     # their target. Keep the logical location so extension reloads can rotate it.
@@ -171,7 +198,7 @@ class HarnessConfig:
         if not self.model.strip():
             raise ValueError("model must not be empty")
         for name, profile in self.profiles.items():
-            if name == "assistant":
+            if name == "assistant" and profile.source_format != "native":
                 raise ValueError("The built-in assistant profile cannot be overridden")
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) or profile.mode not in {"build", "reviewer"}:
                 raise ValueError(f"Invalid profile {name!r}: mode must be build or reviewer")
@@ -197,7 +224,7 @@ class HarnessConfig:
         return self.providers.get(self.provider, ProviderProfile(kind="openai", auth="auto"))
 
     def profile(self, name: str) -> AgentProfile:
-        if name == "assistant":
+        if name == "assistant" and name not in self.profiles:
             return AgentProfile(mode="reviewer" if self.read_only else "build")
         if name not in self.profiles:
             raise ValueError(f"Unknown agent profile {name!r}; available: {', '.join(self.profile_names)}")
@@ -205,26 +232,52 @@ class HarnessConfig:
 
     @property
     def profile_names(self) -> tuple[str, ...]:
-        return ("assistant", *sorted(self.profiles))
+        return ("assistant", *sorted(name for name in self.profiles if name != "assistant"))
 
     @property
     def selectable_profile_names(self) -> tuple[str, ...]:
         return tuple(name for name in self.profile_names if self.profile(name).user_invocable)
 
 
-def _install_profile(config: HarnessConfig, name: str, profile: AgentProfile, diagnostics: list[str]) -> None:
+def _install_profile(
+    config: HarnessConfig, name: str, profile: AgentProfile, diagnostics: list[str], *, overlay: bool = False
+) -> None:
     profile.validate()
-    if name == "assistant":
+    if name == "assistant" and profile.source_format != "native":
         raise ValueError("The built-in assistant profile cannot be overridden")
     previous = config.profiles.get(name)
     if previous is not None:
         note = f"Agent {name!r}: {profile.source} overrides {previous.source or 'configured profile'}"
         diagnostics.append(note)
         config.agent_diagnostics += (note,)
+        if profile.source_format == "native" and (previous.source_format == "native" or overlay):
+            changes = {field_name: getattr(profile, field_name) for field_name in profile.fields_present}
+            if "live" in changes:
+                changes["live"] = LiveProfile.parse({**previous.live.selected(), **profile.live.selected()})
+            previous_fields = (
+                set(previous.fields_present)
+                if previous.source_format == "native"
+                else set(previous.__dataclass_fields__) - {"source", "source_format", "fields_present", "field_sources"}
+            )
+            previous_sources = {field_name: previous.source for field_name in previous_fields}
+            previous_sources.update({f"live.{field_name}": previous.source for field_name in previous.live.selected()})
+            previous_sources.update(dict(previous.field_sources))
+            previous_sources.update(dict(profile.field_sources))
+            profile = replace(
+                previous,
+                **changes,
+                source=profile.source,
+                source_format=profile.source_format,
+                fields_present=tuple(sorted(previous_fields | set(profile.fields_present))),
+                field_sources=tuple(sorted(previous_sources.items())),
+            )
+            profile.validate()
     config.profiles[name] = profile
 
 
-def _install_agents(config: HarnessConfig, batch: DefinitionBatch, diagnostics: list[str]) -> None:
+def _install_agents(
+    config: HarnessConfig, batch: DefinitionBatch, diagnostics: list[str], *, overlay: bool = False
+) -> None:
     diagnostics.extend(batch.diagnostics)
     config.agent_diagnostics += batch.diagnostics
     for definition in batch.profiles:
@@ -243,13 +296,55 @@ def _install_agents(config: HarnessConfig, batch: DefinitionBatch, diagnostics: 
             source_format=definition.source_format,
             reasoning_effort=definition.reasoning_effort,
             live=definition.live,
+            prompt=definition.prompt,
+            prompt_present=definition.prompt_present,
+            fields_present=definition.fields_present,
+            auto_update=definition.auto_update,
+            default_revision=definition.default_revision,
+            field_sources=definition.field_sources,
         )
         try:
-            _install_profile(config, definition.name, profile, diagnostics)
+            _install_profile(config, definition.name, profile, diagnostics, overlay=overlay)
         except ValueError as error:
             note = f"{definition.source}: {error}; agent was not loaded"
             diagnostics.append(note)
             config.agent_diagnostics += (note,)
+
+
+def _install_assistant_metadata(config: HarnessConfig, path: Path, diagnostics: list[str]) -> bool:
+    """Routing, prompts, Live and tool defaults resolve in their scoped stores."""
+    if not path.exists():
+        return False
+    batch = import_agents([{"path": str(path), "format": "native"}], path.parent)
+    fields = {
+        "description",
+        "mode",
+        "denied_tools",
+        "allowed_agents",
+        "user_invocable",
+        "subagent_available",
+        "reasoning_effort",
+        "auto_update",
+        "default_revision",
+    }
+    selected = tuple(
+        replace(
+            profile,
+            prompt="",
+            prompt_present=False,
+            instructions="",
+            model="",
+            provider="",
+            tools=None,
+            live=LiveProfile(),
+            fields_present=tuple(name for name in profile.fields_present if name in fields),
+            field_sources=tuple(item for item in profile.field_sources if item[0] in fields),
+        )
+        for profile in batch.profiles
+        if profile.name == "assistant"
+    )
+    _install_agents(config, DefinitionBatch(selected, batch.diagnostics, batch.failed), diagnostics)
+    return batch.failed
 
 
 def _json_profile(value: object, source: Path) -> AgentProfile:
@@ -287,7 +382,7 @@ def _provider_defaults(config: HarnessConfig, store: ScopedProviderRegistryStore
     registry = store.load()
     binding = store.model_binding("workspace")
     if not binding.configured:
-        binding = store.model_binding("global", legacy_provider=registry.active)
+        binding = store.model_binding("global")
     selected = binding.provider or registry.active
     if selected:
         if selected not in registry.providers:
@@ -426,7 +521,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 global_model = env_value
 
     diagnostics: list[str] = [login_note] if login_note else []
-    agent_sources = [AgentDefinitionSource("personal", Path.home())]
+    agent_sources = [
+        AgentDefinitionSource("defaults", store.model_store(scope).path.parent / "assistant.md")
+        for scope in ("global", "workspace")
+    ]
+    for agent_source in agent_sources:
+        _install_assistant_metadata(config, agent_source.path, diagnostics)
+    agent_sources.append(AgentDefinitionSource("personal", Path.home()))
     _install_agents(config, discover_agents(Path.home(), personal=True), diagnostics)
     project_agents_loaded = False
     if project.exists() and not trust_project and not explicit_project:
@@ -521,7 +622,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         if not any(source.kind == "configuration" and source.path == path for source in agent_sources):
             definition_source = AgentDefinitionSource("configuration", path, path == explicit)
             if path == user and path != explicit:
-                agent_sources.insert(1, definition_source)
+                position = next(index + 1 for index, item in enumerate(agent_sources) if item.kind == "personal")
+                agent_sources.insert(position, definition_source)
             elif path == project:
                 position = next(
                     (index + 1 for index, item in enumerate(agent_sources) if item.kind == "workspace"),
@@ -530,6 +632,16 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 agent_sources.insert(position, definition_source)
             else:
                 agent_sources.append(definition_source)
+    native_directory = store.agent_models.directory
+    config.agent_authored_profiles = {name: replace(profile) for name, profile in config.profiles.items()}
+    agent_sources.append(AgentDefinitionSource("native", native_directory))
+    if native_directory.exists():
+        _install_agents(
+            config,
+            import_agents([{"path": str(native_directory), "format": "native"}], native_directory.parent),
+            diagnostics,
+            overlay=True,
+        )
     config.agent_sources = tuple(agent_sources)
     config.agent_source_profiles = {name: replace(profile) for name, profile in config.profiles.items()}
     config.diagnostics = tuple(diagnostics)

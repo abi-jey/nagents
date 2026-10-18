@@ -16,7 +16,7 @@ function view() {
   const props: LiveComposerProps = {
     targets: { presence: document.getElementById("presence"), caption: document.getElementById("caption"), controls: document.getElementById("controls"), details: document.getElementById("details") },
     state: { phase: "idle", sessionId: "", error: "", notice: "", micMuted: false, outputMuted: false, playbackBlocked: false, startedAt: 0, endedAt: 0, captions: [], delegations: [], devices: { inputId: "", outputId: "" }, inputLevel: 0, outputLevel: 0 },
-    status: "Ready to connect", elapsed: "00:00", disabled: false, unavailable: "", loading: false, voice: "cove", settingsOpen: false, settingsSaving: false, inspectionOpen: false, inspect: () => actions.push("inspect"),
+    status: "Ready to connect", elapsed: "00:00", disabled: false, unavailable: "", loading: false, voice: "cove", inspectionOpen: false, inspect: () => actions.push("inspect"),
     start: () => actions.push("start"), end: () => actions.push("end"), close: () => actions.push("close"), configure: () => actions.push("configure"), muteInput: () => actions.push("mute-input"), muteOutput: () => actions.push("mute-output"), play: () => actions.push("play"), refresh: () => actions.push("refresh"), viewChat: runId => actions.push(`view-chat:${runId}`),
   };
   return {
@@ -69,7 +69,7 @@ test("connected controls expose microphone and speaker state with separate playb
   } finally { await ui.close(); }
 });
 
-test("connection cancellation, recoverable errors and settings remain explicit and independently accessible", async () => {
+test("connection cancellation, recoverable errors and agent settings remain explicit", async () => {
   const ui = view();
   ui.props.state.phase = "permission";
   try {
@@ -77,20 +77,18 @@ test("connection cancellation, recoverable errors and settings remain explicit a
     assert.equal(ui.container.querySelector<HTMLButtonElement>('button.voice-mic[aria-label="Mute microphone"]')?.disabled, true);
     await ui.click('[aria-label="Cancel connection"]');
     assert.deepEqual(ui.actions, ["end"]);
-    Object.assign(ui.props.state, { phase: "error", error: "Your microphone disconnected." });
-    ui.props.settingsOpen = true; await ui.render();
+    Object.assign(ui.props.state, { phase: "error", error: "Your microphone disconnected." }); await ui.render();
     assert.equal(ui.container.querySelector("#voice-inline-settings"), null);
     assert.equal(ui.container.querySelector(".voice-settings-trigger")?.getAttribute("aria-haspopup"), "dialog");
-    assert.equal(ui.container.querySelector('.voice-settings-trigger')?.getAttribute("aria-expanded"), "true");
-    assert.equal(ui.container.querySelector<HTMLButtonElement>(".voice-start")?.disabled, true);
+    assert.equal(ui.container.querySelector<HTMLButtonElement>(".voice-start")?.disabled, false);
     assert.match(ui.container.querySelector('[role="alert"]')?.textContent || "", /microphone disconnected/);
+    await ui.click(".voice-settings-trigger");
+    assert.equal(ui.actions.at(-1), "configure");
     await ui.click(".voice-feedback button");
     assert.equal(ui.actions.at(-1), "refresh");
-    ui.props.settingsSaving = true; await ui.render();
     const beforeEscape = ui.actions.length;
     await act(async () => ui.container.querySelector("#voice-session")!.dispatchEvent(new ui.dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    assert.equal(ui.actions.length, beforeEscape, "Background Escape does not dismiss the settings overlay");
-    assert.equal(ui.container.querySelector<HTMLButtonElement>('[aria-label="Close voice controls"]')?.disabled, true);
+    assert.equal(ui.actions.length, beforeEscape, "Background Escape does not change voice state");
   } finally { await ui.close(); }
 });
 

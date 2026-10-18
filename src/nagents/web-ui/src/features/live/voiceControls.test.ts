@@ -15,7 +15,7 @@ function view(initial: Partial<VoiceControlsProps> = {}) {
   const calls = { start: 0, end: 0, close: 0, configure: 0, input: 0, output: 0 };
   let props: VoiceControlsProps = {
     phase: "idle", status: "Ready for voice", voice: "Sol", elapsed: "", micMuted: false, outputMuted: false,
-    startDisabled: false, settingsOpen: false, settingsSaving: false,
+    startDisabled: false,
     start: () => { calls.start++; }, end: () => { calls.end++; }, close: () => { calls.close++; },
     configure: () => { calls.configure++; }, muteInput: () => { calls.input++; }, muteOutput: () => { calls.output++; },
     ...initial,
@@ -118,7 +118,7 @@ test("returning to the draft or clicking outside collapses controls without inte
   } finally { await ui.close(); }
 });
 
-test("settings stays expanded through modal focus and allows focus to return to Settings", async () => {
+test("agent settings trigger allows dialog focus and returns to the trigger", async () => {
   const ui = view({ phase: "connected" });
   try {
     await ui.render(); await ui.click(".voice-controls-trigger");
@@ -127,10 +127,6 @@ test("settings stays expanded through modal focus and allows focus to return to 
     const dialogButton = ui.dom.window.document.querySelector<HTMLButtonElement>("#dialog-action")!;
     await act(async () => dialogButton.focus());
     assert.equal(ui.trigger().getAttribute("aria-expanded"), "true", "dialog focus is safe before the settings flag renders");
-    await ui.render({ settingsOpen: true });
-    await act(async () => ui.dom.window.document.querySelector("textarea")!.focus());
-    assert.equal(ui.trigger().getAttribute("aria-expanded"), "true", "an open modal owns focus transitions");
-    await ui.render({ settingsOpen: false });
     await act(async () => ui.button(".voice-settings-trigger").focus());
     assert.equal(ui.dom.window.document.activeElement, ui.button(".voice-settings-trigger"));
     assert.equal(ui.panel().hasAttribute("inert"), false);
@@ -138,18 +134,7 @@ test("settings stays expanded through modal focus and allows focus to return to 
   } finally { await ui.close(); }
 });
 
-test("initial settings entry reveals its return target and never starts voice", async () => {
-  const ui = view({ settingsOpen: true });
-  try {
-    await ui.render();
-    assert.equal(ui.trigger().getAttribute("aria-expanded"), "true");
-    assert.equal(ui.button(".voice-start").disabled, true);
-    await ui.click(".voice-start");
-    assert.equal(ui.calls.start, 0);
-  } finally { await ui.close(); }
-});
-
-test("stop, cancellation and close remain distinct across active phases and saves", async () => {
+test("stop, cancellation and close remain distinct across active phases", async () => {
   const ui = view({ phase: "connected" });
   try {
     await ui.render(); await ui.click(".voice-controls-trigger");
@@ -163,10 +148,7 @@ test("stop, cancellation and close remain distinct across active phases and save
     assert.equal(ui.button(".voice-stop").disabled, true);
     assert.equal(ui.button(".voice-dismiss").disabled, false);
     await ui.click(".voice-stop"); assert.equal(ui.calls.end, 2);
-    await ui.render({ settingsSaving: true });
-    assert.equal(ui.button(".voice-dismiss").disabled, true);
-    assert.equal(ui.button(".voice-settings-trigger").disabled, true);
-    await ui.click(".voice-dismiss"); assert.equal(ui.calls.close, 1);
+    await ui.click(".voice-dismiss"); assert.equal(ui.calls.close, 2);
   } finally { await ui.close(); }
 });
 

@@ -33,7 +33,7 @@ const agentReply: AgentModelReply = { agent: "mini", revision: "one", model: nul
 const registry = { revision: "providers", providers: { "global-openai": { kind: "openai" }, "local-anthropic": { kind: "anthropic" } },
   kinds: { openai: { label: "OpenAI" }, anthropic: { label: "Anthropic" } }, origins: { "global-openai": "global", "local-anthropic": "workspace" } };
 
-test("defined agent settings bind provider and model, distinguish explicit inheritance from restoring its definition", async t => {
+test("defined agent settings bind provider and remove the override to inherit", async t => {
   const view = browser();
   const writes: { method: string; body: { revision: string; model?: { provider: string; id: string } } }[] = [];
   let reply = agentReply, changed = 0;
@@ -54,6 +54,8 @@ test("defined agent settings bind provider and model, distinguish explicit inher
     await act(async () => view.root.render(createElement(AgentModelDialog, { agent: "mini", token: "token", close() {}, changed: () => { changed++; } })));
     assert.match(view.container.textContent!, /Agent configuration/);
     assert.equal(view.button("Save agent model").disabled, true);
+    assert.match(view.container.textContent!, /Use agent file model/);
+    await act(async () => view.container.querySelectorAll<HTMLInputElement>('.agent-model-mode input[type="radio"]')[1].click());
     const provider = view.container.querySelector<HTMLSelectElement>(".model-binding-picker select")!;
     assert.match(provider.textContent!, /Global/); assert.match(provider.textContent!, /Workspace/);
     await act(async () => { provider.value = "local-anthropic"; provider.dispatchEvent(new view.dom.window.Event("change", { bubbles: true })); });
@@ -65,11 +67,10 @@ test("defined agent settings bind provider and model, distinguish explicit inher
     assert.equal(changed, 1);
     await act(async () => view.container.querySelector<HTMLInputElement>('.agent-model-mode input[type="radio"]')!.click());
     await act(async () => view.button("Save agent model").click());
-    assert.deepEqual(writes[1], { method: "PUT", body: { revision: "2", model: { provider: "", id: "" } } });
-    await act(async () => view.button("Restore definition model").click());
-    assert.deepEqual(writes[2], { method: "DELETE", body: { revision: "3" } });
-    assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.value, "definition-model");
-    assert.equal(changed, 3);
+    assert.deepEqual(writes[1], { method: "DELETE", body: { revision: "2" } });
+    assert.match(view.container.textContent!, /definition-model/);
+    assert.equal(view.container.querySelectorAll<HTMLInputElement>('.agent-model-mode input[type="radio"]')[0].checked, true);
+    assert.equal(changed, 2);
   } finally { await view.close(); }
 });
 
@@ -85,6 +86,7 @@ test("agent model conflict keeps the pair and requires reload before another wri
   });
   try {
     await act(async () => view.root.render(createElement(AgentModelDialog, { agent: "mini", token: "token", close() {}, changed() {} })));
+    await act(async () => view.container.querySelectorAll<HTMLInputElement>('.agent-model-mode input[type="radio"]')[1].click());
     await act(async () => view.container.querySelector<HTMLButtonElement>(".model-catalog-list button")!.click());
     await act(async () => view.button("Save agent model").click());
     assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.value, "another-model");
@@ -92,7 +94,8 @@ test("agent model conflict keeps the pair and requires reload before another wri
     assert.equal(view.button("Save agent model").disabled, true);
     assert.equal(writes, 1);
     await act(async () => view.button("Reload saved settings").click());
-    assert.equal(view.container.querySelector<HTMLInputElement>("#settings-model")!.value, "definition-model");
+    assert.match(view.container.textContent!, /definition-model/);
+    assert.match(view.container.textContent!, /Use agent file model/);
     assert.doesNotMatch(view.container.textContent!, /Agent changed/);
   } finally { await view.close(); }
 });
@@ -139,6 +142,7 @@ test("embedded model refreshes clean snapshots after another section saves and p
     reply = { ...reply, revision: "after-voice" };
     await act(async () => window.dispatchEvent(new view.dom.window.Event("ngn:agent-settings-saved")));
     assert.equal(reads, 2, "Clean model snapshots refresh after other preference writes");
+    await act(async () => view.container.querySelectorAll<HTMLInputElement>('.agent-model-mode input[type="radio"]')[1].click());
     await act(async () => view.container.querySelector<HTMLButtonElement>(".model-catalog-list button")!.click());
     reply = { ...reply, revision: "after-instructions" };
     await act(async () => window.dispatchEvent(new view.dom.window.Event("ngn:agent-settings-saved")));

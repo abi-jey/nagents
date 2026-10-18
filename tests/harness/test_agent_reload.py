@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -16,11 +17,13 @@ from nagents.harness import runtime
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
+from nagents.harness.default_instructions import load_default_instructions
 from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from nagents.harness.runtime import Harness
+from nagents.harness.subagents import SubagentManager
 from nagents.harness.subagents import TaskInfo
 from nagents.harness.task_activity import TaskOptions
 from nagents.harness.types import TaskCompleted
@@ -51,7 +54,9 @@ def isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def definition(name: str, *, native: bool = True, instructions: str = "Follow the assigned task.") -> str:
     flags = "user_invocable: true\nsubagent_available: true\n" if native else ""
-    return f"---\nname: {name}\ndescription: General coding agent\n{flags}---\n{instructions}\n"
+    if native:
+        return f"---\nname: {name}\ndescription: General coding agent\n{flags}prompt: {json.dumps(instructions)}\n---\n"
+    return f"---\nname: {name}\ndescription: General coding agent\n---\n{instructions}\n"
 
 
 def catalog(harness: Harness) -> list[str]:
@@ -184,13 +189,170 @@ async def test_catalog_refresh_does_not_mutate_advertised_schema_or_selected_pro
         assert config.profile_names == ("assistant", "mini")
         assert advertised.parameters["properties"]["agent"]["enum"] == ["assistant", "mint"]
         assert catalog(harness) == ["assistant", "mint"]
-        assert harness.current_profile().instructions == "Original accepted instructions."
+        assert harness.current_profile().prompt == "Original accepted instructions."
         assert harness.mode == "build"
         await harness.resources.before_generation(context)
         assert catalog(harness) == ["assistant", "mini"]
-        assert harness.current_profile().instructions == "Original accepted instructions."
+        assert harness.current_profile().prompt == "Original accepted instructions."
     finally:
         await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_workspace_assistant_markdown_parses_and_hot_reloads_with_field_sources(tmp_path: Path) -> None:
+    root = tmp_path / ".ngn/agents"
+    root.mkdir(parents=True)
+    path = root / "assistant.md"
+    path.write_text("---\nprompt: First assistant prompt\nmode: reviewer\n---\n", encoding="utf-8")
+    config = load_config(tmp_path, trust_project=True)
+    config.demo = True
+    config.data_dir = tmp_path / "state"
+    harness = Harness(config)
+    try:
+        await harness.initialize()
+        profile = harness.config.profile("assistant")
+        assert profile.prompt == "First assistant prompt" and profile.prompt_present
+        assert dict(profile.field_sources)["prompt"] == str(path)
+
+        path.write_text("---\nprompt: Reloaded assistant prompt\nmode: build\n---\n", encoding="utf-8")
+        assert harness.refresh_agent_definitions()
+        reloaded = harness.config.profile("assistant")
+        assert reloaded.prompt == "Reloaded assistant prompt"
+        assert reloaded.mode == "build"
+        assert dict(reloaded.field_sources)["prompt"] == str(path)
+    finally:
+        await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_sparse_canonical_reviewer_overlay_preserves_definition_permissions_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_path = tmp_path / "profiles.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "reviewer": {
+                        "mode": "reviewer",
+                        "tools": ["read_file"],
+                        "description": "Configured review profile",
+                        "model": {"provider": "home", "id": "definition-model"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    providers = ScopedProviderRegistryStore(workspace)
+    saved = providers.agent_models.patch("reviewer", {"live": {"voice": "sol"}}, expected="0" * 64)
+    config = load_config(workspace, config_path)
+    config.agent = "reviewer"
+    config.demo = True
+    config.data_dir = tmp_path / "state"
+    config.provider = "home"
+    config.providers = {"home": ProviderProfile(kind="openai", auth="api-key")}
+
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        yield TextDoneEvent(text="Done")
+
+    monkeypatch.setattr(runtime, "build_provider", lambda profile, owner, auth: FakeProvider(owner, 0, script))
+    harness = Harness(config)
+    try:
+        await harness.initialize()
+        profile = harness.config.profile("reviewer")
+        assert profile.mode == "reviewer"
+        assert profile.tools == ("read_file",)
+        assert profile.description == "Configured review profile"
+        assert profile.provider == "home" and profile.model == "definition-model"
+        assert profile.live.selected()["voice"] == "sol"
+        assert harness.mode == "reviewer"
+        assert harness.tool_enabled("read_file") and not harness.tool_enabled("search")
+
+        providers.agent_models.patch(
+            "reviewer",
+            {"prompt": "Sparse child prompt", "model": {"provider": "home", "id": "overlay-model"}},
+            expected=saved.revision,
+        )
+        assert harness.refresh_agent_definitions()
+        refreshed = harness.config.profile("reviewer")
+        assert refreshed.mode == "reviewer" and refreshed.tools == ("read_file",)
+        assert refreshed.description == "Configured review profile"
+        assert refreshed.provider == "home" and refreshed.model == "overlay-model"
+        assert refreshed.prompt == "Sparse child prompt" and refreshed.prompt_present
+        assert refreshed.live.selected()["voice"] == "sol"
+    finally:
+        await harness.close()
+
+
+@pytest.mark.requires_posix
+@pytest.mark.asyncio
+async def test_global_assistant_reviewer_mode_survives_partial_workspace_metadata(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    providers = ScopedProviderRegistryStore(workspace)
+    global_path = providers.model_store("global").path
+    workspace_path = providers.model_store("workspace").path
+    global_path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_path.parent.mkdir(parents=True, exist_ok=True)
+    global_path.write_text("---\nmode: reviewer\ndescription: Global assistant baseline\n---\n", encoding="utf-8")
+    workspace_path.write_text("---\ndescription: Workspace assistant overlay\n---\n", encoding="utf-8")
+
+    config = load_config(workspace, trust_project=True)
+    config.data_dir = tmp_path / "state"
+    harness = Harness(config)
+    try:
+        profile = harness.config.profile("assistant")
+        assert profile.mode == "reviewer" and harness.mode == "reviewer"
+        assert profile.description == "Workspace assistant overlay"
+        sources = dict(profile.field_sources)
+        assert sources["mode"] == str(global_path)
+        assert sources["description"] == str(workspace_path)
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_child_prompt_replaces_parent_builtin_prompt_context(tmp_path: Path) -> None:
+    providers = {"home": ProviderProfile(kind="openai", auth="api-key")}
+    config = HarnessConfig(
+        tmp_path,
+        data_dir=tmp_path / "state",
+        demo=True,
+        provider="home",
+        providers=providers,
+        profiles={
+            "mini": AgentProfile(
+                prompt="Child explicit replacement.",
+                prompt_present=True,
+                subagent_available=True,
+                source_format="native",
+                fields_present=("prompt", "prompt_present", "subagent_available"),
+            )
+        },
+    )
+    parent = Harness(config)
+    child_config = deepcopy(config)
+    child_config.agent = "mini"
+    child = Harness(child_config)
+    try:
+        parent.refresh_instructions()
+        child._is_subagent = True
+        child.tasks = SubagentManager(child, parent.tasks.root)
+        child.inherit_tool_permissions(parent)
+        child.refresh_instructions()
+        prompt = str(child.agent.system_prompt)
+        assert "Child explicit replacement." in prompt
+        assert load_default_instructions() not in prompt
+        assert "You are ngn, a coding assistant." not in prompt
+        assert child.inherited_run_instructions()[1] == ()
+    finally:
+        await child.close()
+        await parent.close()
 
 
 @pytest.mark.requires_posix
@@ -409,36 +571,6 @@ def test_config_reads_model_reference_maps_without_splitting_provider(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_legacy_model_id_keeps_workspace_route_but_explicit_pair_does_not_mix(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = ScopedProviderRegistryStore(tmp_path)
-    providers = {name: ProviderProfile(kind="openai", auth="api-key") for name in ("global", "work")}
-    store.store("global").save(ProviderRegistry(active="global", providers=providers), expected="0" * 64)
-    store.store("workspace").save(ProviderRegistry(active="work"), expected="0" * 64)
-    store.model_store("global").save("existing-model")
-
-    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-        yield TextDoneEvent(text="Done")
-
-    def factory(profile: ProviderProfile, config: HarnessConfig, auth: object) -> FakeProvider:
-        return FakeProvider(config, 0, script)
-
-    monkeypatch.setattr(runtime, "build_provider", factory)
-    config = load_config(tmp_path)
-    config.data_dir = tmp_path / "state"
-    harness = Harness(config)
-    try:
-        assert (config.provider, config.model) == ("work", "existing-model")
-        assert harness.resolved_model_binding().binding == ModelBinding("work", "existing-model")
-        store.model_store("global").save_binding(ModelBinding("global", "new-paired-model"))
-        assert harness.resolved_model_binding().binding == ModelBinding("global", "new-paired-model")
-        assert (harness.config.provider, harness.agent.provider.model) == ("work", "existing-model")
-    finally:
-        await harness.close()
-
-
-@pytest.mark.asyncio
 async def test_model_generation_pins_overlay_and_default_bindings_until_next_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -515,7 +647,7 @@ async def test_runtime_clone_keeps_authoritative_default_after_agent_override_an
     clone = Harness(original.clone_configuration())
     try:
         assert clone.default_model_binding().binding == ModelBinding("home", "startup-model")
-        assert (clone.config.provider, clone.agent.provider.model) == ("home", "startup-model")
+        assert (clone.config.provider, clone.agent.provider.model) == ("special", "special-model")
         assert (original.config.provider, original.agent.provider.model) == ("special", "special-model")
     finally:
         await clone.close()

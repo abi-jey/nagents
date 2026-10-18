@@ -4,6 +4,9 @@ import asyncio
 from pathlib import Path
 
 from nagents.harness.config import HarnessConfig
+from nagents.harness.model_bindings import ModelBinding
+from nagents.harness.providers import ProviderProfile
+from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
 from tests.support.web import client_app
 from tests.support.web import no_guarded_workspace_io as no_guarded_workspace_io
@@ -15,7 +18,10 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
         first.mkdir()
         second.mkdir()
         data = tmp_path / "shared-data"
-        config = HarnessConfig(first, data_dir=data, demo=True)
+        named = ProviderProfile(kind="openai", auth="api-key")
+        store = ScopedProviderRegistryStore(first)
+        store.global_store.save(ProviderRegistry(active="home", providers={"home": named}), expected="0" * 64)
+        config = HarnessConfig(first, data_dir=data, demo=True, provider="home", providers={"home": named})
         async with client_app(first, config=config) as (_, client, headers, _):
             original = (await client.get("/api/settings/global", headers=headers)).json()
             assert original["scope"] == "global" and not original["persisted"]
@@ -24,7 +30,13 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
                 "model": "global-model",
             }
             saved = await client.post(
-                "/api/settings/global", headers=headers, json={"revision": original["revision"], "values": values}
+                "/api/settings/global",
+                headers=headers,
+                json={
+                    "revision": original["revision"],
+                    "values": values,
+                    "model_binding": {"provider": "home", "id": "global-model"},
+                },
             )
             assert saved.status_code == 200, saved.text
             global_revision = saved.json()["revision"]
@@ -33,13 +45,21 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             project = await client.post(
                 "/api/settings",
                 headers=headers,
-                json={"revision": inherited["revision"], "values": {**inherited["values"], "model": "project-model"}},
+                json={
+                    "revision": inherited["revision"],
+                    "values": {**inherited["values"], "model": "project-model"},
+                    "model_binding": {"provider": "home", "id": "project-model"},
+                },
             )
             assert project.status_code == 200, project.text
             changed = await client.post(
                 "/api/settings/global",
                 headers=headers,
-                json={"revision": global_revision, "values": {**values, "model": "new-global-model"}},
+                json={
+                    "revision": global_revision,
+                    "values": {**values, "model": "new-global-model"},
+                    "model_binding": {"provider": "home", "id": "new-global-model"},
+                },
             )
             assert changed.status_code == 200, changed.text
             stale = await client.post(
@@ -53,7 +73,11 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             inherited_limit = await client.post(
                 "/api/settings/global",
                 headers=headers,
-                json={"revision": changed.json()["revision"], "values": {**values, "max_output": 65536}},
+                json={
+                    "revision": changed.json()["revision"],
+                    "values": {**changed.json()["values"], "max_output": 65536},
+                    "model_binding": changed.json()["model_binding"],
+                },
             )
             assert inherited_limit.status_code == 200, inherited_limit.text
             effective = (await client.get("/api/settings", headers=headers)).json()
@@ -69,7 +93,7 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
             current = effective
             reset = await client.post("/api/settings/reset", headers=headers, json={"revision": current["revision"]})
             assert reset.status_code == 200, reset.text
-            assert reset.json()["values"]["model"] == "global-model"
+            assert reset.json()["values"]["model"] == "new-global-model"
             denied = await client.post(
                 "/api/settings/global",
                 headers=headers,
@@ -80,7 +104,9 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
                 },
             )
             assert denied.status_code == 422
-        async with client_app(second, config=HarnessConfig(second, data_dir=data, demo=True)) as (
+        async with client_app(
+            second, config=HarnessConfig(second, data_dir=data, demo=True, provider="home", providers={"home": named})
+        ) as (
             _,
             client,
             headers,
@@ -88,7 +114,7 @@ def test_global_defaults_workspace_override_reset_and_cross_workspace_reload(tmp
         ):
             inherited = (await client.get("/api/settings", headers=headers)).json()
             assert not inherited["persisted"]
-            assert inherited["values"]["model"] == "global-model"
+            assert inherited["values"]["model"] == "new-global-model"
             assert inherited["values"]["provider"] == "openai"
             assert inherited["values"]["api"] == "auto"
             global_values = (await client.get("/api/settings/global", headers=headers)).json()
@@ -130,13 +156,60 @@ def test_global_settings_preserve_submit_mode_when_omitted(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_main_prompt_edit_invalidates_stale_global_and_workspace_settings_revisions(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        async with client_app(workspace, config=HarnessConfig(workspace, data_dir=tmp_path / "data", demo=True)) as (
+            _,
+            client,
+            headers,
+            _,
+        ):
+            global_before = (await client.get("/api/settings/global", headers=headers)).json()
+            workspace_before = (await client.get("/api/settings", headers=headers)).json()
+            prompt_before = await client.get("/api/agent-settings?scope=global", headers=headers)
+            assert prompt_before.status_code == 200, prompt_before.text
+            prompt_saved = await client.put(
+                "/api/agent-settings",
+                headers=headers,
+                json={
+                    "scope": "global",
+                    "agent": "assistant",
+                    "revision": prompt_before.json()["revision"],
+                    "preferences": {"instructions": "Updated main assistant prompt"},
+                },
+            )
+            assert prompt_saved.status_code == 200, prompt_saved.text
+
+            stale_global = await client.post(
+                "/api/settings/global",
+                headers=headers,
+                json={"revision": global_before["revision"], "values": global_before["values"]},
+            )
+            stale_workspace = await client.post(
+                "/api/settings",
+                headers=headers,
+                json={"revision": workspace_before["revision"], "values": workspace_before["values"]},
+            )
+            assert stale_global.status_code == 409
+            assert stale_workspace.status_code == 409
+
+    asyncio.run(scenario())
+
+
 def test_explicit_startup_model_overrides_saved_global_and_workspace_choices(tmp_path: Path) -> None:
     async def scenario() -> None:
         data_dir = tmp_path / "data"
         store = ScopedProviderRegistryStore(tmp_path)
-        store.model_store("global").save("old-global")
-        store.model_store("workspace").save("old-workspace")
-        async with client_app(tmp_path, config=HarnessConfig(tmp_path, data_dir=data_dir, demo=True)) as (
+        named = ProviderProfile(kind="openai", auth="api-key")
+        store.global_store.save(ProviderRegistry(active="home", providers={"home": named}), expected="0" * 64)
+        store.model_store("global").save_binding(ModelBinding("home", "old-global"))
+        store.model_store("workspace").save_binding(ModelBinding("home", "old-workspace"))
+        async with client_app(
+            tmp_path,
+            config=HarnessConfig(tmp_path, data_dir=data_dir, demo=True, provider="home", providers={"home": named}),
+        ) as (
             _,
             client,
             headers,
@@ -149,6 +222,7 @@ def test_explicit_startup_model_overrides_saved_global_and_workspace_choices(tmp
                 json={
                     "revision": global_before["revision"],
                     "values": {**global_before["values"], "model": "saved-global"},
+                    "model_binding": {"provider": "home", "id": "saved-global"},
                 },
             )
             assert global_saved.status_code == 200, global_saved.text
@@ -159,6 +233,7 @@ def test_explicit_startup_model_overrides_saved_global_and_workspace_choices(tmp
                 json={
                     "revision": workspace_before["revision"],
                     "values": {**workspace_before["values"], "model": "saved-workspace"},
+                    "model_binding": {"provider": "home", "id": "saved-workspace"},
                 },
             )
             assert workspace_saved.status_code == 200, workspace_saved.text
@@ -167,6 +242,8 @@ def test_explicit_startup_model_overrides_saved_global_and_workspace_choices(tmp
             tmp_path,
             data_dir=data_dir,
             demo=True,
+            provider="home",
+            providers={"home": named},
             model="cli-model",
             global_model_default="cli-model",
             model_explicit=True,

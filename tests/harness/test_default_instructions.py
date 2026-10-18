@@ -17,16 +17,14 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio
 async def test_programmatic_harness_uses_the_bundled_markdown_without_creating_workspace_files(tmp_path: Path) -> None:
-    bundled = (
-        resources.files("nagents.harness").joinpath("instructions", "AGENTS.md").read_text(encoding="utf-8").strip()
-    )
+    bundled = load_default_instructions()
     assert bundled
     harness = Harness(HarnessConfig(tmp_path, data_dir=tmp_path / "data", demo=True))
     try:
         prompt = harness.agent.system_prompt or ""
         assert prompt.count(bundled) == 1
         assert str(tmp_path) in prompt
-        assert "Active profile: assistant" in prompt
+        assert "active profile assistant" in prompt
         harness.refresh_instructions()
         assert harness.agent.system_prompt == prompt
         assert not (tmp_path / "AGENTS.md").exists()
@@ -80,10 +78,10 @@ def test_missing_or_invalid_bundled_instructions_fail_actionably(
     directory = tmp_path / "instructions"
     directory.mkdir()
     if resource == "empty":
-        (directory / "AGENTS.md").write_text(" \n", encoding="utf-8")
+        (directory / "assistant.md").write_text(" \n", encoding="utf-8")
     elif resource == "invalid-encoding":
-        (directory / "AGENTS.md").write_bytes(b"\xff")
+        (directory / "assistant.md").write_bytes(b"\xff")
     monkeypatch.setattr(resources, "files", lambda anchor: tmp_path)
     with pytest.raises(RuntimeError, match="Reinstall nagents or restore") as failure:
         load_default_instructions()
-    assert "nagents/harness/instructions/AGENTS.md" in str(failure.value)
+    assert "nagents/harness/instructions/assistant.md" in str(failure.value)

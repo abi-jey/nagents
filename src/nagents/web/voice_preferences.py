@@ -1,54 +1,37 @@
-"""Global voice defaults and per-workspace field overrides, independent of providers."""
+"""Global and workspace speech settings in assistant Markdown documents."""
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import secrets
-import sqlite3
-from contextlib import closing
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Literal
-from typing import TypeVar
 
 from pydantic import AfterValidator
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import ValidationError
 
+from nagents.harness.agent_documents import agent_document_store
+from nagents.harness.live_profiles import LIVE_FIELDS
+from nagents.harness.providers import KINDS
 from nagents.live import LiveConfig
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
+from .voice_instruction_store import validate_instruction_text
 
+if TYPE_CHECKING:
     from nagents.harness.providers import ScopedProviderRegistryStore
 
-MAX_VOICE_INSTRUCTION_CHARACTERS = 6000
-MAX_VOICE_INSTRUCTION_BYTES = 12000
-# JSON can escape each control character to six bytes. Leave room for those
-# escapes and the remaining preferences while staying below the HTTP body cap.
+MAX_VOICE_INSTRUCTION_CHARACTERS = 12000
+MAX_VOICE_INSTRUCTION_BYTES = 24000
 MAX_VOICE_BYTES = 40 * 1024
 ModelId = str
 Scope = Literal["global", "workspace"]
 ContextMode = Literal["recent", "summary", "none"]
-T = TypeVar("T")
 
-
-def _instructions(value: str) -> str:
-    try:
-        size = len(value.encode("utf-8"))
-    except UnicodeError:
-        raise ValueError("Voice instructions must contain valid Unicode text.") from None
-    if size > MAX_VOICE_INSTRUCTION_BYTES:
-        raise ValueError("Voice instructions exceed the 12,000-byte UTF-8 size limit.")
-    return value
-
-
-VoiceInstructions = Annotated[str, Field(max_length=MAX_VOICE_INSTRUCTION_CHARACTERS), AfterValidator(_instructions)]
+VoiceInstructions = Annotated[
+    str, Field(max_length=MAX_VOICE_INSTRUCTION_CHARACTERS), AfterValidator(validate_instruction_text)
+]
 
 
 class VoicePreferences(BaseModel):
@@ -69,7 +52,6 @@ class VoicePreferences(BaseModel):
     voice: Literal[
         "marin", "cedar", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
     ] = "sol"
-    instructions: VoiceInstructions = ""
     context_mode: ContextMode = "recent"
 
 
@@ -80,112 +62,66 @@ class VoiceOverrides(VoicePreferences):
         return self.model_dump(exclude_unset=True)
 
 
+@dataclass(frozen=True)
+class VoicePreferenceSnapshot:
+    global_values: VoicePreferences
+    overrides: VoiceOverrides
+    global_revision: str
+    local_revision: str
+
+
 class VoicePreferenceStore:
-    """Both databases participate in one short SQLite transaction for CAS reads/writes."""
+    """Read speech settings and update them without replacing live.prompt."""
 
-    def __init__(self, workspace_db: Path, providers: ScopedProviderRegistryStore) -> None:
-        self.workspace_db = workspace_db
+    def __init__(self, providers: ScopedProviderRegistryStore) -> None:
         self.providers = providers
-        self.global_db = providers.global_store.path.parent / "voice.db"
+
+    def to_live(self, values: VoicePreferences, scope: Scope, *, inherited: VoicePreferences) -> dict[str, object]:
+        """Translate flattened speech settings to an atomic model binding."""
+        selected: dict[str, object] = values.model_dump(exclude_unset=True)
+        connection = selected.pop("connection_id", "")
+        model = selected.pop("model", "")
+        if {"connection_id", "model"} & values.model_fields_set:
+            registry = self.providers.load_scope("global") if scope == "global" else self.providers.load()
+            name = str(
+                connection or registry.active
+                if "connection_id" in values.model_fields_set
+                else inherited.connection_id or registry.active
+            )
+            identifier = str(model or inherited.model)
+            profile = registry.providers.get(name)
+            if profile is not None and KINDS[profile.kind].live:
+                selected["model"] = {"provider": name, "id": identifier}
+            elif identifier not in {"gpt-live-1", "gpt-live-1-codex"} or connection:
+                raise ValueError("Choose an existing GPT-Live provider connection for this model.")
+        return selected
 
     @staticmethod
-    def _row(db: sqlite3.Connection, schema: str) -> tuple[VoicePreferences | VoiceOverrides, str]:
-        with closing(
-            db.execute(
-                f"SELECT version, CASE WHEN typeof(payload) = 'text' AND length(CAST(payload AS BLOB)) <= ? "
-                f"THEN payload END, revision FROM {schema}.ngn_voice_preferences WHERE id = 1",
-                (MAX_VOICE_BYTES,),
-            )
-        ) as cursor:
-            row = cursor.fetchone()
-        if row is None or row[0] != 1 or not isinstance(row[1], str) or not isinstance(row[2], str):
+    def _from_live(live: object, *, workspace: bool) -> VoicePreferences | VoiceOverrides:
+        if not isinstance(live, dict):
             raise ValueError("Invalid Voice preferences")
-        if not re.fullmatch(r"[0-9a-f]{64}", row[2]):
-            raise ValueError("Invalid Voice revision")
-        return (VoicePreferences if schema == "voice_global" else VoiceOverrides).model_validate_json(row[1]), row[2]
+        selected = {key: value for key, value in live.items() if key != "prompt"}
+        binding = selected.pop("model", None)
+        if binding is not None:
+            if not isinstance(binding, dict):
+                raise ValueError("Invalid Voice model binding")
+            selected.update(connection_id=binding["provider"], model=binding["id"])
+        return (VoiceOverrides if workspace else VoicePreferences).model_validate(selected)
 
-    def _initialize(self, db: sqlite3.Connection) -> None:
-        for schema in ("voice_global", "main"):
-            db.execute(
-                f"CREATE TABLE IF NOT EXISTS {schema}.ngn_voice_preferences ("
-                "id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL, "
-                "payload TEXT NOT NULL, revision TEXT NOT NULL)"
-            )
-        db.execute(
-            "INSERT OR IGNORE INTO voice_global.ngn_voice_preferences VALUES (1, 1, ?, ?)",
-            (VoicePreferences().model_dump_json(exclude_unset=True), secrets.token_hex(32)),
+    def save(self, scope: Scope, values: VoicePreferences, *, expected: str, inherited: VoicePreferences) -> None:
+        live = self.to_live(values, scope, inherited=inherited if scope == "workspace" else VoicePreferences())
+        fields = LIVE_FIELDS - {"prompt"}
+        agent_document_store(self.providers, scope).patch_live(
+            "assistant", live, removed=tuple(sorted(fields - live.keys())), expected=expected
         )
-        with closing(db.execute("SELECT 1 FROM main.ngn_voice_preferences WHERE id = 1")) as cursor:
-            workspace_exists = cursor.fetchone() is not None
-        if not workspace_exists:
-            migrated = self._legacy_workspace_preferences(db)
-            payload = (migrated or VoiceOverrides()).model_dump_json(exclude_unset=True)
-            db.execute(
-                "INSERT INTO main.ngn_voice_preferences VALUES (1, 1, ?, ?)",
-                (payload, secrets.token_hex(32)),
-            )
 
-    @staticmethod
-    def _legacy_workspace_preferences(db: sqlite3.Connection) -> VoiceOverrides | None:
-        """Copy user preferences from the retired row without inspecting its connection key."""
-        with closing(
-            db.execute("SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?", ("ngn_web_live_settings",))
-        ) as cursor:
-            if cursor.fetchone() is None:
-                return None
-        with closing(
-            db.execute(
-                "SELECT version, CASE WHEN typeof(values_json) = 'text' "
-                "AND length(CAST(values_json AS BLOB)) <= ? THEN values_json END "
-                "FROM main.ngn_web_live_settings WHERE id = 1",
-                (MAX_VOICE_BYTES,),
-            )
-        ) as cursor:
-            row = cursor.fetchone()
-        if row is None or type(row[0]) is not int or row[0] != 1 or not isinstance(row[1], str):
-            raise ValueError("Invalid saved Voice preferences")
-        try:
-            legacy = json.loads(row[1])
-            if not isinstance(legacy, dict):
-                raise ValueError("Invalid saved Voice preferences")
-            supported = {
-                field: legacy[field]
-                for field in (
-                    "enabled",
-                    "connection_id",
-                    "backend_mode",
-                    "model",
-                    "backend_model",
-                    "voice",
-                    "instructions",
-                    "context_mode",
-                )
-                if field in legacy
-            }
-            # Older installations defaulted to hosted Voice when this field was absent.
-            supported.setdefault("backend_mode", "hosted")
-            return VoiceOverrides.model_validate(supported)
-        except (json.JSONDecodeError, UnicodeError, ValueError, ValidationError):
-            raise ValueError("Invalid saved Voice preferences") from None
-
-    def transaction(
-        self, operation: Callable[[sqlite3.Connection, VoicePreferences, VoiceOverrides, str, str], T]
-    ) -> T:
-        directory = self.global_db.parent
-        directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-        try:
-            descriptor = os.open(self.global_db, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            os.close(descriptor)
-        with closing(sqlite3.connect(self.workspace_db, timeout=5)) as db:
-            db.execute("ATTACH DATABASE ? AS voice_global", (str(self.global_db),))
-            with db:
-                db.execute("BEGIN IMMEDIATE")
-                self._initialize(db)
-                global_values, global_revision = self._row(db, "voice_global")
-                local_values, local_revision = self._row(db, "main")
-                assert isinstance(global_values, VoicePreferences)
-                assert isinstance(local_values, VoiceOverrides)
-                return operation(db, global_values, local_values, global_revision, local_revision)
+    def snapshot(self, scope: Scope = "workspace") -> VoicePreferenceSnapshot:
+        global_document = agent_document_store(self.providers, "global").load("assistant")
+        global_values = self._from_live(global_document.preferences.get("live", {}), workspace=False)
+        assert isinstance(global_values, VoicePreferences)
+        if scope == "global":
+            return VoicePreferenceSnapshot(global_values, VoiceOverrides(), global_document.revision, "0" * 64)
+        local_document = agent_document_store(self.providers, "workspace").load("assistant")
+        overrides = self._from_live(local_document.preferences.get("live", {}), workspace=True)
+        assert isinstance(overrides, VoiceOverrides)
+        return VoicePreferenceSnapshot(global_values, overrides, global_document.revision, local_document.revision)

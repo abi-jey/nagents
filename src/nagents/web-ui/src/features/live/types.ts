@@ -87,16 +87,6 @@ export interface LiveSettingsSnapshot {
   origins: { [Key in keyof VoicePreferences]: VoiceScope };
 }
 
-export type LiveSettingsInput = {
-  revision: string;
-  scope: "global";
-  preferences: VoicePreferences;
-} | {
-  revision: string;
-  scope: "workspace";
-  overrides: VoiceOverrides;
-};
-
 export type LiveDelegationStatus = "queued" | "working" | "completed" | "failed" | "cancelled";
 
 export interface LiveDelegationRecord {

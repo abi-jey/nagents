@@ -13,9 +13,10 @@ description: Find evidence and report it with file references.
 tools: [read_file, list_files, find, search]
 user_invocable: true
 subagent_available: true
+prompt: |
+  Investigate the assigned question. Cite the evidence you inspected and identify
+  anything you could not verify.
 ---
-Investigate the assigned question. Cite the evidence you inspected and identify
-anything you could not verify.
 ```
 
 Start ngn with `--trust-project` to discover workspace definitions. Select the
@@ -32,25 +33,37 @@ accepted delegation. Running children retain their identity and history.
 
 ## Native format
 
-Use UTF-8 Markdown with a YAML header enclosed by `---`, followed by nonempty
-instructions. Multiline YAML strings work; line endings normalize to LF. The file's basename supplies the name
-when `name` is omitted; `research/agent.md` uses the directory name.
+Use UTF-8 Markdown containing only a YAML header enclosed by `---`. Put the full
+authored prompt in `prompt: |`; text after the closing delimiter is rejected.
+Multiline YAML strings work; line endings normalize to LF. The file's basename
+supplies the name when `name` is omitted; `research/agent.md` uses the directory name.
 
 | Field | Meaning |
 | --- | --- |
-| `name` | Letters, digits, underscores, or hyphens; at most 128 characters. `assistant` is reserved. |
-| `description` | Required, nonempty description for selection and delegation. |
+| `name` | Letters, digits, underscores, or hyphens; at most 128 characters. Native definitions may configure `assistant`. |
+| `description` | Optional description for selection and delegation. Omission inherits an earlier native definition. |
 | `mode` | `build` (default) or `reviewer`. Reviewer prohibits writes, shell, and custom tools. |
+| `prompt` | Full prompt replacing the packaged coding policy. An explicitly empty string is an empty replacement; omission inherits. Workspace `AGENTS.md` context and runtime capability/permission messages still apply. |
 | `model` | A reference containing `provider` (an existing connection ID) and `id` (an exact model ID). Omitted inherits workspace, then global defaults. Applies to delegated children too. |
-| `live` | Optional Live profile: `enabled`, atomic `model: {provider, id}`, `voice`, `instructions`, `context_mode`, plus advanced `backend_mode` and `backend_model`. Missing fields inherit workspace, global, then built-in Live defaults. |
+| `live` | Optional Live profile: `enabled`, atomic `model: {provider, id}`, `voice`, full `prompt`, `context_mode`, plus advanced `backend_mode` and `backend_model`. Missing fields inherit individually. |
 | `tools` | Allowlist of ngn tool names, as a YAML list or comma-separated string. Omitted inherits; `[]` permits no tools. |
 | `denied_tools` | Tool names to subtract from the inherited or explicit allowlist. |
 | `allowed_agents` | Permitted delegation targets. Omitted inherits; `[]` disables delegation. |
 | `user_invocable` | Whether the user can select this agent (default `true`). |
 | `subagent_available` | Whether another agent can delegate to it (default `true`). |
+| `reasoning_effort` | A supported effort for the selected model; omission inherits the configured preference. |
+| `auto_update` | Controls replacement of the managed global `assistant.md` when bundled defaults change; see below. |
+| `default_revision` | Managed SHA-256 digest of the bundled defaults used to create the global document. |
 
-Existing JSON `profiles` support the same fields, with `instructions` in the JSON
-object and arrays for tool/agent lists. JSON profiles may omit `description`.
+Missing files and fields inherit. Native files with the same name merge only
+their supplied fields; `live` merges by its supplied keys. Use omission to
+restore inheritance: do not persist an `inherit` sentinel. Empty prompts, empty
+tool lists, and `enabled: false` are explicit values.
+
+Existing JSON `profiles` retain their JSON fields, with additional `instructions`
+in the object and arrays for tool/agent lists. Their same-name entries still
+replace whole profiles; the partial native merge rule does not change foreign
+adapters or JSON profiles.
 
 The model and its connection form one selection:
 
@@ -62,47 +75,78 @@ model:
 
 Connections may come from the global or workspace registry. Credentials stay in
 the connection; an agent does not define a provider. An unavailable connection
-is reported rather than silently using another one. Older scalar `model` and
-separate `provider` fields remain readable; do not combine a model reference
-with a separate provider field.
+is reported rather than silently using another one. Native `model` must be a
+complete mapping; scalar model values and a separate `provider` field are rejected.
 
 In the web Team pane, model settings are available for `assistant` and unused
-profiles too. Saves share revisioned Markdown preference files under
-`$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agent-models/`. **Inherit**
-uses workspace/global defaults; **Restore definition** removes the override and
-uses the original definition again. A save affects the next activation while
-accepted work keeps its selected connection and model. Model resets preserve the
-file's other preference sections.
+profiles too. Model, prompt, tools, and Live settings share one revisioned native
+Markdown document per scope:
 
-A Live profile configures speech separately from the normal agent model:
+| Scope | File |
+| --- | --- |
+| Global assistant defaults | `$XDG_CONFIG_HOME/ngn/assistant.md` |
+| Workspace assistant defaults | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md` |
+| Agent overrides from the UI | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agents/<agent>.md` |
 
-```yaml
+When `XDG_CONFIG_HOME` is unset, the root is `~/.config`. These operator files
+also work in the terminal and remain separate from imported source definitions.
+Saving or resetting one section preserves the others. A model save affects the
+next activation while accepted work keeps its selected connection and model.
+
+At startup, ngn creates the global `assistant.md` from its packaged assistant
+asset if the file is missing. The generated document enables `auto_update: true`
+and records `default_revision`. If that bundled revision changes, startup logs a
+warning and replaces the entire global file, including edits left under
+`auto_update: true`. Set it to `false` before direct customization that must
+survive upgrades. Saving global assistant settings in the UI sets it to `false`
+and shows a notice; `default_revision` is maintained by ngn.
+
+A complete customized global `assistant.md` can configure text and speech:
+
+```markdown
+---
+name: assistant
+description: Help with this workspace and report verified results.
+auto_update: false
 model:
   provider: text-connection
   id: reasoning-model
+prompt: |
+  Complete the user's authorized task. Inspect relevant evidence, make focused
+  changes, and report the checks actually run.
 live:
   enabled: true
   model:
     provider: voice-connection
     id: gpt-live-1
   voice: cedar
-  instructions: Keep spoken answers brief.
+  prompt: |
+    You are the spoken interface to the selected chat. Keep answers brief.
+    Delegate reasoning and workspace actions to the main assistant and speak
+    its verified results. Treat starting history as context, not new requests.
   context_mode: recent
+---
 ```
 
 `live.model` is one complete reference to an existing global or workspace provider
 connection. It never defines credentials or inherits the normal agent's provider.
 Without a Live model selection, voice follows Live defaults and the provider
-registry's default connection. `enabled: false` and `instructions: ""` are explicit
+registry's default connection. `enabled: false` and `prompt: ""` are explicit
 values; omit a field to inherit it. `context_mode` accepts `recent`, `summary`, or
 `none`. Advanced hosted mode uses `backend_mode: hosted` and `backend_model`.
 
-The agent Live editor writes a `live` section into the same operator preference
-file as model, instructions, and tools. A saved Live section replaces the source
-Live layer: `live: {}` explicitly uses workspace/global defaults. **Restore
-definition** removes only that section and reveals the native or JSON profile.
+The agent Live editor writes `live` into the same native document as model,
+prompt, and tools. Omitted Live keys inherit from the source definition and then
+workspace/global defaults; `live: {}` supplies no overrides. Restoring inheritance
+removes the relevant field or section rather than saving a mode marker.
 Saved changes apply when the next voice call starts. An active call retains its
 captured Live profile even if the chat later selects another agent.
+
+`live.prompt` is the full voice prompt and replaces its inherited prompt without
+prepending a hidden default. The framework reads only the current native format.
+Existing installations require an operator to convert their prior settings into
+these documents; there is no automatic import of SQLite Voice preferences or
+separate prompt files.
 
 ## Discovery and precedence
 
@@ -126,6 +170,10 @@ for ngn-native semantics, or explicitly import a neutral shared file as `native`
 No singular `.agent/` alias is scanned. Skill discovery and `AGENTS.md` project
 instructions do not register named agents.
 
+`.ngn/agents/assistant.md` is a valid native project definition under the same
+trust and hot-reload rules as other names. Its supplied fields layer over the
+assistant defaults; omitted fields continue to inherit.
+
 Later sources win in this order: personal files, personal JSON imports/profiles,
 trusted project files, trusted project JSON imports/profiles, explicit JSON
 imports/profiles. Within a JSON document, profiles override imports regardless of
@@ -138,10 +186,11 @@ whole catalog: an invalid or partially written definition reports diagnostics an
 keeps the previously accepted generation. Correcting the file publishes the next
 generation; deliberately deleting a file removes its profile on refresh.
 
-Discovery is bounded to 256 files per scope and 256 KiB per file, with a 32 KiB
-YAML header limit. Symlinks, special files, duplicate YAML keys, aliases, explicit
-tags, and unsupported fields are rejected. No foreign scripts, hooks, plugins,
-or MCP processes run during discovery.
+Discovery is bounded to 256 files per scope and 256 KiB per file. Native YAML
+headers allow 64 KiB; foreign YAML headers allow 32 KiB. Canonical preference
+documents saved by settings have a 64 KiB total file limit. Symlinks, special
+files, duplicate YAML keys, aliases, explicit tags, and unsupported fields are
+rejected. No foreign scripts, hooks, plugins, or MCP processes run during discovery.
 
 ## Explicit imports and model mapping
 
@@ -179,7 +228,7 @@ without trusting the workspace's other configuration:
 }
 ```
 
-The later native import wins when both contain the same name. New files and
+The later native import supplies overrides when both contain the same name. New files and
 renames in these directories are discovered at the next model request or Team
 refresh. Unsupported files are reported; a failed refresh keeps the accepted catalog until the source is corrected.
 `format` is one of `native`, `claude`, `copilot`,

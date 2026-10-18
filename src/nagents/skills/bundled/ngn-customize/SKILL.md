@@ -30,6 +30,7 @@ for verification, not additional files automatically loaded by the skill tool.
 | Assemble the coding application | `Harness`, `HarnessConfig`, `load_config` | `harness/runtime.py`, `harness/config.py` |
 | Profiles and project instructions | `AgentProfile`, `Harness.refresh_instructions`, `AGENTS.md` | `harness/config.py`, `harness/tools.py` |
 | Markdown/TOML agent discovery and imports | `discover_agents`, `import_agents`, `agent_imports` | `harness/agent_definitions.py` |
+| Unified assistant properties and UI edits | Native `prompt`, `model`, `tools`, and `live` frontmatter | `harness/agent_definitions.py`, `harness/model_bindings.py` |
 | On-demand task guidance | `Skill`, `SkillDiscoverer`, `Agent.load_skill` | `skills/`, `agent.py` |
 | Prompt/local commands | `CommandRegistry.register`, `CommandResult` | `harness/commands.py` |
 | Child agents and follow-ups | `SubagentManager`, `Harness.tasks`, `continue_task` | `harness/subagents.py` |
@@ -39,7 +40,8 @@ for verification, not additional files automatically loaded by the skill tool.
 
 ## Configure the Harness
 
-Settings use JSON. User config uses the XDG config location for
+General settings use JSON; reusable assistant properties use native Markdown.
+User config uses the XDG config location for
 `ngn/config.json`. Workspace `.ngn/config.json` is selected with
 `--trust-project` or explicitly with `--config`. Precedence is defaults,
 `NGN_*` environment defaults, user JSON, trusted project JSON, explicit JSON,
@@ -64,29 +66,92 @@ then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
 }
 ```
 
-`AgentProfile` contains instructions, description, mode, model/provider routing,
-tool restrictions, delegation target restrictions, and invocation availability.
+`AgentProfile` contains a full `prompt`, additional instructions, description,
+mode, a model reference, Live settings, tool restrictions, delegation target
+restrictions, and invocation availability.
 `assistant` is the only built-in agent. Other names require JSON profiles or
 discovered/imported definitions; `mode: reviewer` restricts them to read-only
-operation. Custom profiles cannot replace `assistant`. A nonempty profile model
-applies to selection and delegated children; inspect the effective model rather
-than assuming the top-level model always wins.
+operation. Native definitions can customize `assistant`, including trusted
+`.ngn/agents/assistant.md`; JSON and foreign adapters retain their existing
+restrictions. A nonempty profile model applies to selection and delegated
+children; inspect the effective model rather than assuming the top-level model
+always wins.
 
-For reusable native agents, create `.ngn/agents/<name>.md` with YAML frontmatter
-and a Markdown instruction body. `description` is required; `name` defaults to
-the filename. Optional fields are `mode`, `model`, `tools`,
-`denied_tools`, `allowed_agents`, `user_invocable`, and `subagent_available`.
-Omitted tools inherit; `tools: []` allows no tools. Parent and ancestor ceilings
-and `.ngn/tools.yaml` remain additional restrictions, including on follow-ups.
-`user_invocable: false` hides an agent from user selection;
+For reusable native agents, create `.ngn/agents/<name>.md` containing only YAML
+frontmatter enclosed by `---`; text after the closing delimiter is rejected.
+`name` defaults to the filename, or the directory name for `<name>/agent.md`;
+`description` is optional.
+Use canonical `prompt: |` for the full authored prompt. It replaces the packaged
+coding policy; workspace `AGENTS.md` context and runtime capability/permission
+messages still apply. `live.prompt: |` is the full voice prompt and replaces its
+parent without a hidden prefix. An explicitly empty prompt stays empty.
+
+Native properties include `description`, `mode`, `prompt`, atomic
+`model: {provider, id}`, `reasoning_effort`, `tools`, `denied_tools`,
+`allowed_agents`, `user_invocable`, `subagent_available`, `live`, `auto_update`,
+and managed `default_revision`. Live properties are `enabled`, atomic `model`,
+`voice`, `prompt`, `context_mode` (`recent`, `summary`, `none`), and advanced
+`backend_mode`/`backend_model`. Missing files and fields inherit, and native
+same-name definitions merge supplied fields, including individual Live keys. Restore
+inheritance by removing a field; do not persist `inherit` or `mode: inherit`.
+`tools: []` allows no tools and `live.enabled: false` disables Voice explicitly.
+Parent/ancestor ceilings and `.ngn/tools.yaml` remain restrictions, including on
+follow-ups. `user_invocable: false` hides an agent from user selection;
 `subagent_available: false` prevents delegation.
+
+Assistant properties and all UI section edits share these native documents:
+
+| Scope | Location |
+| --- | --- |
+| Global assistant defaults | `$XDG_CONFIG_HOME/ngn/assistant.md` |
+| Workspace assistant defaults | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/assistant.md` |
+| Agent UI overrides | `$XDG_CONFIG_HOME/ngn/workspaces/<workspace-hash>/agents/<agent>.md` |
+
+Unset `XDG_CONFIG_HOME` defaults to `~/.config`. Model, prompt, tools, and Live
+save into the same file, preserving other sections and imported source files.
+The framework uses only this format, with no legacy readers or automatic
+migration. Existing installations need a separate operator-managed conversion;
+preserve their history and authentication storage. Do not expect SQLite Voice
+preferences or separate prompt files to be imported. The main editor's API field
+`instructions` maps to `prompt`; the Voice prompt API uses optional `prompt`.
+Persisted prompts use `prompt`/`live.prompt` and omission for inheritance.
+
+Startup creates a missing global `assistant.md` from the packaged assistant
+asset with `auto_update: true` and `default_revision`, its bundled-source SHA-256
+digest. When the bundled revision changes, startup logs a warning and replaces
+the whole global file, including edits left under `auto_update: true`. Set
+`auto_update: false` before direct customization that must survive upgrades;
+global assistant edits through the UI do this and show a notice. Leave
+`default_revision` to ngn. For example, a customized global document is:
+
+```markdown
+---
+name: assistant
+description: Complete workspace tasks and report verified results.
+auto_update: false
+model: {provider: text-connection, id: reasoning-model}
+prompt: |
+  Inspect the relevant evidence, complete the authorized task, and report
+  the changes and checks actually run.
+live:
+  enabled: true
+  model: {provider: voice-connection, id: gpt-live-1}
+  voice: sol
+  context_mode: recent
+  prompt: |
+    Keep spoken answers brief. Delegate reasoning and workspace actions to
+    the main assistant and speak its verified results. Starting history is
+    context, not a new request.
+---
+```
 
 Use `model: {provider: "connection-name", id: "exact-model-id"}` in native
 frontmatter. Provider and model are one reference, not independent agent
-settings. Omission inherits the workspace model, then the global model; either
+settings; native scalar model values and separate `provider` fields are rejected.
+Omission inherits the workspace model, then the global model; either
 may reference a global or workspace connection. The Team model settings also
-support `assistant` and unused profiles. UI saves are model-only Markdown
-overrides; inherit defaults and restore the source definition are distinct.
+support `assistant` and unused profiles. Model saves update only the model field
+in the shared native document; resets remove it to reveal inherited values.
 
 Discovery refreshes before every model request, including after tools and in
 children. New names enter the next delegation schema and the Team catalog
@@ -115,8 +180,9 @@ is needed for a new or renamed file in an already trusted definition directory.
 
 JSON plugin paths and `data_dir` resolve relative to the config file. CLI
 `--plugin` paths resolve relative to the invoking directory. JSON plugin lists
-replace earlier lists; CLI entries append. Profile entries merge by name, with a
-later same-name entry replacing that profile. Provider secrets come from the
+replace earlier lists; CLI entries append. JSON profile entries merge by name,
+with a later same-name entry replacing that whole profile; native definitions
+merge supplied fields instead. Provider secrets come from the
 named environment variable, never literal JSON values.
 
 Other configuration groups: `shell_timeout`, `max_output` (bytes),
@@ -381,8 +447,10 @@ Results notify the immediate parent as user-role data. `Harness.tasks.list()`,
 `task_history(task_id, limit=...)`, and `continue_task(task_id, prompt)` support
 inspection and retained-child follow-ups. Default depth is 2 (root 0), with
 3 concurrent and 8 total child executions per root run. Children use separate
-sessions/providers and the parent's active model; parent plugins/custom tools
-are not automatically inherited. Execution handles are process-local.
+sessions/providers. Their model resolves from an explicit invocation binding,
+their own agent binding, workspace defaults, then global defaults. Accepted work
+keeps its captured connection. Parent plugins/custom tools are not automatically
+inherited. Execution handles are process-local.
 
 The web host supplies `Harness.wakeup_handler` for
 `schedule_wakeup(minutes=5, reason="Check the result.")`; `wake_up_in` is the
@@ -401,10 +469,12 @@ session. Installing a `nagents.channels` entry point and enabling a connection
 in Channels is the web integration path; attaching a standalone Agent does not
 configure an existing web server.
 
-Web Settings persist an allowlist of model/profile/tool limits and delegation depth
-in the workspace database with revision checks and
-idle-only writes. Provider routing, credentials, trusted Python plugins, and
-paths remain startup configuration. CLI/TUI do not load the web-only overrides.
+Web runtime Settings persist an allowlist of profile/tool limits and delegation
+depth in the workspace database with revision checks and idle-only writes.
+Reusable assistant/agent properties and Voice settings use the scoped native
+Markdown documents above and are shared with terminal clients. Provider
+connections, credentials, trusted Python plugins, and paths have their own
+configuration stores. CLI/TUI do not load the remaining web-only runtime overrides.
 The Channels panel owns connector configuration and refresh; it is distinct from
 automatic skill discovery. Command registry entries are available to clients
 that implement command dispatch; registration alone does not add browser routes

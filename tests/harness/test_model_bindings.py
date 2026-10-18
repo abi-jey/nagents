@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -13,7 +12,6 @@ import pytest
 from nagents.harness.model_bindings import AgentModelStore
 from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.model_bindings import resolve_model_binding
-from nagents.harness.providers import ModelPreferenceStore
 from nagents.harness.providers import ProviderProfile
 from nagents.harness.providers import ProviderRegistry
 from nagents.harness.providers import ScopedProviderRegistryStore
@@ -76,8 +74,6 @@ def test_unnamed_builtin_is_effective_only_not_an_explicit_model(tmp_path: Path)
     with pytest.raises(ValueError, match="provider"):
         ModelBinding.parse(binding.as_dict())
     with pytest.raises(ValueError, match="configured provider"):
-        ModelPreferenceStore(tmp_path / "config.json").save_binding(binding)
-    with pytest.raises(ValueError, match="configured provider"):
         AgentModelStore(tmp_path / "agents").save("assistant", binding, expected=EMPTY_REVISION)
 
 
@@ -112,9 +108,9 @@ def test_agent_preferences_round_trip_without_creating_an_agent_definition(tmp_p
     if os.name != "nt":
         assert selected.path.stat().st_mode & 0o777 == 0o600
     inherited = store.save("assistant", ModelBinding(), expected=selected.revision)
-    assert inherited.revision != EMPTY_REVISION
+    assert inherited.revision == EMPTY_REVISION
     assert not inherited.binding.configured
-    assert inherited.path.exists()
+    assert not inherited.path.exists()
     reset = store.reset("assistant", expected=inherited.revision)
     assert reset == initial
     assert not initial.path.exists()
@@ -190,32 +186,7 @@ def test_agent_model_paths_reject_traversal_and_symlinks(tmp_path: Path) -> None
     assert "preserved" in target.read_text()
 
 
-def test_model_preferences_keep_binding_when_old_id_api_updates_it(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    path.write_text(json.dumps({"theme": "ocean", "model": "old-id"}))
-    store = ModelPreferenceStore(path)
-    assert store.load_binding(provider="home") == ModelBinding("home", "old-id")
-    store.save_binding(ModelBinding("work", "new-id"))
-    assert store.load() == "new-id"
-    store.save("edited-id")
-    assert store.load_binding(provider="unrelated-active") == ModelBinding("work", "edited-id")
-    assert json.loads(path.read_text()) == {"theme": "ocean", "model": {"provider": "work", "id": "edited-id"}}
-    store.save_binding(ModelBinding())
-    assert store.load() == ""
-    assert json.loads(path.read_text()) == {"theme": "ocean"}
-
-
-def test_only_if_missing_never_relabels_a_legacy_choice_with_rejected_provider(tmp_path: Path) -> None:
-    path = tmp_path / "config.json"
-    path.write_text('{"model": "existing-id"}\n')
-    store = ModelPreferenceStore(path)
-    unchanged = store.save_binding(ModelBinding("new-provider", "new-id"), only_if_missing=True)
-    assert unchanged == ModelBinding("", "existing-id")
-    assert store.load_binding(provider="configured-provider") == ModelBinding("configured-provider", "existing-id")
-    assert path.read_text() == '{"model": "existing-id"}\n'
-
-
-def test_scoped_legacy_ids_keep_scope_selection_and_new_pairs_can_cross_scopes(tmp_path: Path) -> None:
+def test_scoped_model_bindings_keep_scope_selection_and_allow_cross_scope_pairs(tmp_path: Path) -> None:
     store = ScopedProviderRegistryStore(tmp_path)
     store.global_store.save(
         ProviderRegistry(active="home", providers={"home": ProviderProfile(kind="openai")}), expected=EMPTY_REVISION
@@ -223,12 +194,12 @@ def test_scoped_legacy_ids_keep_scope_selection_and_new_pairs_can_cross_scopes(t
     store.workspace_store.save(
         ProviderRegistry(active="work", providers={"work": ProviderProfile(kind="openai")}), expected=EMPTY_REVISION
     )
-    store.model_store("global").save("global-id")
-    store.model_store("workspace").save("workspace-id")
+    store.model_store("global").save_binding(ModelBinding("home", "global-id"))
+    store.model_store("workspace").save_binding(ModelBinding("work", "workspace-id"))
     assert store.model_binding("global") == ModelBinding("home", "global-id")
     assert store.model_binding("workspace") == ModelBinding("work", "workspace-id")
     store.model_store("global").save_binding(ModelBinding("work", "workspace-hosted-model"))
     assert store.model_binding("global") == ModelBinding("work", "workspace-hosted-model")
     resolved = resolve_model_binding(providers=store.load().providers, global_default=store.model_binding("global"))
     assert resolved.binding == ModelBinding("work", "workspace-hosted-model")
-    assert store.agent_models.directory == store.model_store("workspace").path.parent / "agent-models"
+    assert store.agent_models.directory == store.model_store("workspace").path.parent / "agents"

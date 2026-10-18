@@ -32,7 +32,6 @@ from .live_settings import GlobalVoiceInput
 from .live_settings import Revision
 from .live_settings import WorkspaceVoiceInput
 from .routing import RoutingStore
-from .voice_instructions import legacy_voice_instructions
 from .voice_preferences import Scope
 
 if TYPE_CHECKING:
@@ -47,9 +46,7 @@ Cursor = Annotated[int, Query(ge=0, le=2**53 - 1)]
 
 
 def voice_instructions(connection: "LiveConnection") -> str:
-    if connection.instruction_prompt_captured:
-        return connection.instruction_prompt
-    return legacy_voice_instructions(connection.values.instructions, connection.values.backend_mode)
+    return connection.instruction_prompt
 
 
 class SessionInput(BaseModel):

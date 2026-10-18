@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import sqlite3
 import sys
-from contextlib import closing
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import TypedDict
@@ -25,7 +22,6 @@ from nagents.web.live import unavailable_reason
 from nagents.web.live_settings import GlobalVoiceInput
 from nagents.web.live_settings import LiveSettings
 from nagents.web.live_settings import WorkspaceVoiceInput
-from nagents.web.voice_preferences import MAX_VOICE_BYTES
 from nagents.web.voice_preferences import VoiceOverrides
 from nagents.web.voice_preferences import VoicePreferences
 from tests.support.web import client_app
@@ -84,7 +80,7 @@ def test_active_voice_can_save_next_conversation_preferences(tmp_path: Path, mon
                 WorkspaceVoiceInput(
                     scope="workspace",
                     revision=before.revision,
-                    overrides=VoiceOverrides(voice="marin", instructions="Keep replies brief."),
+                    overrides=VoiceOverrides(voice="marin"),
                 )
             )
         )
@@ -111,16 +107,14 @@ def test_voice_behavior_and_context_inherit_independently_and_survive_restart(tm
         owner = settings(tmp_path)
         await owner.load()
         before = voice(await owner.snapshot("global"))
-        instructions = "Keep answers brief.\nParlez doucement. 🌍"
         await owner.change(
             GlobalVoiceInput(
                 scope="global",
                 revision=before["revision"],
-                preferences=VoicePreferences(instructions=instructions, context_mode="summary"),
+                preferences=VoicePreferences(context_mode="summary"),
             )
         )
         inherited = voice(await owner.snapshot("workspace"))
-        assert inherited["values"]["instructions"] == instructions
         assert inherited["values"]["context_mode"] == "summary"
         await owner.change(
             WorkspaceVoiceInput(
@@ -132,58 +126,30 @@ def test_voice_behavior_and_context_inherit_independently_and_survive_restart(tm
             GlobalVoiceInput(
                 scope="global",
                 revision=global_before["revision"],
-                preferences=VoicePreferences(instructions="Use a calm tone.", context_mode="recent"),
+                preferences=VoicePreferences(context_mode="recent"),
             )
         )
         local = voice(await owner.snapshot("workspace"))
-        assert local["values"]["instructions"] == "Use a calm tone."
         assert local["values"]["context_mode"] == "none"
         assert local["overrides"] == {"context_mode": "none"}
-        assert local["origins"]["instructions"] == "global" and local["origins"]["context_mode"] == "workspace"
+        assert local["origins"]["context_mode"] == "workspace"
         await owner.change(
             WorkspaceVoiceInput(
                 scope="workspace",
                 revision=local["revision"],
-                overrides=VoiceOverrides(instructions="", context_mode="none"),
+                overrides=VoiceOverrides(context_mode="none"),
             )
         )
         await owner.shutdown()
         restarted = settings(tmp_path)
         await restarted.load()
         restored = voice(await restarted.snapshot("workspace"))
-        assert restored["values"]["instructions"] == "" and restored["values"]["context_mode"] == "none"
-        assert voice(await restarted.snapshot("global"))["values"]["instructions"] == "Use a calm tone."
+        assert restored["values"]["context_mode"] == "none"
+        assert voice(await restarted.snapshot("global"))["values"]["context_mode"] == "recent"
         await restarted.change(
             WorkspaceVoiceInput(scope="workspace", revision=restored["revision"], overrides=VoiceOverrides())
         )
-        assert voice(await restarted.snapshot("workspace"))["values"]["instructions"] == "Use a calm tone."
-        await restarted.shutdown()
-
-    asyncio.run(check())
-
-
-@pytest.mark.parametrize("instructions", ["🌍" * 3000, "é" * 6000, "\n" * 6000, "\x01" * 6000])
-def test_instruction_storage_accepts_unicode_and_json_escaping_at_the_character_budget(
-    tmp_path: Path, instructions: str
-) -> None:
-    named(tmp_path)
-
-    async def check() -> None:
-        owner = settings(tmp_path)
-        await owner.load()
-        before = voice(await owner.snapshot("global"))
-        await owner.change(
-            GlobalVoiceInput(
-                scope="global", revision=before["revision"], preferences=VoicePreferences(instructions=instructions)
-            )
-        )
-        await owner.shutdown()
-        restarted = settings(tmp_path)
-        await restarted.load()
-        assert voice(await restarted.snapshot("global"))["values"]["instructions"] == instructions
-        with closing(sqlite3.connect(restarted.voice.global_db)) as db:
-            size = db.execute("SELECT length(CAST(payload AS BLOB)) FROM ngn_voice_preferences").fetchone()[0]
-        assert 4096 < size <= MAX_VOICE_BYTES
+        assert voice(await restarted.snapshot("workspace"))["values"]["context_mode"] == "recent"
         await restarted.shutdown()
 
     asyncio.run(check())
@@ -204,61 +170,6 @@ def test_invalid_voice_behavior_preferences_are_rejected(values: dict[str, objec
     for model in (VoicePreferences, VoiceOverrides):
         with pytest.raises(ValidationError):
             model.model_validate(values)
-
-
-@pytest.mark.parametrize("saved_voice", ["", "marin", "cedar", "cove"])
-def test_old_saved_preferences_add_defaults_without_overwriting_saved_choices(tmp_path: Path, saved_voice: str) -> None:
-    named(tmp_path)
-
-    async def check() -> None:
-        owner = settings(tmp_path)
-        await owner.load()
-        payload = json.dumps(
-            {
-                "enabled": True,
-                "model": "saved-live",
-                "backend_model": "saved-backend",
-                **({"voice": saved_voice} if saved_voice else {}),
-            }
-        )
-        with closing(sqlite3.connect(owner.voice.global_db)) as db, db:
-            db.execute("UPDATE ngn_voice_preferences SET payload = ?", (payload,))
-        current = voice(await owner.snapshot("global"))
-        assert current["values"]["instructions"] == "" and current["values"]["context_mode"] == "recent"
-        assert current["values"]["model"] == "saved-live" and current["values"]["backend_model"] == "saved-backend"
-        assert current["global_preferences"]["voice"] == (saved_voice or "sol")
-        assert current["values"]["voice"] == (saved_voice if saved_voice in {"marin", "cedar"} else "marin")
-        with closing(sqlite3.connect(owner.voice.global_db)) as db:
-            assert db.execute("SELECT payload FROM ngn_voice_preferences").fetchone()[0] == payload
-        await owner.shutdown()
-
-    asyncio.run(check())
-
-
-def test_voice_instructions_cannot_accidentally_store_a_configured_api_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    named(tmp_path)
-    monkeypatch.setenv("TEST_VOICE_KEY", "private-voice-key")
-
-    async def check() -> None:
-        owner = settings(tmp_path)
-        await owner.load()
-        before = voice(await owner.snapshot("global"))
-        with pytest.raises(HTTPException) as rejected:
-            await owner.change(
-                GlobalVoiceInput(
-                    scope="global",
-                    revision=before["revision"],
-                    preferences=VoicePreferences(instructions="Use private-voice-key"),
-                )
-            )
-        assert rejected.value.status_code == 422
-        after = voice(await owner.snapshot("global"))
-        assert after["revision"] == before["revision"] and after["values"]["instructions"] == ""
-        await owner.shutdown()
-
-    asyncio.run(check())
 
 
 @pytest.mark.parametrize("kind,auth", [("anthropic", "api-key"), ("gemini", "api-key"), ("openai", "chatgpt")])
@@ -415,11 +326,12 @@ def test_global_and_local_voice_values_are_independent_of_provider_yaml(
         assert workspace_before["overrides"] == {
             "enabled": True,
             "backend_mode": "hosted",
+            "connection_id": "primary",
             "model": "local-live",
             "backend_model": "local-backend",
             "voice": "marin",
         }
-        assert workspace_before["connection_scope"] == "workspace"
+        assert workspace_before["connection_scope"] == "global"
         assert (await first.connection()).key_configured
         agent = create_agent(await first.connection())
         try:
@@ -634,7 +546,7 @@ def test_scoped_revision_conflicts_and_admission_pins_the_model(tmp_path: Path) 
     asyncio.run(check())
 
 
-def test_scoped_payload_rejects_connection_fields_and_failed_write_rolls_back(
+def test_scoped_payload_rejects_connection_fields_and_secrets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -662,20 +574,6 @@ def test_scoped_payload_rejects_connection_fields_and_failed_write_rolls_back(
                 )
             )
         assert leaked.value.status_code == 422 and "private-voice-key" not in str(leaked.value)
-        with closing(sqlite3.connect(owner.db_path)) as db, db:
-            db.execute(
-                "CREATE TRIGGER fail_voice BEFORE UPDATE ON ngn_voice_preferences "
-                "BEGIN SELECT RAISE(ABORT, 'private-voice-key'); END"
-            )
-        with pytest.raises(HTTPException) as failed:
-            await owner.change(
-                WorkspaceVoiceInput(
-                    scope="workspace",
-                    revision=before["revision"],
-                    overrides=VoiceOverrides(model="later"),
-                )
-            )
-        assert failed.value.status_code == 500 and "private-voice-key" not in str(failed.value)
         assert await owner.snapshot("workspace") == before
 
     asyncio.run(check())
@@ -723,7 +621,7 @@ def test_scoped_http_settings_expose_inheritance_and_never_edit_connection(tmp_p
             )
             assert changed.status_code == 200, changed.text
             assert changed.json()["values"]["model"] == "voice-only"
-            assert changed.json()["origins"]["voice"] == "builtin"
+            assert changed.json()["origins"]["voice"] == "global"
             assert (await client.get("/api/live", headers=headers)).json()["model"] == "voice-only"
             assert (await client.get("/api/live/settings?scope=global", headers=headers)).json() == global_snapshot
             assert providers.global_store.path.read_bytes() == original

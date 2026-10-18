@@ -2,11 +2,18 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { request, RequestError } from "../../../api/client.js";
 import { ProviderLogo } from "../../../components/ProviderLogo.js";
-import { providerLabel } from "../../live/LiveSettings.js";
-import { settingsValidation } from "../../live/settings.js";
 import { VoiceInstructionEditor } from "./VoiceInstructionEditor.js";
 import { inheritField, nestedVoice, readJson, sourceLabel, targetQuery, useNavigatorDraft, voiceDraft, voiceWrite } from "./state.js";
 import type { NavigatorTarget, NavigatorVoiceReply, VoiceDraft, VoiceProfile } from "./state.js";
+
+const providerLabel = (name: string) => ({ openai: "OpenAI", openai_compatible: "OpenAI-compatible", azure_openai_compatible_v1: "Azure OpenAI", foundry: "Azure AI Foundry" })[name] || name;
+
+function speechValidation(values: VoiceProfile): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(values.model.id) || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/.test(values.backend_model))
+    return "Enter a voice and backend model ID (1–128 characters, without spaces).";
+  if (!["recent", "summary", "none"].includes(values.context_mode)) return "Choose a starting context option.";
+  return "";
+}
 
 export function VoiceEditor({ token, target, report, snapshotChanged, connections }: {
   token: string; target: NavigatorTarget; report: (dirty: boolean) => void;
@@ -17,7 +24,7 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
     write: async (snapshot, draft) => {
       if (target.scope === "agent" && draft.model && !draft.model.provider.trim()) throw new RequestError("Choose a saved connection, or inherit the whole speech model from the workspace.", 422);
       const effective = resolved(snapshot, draft);
-      const error = settingsValidation({ ...snapshot.values, ...effective, model: effective.model.id, connection_id: effective.model.provider });
+      const error = speechValidation(effective);
       if (error) throw new RequestError(error, 422);
       return (await request("live/settings", token, voiceWrite(target, snapshot.revision, draft, snapshot))).json() as Promise<NavigatorVoiceReply>;
     },
@@ -27,14 +34,15 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
   useEffect(() => { report(dirty || instructionsDirty); }, [dirty, instructionsDirty, report]);
   useEffect(() => { if (snapshot) snapshotChanged(snapshot); }, [snapshot, snapshotChanged]);
   const values = snapshot && draft && resolved(snapshot, draft);
-  const speechOverrides = draft ? Object.keys(draft).filter(key => key !== "instructions").length : 0;
+  const speechOverrides = draft ? Object.keys(draft).length : 0;
   const disabled = pending || recovery;
   function edit<K extends keyof VoiceProfile>(key: K, value: VoiceProfile[K]) { if (draft) editor.edit({ ...draft, [key]: value }); }
   function field(key: keyof VoiceProfile, title: string, control: ReactNode, help = "") {
     if (!draft || !snapshot) return null;
     const custom = Object.hasOwn(draft, key);
-    const origin = dirty && custom ? "Unsaved preference" : custom ? target.scope === "global" ? "Global default" : snapshot.saved_live_present === false && target.scope === "agent" ? "Agent definition" : `${target.scope === "agent" ? "Agent" : "Workspace"} override` : Object.hasOwn(voiceDraft(snapshot), key) ? `Will inherit ${target.scope === "agent" ? "workspace" : "global"}` : sourceLabel(snapshot.origins[key] || (target.scope === "agent" ? "workspace" : "global"));
-    return <div className="an-voice-field"><div className="an-field-title"><span>{title}</span><span className="an-field-origin">{origin}{target.scope !== "global" && custom && <button type="button" disabled={disabled} onClick={() => editor.edit(inheritField(draft, key))}>Use {target.scope === "agent" ? "workspace" : "global"}</button>}</span></div>{control}{help && <p className="an-footnote">{help}</p>}</div>;
+    const inheritedSource = target.scope === "agent" ? Object.hasOwn(snapshot.definition_live || {}, key) ? "agent file" : "workspace" : "global";
+    const origin = dirty && custom ? "Unsaved preference" : custom ? target.scope === "global" ? "Global default" : snapshot.saved_live_present === false && target.scope === "agent" ? "Agent definition" : `${target.scope === "agent" ? "Agent" : "Workspace"} override` : Object.hasOwn(voiceDraft(snapshot), key) ? `Will use ${inheritedSource}` : sourceLabel(snapshot.origins[key] || (target.scope === "agent" ? "workspace" : "global"));
+    return <div className="an-voice-field"><div className="an-field-title"><span>{title}</span><span className="an-field-origin">{origin}{target.scope !== "global" && custom && <button type="button" disabled={disabled} onClick={() => editor.edit(inheritField(draft, key))}>Use {inheritedSource}</button>}</span></div>{control}{help && <p className="an-footnote">{help}</p>}</div>;
   }
   return <section className="an-voice-editor">
     <div className="an-section-heading"><div><h3>Voice</h3><p>{target.scope === "agent" ? `How ${target.agent} speaks in live conversations.` : "Speech defaults inherited by agents."}</p></div></div>
@@ -43,7 +51,7 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
     {error && <p role="alert" className="error-text">{error}</p>}
     {(recovery || (!snapshot && error)) && <div className="an-recovery"><p>Your draft is kept. Reload saved voice preferences before saving again.</p><button type="button" disabled={pending} onClick={() => void editor.reload()}>{dirty ? "Discard voice draft and reload" : "Reload saved voice settings"}</button></div>}
     {snapshot && draft && values && <>
-      <div className="an-ownership"><span>{target.scope === "global" ? "Global speech defaults" : speechOverrides ? `${speechOverrides} explicit speech settings` : "Speech settings inherited"}</span>{target.scope !== "global" && <button type="button" disabled={disabled || !speechOverrides} onClick={() => editor.edit(Object.hasOwn(draft, "instructions") ? { instructions: draft.instructions } : {})}>Inherit {target.scope === "agent" ? "workspace" : "global"} speech settings</button>}</div>
+      <div className="an-ownership"><span>{target.scope === "global" ? "Global speech defaults" : speechOverrides ? `${speechOverrides} explicit speech settings` : "Speech settings inherited"}</span>{target.scope !== "global" && <button type="button" disabled={disabled || !speechOverrides} onClick={() => editor.edit({})}>Use inherited speech settings</button>}</div>
       <fieldset className="an-fields" disabled={disabled}>
         <div className="an-voice-pair">
           {field("voice", "Voice", <select aria-label="Voice" value={values.voice} onChange={event => edit("voice", event.target.value)}>{!snapshot.voices.includes(values.voice) && <option value={values.voice}>{values.voice} · unavailable</option>}{snapshot.voices.map(voice => <option key={voice}>{voice}</option>)}</select>)}
@@ -67,7 +75,7 @@ export function VoiceEditor({ token, target, report, snapshotChanged, connection
         </details>
       </fieldset>
       <div className="an-connection-status"><ProviderLogo provider={snapshot.values.provider} /><div><strong>Saved voice connection · {snapshot.profile_name || "Default"}</strong><p>{snapshot.live_supported === false ? "This connection does not support Live." : !snapshot.key_configured ? "Sign in or configure credentials before starting voice." : snapshot.voice_auth === "chatgpt" ? "Uses your ChatGPT / Codex login." : snapshot.voice_auth === "entra" ? "Uses Microsoft Entra ID." : "Provider credentials configured."}</p></div><button type="button" onClick={connections}>Manage connections</button></div>
-      {target.scope === "agent" && <details className="an-source"><summary>Agent voice definition</summary><pre>{JSON.stringify(snapshot.definition_live || {}, null, 2)}</pre>{snapshot.saved_live_present && <><p>Restores the profile’s speech settings and instruction defaults. Customized Markdown instructions remain in place.</p><button type="button" disabled={disabled} onClick={() => void editor.save(draft, undefined, async current => (await request("live/settings", token, { scope: "agent", agent: target.agent, revision: current.revision }, undefined, "DELETE")).json() as Promise<NavigatorVoiceReply>)}>Restore authored Voice profile</button></>}</details>}
+      {target.scope === "agent" && <details className="an-source"><summary>Agent voice profile · read-only</summary><pre>{JSON.stringify(snapshot.definition_live || {}, null, 2)}</pre></details>}
       <footer className="an-save-bar"><span>{dirty ? `Unsaved voice · ${target.scope === "agent" ? target.agent : target.scope}` : editor.notice || "Saved voice preferences"}</span><button type="button" disabled={pending || !dirty} onClick={editor.discard}>Discard voice</button><button type="button" className="primary" disabled={disabled || !dirty || !values.model.id.trim() || (target.scope === "agent" && !!draft.model && !draft.model.provider.trim())} onClick={() => void editor.save()}>{pending ? "Saving…" : "Save voice"}</button></footer>
     </>}
   </section>;

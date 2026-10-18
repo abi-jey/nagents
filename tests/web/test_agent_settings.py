@@ -11,6 +11,7 @@ from typing import cast
 import pytest
 
 from nagents.harness.agent_behavior import behavior_store
+from nagents.harness.agent_documents import agent_document_store
 from nagents.harness.model_bindings import ModelBinding
 from tests.support.web import ControlledHarness
 from tests.support.web import client_app
@@ -185,9 +186,7 @@ def test_changed_parent_or_sibling_section_rejects_stale_save(tmp_path: Path) ->
             assert "tools" not in store.load("assistant").preferences
             assert "instructions" not in store.load("assistant").preferences
             assert (
-                behavior_store(app.state.web.harness.provider_store, "global")
-                .load("defaults")
-                .preferences["instructions"]
+                behavior_store(app.state.web.harness.provider_store, "global").load("assistant").preferences["prompt"]
                 == "NEW_GLOBAL"
             )
 
@@ -201,17 +200,12 @@ def test_child_inherits_published_instructions_until_next_model_round(tmp_path: 
             await save(client, headers, "agent", {"instructions": "ACCEPTED_ROUND_A"})
             parent.refresh_instructions()
             await save(client, headers, "agent", {"instructions": "NEXT_ROUND_B"})
-            child = ControlledHarness(copy.deepcopy(parent.config))
-            try:
-                child._is_subagent = True
-                child.inherit_tool_permissions(parent)
-                assert "ACCEPTED_ROUND_A" in parent.agent.system_prompt
-                assert parent.inherited_run_instructions()[1] == ("ACCEPTED_ROUND_A",)
-                parent.refresh_instructions()
-                assert "NEXT_ROUND_B" in parent.agent.system_prompt
-                assert parent.inherited_run_instructions()[1] == ("NEXT_ROUND_B",)
-            finally:
-                await child.close()
+            assert "ACCEPTED_ROUND_A" in parent.agent.system_prompt
+            assert "NEXT_ROUND_B" not in parent.agent.system_prompt
+            assert parent.inherited_run_instructions()[1] == ()
+            parent.refresh_instructions()
+            assert "NEXT_ROUND_B" in parent.agent.system_prompt
+            assert parent.inherited_run_instructions()[1] == ()
 
     asyncio.run(scenario())
 
@@ -221,7 +215,7 @@ def test_defaults_do_not_read_lower_preference_scopes(tmp_path: Path) -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, _):
             providers = app.state.web.harness.provider_store
             await save(client, headers, "global", {"instructions": "GLOBAL"})
-            workspace = behavior_store(providers, "workspace").load("defaults").path
+            workspace = behavior_store(providers, "workspace").load("assistant").path
             workspace.parent.mkdir(parents=True, exist_ok=True)
             workspace.write_text("---\ninstructions: [broken\n---\n", encoding="utf-8")
             assert (await read(client, headers, "global"))["values"]["instructions"] == "GLOBAL"
@@ -232,6 +226,34 @@ def test_defaults_do_not_read_lower_preference_scopes(tmp_path: Path) -> None:
             agent.write_text("---\ntools: [broken\n---\n", encoding="utf-8")
             assert (await read(client, headers, "workspace"))["values"]["instructions"] == "GLOBAL"
             assert (await client.get("/api/agent-settings?scope=agent", headers=headers)).status_code == 422
+
+    asyncio.run(scenario())
+
+
+def test_global_main_and_voice_http_edits_share_assistant_markdown(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, _):
+            await save(client, headers, "global", {"instructions": "MAIN_PROMPT"})
+            voice_before = await client.get("/api/live/instructions?scope=global", headers=headers)
+            assert voice_before.status_code == 200, voice_before.text
+            voice_saved = await client.put(
+                "/api/live/instructions",
+                headers=headers,
+                json={
+                    "scope": "global",
+                    "revision": voice_before.json()["revision"],
+                    "prompt": "VOICE_PROMPT",
+                },
+            )
+            assert voice_saved.status_code == 200, voice_saved.text
+
+            store = agent_document_store(app.state.web.harness.provider_store, "global")
+            saved = store.load("assistant")
+            assert str(saved.path) == voice_saved.json()["preferences_path"]
+            assert saved.preferences["prompt"] == "MAIN_PROMPT"
+            live = saved.preferences["live"]
+            assert isinstance(live, dict) and live["prompt"] == "VOICE_PROMPT"
+            assert saved.preferences["auto_update"] is False
 
     asyncio.run(scenario())
 

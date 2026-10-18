@@ -89,50 +89,36 @@ def test_assistant_model_can_be_saved_inherited_and_reset(tmp_path: Path) -> Non
                 "work", "agent-model"
             )
             assert any(call.args[0].get("event") == "agent_profiles_changed" for call in published.call_args_list)
-            inherited = await client.put(
-                "/api/agent-models/assistant",
-                headers=headers,
-                json={"revision": saved["revision"], "model": {"provider": "", "id": ""}},
-            )
-            assert inherited.status_code == 200, inherited.text
-            assert inherited.json()["model"] == {"provider": "", "id": ""}
-            assert inherited.json()["effective"] == before["inherited"]
             reset = await client.request(
                 "DELETE",
                 "/api/agent-models/assistant",
                 headers=headers,
-                json={"revision": inherited.json()["revision"]},
+                json={"revision": saved["revision"]},
             )
             assert reset.status_code == 200, reset.text
             assert reset.json()["model"] is None
+            assert reset.json()["effective"] == before["inherited"]
             assert reset.json()["revision"] == EMPTY_REVISION
 
     asyncio.run(scenario())
 
 
-def test_unused_profile_explicit_inheritance_differs_from_restoring_its_definition(tmp_path: Path) -> None:
+def test_unused_profile_model_delete_restores_its_definition(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with client_app(tmp_path, config=configuration(tmp_path)) as (app, client, headers, _):
             before = (await client.get("/api/agent-models/mini", headers=headers)).json()
             assert before["definition_model"] == before["effective"] == {"provider": "home", "id": "definition-model"}
             assert "Private definition instructions" not in str(before)
-            inherited = await client.put(
+            reset = await client.request(
+                "DELETE",
                 "/api/agent-models/mini",
                 headers=headers,
-                json={"revision": before["revision"], "model": {"provider": "", "id": ""}},
-            )
-            assert inherited.status_code == 200, inherited.text
-            assert inherited.json()["source"] == "workspace"
-            assert inherited.json()["effective"] == {"provider": "home", "id": "workspace-model"}
-            assert app.state.web.harness.resolved_model_binding("mini").binding == ModelBinding(
-                "home", "workspace-model"
-            )
-            reset = await client.request(
-                "DELETE", "/api/agent-models/mini", headers=headers, json={"revision": inherited.json()["revision"]}
+                json={"revision": before["revision"]},
             )
             assert reset.status_code == 200, reset.text
-            assert reset.json()["effective"] == before["effective"]
             assert reset.json()["source"] == "agent"
+            assert reset.json()["model"] is None
+            assert reset.json()["effective"] == before["effective"]
             assert app.state.web.harness.resolved_model_binding("mini").binding == ModelBinding(
                 "home", "definition-model"
             )
@@ -184,7 +170,9 @@ def test_stale_edits_and_removed_profiles_do_not_write(tmp_path: Path) -> None:
             directory = tmp_path / ".ngn" / "agents"
             directory.mkdir(parents=True)
             source = directory / "fresh.md"
-            source.write_text("---\nname: fresh\ndescription: A newly created agent\n---\nHelp with the request.\n")
+            source.write_text(
+                "---\nname: fresh\ndescription: A newly created agent\nprompt: Help with the request.\n---\n"
+            )
             discovered = await client.get("/api/agent-models/fresh", headers=headers)
             assert discovered.status_code == 200, discovered.text
             source.unlink()
