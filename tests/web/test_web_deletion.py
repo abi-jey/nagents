@@ -119,7 +119,7 @@ def test_delete_only_root_rows_and_refresh_selection(tmp_path: Path, selection: 
             await quiet(state)
             root = state.selected_session_id
             child = "ngn-hidden-child"
-            await state.settings.change(state.settings.revision, state.settings.values)
+            await state.settings.change(cast("str", state.settings.snapshot()["revision"]), state.settings.values)
             settings_before = await rows(state, "SELECT * FROM ngn_web_settings")
             await state.history.get_or_create_session(child, "harness")
             await state.history.add_message(child, Message(role="user", content="child kept"))

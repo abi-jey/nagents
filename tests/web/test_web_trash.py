@@ -100,7 +100,7 @@ def test_soft_delete_preserves_all_history_and_restores_same_identity_without_se
                     resumed = await client.post("/api/sessions/resume", headers=headers, json={"session_id": root})
                     assert resumed.status_code == 200, resumed.text
             before = {table: await rows(state, f"SELECT * FROM {table}") for table in tables}
-            await state.settings.change(state.settings.revision, state.settings.values)
+            await state.settings.change(cast("str", state.settings.snapshot()["revision"]), state.settings.values)
             settings = await rows(state, "SELECT * FROM ngn_web_settings")
             subscriber = Subscriber(session_id=root, ready=True)
             state.bus.subscribers.add(subscriber)

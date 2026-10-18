@@ -89,9 +89,16 @@ def test_team_tracks_create_rename_and_starts_mini_without_restart(
                 for directory in (foreign, native):
                     if previous:
                         (directory / f"{previous}.md").unlink()
-                    (directory / f"{name}.md").write_text(
-                        f"---\nname: {name}\ndescription: General coding agent\n---\nFollow the assigned task.\n"
-                    )
+                    if directory == foreign:
+                        definition = (
+                            f"---\nname: {name}\ndescription: General coding agent\n---\nFollow the assigned task.\n"
+                        )
+                    else:
+                        definition = (
+                            f"---\nname: {name}\ndescription: General coding agent\n"
+                            "prompt: |\n  Follow the assigned task.\n---\n"
+                        )
+                    (directory / f"{name}.md").write_text(definition, encoding="utf-8")
                 response = await client.get(route, headers=headers)
                 assert response.status_code == 200, response.text
                 catalog = response.json()

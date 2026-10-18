@@ -26,6 +26,7 @@ class AgentCatalog:
         sources = config.agent_sources or (
             (AgentDefinitionSource("workspace", config.workspace),) if config.trust_project else ()
         )
+        self._diagnostics = config.agent_diagnostics if not sources else ()
         providers = ScopedProviderRegistryStore(config.workspace, paths=config.provider_paths)
         if not any(source.kind == "defaults" for source in sources):
             sources = (
@@ -75,7 +76,7 @@ class AgentCatalog:
         candidate = HarnessConfig(config.workspace)
         # A programmatic catalog without reloadable sources owns its supplied
         # diagnostics too; there is no discovery pass that can replace them.
-        diagnostics: list[str] = [] if self.sources else list(config.agent_diagnostics)
+        diagnostics = list(self._diagnostics)
         failed = False
         authored = {name: replace(profile) for name, profile in self.overrides.items()}
         for source in self.sources:
