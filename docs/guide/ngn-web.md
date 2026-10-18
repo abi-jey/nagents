@@ -6,7 +6,9 @@ per-call approvals.
 
 The Team pane shows the main conversation and delegated agents in an activity
 tree. Select an agent to inspect its conversation and send it a message through
-the shared composer. Discovered profiles that have not run appear as **Not
+the shared composer. Siblings use newest-spawn order; status changes and activity
+inside descendants do not reshuffle the list. Live spawn rows keep their position
+in the chat when later saved metadata arrives. Discovered profiles that have not run appear as **Not
 started**. See [Inspecting and messaging delegated agents](task-inspection.md)
 for message delivery, settings, and restart behavior.
 
@@ -219,9 +221,15 @@ notice. See the [native format and example](agent-definitions.md#native-format).
 Open **Settings → Appearance** to choose **Messages only**, **Quiet**,
 **Compact**, **Detailed**, or **Everything**. Compact is the default: messages
 stay prominent, consecutive activity of the same kind shares a small expandable
-row, and provider reasoning summaries start collapsed beside their answer.
-Expanded summaries use a separate reading surface. Recorded run statistics have
-their own footer, outside individual answers.
+row, and provider reasoning summaries start collapsed before their answer.
+The first summary sentence is the control: open it to read the heading and full
+summary in the same column. Running activity uses restrained motion, completed
+activity settles into muted text, and errors or approval requests remain explicit.
+Context statistics remain in
+the header’s **Context** panel; token counters are not repeated in the chat.
+Chat bylines use the configured agent name once per admitted turn. Subagent
+conversations identify the immediate parent and target, for example
+**Assistant → Explorer**. Queued follow-ups do not restart the current byline.
 
 **Customize activity** controls commands, file changes, reasoning, agents,
 notices, and other tools separately. Choose visibility, grouped or separate
@@ -773,15 +781,16 @@ executes a prompt or tool again.
 
 ### Response Usage And Provider Summaries
 
-Completed responses show provider-supplied reasoning text in a subdued section,
-collapsed by default. Per-response token counts are not shown inline; reported
-usage remains available in the collapsed recorded-run breakdown. In stored usage,
+Completed responses show provider-supplied reasoning text in a subdued row,
+collapsed by default. Its first sentence is visible; opening the row reveals the
+remaining text without a duplicate heading or a boxed panel. Token counters are
+not repeated in chat; Context is the metrics entry point. In stored usage,
 an absent reasoning count stays absent and an actual zero remains zero.
 OpenAI and Anthropic report reasoning as part of output when that breakdown is
 available. Gemini reports its thought count separately from candidate output.
-The usage details explain that distinction without adding tokens twice.
+Stored usage preserves that distinction without adding tokens twice.
 
-A collapsed **Thinking** section contains displayable text supplied by the
+A collapsed reasoning row contains displayable text supplied by the
 provider. It streams independently of the answer and tool results. Providers that
 return counts without text do not create an empty summary. The harness requests supported
 summaries by default; set `reasoning_summaries` to `false` in harness configuration
@@ -793,7 +802,7 @@ Responses and ChatGPT/Codex summary parts retain their output/part identity.
 Heading deltas, completed part bodies, and final-only summaries are reconciled
 without repeating snapshots. Distinct parts have paragraph boundaries; late text
 for an earlier part stays in that part. A completed Markdown heading without body
-text is labeled **Summary heading**. Counts alone never imply a displayable
+text stays as the heading; opening it explains that no body was supplied. Counts alone never imply a displayable
 summary, and opaque reasoning state is never shown as prose.
 
 The web protocol uses revisioned `response_metadata` snapshots. Each has a unique

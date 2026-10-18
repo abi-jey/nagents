@@ -65,7 +65,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
     <details className="execution-record tool-record" data-tone={status.tone} data-busy={busy || undefined}
       data-tool-family={presentation.family}
       data-preparing={preparing || undefined} data-disclosure-key={entry.id} open={open ?? revealedStream.current}
-      onToggle={(event) => toggle?.(event.currentTarget.open)}>
+      onToggle={(event) => { if (open === undefined || event.currentTarget.open !== open) toggle?.(event.currentTarget.open); }}>
       <summary>
         <span className="tool-symbol"><Icon name={presentation.icon} size={16} /></span>
         <span className="tool-heading">
@@ -84,7 +84,6 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
           {entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0 &&
             <span className="execution-duration">{executionDuration(entry.durationMs)}</span>}
         </span>
-        <span className="tool-chevron"><Icon name="chevron" size={14} /></span>
       </summary>
       <div className="tool-inspector">
         {entry.error && <div className="tool-error"><span>Error</span><pre tabIndex={0} role="region" aria-label="Error">{entry.error}</pre></div>}

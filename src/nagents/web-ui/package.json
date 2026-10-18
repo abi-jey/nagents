@@ -8,6 +8,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "demo:chat-flow": "vite --config demos/chat-flow/vite.config.ts",
+    "demo:chat-flow:build": "tsc --noEmit -p demos/chat-flow/tsconfig.json && vite build --config demos/chat-flow/vite.config.ts",
+    "demo:chat-flow:test": "node --test demos/chat-flow/test.mjs",
     "demo:voice": "vite --config demos/deep-resonance/vite.config.ts",
     "demo:voice:build": "tsc --noEmit -p demos/deep-resonance/tsconfig.json && vite build --config demos/deep-resonance/vite.config.ts",
     "demo:voice:test": "node --test demos/deep-resonance/test.mjs",
@@ -15,7 +18,7 @@
     "demo:subagents:build": "tsc --noEmit -p demos/subagent-activity/tsconfig.json && vite build --config demos/subagent-activity/vite.config.ts",
     "demo:subagents:test": "node --test demos/subagent-activity/test.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/app/*.test.js .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/live/*.test.js && npm run demo:voice:test"
+    "test": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/app/*.test.js .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/live/*.test.js && npm run demo:voice:test && npm run demo:chat-flow:test"
   },
   "dependencies": {
     "entities": "8.1.0",

@@ -46,7 +46,7 @@ test("malformed and oversized storage values fall back to Compact", () => {
     shell: { placement: ["separate"], details: ["expanded"] },
   } }));
   assert.deepEqual(arrays.activity.shell, defaultAppearance.activity.shell);
-  assert.equal(arrays.runUsage, defaultAppearance.runUsage);
+  assert.equal("runUsage" in arrays, false, "obsolete presentation preferences are discarded");
 });
 
 test("partially invalid appearance settings preserve valid categories and default invalid fields", () => {
@@ -60,7 +60,7 @@ test("partially invalid appearance settings preserve valid categories and defaul
   assert.deepEqual(parsed.activity.files, defaultAppearance.activity.files);
   assert.deepEqual(parsed.activity.tools, defaultAppearance.activity.tools);
   assert.deepEqual(parsed.activity.reasoning, defaultAppearance.activity.reasoning);
-  assert.equal(parsed.runUsage, defaultAppearance.runUsage);
+  assert.equal("runUsage" in parsed, false, "legacy run usage preferences are not exposed by the new appearance model");
   assert.equal(selectedAppearancePreset(parsed), undefined);
 });
 

@@ -12,6 +12,7 @@
     "src/features/chat/drafts*.ts",
     "src/features/chat/transcript*.ts",
     "src/features/chat/activityLayout.test.ts",
+    "src/features/chat/agentLabels.test.ts",
     "src/features/chat/appearance.rendering.test.ts",
     "src/features/chat/deliveries*.ts",
     "src/features/chat/inlineDeliveryImages.test.ts",

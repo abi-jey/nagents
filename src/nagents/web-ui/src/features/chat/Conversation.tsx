@@ -3,8 +3,8 @@ import { ExecutionRecord } from "./ExecutionRecord.js";
 import { TeamIcon } from "../team/TeamTree.js";
 import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
-import { ResponseDetails } from "./ResponseDetails.js";
-import { RunDetails } from "./RunDetails.js";
+import { ResponseDetails, type ResponseDetailsProps } from "./ResponseDetails.js";
+import { agentLabels, transcriptEntries } from "./agentLabels.js";
 import { activityCategory, activityLabels, activityLayout, activityState, importantActivity } from "./activityLayout.js";
 import type { ChatAppearance } from "../settings/appearance.js";
 import { hasResponseDetails } from "./responseMetadata.js";
@@ -51,6 +51,9 @@ export function TranscriptItems({
   renderTask,
   appearance,
   insideGroup = false,
+  labels,
+  agentName = "Assistant",
+  renderReasoning,
 }: {
   items: TranscriptItem[];
   appearance?: ChatAppearance;
@@ -59,23 +62,25 @@ export function TranscriptItems({
   disclosures: Map<string, boolean>;
   toggle: (key: string, open: boolean) => void;
   renderTask?: (thread: TaskThread) => ReactNode;
+  labels?: Map<string, string>;
+  agentName?: string;
+  renderReasoning?: (props: ResponseDetailsProps) => ReactNode;
 }) {
   const visibleItems = renderTask ? items.filter(item => item.kind !== "retained") : items;
+  const bylines = labels ?? agentLabels(transcriptEntries(items), agentName, names, appearance);
   return activityLayout(visibleItems, appearance, insideGroup).map((item) => {
-    if (item.kind === "run_footer") return <RunDetails key={item.id} metadata={item.metadata}
-      open={disclosures.get(item.id) ?? appearance?.runUsage === "expanded"}
-      toggle={open => toggle(item.id, open)} />;
     if (item.kind === "activity_group") {
       const { label, icon } = activityLabels[item.category];
       const state = activityState(item.items);
+      const groupOpen = disclosures.get(item.id) ?? (item.items.some(importantActivity) || appearance?.activity[item.category].details === "expanded");
       const targets = [...new Set(item.items.flatMap(child => child.kind === "entry" ? [executionTarget(child.entry)] : child.kind === "thread" ? [child.thread.name] : []).filter(Boolean))].slice(0, 2).join(" · ");
       return <details key={item.id} className="chat-activity-group" data-category={item.category}
         data-state={state} data-record-key={item.id} data-disclosure-key={item.id}
-        open={disclosures.get(item.id) ?? (item.items.some(importantActivity) || appearance?.activity[item.category].details === "expanded")}
-        onToggle={event => toggle(item.id, event.currentTarget.open)}>
+        open={groupOpen}
+        onToggle={event => { if (event.currentTarget.open !== groupOpen) toggle(item.id, event.currentTarget.open); }}>
         <summary><Icon name={icon} size={14} /><span className="chat-activity-label">{label}<span className="chat-activity-count">{item.items.length}</span></span>
           {targets && <span className="chat-activity-target">{targets}</span>}{state && <span className="chat-activity-state" role="status">{state}</span>}</summary>
-        <div className="chat-activity-body"><TranscriptItems items={item.items} names={names} disclosures={disclosures} toggle={toggle} renderTask={renderTask} appearance={appearance} insideGroup /></div>
+        <div className="chat-activity-body"><TranscriptItems items={item.items} names={names} disclosures={disclosures} toggle={toggle} renderTask={renderTask} appearance={appearance} labels={bylines} agentName={agentName} renderReasoning={renderReasoning} insideGroup /></div>
       </details>;
     }
     // Registry-only tasks have no proven location in this transcript. The team
@@ -105,6 +110,9 @@ export function TranscriptItems({
               toggle={toggle}
               renderTask={renderTask}
               appearance={appearance}
+              labels={bylines}
+              agentName={agentName}
+              renderReasoning={renderReasoning}
             />
           </details>
         </section>
@@ -152,6 +160,9 @@ export function TranscriptItems({
                 toggle={toggle}
                 renderTask={renderTask}
                 appearance={appearance}
+                labels={bylines}
+                agentName={agentName}
+                renderReasoning={renderReasoning}
               />
             </div>
           </details>
@@ -165,10 +176,10 @@ export function TranscriptItems({
     if (entry.kind === "assistant" && !entry.text && !hasReasoning) return null;
     const category = activityCategory(item);
     const expanded = importantActivity(item) || !!category && appearance?.activity[category].details === "expanded";
-    const responseDetails = entry.kind === "assistant" && hasReasoning && <ResponseDetails metadata={entry.responseMetadata}
-      hideSummary={reasoning?.placement === "hidden"}
-      open={disclosures.get(`reasoning:${entry.responseId}`) ?? reasoning?.details === "expanded"}
-      toggle={open => toggle(`reasoning:${entry.responseId}`, open)} />;
+    const props: ResponseDetailsProps = { metadata: entry.responseMetadata, hideSummary: reasoning?.placement === "hidden",
+      open: disclosures.get(`reasoning:${entry.responseId}`) ?? reasoning?.details === "expanded",
+      toggle: open => toggle(`reasoning:${entry.responseId}`, open) };
+    const responseDetails = entry.kind === "assistant" && hasReasoning && (renderReasoning ? renderReasoning(props) : <ResponseDetails {...props} />);
     return (
       <article
         key={entry.id}
@@ -181,7 +192,7 @@ export function TranscriptItems({
       >
         {entry.kind === "agent_change" ? <div className="agent-change-marker" title={entry.title}><TeamIcon size={13} /><span>{entry.text}</span></div> : entry.liveCaption ? <>
           <div className="entry-label chat-live-caption-label">
-            <span>{entry.liveCaption.speaker === "user" ? "You" : "ngn"}</span>
+            <span hidden={entry.liveCaption.speaker === "assistant" && !bylines.has(entry.id)}>{entry.liveCaption.speaker === "user" ? "You" : bylines.get(entry.id)}</span>
             <span className="chat-live-badge"><Icon name="wave" size={12} />Live</span>
             <time aria-label={`Voice time ${captionTime(entry.liveCaption.start)}`}>{captionTime(entry.liveCaption.start)}</time>
           </div>
@@ -202,11 +213,9 @@ export function TranscriptItems({
             toggle={(open) => toggle(entry.id, open)} />
         ) : (
           <>
-            <div className="entry-label" hidden={entry.kind === "assistant" && !entry.text}>
+            <div className="entry-label" hidden={entry.kind === "assistant" && !bylines.has(entry.id)}>
               {entry.kind === "assistant"
-                ? entry.taskId
-                  ? names.get(entry.taskId) || entry.taskId
-                  : "ngn"
+                ? bylines.get(entry.id)
                 : entry.kind === "user"
                   ? entry.origin ? "User" : "You"
                   : entry.kind === "error"
@@ -221,9 +230,8 @@ export function TranscriptItems({
               {entry.queued && <span className="origin-badge">{entry.admission === "queued" ? "Queued" : entry.admission === "sending" ? "Sending…" : "Delivery unconfirmed"}</span>}
             </div>
             {entry.channel && <ChannelHeader meta={entry.channel} />}
-            {reasoning?.placement === "separate" && responseDetails}
+            {responseDetails}
             {entry.text && <MessageContent text={entry.text} />}
-            {reasoning?.placement !== "separate" && responseDetails}
              {entry.uploads?.map((upload) => <UploadAttachment key={upload.upload_id} upload={upload} ready={!entry.queued} />)}
             {entry.channel && <ChannelAttachments parts={entry.parts} />}
             {entry.provenance && <details className="channel-provenance" data-disclosure-key={`source:${entry.id}`}
@@ -250,6 +258,9 @@ export function Conversation({
   renderTask,
   active = true,
   appearance,
+  agentName = "Assistant",
+  parentAgentName = "",
+  renderReasoning,
 }: {
   entries: Entry[];
   sessionId: string;
@@ -261,6 +272,9 @@ export function Conversation({
   renderTask?: (thread: TaskThread) => ReactNode;
   active?: boolean;
   appearance?: ChatAppearance;
+  agentName?: string;
+  parentAgentName?: string;
+  renderReasoning?: (props: ResponseDetailsProps) => ReactNode;
 }) {
   const feed = useRef<HTMLDivElement>(null);
   const isActive = useRef(active);
@@ -410,6 +424,7 @@ export function Conversation({
       .filter((entry) => entry.kind === "task" && entry.taskId)
       .map((entry) => [entry.taskId!, entry.title || entry.taskId!]),
   );
+  const labels = agentLabels(display, agentName, names, appearance, parentAgentName);
 
   return (
     <div
@@ -510,6 +525,9 @@ export function Conversation({
           toggle={toggle}
           renderTask={renderTask}
           appearance={appearance}
+          labels={labels}
+          agentName={agentName}
+          renderReasoning={renderReasoning}
         />
         </UploadSession.Provider>
         </MediaToken.Provider>

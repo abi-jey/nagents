@@ -4,11 +4,11 @@ import { activityCategories, appearancePresets, defaultAppearance, saveAppearanc
 import type { ActivityCategory, ActivityPlacement, DetailExpansion } from "./appearance.js";
 
 const categoryNames: Record<ActivityCategory, string> = { shell: "Commands", files: "File changes", reasoning: "Reasoning summaries", agents: "Agents", notices: "Notices", tools: "Other tools" };
-export function AppearanceSettings() {
+export function AppearanceSettings({ initiallyExpanded = false }: { initiallyExpanded?: boolean } = {}) {
   const value = useAppearance();
   const selected = selectedAppearancePreset(value);
   const [notice, setNotice] = useState("");
-  const [customizing, setCustomizing] = useState(!selected);
+  const [customizing, setCustomizing] = useState(initiallyExpanded || !selected);
   const visible = useRef<Partial<Record<ActivityCategory, ActivityPlacement>>>({});
   function update(next: typeof value) { setNotice(saveAppearance(next) ? "Saved in this browser" : "Applied for this page. Browser storage is unavailable."); }
   const position = appearancePresets.findIndex(preset => preset.id === selected?.id);
@@ -39,8 +39,6 @@ export function AppearanceSettings() {
             onChange={event => change({ details: event.target.value as DetailExpansion })}><option value="collapsed">Collapsed</option><option value="expanded">Expanded</option></select></label>
         </div>;
       })}</div>
-      <label className="appearance-usage">Run statistics<select aria-label="Run statistics" value={value.runUsage} onChange={event => update({ ...value, runUsage: event.target.value as typeof value.runUsage })}>
-        <option value="hidden">Hidden</option><option value="collapsed">Collapsed</option><option value="expanded">Expanded</option></select></label>
     </details>
     <footer className="appearance-footer"><span role="status">{notice || "Saved in this browser · applies to every conversation"}</span><button type="button" onClick={() => update(defaultAppearance)}>Reset appearance</button></footer>
     <p className="appearance-description">Approvals and errors remain visible at every level. These preferences change presentation only.</p>

@@ -63,8 +63,8 @@ export function taskAgent(task: RetainedTask): TeamAgent {
     canMessage: task.can_message === true, messageReason: task.unavailable_reason || task.message_unavailable_reason || "", task };
 }
 
-/** Stable ancestry and recency derived only from host timestamps. Broken ancestry is rooted. */
-export function orderedTeam(agents: readonly TeamAgent[]): { children: Map<string, TeamAgent[]>; latest: Map<string, number> } {
+/** Newest spawns first; status and descendant activity never reorder a branch. */
+export function orderedTeam(agents: readonly TeamAgent[]): { children: Map<string, TeamAgent[]> } {
   const known = new Map(agents.map(agent => [agent.id, agent]));
   const children = new Map<string, TeamAgent[]>();
   for (const agent of agents) {
@@ -78,16 +78,8 @@ export function orderedTeam(agents: readonly TeamAgent[]): { children: Map<strin
     const group = children.get(parent) || [];
     group.push(agent); children.set(parent, group);
   }
-  const latest = new Map<string, number>();
-  function activity(agent: TeamAgent): number {
-    const cached = latest.get(agent.id);
-    if (cached !== undefined) return cached;
-    const value = Math.max(agent.updatedAt, ...(children.get(agent.id) || []).map(activity));
-    latest.set(agent.id, value); return value;
-  }
-  for (const agent of agents) activity(agent);
-  for (const group of children.values()) group.sort((a, b) => (latest.get(b.id) || 0) - (latest.get(a.id) || 0) || a.id.localeCompare(b.id));
-  return { children, latest };
+  for (const group of children.values()) group.sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id));
+  return { children };
 }
 
 export function agentAncestors(id: string, agents: readonly TeamAgent[]): string[] {

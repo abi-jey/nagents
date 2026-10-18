@@ -111,6 +111,7 @@ export type Entry = {
   voice?: boolean;
   voiceSessionId?: string;
   agentName?: string;
+  previousAgentName?: string;
   liveCaption?: LiveCaption;
   // Local saved-row boundary, not an inferred run/task or source identity.
   historyTurn?: number;
@@ -204,6 +205,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
     if (!/^agent-change-[1-9]\d*$/.test(historyId) || !agent || text(event, "task_id")) return entries;
     if (entries.some(entry => entry.kind === "agent_change" && entry.historyId === historyId)) return entries;
     const marker: Entry = { id: historyId, kind: "agent_change", text: `Agent: ${agent}`, historyId, agentName: agent,
+      previousAgentName: text(event, "previous_agent") || undefined,
       title: [text(event, "provider"), text(event, "model")].filter(Boolean).join(" · "),
       ...(event.saved === true ? { recorded: true } : {}),
       ...(typeof event.history_index === "number" ? { historyIndex: event.history_index } : {}),
@@ -861,10 +863,10 @@ export function groupTranscript(entries: Entry[], options: { inlineTasks?: boole
     const origin = entries.find(entry => entry.taskId === task.id && entry.originHistoryId)?.originHistoryId;
     const anchor = origin ? entries.findLastIndex(entry => !entry.taskId && entry.historyId === origin) : -1;
     const observed = entries.findIndex(entry => entry.taskId === task.id && entry.kind === "task" && entry.started && !entry.recorded && !entry.activation);
-    // A saved root-row identity is authoritative. Otherwise retain only the
-    // creation position actually observed in this connection, never a timestamp
-    // or an unrelated later activation. Unlinked tasks stay in the team pane.
-    if (anchor >= 0 || observed >= 0) { task.first = anchor >= 0 ? anchor + .5 : observed; task.retained = false; }
+    // Keep an observed spawn at its original place through status changes and
+    // later saved metadata. Cold history uses the exact saved root-row anchor;
+    // an unrelated activation never supplies a creation position.
+    if (anchor >= 0 || observed >= 0) { task.first = observed >= 0 ? observed : anchor + .5; task.retained = false; }
   }
   for (const task of tasks.values()) {
     const seen = new Set([task.id]);
