@@ -7,8 +7,10 @@ Unclaimed work survives connector configuration changes and process shutdown.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import sqlite3
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -17,13 +19,13 @@ from typing import Literal
 
 from fastapi import HTTPException
 
+from nagents._async import finish_on_cancel
 from nagents.channels.runtime import _INBOUND_PREFIX
 from nagents.channels.store import InboxStore
 
 from .upload_store import bind as bind_uploads
 
 if TYPE_CHECKING:
-    import sqlite3
     from pathlib import Path
 
     from nagents.channels.types import ChannelCommand
@@ -628,6 +630,18 @@ class RoutingStore(InboxStore):
 
     async def has_pending(self, *, web_only: bool = False, available_channels: tuple[str, ...] | None = None) -> bool:
         predicate, parameters = self.eligible(web_only, available_channels)
+
+        def probe() -> bool:
+            # An idle poll must not compete with reply/history writes. Quarantine
+            # still runs in the existing atomic transaction when candidates exist.
+            with closing(sqlite3.connect(self.db_path, timeout=5)) as db:
+                return (
+                    db.execute(f"SELECT 1 FROM ngn_web_inbox WHERE {predicate} LIMIT 1", parameters).fetchone()
+                    is not None
+                )
+
+        if not await finish_on_cancel(asyncio.to_thread(probe)):
+            return False
 
         def pending(db: sqlite3.Connection) -> bool:
             self._quarantine_work(db)
