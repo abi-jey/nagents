@@ -14,7 +14,7 @@ const row = (history_id: string, role: string, content: string, extra: Partial<H
 const responseMetadata = (response_id: string, history_id: string, status: "responding" | "completed") => ({
   response_id, response_session_id: "root", run_id: response_id === "old-response" ? "old-run" : "run",
   revision: status === "completed" ? 2 : 1, round_number: 1, history_id, status,
-  summary: "", summary_truncated: false, summary_expired: false, usage_reported: false,
+  summary: "A synthetic response summary", summary_truncated: false, summary_expired: false, usage_reported: false,
 });
 
 function fixture() {
@@ -163,8 +163,7 @@ test("assistant row survives completion with an older HTTP history baseline and 
       "Saved history reconciles to the streaming response's existing row identity");
     const assistantRows = [...ui.container.querySelectorAll<HTMLElement>("article.entry.assistant")];
     assert.equal(assistantRows.length, 2);
-    assert.ok(assistantRows.every(element => element.querySelector(".entry-content")?.textContent?.includes("The same final answer")),
-      assistantRows.map(element => element.querySelector(".entry-content")?.textContent).join(" | "));
+    assert.ok(assistantRows.every(element => element.querySelector(":scope > .entry-content")?.textContent?.startsWith("The same final answer")));
     assert.deepEqual(assistantRows.map(element => element.querySelector(".entry-label:not([hidden])")?.textContent?.trim()),
       ["Assistant", "Assistant"], "Each admitted turn gets one visible byline");
     assert.equal(feed.scrollTop, 180);
@@ -206,7 +205,7 @@ test("ordinary adapter responses keep their DOM row through same-turn tool round
     const key = final.dataset.recordKey;
     assert.ok(key);
     assert.equal(final.dataset.runId, "run");
-    assert.equal(final.querySelector(".entry-content")?.textContent?.startsWith("The same answer"), true);
+    assert.equal(final.querySelector(":scope > .entry-content")?.textContent?.startsWith("The same answer"), true);
     assert.equal(assistants().length, 3, "The prior identical answer and first same-turn response remain distinct");
     const visibleLabels = () => assistants().map(element => element.querySelector(".entry-label:not([hidden])")?.textContent?.trim()).filter(Boolean);
     assert.deepEqual(visibleLabels(), ["Assistant", "Assistant"], "The current run has one byline across both assistant blocks");
@@ -220,7 +219,7 @@ test("ordinary adapter responses keep their DOM row through same-turn tool round
     receive({ event: "run_finished", run_id: "run", status: "completed" });
     await ui.render(cache.get("root").entries);
     assert.equal(ui.container.querySelector(`[data-record-key="${key}"]`), final);
-    assert.equal(final.querySelector(".entry-content")?.textContent?.startsWith("The same answer"), true);
+    assert.equal(final.querySelector(":scope > .entry-content")?.textContent?.startsWith("The same answer"), true);
     assert.deepEqual(visibleLabels(), ["Assistant", "Assistant"]);
     assert.equal([...ui.container.querySelectorAll("article.entry")].indexOf(final), position);
     assert.equal(tool.open, true);
