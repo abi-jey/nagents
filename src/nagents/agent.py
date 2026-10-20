@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from ._delivery_execution import _DeliveryExecution
     from .audio import AudioDuplex
     from .live import _LiveUpdates
+    from .provider.context import ContextWindow
     from .realtime import RealtimeConfig
     from .realtime import RealtimeSession
     from .stt import STTService
@@ -1268,13 +1269,16 @@ class Agent:
             raise ValueError(f"Session '{session_id}' not found")
         provider = self.provider
         identity = self._usage_provider_identity()
-        await provider.resolve_context_window()
+        window = await provider.resolve_context_window()
         history = await self.session.get_history(session_id)
         observed = await self._observed_usage(session_id, history)
         if identity != self._usage_provider_identity():
             provider = self.provider
+            window = provider.cached_context_window()
             observed = None
-        return self._context_snapshot(provider, session_id, history, observed, streaming_reply=streaming_reply)
+        return self._context_snapshot(
+            provider, session_id, history, observed, streaming_reply=streaming_reply, context_window=window
+        )
 
     def _context_snapshot(
         self,
@@ -1284,6 +1288,7 @@ class Agent:
         observed: TokenUsage | None,
         *,
         streaming_reply: str = "",
+        context_window: "ContextWindow | None" = None,
     ) -> ContextStats:
         messages = self._filter_unsupported_audio(list(history))
         tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else []
@@ -1311,6 +1316,7 @@ class Agent:
             observed=observed,
             additional_messages=additional,
             streaming_reply=draft,
+            context_window=context_window,
         )
 
     async def run(

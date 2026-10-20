@@ -64,8 +64,9 @@ without adding the same assistant response again.
 ```python
 from nagents.events import TokenUsage
 
-await provider.resolve_context_window()  # Optional bounded model metadata refresh.
+window = await provider.resolve_context_window()  # Optional bounded metadata refresh.
 stats = provider.context_stats(
+    context_window=window,
     observed=TokenUsage(
         prompt_tokens=400,
         completion_tokens=120,

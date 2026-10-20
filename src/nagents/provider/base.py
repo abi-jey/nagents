@@ -285,6 +285,7 @@ class Provider:
         additional_messages: "Sequence[Message]" = (),
         streaming_reply: str = "",
         compaction: "CompactionSnapshot | None" = None,
+        context_window: "ContextWindow | None" = None,
     ) -> "ContextStats":
         """Account for context through the library's normalized provider usage.
 
@@ -299,7 +300,7 @@ class Provider:
         """
         from ..context_stats import estimate_context_stats
 
-        window = self.cached_context_window()
+        window = context_window if context_window is not None else self.cached_context_window()
         return estimate_context_stats(
             messages=messages,
             tools=tools,
