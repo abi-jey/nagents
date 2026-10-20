@@ -652,6 +652,8 @@ after the subcommand; prefer supplying each option only once.
 | `--model ID`, `-m ID` | Set top-level model selection. A profile's own model can supersede it on activation. |
 | `--agent NAME`, `-a NAME` | Select the built-in `assistant` or an explicitly configured custom profile. |
 | `--max-subagent-depth N` | Integer `0..8`; default `2`, with the root at depth `0`. |
+| `--max-concurrent-subagents N` | Concurrent slots shared by the tree: integer `1..64`, default `3`. |
+| `--max-subagent-executions N` | Shared executions per root run: integer `1..4096`, default `8`; includes follow-ups and reactivations. |
 | `--theme NAME` | Select `terminal`, `graphite`, `ocean`, or `ember`. |
 | `--theme-background auto\|terminal\|theme` | Choose preset-default, terminal-native, or preset background behavior. |
 | `--no-animations` | Disable the busy indicator's motion, animated scrolling, and cursor blinking; brief button feedback remains. |
