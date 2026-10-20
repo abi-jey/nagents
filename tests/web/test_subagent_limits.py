@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from nagents.events import Event
     from nagents.types import Message
+    from nagents.web.service import Run
     from tests.support.providers import FakeProvider
 
 
@@ -194,8 +195,9 @@ def test_cancelled_limit_approval_does_not_save(tmp_path: Path, monkeypatch: pyt
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("reorder_read_result", [False, True], ids=["normal", "approval-before-read-result"])
 def test_stale_approved_limit_proposal_does_not_overwrite_newer_scope_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reorder_read_result: bool
 ) -> None:
     async def scenario() -> None:
         proposed = SubagentLimits(5, 24, 3)
@@ -211,6 +213,20 @@ def test_stale_approved_limit_proposal_does_not_overwrite_newer_scope_values(
             providers,
             _,
         ):
+            approval_published = asyncio.Event()
+            if reorder_read_result:
+                original_send = state.send
+
+                async def send(run: Run, record: dict[str, object]) -> None:
+                    # Harness events are queued; approval callbacks publish
+                    # directly and may overtake an earlier tool result.
+                    if record.get("event") == "tool_result" and record.get("id") == "read-limits":
+                        await approval_published.wait()
+                    await original_send(run, record)
+                    if record.get("event") == "approval":
+                        approval_published.set()
+
+                monkeypatch.setattr(state, "send", send)
             before = await state.subagent_settings.read("workspace")
             providers[0].script = proposal_script(before.revision, proposed)
             stream = LiveStream(app, headers, state.harness.session_id, "Raise this run's scoped limits")
@@ -218,7 +234,18 @@ def test_stale_approved_limit_proposal_does_not_overwrite_newer_scope_values(
             intervening = SubagentLimits(6, 32, 4)
             await state.subagent_settings.save("workspace", before.revision, intervening)
             assert (await decide(client, headers, pending, "allow")).status_code == 200
-            result = await stream.event("tool_result")
+            saw_read_result = False
+            while True:
+                result = await stream.event("tool_result")
+                if result.get("id") == "configure-limits":
+                    assert result.get("name") == "subagent_configure"
+                    break
+                assert result.get("id") == "read-limits"
+                assert result.get("name") == "subagent_configuration"
+                assert not result.get("error")
+                saw_read_result = True
+            if reorder_read_result:
+                assert saw_read_result
             assert result.get("error") or result.get("is_error")
             await stream.event("run_finished")
             await asyncio.wait_for(stream.task, HANG_GUARD)
