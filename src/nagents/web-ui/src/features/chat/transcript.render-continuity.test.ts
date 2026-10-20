@@ -477,3 +477,103 @@ test("task conversation polling reconciles streamed tool and answer rows to cano
     assert.equal(ui.container.querySelectorAll("article.entry.assistant").length, 1);
   } finally { await ui.close(); }
 });
+
+test("child followup metadata and text without a followup counter stay in one activation row", async () => {
+  const ui = fixture();
+  const childSession = "child-session";
+  const task = {
+    id: "child", name: "Calm Otter", status: "completed" as const, result: "Done", error: "",
+    session_id: "root", prompt: "First request", child_session_id: childSession, parent_task_id: "parent",
+    parent_session_id: "root", depth: 2, profile: "assistant", mode: "", followups: 1, activation: 1, trigger: "delegation" as const,
+  };
+  const priorResponseMetadata = {
+    response_id: "first-response", response_session_id: childSession, revision: 2, round_number: 0,
+    history_id: "first-answer-history", status: "completed", summary: "", summary_truncated: false,
+    summary_expired: false, usage_reported: false,
+  };
+  const priorUser: TaskDetail["history"][number] = {
+    role: "user", content: "First request", name: "", tool_call_id: "", tool_calls: [],
+    history_id: "first-user-history", message_id: "first-message",
+  };
+  const followupUser: TaskDetail["history"][number] = {
+    role: "user", content: "Find one current result", name: "", tool_call_id: "", tool_calls: [],
+    history_id: "followup-user-history", message_id: "followup-message",
+  };
+  const priorAssistant: TaskDetail["history"][number] = {
+    role: "assistant", content: "The first answer.", name: "", tool_call_id: "", tool_calls: [],
+    history_id: "first-answer-history", response_id: "first-response", response_metadata: priorResponseMetadata,
+  };
+  const detail = (history: TaskDetail["history"], activity: TaskActivity[], activityCursor: number): TaskDetail => ({
+    task, history, activity, activity_cursor: activityCursor,
+  });
+  const team = {
+    selected: "child", loaded: true, profile: undefined,
+    detail: detail([priorUser, priorAssistant, followupUser], [], 100), activity: [],
+    loading: false, loadingEarlier: false, select() {}, loadEarlier: async () => {}, startNotice: "",
+  } as unknown as TeamController;
+  const render = () => ui.renderElement(createElement(TaskConversation, {
+    team, agents: [], arrivals: {}, token: "", sessionId: "root", back() {},
+  }));
+  const event = (sequence: number, payload: TaskActivity["payload"]): TaskActivity => ({
+    event: "task_activity", task_id: "child", activation: 1, sequence, timestamp: sequence, payload,
+  });
+  const findAnswer = () => [...ui.container.querySelectorAll<HTMLElement>("article.entry.assistant")]
+    .find(item => item.textContent?.includes("A current result is ready.")) || null;
+  const assertSingleFollowup = (expected: HTMLElement) => {
+    assert.equal(ui.container.querySelectorAll("article.entry.assistant").length, 2,
+      "the earlier activation and current followup must each have one assistant row");
+    assert.equal(findAnswer(), expected, "the followup response row must keep its DOM identity");
+    assert.ok([...ui.container.querySelectorAll("article.entry.assistant")]
+      .some(item => item.textContent?.includes("The first answer.")),
+    "the earlier activation remains a separate, intact response");
+  };
+  try {
+    await render();
+    assert.equal(ui.container.querySelectorAll("article.entry.assistant").length, 1,
+      "the earlier completed response is present before the followup starts");
+
+    const chunks = [
+      event(101, { type: "text_chunk", response_id: "followup-response", response_session_id: childSession, chunk: "A current " }),
+      event(102, { type: "text_chunk", response_id: "followup-response", response_session_id: childSession, chunk: "result is ready." }),
+    ];
+    team.detail = detail([priorUser, priorAssistant, followupUser], chunks, 100);
+    await render();
+    const answer = findAnswer();
+    assert.ok(answer, "text chunks create the live followup row before its enriched metadata arrives");
+    assertSingleFollowup(answer);
+
+    const metadata = event(103, {
+      type: "response_metadata", response_id: "followup-response", response_session_id: childSession,
+      run_id: "root-run", task_id: "parent", parent_task_id: "root", followup: 1,
+      revision: 1, round_number: 0, history_id: "", status: "responding", summary: "",
+      summary_truncated: false, summary_expired: false, usage_reported: false,
+    });
+    team.detail = detail([priorUser, priorAssistant, followupUser], [...chunks, metadata], 100);
+    await render();
+    assertSingleFollowup(answer);
+    assert.match(answer.textContent || "", /A current result is ready\./);
+
+    const textDone = event(104, {
+      type: "text_done", response_id: "followup-response", response_session_id: childSession,
+      text: "A current result is ready.",
+    });
+    team.detail = detail([priorUser, priorAssistant, followupUser], [...chunks, metadata, textDone], 100);
+    await render();
+    assertSingleFollowup(answer);
+
+    const canonicalMetadata = {
+      response_id: "followup-response", response_session_id: childSession, revision: 3, round_number: 0,
+      history_id: "followup-answer-history", status: "completed", summary: "", summary_truncated: false,
+      summary_expired: false, usage_reported: false,
+    };
+    const canonicalHistory: TaskDetail["history"] = [priorUser, priorAssistant, followupUser, {
+      role: "assistant", content: "A current result is ready.", name: "", tool_call_id: "", tool_calls: [],
+      history_id: "followup-answer-history", response_id: "followup-response", response_metadata: canonicalMetadata,
+    }];
+    team.detail = detail(canonicalHistory, [], 104);
+    await render();
+    assertSingleFollowup(answer);
+    assert.equal(ui.container.querySelectorAll("article.entry.assistant").length, 2,
+      "canonical polling leaves one response for each activation");
+  } finally { await ui.close(); }
+});

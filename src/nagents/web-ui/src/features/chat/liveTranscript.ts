@@ -147,7 +147,12 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
           responseMetadata: latestResponseMetadata(entry.responseMetadata, old.responseMetadata),
           callPosition: entry.callPosition,
           historyIndex: entry.historyIndex, historyTurn: entry.historyTurn,
-          text: entry.kind === "assistant" ? entry.text : old.text,
+          // A response-metadata checkpoint carries identity and usage, not an
+          // answer body. It may arrive after text_done but before the assistant
+          // row is committed. Only an actual assistant history row replaces the
+          // observed text, including an intentionally empty saved answer.
+          text: entry.kind === "assistant" && snapshot.history[entry.historyIndex ?? -1]?.role !== "response_metadata"
+            ? entry.text : old.text,
           // A committed row can reach a checkpoint before the consumer has
           // published its final text event. Keep that same live slot open until
           // the event arrives, or aggregated active chunks create a second row.

@@ -1235,14 +1235,20 @@ button.deny:hover:not(:disabled) {
   color: var(--surface-reading);
 }
 @media (max-width: 760px) {
+  .app-shell {
+    position: fixed;
+    top: var(--app-viewport-top, 0px);
+    left: 0;
+    height: var(--app-viewport-height, 100dvh);
+  }
   main {
     display: flex;
     flex-direction: column;
   }
   .topbar {
-    height: 52px;
+    height: auto;
     min-height: 52px;
-    padding: 4px 8px;
+    padding: max(4px, env(safe-area-inset-top)) 8px 4px;
     gap: 6px;
     flex-shrink: 0;
   }
@@ -1304,6 +1310,10 @@ button.deny:hover:not(:disabled) {
   .composer-area {
     padding: 6px 8px max(6px, env(safe-area-inset-bottom));
     flex-shrink: 0;
+  }
+  #composer {
+    /* Smaller fields trigger automatic focus zoom in mobile Safari. */
+    font-size: 16px;
   }
   .welcome {
     margin-top: 4px;
