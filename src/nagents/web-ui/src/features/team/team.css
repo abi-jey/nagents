@@ -12,7 +12,8 @@
 .team-pane-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; font-weight: 550; }
 .team-pane-heading h2 > span { color: var(--text-secondary); font-size: 10px; font-weight: 400; }
 .team-pane-heading > button { display: grid; place-items: center; min-height: 28px; width: 28px; padding: 0; border-color: transparent; background: transparent; }
-.team-tree-scroll { min-height: 0; overflow: auto; padding: 0 8px 16px 5px; scrollbar-width: thin; overflow-anchor: none; }
+.team-navigation { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.team-tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 16px 5px; scrollbar-width: thin; overflow-anchor: none; }
 .team-tree, .team-tree-children { list-style: none; padding: 0; margin: 0; }
 .team-tree-branch { position: relative; min-width: 0; }
 .team-tree-children { margin: 0 0 0 12px; padding: 0 0 0 6px; border-left: 1px solid color-mix(in srgb, var(--text-secondary) 22%, transparent); }
@@ -25,7 +26,9 @@
 .team-agent-row.is-selected { background: color-mix(in srgb, var(--accent-blue) 8%, var(--surface-navigation)); border-color: color-mix(in srgb, var(--accent-blue) 22%, transparent); }
 .team-agent-open { display: flex; flex-direction: column; gap: 5px; text-align: left; width: 100%; border: 0; background: transparent; padding: 8px 9px 7px; min-height: 76px; border-radius: 6px; }
 .team-agent-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; width: 100%; padding-right: 22px; min-width: 0; }
-.team-agent-heading > strong { font-size: 11px; font-weight: 580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-agent-identity { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.team-agent-identity > strong { font-size: 11px; font-weight: 580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-agent-definition { flex: 0 1 auto; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; color: var(--text-secondary); font-weight: 400; }
 .team-state { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 450; line-height: 1.3; color: var(--text-secondary); white-space: nowrap; min-width: 0; }
 .team-state i { width: 4px; height: 4px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
 .team-state.state-running { color: var(--accent-blue); }
@@ -47,8 +50,9 @@
 .team-more { padding: 4px 0 5px 16px; }
 .team-more button, .team-profile-more { display: flex; justify-content: space-between; align-items: center; gap: 9px; min-height: 30px; font-size: 11px; border-color: transparent; background: transparent; color: var(--text-secondary); }
 .team-more button > span, .team-profile-more > span { font-variant-numeric: tabular-nums; opacity: .7; }
-.team-profiles { margin: 14px 0 0 18px; border-top: 1px solid color-mix(in srgb, var(--border-group) 65%, transparent); padding-top: 13px; }
-.team-profiles-label { display: block; margin: 0 7px 7px; font-size: 10px; color: var(--text-secondary); }
+.team-profiles { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; max-height: 35%; margin: 0 9px 0 18px; border-top: 1px solid var(--border-group); padding: 9px 0 8px; }
+.team-profiles-label { flex-shrink: 0; display: block; margin: 0 7px 5px; font-size: 10px; font-weight: 450; color: var(--text-secondary); }
+.team-profile-list { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .team-profile { display: block; width: 100%; text-align: left; border-color: transparent; background: transparent; padding: 7px; margin: 2px 0; }
 .team-profile > span { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .team-profile strong { font-size: 11px; font-weight: 550; }
@@ -90,7 +94,9 @@
 .focused-task-header { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border-group); padding: 12px 26px; }
 .focused-task-header > div { flex: 1; min-width: 0; }
 .focused-task-header h2 { font-size: 14px; font-weight: 550; margin: 0 0 3px; }
-.focused-task-model { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-secondary); }
+.focused-task-model { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 5px; font-size: 10px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.focused-task-definition { min-width: 0; max-width: 100%; }
+.focused-task-definition b { font-weight: 500; }
 .task-back { display: flex; align-items: center; gap: 5px; padding: 5px 7px; background: transparent; border-color: transparent; font-size: 11px; color: var(--text-secondary); }
 .task-back svg { transform: rotate(180deg); }
 .task-assignment { margin: 10px 28px 0; color: var(--text-secondary); font-size: 11px; }
@@ -109,6 +115,8 @@
 .workspace-live-slot:empty { display: none; }
 .team-profile-introduction { max-width: 680px; padding: 28px; font-size: 14px; line-height: 1.7; }
 .team-profile-help { color: var(--text-secondary); font-size: 12px; }
+.team-profile-source { margin-top: 22px; color: var(--text-secondary); font-size: 11px; }
+.team-profile-source dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .agent-configuration-dialog { width: min(480px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow-y: auto; padding: 20px; border: 1px solid var(--border-group); border-radius: 12px; color: var(--text-reading); background: var(--surface-navigation); }
 .agent-configuration-dialog::backdrop { background: #0008; }
 .agent-configuration-dialog header { display: flex; align-items: center; justify-content: space-between; }

@@ -8,9 +8,18 @@ The Team pane shows the main conversation and delegated agents in an activity
 tree. Select an agent to inspect its conversation and send it a message through
 the shared composer. Siblings use newest-spawn order; status changes and activity
 inside descendants do not reshuffle the list. Live spawn rows keep their position
-in the chat when later saved metadata arrives. Discovered profiles that have not run appear as **Not
-started**. See [Inspecting and messaging delegated agents](task-inspection.md)
+in the chat when later saved metadata arrives. **Agent definitions** stays below
+a divider with its own scroll area, including definitions already used by running
+or completed conversations. Unused definitions show **Not started**. Selecting a
+definition starts a new conversation through the shared composer; selecting a
+named conversation messages that existing agent. See [Inspecting and messaging delegated agents](task-inspection.md)
 for message delivery, settings, and restart behavior.
+
+Generated conversation names are separate from their definitions. A named child
+shows its recorded definition (such as `assistant` or `mini`) beside its name and
+in its conversation header and settings. Definition entries expose their current
+source file; this is not a historical snapshot of the file used by an older run.
+Each conversation's accepted provider and model remain visible independently.
 
 ## Source Availability
 
@@ -103,7 +112,7 @@ connection; set its environment variable before making requests.
 Both model-default scopes can reference a global or workspace connection. An
 agent model overrides the workspace default, which overrides the global default.
 Open an agent's settings in Team to configure the same provider/model selection
-for `assistant` or any unused profile. **Inherit** removes its explicit model
+for `assistant` or any discovered profile. **Inherit** removes its explicit model
 choice; **Restore definition** restores the model declared in its source file.
 Accepted executions keep their connection and model until the next activation.
 New trusted agent definitions appear in Team without restarting the server.
