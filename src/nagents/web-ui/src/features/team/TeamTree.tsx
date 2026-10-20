@@ -52,6 +52,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   const { children } = useMemo(() => orderedTeam(agents), [agents]);
   const [expanded, setExpanded] = useState(new Map<string, boolean>());
   const [limits, setLimits] = useState(new Map<string, number>());
+  const revealed = useRef(new Map<string, Set<string>>());
   const [profileLimit, setProfileLimit] = useState(3);
   const tree = useRef<HTMLDivElement>(null);
   const definitions = useRef<HTMLDivElement>(null);
@@ -92,7 +93,13 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   }, [profiles.length, profileLimit]);
   function branch(agent: TeamAgent, depth: number) {
     const descendants = children.get(agent.id) || [], open = expanded.get(agent.id) ?? depth < 2;
-    const limit = limits.get(agent.id) || 6;
+    let limit = limits.get(agent.id) || 6;
+    const shown = revealed.current.get(agent.id) || new Set<string>();
+    // New spawns enter before older siblings. Grow this already-revealed
+    // window in the same render, rather than evicting and lazy-remounting them.
+    descendants.forEach((child, index) => { if (shown.has(child.id)) limit = Math.max(limit, index + 1); });
+    if (open) descendants.slice(0, limit).forEach(child => shown.add(child.id));
+    revealed.current.set(agent.id, shown);
     return <li key={agent.id || "main"} className="team-tree-branch">
       <div className="team-tree-row"><span className="team-tree-toggle-slot">{!!descendants.length && <button type="button" className="team-tree-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${agent.name}'s agents`} aria-expanded={open}
         onClick={() => setExpanded(current => new Map(current).set(agent.id, !open))}><Icon name="chevron" size={12} /></button>}</span>

@@ -7,6 +7,7 @@ import type { Snapshot, WireEvent } from "../../types.js";
 import { defaultAppearance, type ChatAppearance } from "../settings/appearance.js";
 import type { ArrivalTimes } from "../team/TeamTree.js";
 import { TaskTimeline } from "../team/TaskTimeline.js";
+import { TeamTree } from "../team/TeamTree.js";
 import { TaskConversation } from "../team/TaskConversation.js";
 import type { TeamController } from "../team/useTeam.js";
 import type { TaskActivity, TaskDetail } from "../team/model.js";
@@ -144,6 +145,50 @@ test("task timeline rows render from observed threads and keep identity as the r
     await ui.render(entries, { renderTask });
     assert.equal(ui.container.querySelector('.task-timeline-node[data-task-id="child"]'), childRow,
       "active-to-terminal task state must update the existing row");
+  } finally { await ui.close(); }
+});
+
+test("new TeamTree siblings do not evict previously revealed rows or nested children", async () => {
+  const ui = fixture();
+  const rootAgent = { ...agent("", "", "running"), name: "Assistant", startedAt: 0 };
+  const oldParents = Array.from({ length: 8 }, (_, index) => ({
+    ...agent(`old-${index + 1}`, "", "running"), name: `Old ${index + 1}`, startedAt: 8 - index,
+  }));
+  const nested = { ...agent("nested-old-1", "old-1", "running"), name: "Nested old child", startedAt: 9 };
+  let agents: TeamAgent[] = [rootAgent, ...oldParents, nested];
+  const render = () => ui.renderElement(createElement(TeamTree, {
+    agents, profiles: [], selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
+  }));
+  try {
+    await render();
+    const tree = ui.container.querySelector<HTMLOListElement>("ol.team-tree")!;
+    const oldNodes = oldParents.slice(0, 6).map(item => {
+      const node = tree.querySelector<HTMLElement>(`[data-agent-id="${item.id}"]`);
+      assert.ok(node, `${item.id} should be in the initial visible sibling window`);
+      return [item.id, node] as const;
+    });
+    const nestedNode = tree.querySelector<HTMLElement>('[data-agent-id="nested-old-1"]');
+    assert.ok(nestedNode, "a nested child of a revealed parent should be rendered");
+    assert.deepEqual([...tree.querySelectorAll(":scope > li.team-tree-branch")].length, 1);
+    assert.equal(tree.querySelectorAll(":scope > li.team-tree-branch > .team-tree-children > li.team-tree-branch").length, 6);
+    assert.match(tree.querySelector(":scope > li.team-tree-branch > .team-tree-children > .team-more button")?.textContent || "", /2/);
+
+    const newParents = [
+      { ...agent("new-1", "", "running"), name: "New 1", startedAt: 10 },
+      { ...agent("new-2", "", "running"), name: "New 2", startedAt: 9 },
+    ];
+    agents = [rootAgent, ...newParents, ...oldParents, nested];
+    await render();
+
+    for (const [id, node] of oldNodes) assert.equal(tree.querySelector(`[data-agent-id="${id}"]`), node,
+      `${id} should remain mounted when new siblings arrive ahead of it`);
+    assert.equal(tree.querySelector('[data-agent-id="nested-old-1"]'), nestedNode,
+      "a previously shown nested child should not disappear when its parent branch shifts");
+    assert.ok(tree.querySelector('[data-agent-id="new-1"]'));
+    assert.ok(tree.querySelector('[data-agent-id="new-2"]'));
+    assert.equal(tree.querySelectorAll(":scope > li.team-tree-branch > .team-tree-children > li.team-tree-branch").length, 8);
+    assert.match(tree.querySelector(":scope > li.team-tree-branch > .team-tree-children > .team-more button")?.textContent || "", /2/,
+      "the two older siblings that were never shown remain behind the lazy More button");
   } finally { await ui.close(); }
 });
 
