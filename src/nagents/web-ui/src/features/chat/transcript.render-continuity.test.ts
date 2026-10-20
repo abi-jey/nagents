@@ -254,6 +254,18 @@ test("grouped approval activity stays open through completion until the user col
     assert.equal(ui.container.querySelector('article.entry.tool'), tool);
     assert.equal(group.open, false, "an explicit user collapse stays closed through later activity");
     assert.equal(details.open, false, "an explicit user collapse stays closed through later activity");
+
+    entries = [];
+    await ui.render(entries, { appearance: defaultAppearance });
+    entries = appendEvent(entries, call);
+    entries = appendEvent(entries, {
+      event: "approval", run_id: "run", id: "approval-call", tool: "lookup", approval_id: "approval-grouped", arguments: call.arguments,
+    });
+    await ui.render(entries, { appearance: defaultAppearance });
+    const resetGroup = ui.container.querySelector<HTMLDetailsElement>('details.chat-activity-group[data-category="tools"]');
+    const resetDetails = ui.container.querySelector<HTMLDetailsElement>("details.execution-record.tool-record");
+    assert.ok(resetGroup?.open, "an empty-list reset must clear stale manual collapse for a reused group key");
+    assert.ok(resetDetails?.open, "an empty-list reset must clear stale manual collapse for a reused tool key");
   } finally { await ui.close(); }
 });
 

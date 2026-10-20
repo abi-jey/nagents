@@ -306,6 +306,10 @@ export function Conversation({
   const [usageTip] = useState(() => usageTips[Math.floor(Math.random() * usageTips.length)]);
   const [announcement, setAnnouncement] = useState("");
   const [disclosures, setDisclosures] = useState(new Map<string, boolean>());
+  const empty = entries.length === 0;
+  useLayoutEffect(() => {
+    if (empty) setDisclosures(current => current.size ? new Map() : current);
+  }, [empty]);
   function toggle(key: string, open: boolean) {
     setDisclosures((current) => rememberDisclosure(current, key, open));
   }
@@ -385,6 +389,7 @@ export function Conversation({
     rememberPosition();
   }
   useLayoutEffect(() => {
+    setDisclosures(current => current.size ? new Map() : current);
     stickToBottom.current = true;
     anchor.current = undefined;
     setNewActivity(false);
