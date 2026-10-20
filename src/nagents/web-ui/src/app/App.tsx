@@ -55,7 +55,7 @@ export function App() {
   const arrivals = useAgentArrivals(client.team.tasks, client.sessions.sessionId, client.team.loaded);
   const configured = agents.find(agent => agent.id === configuredAgent);
   function configure(id: string) {
-    const target = id || profileTarget(client.sessionAgent.selection?.agent || "assistant");
+    const target = id || profileTarget(root.profile || client.sessionAgent.selection?.agent || "assistant");
     if (isProfileTarget(target)) { setConfiguredAgent(""); openAgentSettings(target.slice("profile:".length)); }
     else setConfiguredAgent(target);
   }
