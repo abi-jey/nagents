@@ -394,3 +394,48 @@ test("an unadmitted follow-up remains queued when the previous run stops and can
   const admitted = event(cache, 3, { event: "run_started", run_id: "next-run", message_id: "next-input" });
   assert.equal(admitted.entries[0].queued, false); assert.equal(admitted.entries[0].runId, "next-run");
 });
+
+test("metadata-only response checkpoints preserve live text until canonical assistant history arrives", () => {
+  const responseId = "e787ceaff6ef4c5eb631808375705a32";
+  const answer = "A final answer with a paragraph and a table-like continuation.\n\n| Check | Result |\n| --- | --- |\n| Stable | Yes |";
+  const metadata = (revision: number, status: "responding" | "completed", historyId: string) => ({
+    response_id: responseId, response_session_id: "root", run_id: "run", revision, round_number: 1,
+    history_id: status === "responding" ? "" : historyId, status, summary: "", summary_truncated: false, summary_expired: false, usage_reported: false,
+  });
+  const checkpoint = (role: "response_metadata" | "assistant", content: string, revision: number, status: "responding" | "completed", historyId: string): Snapshot => {
+    const snapshot = history(["Question"], "root", ["input"]);
+    snapshot.history.push({ role, content, history_id: historyId, response_id: responseId,
+      response_metadata: metadata(revision, status, historyId), name: "", tool_call_id: "", tool_calls: [] });
+    return snapshot;
+  };
+  const baseline = checkpoint("response_metadata", "", 1, "responding", "response-meta-1");
+  baseline.active_run = { id: "run", status: "running", events: [
+    { event: "run_started", run_id: "run", message_id: "input" },
+    { event: "user_message", run_id: "run", message_id: "input", text: "Question" },
+    { event: "text_chunk", run_id: "run", response_id: responseId, chunk: answer },
+    { event: "response_metadata", run_id: "run", response_id: responseId, response_session_id: "root",
+      revision: 1, round_number: 1, history_id: "", status: "responding", summary: "" },
+    { event: "text_done", run_id: "run", response_id: responseId, text: answer },
+  ] };
+
+  let state = applySnapshot({ entries: [] }, baseline);
+  const body = () => state.entries.filter((entry) => entry.kind === "assistant");
+  assert.equal(body().length, 1);
+  assert.equal(body()[0].text, answer);
+  const liveEntryId = body()[0].id;
+
+  state = applySnapshot(state, checkpoint("response_metadata", "", 3, "completed", "response-meta-3"));
+  assert.equal(body().length, 1, "a metadata checkpoint must not create a second response row");
+  assert.equal(body()[0].id, liveEntryId, "the response keeps its stable entry identity across checkpoints");
+  assert.equal(body()[0].text, answer, "metadata-only history has no authority to clear the live answer");
+
+  state = applySnapshot(state, checkpoint("assistant", "Canonical replacement", 3, "completed", "response-canonical"));
+  assert.equal(body().length, 1);
+  assert.equal(body()[0].id, liveEntryId);
+  assert.equal(body()[0].text, "Canonical replacement", "canonical assistant history replaces the observed body");
+
+  state = applySnapshot(state, checkpoint("assistant", "", 4, "completed", "response-canonical"));
+  assert.equal(body().length, 1);
+  assert.equal(body()[0].text, "", "an explicitly empty canonical assistant row remains authoritative");
+
+});

@@ -16,10 +16,13 @@ import { TaskTimeline } from "../features/team/TaskTimeline.js";
 import { TaskConversation } from "../features/team/TaskConversation.js";
 import { WorkspaceActivity } from "./WorkspaceActivity.js";
 import { useAppearance } from "../features/settings/appearance.js";
+import { useAppViewport } from "./useAppViewport.js";
 import "../features/team/team.css";
 import "../features/settings/navigator/agentNavigator.css";
 
 export function App() {
+  const shell = useRef<HTMLDivElement>(null);
+  useAppViewport(shell);
   const client = useClient();
   const appearance = useAppearance();
   const [navOpen, setNavOpen] = useState(false);
@@ -76,7 +79,7 @@ export function App() {
   }
 
   return (
-    <div className={`app-shell${sidebarCollapsed ? " rail-collapsed" : ""}`}>
+    <div ref={shell} className={`app-shell${sidebarCollapsed ? " rail-collapsed" : ""}`}>
       <a className="skip-link" href="#composer">Skip to prompt</a>
       <main className={[sidebarCollapsed && "sidebar-collapsed", client.liveOpen && "voice-open", teamOpen && "team-open"].filter(Boolean).join(" ")}>
         <WorkspaceHeader client={client} navOpen={navOpen} toggleNavigation={() => setNavOpen(!navOpen)} teamOpen={teamOpen} toggleTeam={() => setTeamOpen(value => !value)} />
