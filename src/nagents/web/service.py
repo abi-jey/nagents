@@ -23,8 +23,6 @@ from fastapi import HTTPException
 
 from nagents.cli import _event_record
 from nagents.cli import _json_default
-from nagents.compaction import estimate_tokens
-from nagents.context_stats import ContextComponent
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import ToolCallEvent
@@ -464,10 +462,11 @@ class WebState:
         }
 
     async def context_stats(self, session_id: str) -> dict[str, object]:
-        """Read-only estimated context breakdown for a root session.
+        """Read the library's provider-owned root context snapshot.
 
         Reads persisted history and the active agent's configuration, plus its
-        bounded uncommitted reply estimate. Safe while a run is active.
+        bounded uncommitted reply estimate. Safe while a run is active; this
+        host does not implement a separate token or reasoning calculation.
         """
         if session_id not in {session.id for session in await self.list_sessions()}:
             raise HTTPException(404, "Session not found in this workspace.")
@@ -477,19 +476,6 @@ class WebState:
         else:
             async with self.session_agents.view(session_id) as harness:
                 stats = await harness.agent.context_stats(session_id)
-        if active is not None and self.run_for(session_id) is active and active.context_reply:
-            tokens = estimate_tokens(active.context_reply) + 4
-            stats = replace(
-                stats,
-                components=(
-                    *stats.components,
-                    ContextComponent("streaming_reply", "Streaming reply (not yet saved)", tokens),
-                ),
-                total_tokens=stats.total_tokens + tokens,
-                remaining_tokens=stats.remaining_tokens - tokens
-                if stats.remaining_tokens is not None and stats.observed_prompt_tokens is None
-                else stats.remaining_tokens,
-            )
         return stats.as_dict()
 
     def user_message(self, run_id: str, record: dict[str, object]) -> None:

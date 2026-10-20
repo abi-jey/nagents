@@ -50,7 +50,7 @@ export function ContextIndicator({
                 </div>
               ) : null}
               <div className="context-usage-row"><span>{contextUsageLabel(stats)}</span><strong>{contextUsage(stats).toLocaleString()}</strong></div>
-              {stats.observed_prompt_tokens != null && <p className="context-note">From the last model request. New messages and tool results may change the next request.</p>}
+              {stats.observed_context_tokens != null && <p className="context-note">Input and output from the last response; reported reasoning is counted once. Added messages are estimated.</p>}
               <p className="context-breakdown-label">Estimated next request</p>
               <ul className="context-rows">
                 {rows.map((row) => (

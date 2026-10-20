@@ -13,12 +13,38 @@ from ..adapters._validation import load_object
 from .reasoning import catalog_reasoning_efforts
 
 if TYPE_CHECKING:
+    from ..events import TokenUsage
+    from ..events import Usage
     from ..types import ReasoningEffort
 
 ContextWindowSource = Literal["configured", "provider", "heuristic"]
+ContextTokenSource = Literal["provider", "mixed", "estimated"]
 MAX_CONTEXT_WINDOW = 1_000_000_000
 METADATA_TTL = 300.0
 MAX_METADATA_MODELS = 10000
+
+
+def reported_context_tokens(usage: TokenUsage | Usage) -> tuple[int, ContextTokenSource]:
+    """Account for one response's context, not cumulative billing across turns.
+
+    OpenAI/Anthropic reasoning can already be included in output; Gemini
+    thoughts are separate. A supplied total also covers otherwise unspecified
+    output details. Unknown inclusion never licenses adding reasoning twice.
+    This describes the measured response, not which opaque items a later
+    request will retain.
+    """
+    output = usage.completion_tokens
+    if usage.reasoning_in_output == "separate":
+        output += usage.reasoning_tokens
+    count = usage.prompt_tokens + output
+    if usage.total_reported:
+        count = max(count, usage.total_tokens)
+    complete = (
+        (usage.prompt_reported or usage.prompt_tokens > 0)
+        and (usage.completion_reported or usage.completion_tokens > 0 or usage.total_reported)
+        and (not usage.reasoning_tokens or usage.reasoning_in_output != "unknown" or usage.total_reported)
+    )
+    return count, "provider" if complete else "mixed"
 
 
 def validate_context_window(value: object, *, automatic: bool = True) -> int:

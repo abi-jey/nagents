@@ -140,6 +140,12 @@ export type ContextStats = {
   remaining_tokens: number | null;
   observed_prompt_tokens: number | null;
   observed_completion_tokens: number | null;
+  observed_reasoning_tokens: number | null;
+  observed_reasoning_in_output: "included" | "separate" | "unknown";
+  observed_context_tokens: number | null;
+  pending_context_tokens: number;
+  context_tokens: number;
+  context_tokens_source: "provider" | "mixed" | "estimated";
   provider: string;
   model: string;
   estimate_method: string;

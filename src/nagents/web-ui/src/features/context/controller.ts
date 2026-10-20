@@ -11,11 +11,11 @@ export function formatTokens(tokens: number): string {
 }
 
 export function contextUsage(stats: ContextStats): number {
-  return stats.observed_prompt_tokens ?? stats.total_tokens;
+  return stats.context_tokens;
 }
 
 export function contextUsageLabel(stats: ContextStats): string {
-  return stats.observed_prompt_tokens != null ? "Last provider-reported input" : "Estimated input";
+  return { provider: "Last measured context", mixed: "Context with estimated additions", estimated: "Estimated context" }[stats.context_tokens_source];
 }
 
 export function contextWindowLabel(stats: ContextStats, concise = false): string {
@@ -29,7 +29,7 @@ export function contextWindowSource(stats: ContextStats): string {
 }
 
 export function contextSummary(stats: ContextStats, concise = false): string {
-  const total = `${stats.observed_prompt_tokens == null ? "~" : ""}${formatTokens(contextUsage(stats))}`;
+  const total = `${stats.context_tokens_source === "provider" ? "" : "~"}${formatTokens(contextUsage(stats))}`;
   if (stats.context_window && stats.context_window > 0) {
     return `${total} / ${contextWindowLabel(stats, concise)}`;
   }

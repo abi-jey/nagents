@@ -10,6 +10,11 @@ export function validContextStats(data: unknown): data is ContextStats {
   if (!["configured", "provider", "heuristic"].includes(String(value.context_window_source))) return false;
   if (value.observed_prompt_tokens !== null && !count(value.observed_prompt_tokens)) return false;
   if (value.observed_completion_tokens !== null && !count(value.observed_completion_tokens)) return false;
+  if (value.observed_reasoning_tokens !== null && !count(value.observed_reasoning_tokens)) return false;
+  if (value.observed_context_tokens !== null && !count(value.observed_context_tokens)) return false;
+  if (!count(value.context_tokens) || !count(value.pending_context_tokens)) return false;
+  if (!["included", "separate", "unknown"].includes(String(value.observed_reasoning_in_output))) return false;
+  if (!["provider", "mixed", "estimated"].includes(String(value.context_tokens_source))) return false;
   if (value.compaction !== undefined) {
     if (!value.compaction || typeof value.compaction !== "object" || Array.isArray(value.compaction)) return false;
     const policy = value.compaction as Record<string, unknown>;

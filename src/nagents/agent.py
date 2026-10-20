@@ -45,7 +45,6 @@ from .compaction import describe_compaction
 from .compaction import estimate_messages_tokens
 from .compaction import get_model_context_limit
 from .context_stats import ContextStats
-from .context_stats import estimate_context_stats
 from .events import CompactionDoneEvent
 from .events import CompactionStartedEvent
 from .events import DoneEvent
@@ -103,6 +102,7 @@ if TYPE_CHECKING:
     from ._delivery_execution import _DeliveryExecution
     from .audio import AudioDuplex
     from .live import _LiveUpdates
+    from .provider.context import ContextWindow
     from .realtime import RealtimeConfig
     from .realtime import RealtimeSession
     from .stt import STTService
@@ -378,6 +378,7 @@ class Agent:
         self._counter_coverage: dict[str, dict[str, int]] = {}
         # Last single generation's real usage per session, for context-stat comparison.
         self._last_usage: dict[str, TokenUsage] = {}
+        self._context_drafts: dict[str, tuple[int, str]] = {}
         self._usage_origins: dict[str, _UsageOrigin] = {}
 
         # Flag to request compaction during run (set by trigger_compaction())
@@ -1090,6 +1091,7 @@ class Agent:
         original_count = len(history)
         original_tokens = estimate_messages_tokens(history)
         observed = await self._observed_usage(session_id, history)
+        snapshot = self._context_snapshot(self.provider, session_id, history, observed)
         request = CompactionRequest(
             messages=deepcopy(history),
             session_id=session_id,
@@ -1097,6 +1099,7 @@ class Agent:
             estimated_tokens=original_tokens,
             force=force,
             actual_input_tokens=observed.prompt_tokens if observed is not None else 0,
+            context_stats=snapshot,
         )
         if not force and not await strategy.should_compact(request):
             return
@@ -1239,13 +1242,15 @@ class Agent:
             return None
         return self._last_usage.get(session_id)
 
-    async def context_stats(self, session_id: str) -> ContextStats:
-        """Estimate the token breakdown of the request this session would send.
+    async def context_stats(self, session_id: str, *, streaming_reply: str = "") -> ContextStats:
+        """Read provider context usage and an estimated next-input breakdown.
 
         Read-only: it assembles the same system prompt, tool schemas, skill
         catalog and history that the next text request uses, without making
-        a generation or changing session state. Optional provider metadata is
-        refreshed through a bounded cache. Breakdown values are character/byte heuristics;
+        a generation or changing session state. The provider accounts for the
+        matching response's input, output and reasoning, with estimated pending
+        messages and streaming output. Optional provider metadata is refreshed
+        through a bounded cache. Breakdown values are character/byte heuristics;
         see :func:`nagents.estimate_context_stats` for what is included.
 
         Explicit ``$skill`` activation text is request-local and never persisted,
@@ -1253,6 +1258,8 @@ class Agent:
 
         Args:
             session_id: Session to account for.
+            streaming_reply: Optional host-supplied draft. Ordinary text runs
+                track their own bounded draft, including nested ngn agents.
 
         Raises:
             ValueError: If the session does not exist.
@@ -1269,22 +1276,47 @@ class Agent:
             provider = self.provider
             window = provider.cached_context_window()
             observed = None
+        return self._context_snapshot(
+            provider, session_id, history, observed, streaming_reply=streaming_reply, context_window=window
+        )
+
+    def _context_snapshot(
+        self,
+        provider: Provider,
+        session_id: str,
+        history: list[Message],
+        observed: TokenUsage | None,
+        *,
+        streaming_reply: str = "",
+        context_window: "ContextWindow | None" = None,
+    ) -> ContextStats:
         messages = self._filter_unsupported_audio(list(history))
         tools = self.tool_registry.get_all() if self.tool_registry.has_tools() else []
         if tools and self.save_tool_outputs:
             tools = _inject_save_to(tools)
         skill_manifest = render_skill_manifest(self.skills.values()) if self.skill_discoverer is not None else ""
-        return estimate_context_stats(
+        additional: list[Message] = []
+        origin = self._usage_origins.get(session_id) if observed is not None else None
+        if origin is not None:
+            additional = messages[origin.history_count :]
+            if additional and additional[0].role == "assistant":
+                # The measured output already covers this response, including
+                # function-call arguments and its provider-reported reasoning.
+                additional = additional[1:]
+        draft_start, draft_text = self._context_drafts.get(session_id, (len(history), ""))
+        draft = streaming_reply or draft_text
+        if len(history) > draft_start and history[draft_start].role == "assistant":
+            draft = ""  # Already committed; don't count the same reply twice.
+        return provider.context_stats(
             system_prompt=self.system_prompt or "",
             tools=tools,
             skill_manifest=skill_manifest,
             messages=messages,
-            context_window=window.tokens,
-            context_window_source=window.source,
             compaction=describe_compaction(self.compaction_strategy, provider),
-            provider=provider.provider_type.value,
-            model=provider.model,
             observed=observed,
+            additional_messages=additional,
+            streaming_reply=draft,
+            context_window=context_window,
         )
 
     async def run(
@@ -1442,6 +1474,7 @@ class Agent:
                         error.add_note(f"{type(plugin).__name__}.after_run failed")
                         errors.append(error)
                 self._session_compaction_requests.discard(session_id)
+                self._context_drafts.pop(session_id, None)
                 if errors:
                     raise BaseExceptionGroup("Agent run cleanup failed", errors)
 
@@ -1648,6 +1681,7 @@ class Agent:
             )
             # A new generation without usage must not inherit an older round's count.
             self._discard_observed_usage(session_id)
+            self._context_drafts[session_id] = (len(history), "")
             async with self._closing_events(
                 self.provider.generate(
                     messages=request.messages,
@@ -1709,12 +1743,18 @@ class Agent:
                             )
                         last_usage = merged
                         self._session_tokens[session_id] = last_usage.prompt_tokens
-                        if last_usage.prompt_tokens > 0:
+                        if last_usage.prompt_reported or last_usage.prompt_tokens > 0:
                             self._usage_origins[session_id] = usage_origin
                             self._last_usage[session_id] = TokenUsage(
                                 prompt_tokens=last_usage.prompt_tokens,
                                 completion_tokens=last_usage.completion_tokens,
                                 total_tokens=last_usage.total_tokens,
+                                prompt_reported=last_usage.prompt_reported,
+                                completion_reported=last_usage.completion_reported,
+                                total_reported=last_usage.total_reported,
+                                reasoning_tokens=last_usage.reasoning_tokens,
+                                reasoning_reported=last_usage.reasoning_reported,
+                                reasoning_in_output=last_usage.reasoning_in_output,
                             )
                     event.usage = replace(last_usage, session=replace(session_usage))
                     response.observe(event)
@@ -1723,8 +1763,10 @@ class Agent:
 
                     if isinstance(event, TextChunkEvent):
                         full_text += event.chunk
+                        self._context_drafts[session_id] = (len(history), full_text[:262144])
                     elif isinstance(event, TextDoneEvent):
                         full_text = event.text
+                        self._context_drafts[session_id] = (len(history), full_text[:262144])
                         finish_reason = event.finish_reason
                     elif isinstance(event, ToolCallEvent):
                         generation, index = event.extra.get("generation_id"), event.extra.get("index")
@@ -1797,6 +1839,7 @@ class Agent:
                     response_write(response.snapshot(terminal=True)),
                 ):
                     history_id = await self.session.add_message(session_id, assistant_block)
+                self._context_drafts.pop(session_id, None)
                 yield response.snapshot(terminal=True, history_id=history_id)
 
                 # Execute each tool
@@ -1873,6 +1916,7 @@ class Agent:
                     history_id = await self.session.add_message(
                         session_id, Message(role="assistant", content=full_text)
                     )
+            self._context_drafts.pop(session_id, None)
             yield response.snapshot(terminal=True, history_id=history_id)
 
             yield DoneEvent(

@@ -25,6 +25,12 @@ const stats: ContextStats = {
   remaining_tokens: 120500,
   observed_prompt_tokens: 7100,
   observed_completion_tokens: 220,
+  observed_reasoning_tokens: 40,
+  observed_reasoning_in_output: "included",
+  observed_context_tokens: 7320,
+  pending_context_tokens: 0,
+  context_tokens: 7320,
+  context_tokens_source: "provider",
   provider: "openai_compatible",
   model: "gpt-4o",
   estimate_method: "chars/4 heuristic",
@@ -55,40 +61,70 @@ test("summary and percent distinguish known and unknown context windows", () => 
   assert.equal(formatTokens(999), "999");
   assert.equal(formatTokens(7500), "7.5k");
   assert.equal(formatTokens(128000), "128k");
-  assert.equal(contextSummary(stats), "7.1k / 128k");
+  assert.equal(contextSummary(stats), "7.3k / 128k");
   assert.equal(contextPercent(stats), 6);
   const unknown = { ...stats, context_window: null, remaining_tokens: null };
-  assert.equal(contextSummary(unknown), "7.1k");
+  assert.equal(contextSummary(unknown), "7.3k");
   assert.equal(contextPercent(unknown), 0);
 });
 
-test("context uses observed input for the summary and meter while preserving the estimated breakdown", () => {
-  const actual = { ...stats, total_tokens: 144875, observed_prompt_tokens: 248779, context_window: 1_000_000 };
-  assert.equal(contextSummary(actual), "249k / 1M");
+test("context displays backend accounting and keeps estimated input breakdown separate", () => {
+  const actual: ContextStats = {
+    ...stats,
+    total_tokens: 144875,
+    observed_prompt_tokens: 248779,
+    observed_completion_tokens: 1200,
+    observed_reasoning_tokens: 80,
+    observed_context_tokens: 249979,
+    pending_context_tokens: 50,
+    context_tokens: 250029,
+    context_tokens_source: "mixed",
+    remaining_tokens: 749971,
+    context_window: 1_000_000,
+  };
+  assert.equal(contextSummary(actual), "~250k / 1M");
   assert.equal(contextPercent(actual), 25);
   const html = renderToStaticMarkup(createElement(ContextIndicator, { stats: actual, error: "", open: true, setOpen() {} }));
-  assert.match(html, /Last provider-reported input/);
-  assert.match(html, /248,779/);
+  assert.match(html, /Context with estimated additions/);
+  assert.match(html, /250,029/);
+  assert.match(html, /reported reasoning is counted once/);
   assert.match(html, /Estimated next request/);
   assert.match(html, /144,875/);
   assert.match(html, /provider metadata/);
-  assert.doesNotMatch(html, /~249k/);
+  assert.doesNotMatch(html, /Last provider-reported input/);
 });
 
-test("heuristic limits and usage estimates are marked separately; zero measured input is valid", () => {
-  const estimated: ContextStats = { ...stats, observed_prompt_tokens: null, context_window: 100000, context_window_source: "heuristic" };
+test("heuristic limits and usage estimates are marked separately; zero measured context is valid", () => {
+  const estimated: ContextStats = {
+    ...stats,
+    observed_prompt_tokens: null,
+    observed_completion_tokens: null,
+    observed_reasoning_tokens: null,
+    observed_context_tokens: null,
+    pending_context_tokens: 0,
+    context_tokens: 7500,
+    context_tokens_source: "estimated",
+    remaining_tokens: 92500,
+    context_window: 100000,
+    context_window_source: "heuristic",
+  };
   assert.equal(contextSummary(estimated), "~7.5k / ~100k (guessed)");
   assert.equal(contextSummary(estimated, true), "~7.5k / ~100k");
   const html = renderToStaticMarkup(createElement(ContextIndicator, { stats: estimated, error: "", open: false, setOpen() {} }));
   assert.match(html, /aria-label="Context ~7.5k \/ ~100k \(guessed\)"/);
   assert.match(html, /model-name guess/);
-  assert.equal(contextSummary({ ...estimated, observed_prompt_tokens: 0 }), "0 / ~100k (guessed)");
-  assert.equal(contextPercent({ ...stats, observed_prompt_tokens: 300000 }), 100);
+  assert.equal(contextSummary({ ...estimated, observed_context_tokens: 0, context_tokens: 0, context_tokens_source: "provider" }), "0 / ~100k (guessed)");
+  assert.equal(contextPercent({ ...stats, context_tokens: 300000 }), 100);
   for (const value of [-1, NaN, Infinity, 1.5]) {
     assert.equal(validContextStats({ ...stats, observed_prompt_tokens: value }), false);
+    assert.equal(validContextStats({ ...stats, observed_reasoning_tokens: value }), false);
+    assert.equal(validContextStats({ ...stats, observed_context_tokens: value }), false);
+    assert.equal(validContextStats({ ...stats, pending_context_tokens: value }), false);
+    assert.equal(validContextStats({ ...stats, context_tokens: value }), false);
     assert.equal(validContextStats({ ...stats, context_window: value }), false);
   }
   assert.equal(validContextStats({ ...stats, context_window_source: "unknown" }), false);
+  assert.equal(validContextStats({ ...stats, context_tokens_source: "unknown" }), false);
 });
 
 function clock() {
