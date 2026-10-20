@@ -6,6 +6,9 @@ import asyncio
 import json
 import sqlite3
 from typing import TYPE_CHECKING
+from typing import Literal
+
+import pytest
 
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
@@ -18,8 +21,6 @@ from tests.web.test_web_wakeups import scheduled_app
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
-
-    import pytest
 
     from nagents.events import Event
     from nagents.types import Message
@@ -162,5 +163,47 @@ def test_idle_root_usage_remains_visible_without_relabeling_another_root_budget(
             response = await client.get(f"/api/sessions/{root}/tasks", headers=headers)
             assert response.status_code == 200
             assert "subagent_usage" not in response.json()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("scope", ["global", "workspace"])
+def test_unrelated_settings_edit_preserves_omitted_approved_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: Literal["global", "workspace"]
+) -> None:
+    async def scenario() -> None:
+        async def idle_script(provider: FakeProvider, _messages: list[Message]) -> AsyncIterator[Event]:
+            yield TextDoneEvent(text="idle")
+
+        async with scheduled_app(tmp_path, monkeypatch, idle_script) as (_, client, headers, state, _, _):
+            configured = SubagentLimits(5, 25, 4)
+            initial = await state.subagent_settings.read(scope)
+            await state.subagent_settings.save(scope, initial.revision, configured)
+
+            path = "/api/settings/global" if scope == "global" else "/api/settings"
+            before = (await client.get(path, headers=headers)).json()
+            values = dict(before["values"])
+            for name in ("max_concurrent_subagents", "max_subagent_executions"):
+                values.pop(name)
+            values["max_tool_rounds"] += 1
+            response = await client.post(
+                path,
+                headers=headers,
+                json={
+                    "revision": before["revision"],
+                    "values": values,
+                    "model_binding": before["model_binding"],
+                },
+            )
+            assert response.status_code == 200, response.text
+            after = (await client.get(path, headers=headers)).json()
+            assert (
+                SubagentLimits(
+                    after["values"]["max_concurrent_subagents"],
+                    after["values"]["max_subagent_executions"],
+                    after["values"]["max_subagent_depth"],
+                )
+                == configured
+            )
 
     asyncio.run(scenario())

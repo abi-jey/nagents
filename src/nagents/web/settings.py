@@ -979,6 +979,9 @@ class WebSettings:
             values = values.model_copy(update={"submit_mode": self.defaults.submit_mode})
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.defaults.read_only})
+        for name in ("max_concurrent_subagents", "max_subagent_executions"):
+            if name not in values.model_fields_set:
+                values = values.model_copy(update={name: getattr(self.defaults, name)})
         values = values.model_copy(update={"agent": self.startup_defaults.agent})
         if any(getattr(values, name) != getattr(self.defaults, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
@@ -1079,6 +1082,9 @@ class WebSettings:
             values = values.model_copy(update={"submit_mode": self.values.submit_mode})
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.values.read_only})
+        for name in ("max_concurrent_subagents", "max_subagent_executions"):
+            if name not in values.model_fields_set:
+                values = values.model_copy(update={name: getattr(self.values, name)})
         if revision != self._settings_revision("workspace"):
             raise HTTPException(409, "Settings changed. Reload settings before saving.")
         try:
