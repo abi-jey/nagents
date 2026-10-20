@@ -137,6 +137,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--port", type=int, default=8765, help="Local HTTP port (default: 8765)")
     serve.add_argument("--dev", action="store_true", help="Rebuild frontend assets and reload on source changes")
+    a2a = commands.add_parser("a2a", help="Authenticated Agent2Agent service (a2a extra)")
+    a2a_commands = a2a.add_subparsers(dest="a2a_command", required=True)
+    a2a_serve = a2a_commands.add_parser("serve", parents=[common], help="Export one ngn profile over A2A 1.0")
+    a2a_serve.add_argument("--a2a-config", required=True, type=Path, help="Explicit host-owned A2A service JSON")
+    a2a_serve.add_argument("--host", default="127.0.0.1", help="Bind address (default: loopback)")
+    a2a_serve.add_argument("--port", default=8768, type=int, help="A2A HTTP port (default: 8768)")
+    a2a_serve.add_argument(
+        "--tls-certfile", default="", help="TLS certificate, unless TLS terminates at a trusted proxy"
+    )
+    a2a_serve.add_argument("--tls-keyfile", default="", help="TLS private key file")
+    a2a_serve.add_argument(
+        "--trusted-proxies", default="127.0.0.1,::1", help="Explicit proxy IPs allowed to set forwarded HTTPS"
+    )
     login = commands.add_parser(
         "login", parents=[common], help="Sign in to a provider: ChatGPT/Codex, OpenRouter, or an API key"
     )
@@ -537,7 +550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides["cli_plugins"] = tuple(plugins[len(config.plugins) :])
         config = replace(config, **overrides)
         _record_cli_subagent_limit_overrides(config, args)
-        if not config.profile(config.agent).user_invocable:
+        if args.command != "a2a" and not config.profile(config.agent).user_invocable:
             raise ValueError(f"Agent {config.agent!r} is available only for delegation")
         if "model" in overrides:
             config.model_explicit = True
@@ -560,6 +573,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 providers={**config.providers, selected_name: profile},
                 model_explicit=True,
             )
+        if args.command == "a2a":
+            from .a2a.cli import serve as serve_a2a
+
+            serve_a2a(
+                config,
+                configuration=args.a2a_config,
+                host=args.host,
+                port=args.port,
+                tls_certfile=args.tls_certfile,
+                tls_keyfile=args.tls_keyfile,
+                trusted_proxies=args.trusted_proxies,
+                agent_override=getattr(args, "agent", ""),
+            )
+            return 0
         if args.command == "serve":
             from .web import serve
 

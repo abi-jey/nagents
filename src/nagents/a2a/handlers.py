@@ -55,11 +55,20 @@ class AuthenticatedContextBuilder(ServerCallContextBuilder):
         user = request.scope.get("ngn.a2a.principal")
         if not isinstance(user, Principal):
             raise AuthenticationError()
+        state: dict[str, object] = {"ngn.request_id": request.scope.get("ngn.request_id", "")}
+        protocol = request.headers.get("a2a-version")
+        if protocol is not None:
+            # SDK version negotiation reads this single protocol header from
+            # context. No Authorization, cookies or other HTTP headers cross
+            # into execution or the SDK's potentially logged request state.
+            state["headers"] = {
+                "a2a-version": protocol if len(protocol) <= 32 and protocol.isprintable() else "invalid"
+            }
         # Deliberately exclude request headers: bearer tokens must not become
         # SDK request context, executor data, tool inputs, or debug-log fields.
         return ServerCallContext(
             user=user,
-            state={"ngn.request_id": request.scope.get("ngn.request_id", "")},
+            state=state,
             requested_extensions=get_requested_extensions(request.headers.getlist(HTTP_EXTENSION_HEADER)),
         )
 

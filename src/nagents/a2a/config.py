@@ -135,6 +135,44 @@ class IssuerConfig:
 
 
 @dataclass(frozen=True)
+class ServiceConfig:
+    issuer: str
+    client_id: str
+    scopes: tuple[str, ...]
+    api_origin: str
+    client_secret_env: str = ""
+    resource: str = ""
+
+    def validate(self, *, loopback_http: bool) -> None:
+        endpoint(self.issuer, loopback_http=loopback_http)
+        endpoint(self.api_origin, loopback_http=loopback_http)
+        if urlsplit(self.api_origin).path not in {"", "/"}:
+            raise ValueError("Service api_origin must be its fixed API origin")
+        string(self.client_id, "service client_id", maximum=256)
+        names(list(self.scopes), "service scopes")
+        if self.resource:
+            endpoint(self.resource, loopback_http=loopback_http)
+        if self.client_secret_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.client_secret_env):
+            raise ValueError("Service client_secret_env must name an environment variable")
+
+    @classmethod
+    def parse(cls, value: object, *, loopback_http: bool) -> ServiceConfig:
+        data = mapping(value, "service")
+        if set(data) - set(cls.__dataclass_fields__):
+            raise ValueError("Unknown downstream service configuration field")
+        result = cls(
+            string(data.get("issuer", ""), "service issuer"),
+            string(data.get("client_id", ""), "service client_id", maximum=256),
+            names(data.get("scopes", []), "service scopes"),
+            string(data.get("api_origin", ""), "service api_origin"),
+            string(data["client_secret_env"], "client_secret_env") if "client_secret_env" in data else "",
+            string(data["resource"], "resource") if "resource" in data else "",
+        )
+        result.validate(loopback_http=loopback_http)
+        return result
+
+
+@dataclass(frozen=True)
 class A2AConfig:
     public_url: str
     agent: str
@@ -155,6 +193,7 @@ class A2AConfig:
     browser_client_id: str = ""
     browser_client_secret_env: str = ""
     browser_scopes: tuple[str, ...] = DEFAULT_BROWSER_SCOPES
+    services: dict[str, ServiceConfig] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         endpoint(self.public_url, loopback_http=self.loopback_http)
@@ -172,6 +211,12 @@ class A2AConfig:
         if type(self.loopback_http) is not bool:
             raise ValueError("loopback_http must be a boolean")
         names(list(self.browser_scopes), "browser_scopes")
+        if len(self.services) > 16:
+            raise ValueError("At most sixteen downstream services may be configured")
+        for name, service in self.services.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or not isinstance(service, ServiceConfig):
+                raise ValueError("Invalid downstream service definition")
+            service.validate(loopback_http=self.loopback_http)
         if self.browser_client_secret_env and not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_]*", self.browser_client_secret_env
         ):
@@ -218,6 +263,10 @@ class A2AConfig:
             if key in data
         }
         scopes = names(data.pop("browser_scopes", list(DEFAULT_BROWSER_SCOPES)), "browser_scopes")
+        services = {
+            name: ServiceConfig.parse(value, loopback_http=development)
+            for name, value in mapping(data.pop("services", {}), "services").items()
+        }
         limits: dict[str, int] = {}
         for key, item in data.items():
             maximum = 1048576 if key in {"max_request_bytes", "max_output_bytes"} else 4096
@@ -244,4 +293,5 @@ class A2AConfig:
             browser_client_id=strings.get("browser_client_id", ""),
             browser_client_secret_env=strings.get("browser_client_secret_env", ""),
             browser_scopes=scopes,
+            services=services,
         )

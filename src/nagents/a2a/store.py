@@ -164,6 +164,7 @@ class SQLiteTaskStore(VersionedTaskStore):
                 "CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, "
                 "version INTEGER NOT NULL, body BLOB NOT NULL);"
                 "CREATE INDEX IF NOT EXISTS events_task_version ON events(task_id, version);"
+                "CREATE TABLE IF NOT EXISTS input_claims (task_id TEXT PRIMARY KEY REFERENCES tasks(id), message_id TEXT NOT NULL);"
                 "CREATE TABLE IF NOT EXISTS private_metadata (key TEXT PRIMARY KEY, value BLOB NOT NULL);"
             )
             await db.execute(
@@ -243,6 +244,12 @@ class SQLiteTaskStore(VersionedTaskStore):
                 if int(row[1]) != TaskState.TASK_STATE_INPUT_REQUIRED:
                     raise UnsupportedOperationError("Use a new task in this context; this task is not awaiting input")
                 task_id = message.task_id
+                pending = await (
+                    await db.execute("SELECT message_id FROM input_claims WHERE task_id=?", (task_id,))
+                ).fetchone()
+                if pending is not None:
+                    raise UnsupportedOperationError("An input response is already being admitted for this task")
+                await db.execute("INSERT INTO input_claims VALUES (?,?)", (task_id, message.message_id))
             else:
                 if message.context_id:
                     row = await (
@@ -328,6 +335,11 @@ class SQLiteTaskStore(VersionedTaskStore):
                     "UPDATE tasks SET state=?,version=?,updated=?,body=? WHERE id=?",
                     (task.status.state, int(row[1]) + 1, time.time(), task.SerializeToString(), task.id),
                 )
+            await db.execute(
+                "DELETE FROM input_claims WHERE task_id=? AND message_id=? AND EXISTS "
+                "(SELECT 1 FROM messages WHERE owner=? AND id=? AND task_id=? AND started=0)",
+                (claim.task_id, claim.message_id, user.user_name, claim.message_id, claim.task_id),
+            )
             await db.commit()
 
     async def session_id(self, context_id: str, user: Principal) -> str:
@@ -377,6 +389,8 @@ class SQLiteTaskStore(VersionedTaskStore):
                 "UPDATE tasks SET version=?,state=?,updated=?,body=? WHERE id=? AND owner=?",
                 (version, task.status.state, updated, task.SerializeToString(), task.id, owner),
             )
+            if task.status.state != TaskState.TASK_STATE_INPUT_REQUIRED:
+                await db.execute("DELETE FROM input_claims WHERE task_id=?", (task.id,))
             if isinstance(event, Task | Message | TaskStatusUpdateEvent | TaskArtifactUpdateEvent):
                 wire = to_stream_response(event).SerializeToString()
                 await db.execute("INSERT INTO events(task_id,version,body) VALUES (?,?,?)", (task.id, version, wire))

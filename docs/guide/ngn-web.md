@@ -1923,7 +1923,7 @@ may need an update; consult the release notes for your selected distribution.
 ## Development Checks
 
 For a spoken browser round trip, use the
-[browser voice E2E harness](../../examples/live/browser_e2e/README.md). It feeds a
+[browser voice E2E harness](https://github.com/abi-jey/nagents/tree/main/examples/live/browser_e2e). It feeds a
 known clip through a virtual microphone and records the rendered speaker graph,
 with socket, caption, delegation, UI, and audio-frame timestamps. An offline
 baseline and an injected-gap case validate playback and the recorder; an opt-in
