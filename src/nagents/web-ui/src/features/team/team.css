@@ -29,7 +29,7 @@
 .team-agent-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; width: 100%; padding-right: 22px; min-width: 0; }
 .team-agent-identity { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .team-agent-identity > strong { font-size: 11px; font-weight: 580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-agent-definition { flex: 0 1 auto; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; color: var(--text-secondary); font-weight: 400; }
+.team-agent-instance { flex: 0 1 auto; max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; color: var(--text-secondary); font-weight: 400; }
 .team-state { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 450; line-height: 1.3; color: var(--text-secondary); white-space: nowrap; min-width: 0; }
 .team-state i { width: 4px; height: 4px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
 .team-state.state-running { color: var(--accent-blue); }

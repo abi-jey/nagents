@@ -122,6 +122,7 @@ test("timeline renders nested task branches with compact terminal rows and reada
 
 test("used definitions remain in their own list and task names stay distinct from their definition", () => {
   const research = taskAgent({ ...task("market-survey"), name: "Market survey", profile: "research" });
+  const unnamedDefinition = taskAgent({ ...task("legacy-child"), name: "Legacy conversation", profile: "" });
   const profiles: TeamProfile[] = [
     { id: "research", name: "Researcher", description: "Survey", provider: "openai", model: "model",
       source: "definitions/researcher.yaml", used: true, available: true },
@@ -129,7 +130,7 @@ test("used definitions remain in their own list and task names stay distinct fro
       used: false, available: true },
     { id: "assistant", name: "Assistant", description: "Main", provider: "openai", model: "model", used: true, available: true },
   ];
-  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root, research], profiles,
+  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root, research, unnamedDefinition], profiles,
     selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
   const document = new JSDOM(markup).window.document;
   const definitions = document.querySelector<HTMLElement>('[aria-label="Agent definitions"]');
@@ -149,9 +150,22 @@ test("used definitions remain in their own list and task names stay distinct fro
   assert.match(unusedDefinition?.textContent || "", /Not started/);
 
   const taskRow = document.querySelector<HTMLElement>('[data-agent-id="market-survey"]');
-  assert.equal(taskRow?.querySelector(".team-agent-heading strong")?.textContent, "Market survey");
-  assert.equal(taskRow?.querySelector(".team-agent-definition")?.textContent, "research");
-  assert.match(taskRow?.querySelector(".team-agent-open")?.getAttribute("aria-label") || "", /Definition research/);
+  const taskIdentity = taskRow?.querySelector(".team-agent-identity");
+  assert.equal(taskIdentity?.querySelector("strong")?.textContent, "research", "the definition name is the primary identity");
+  assert.equal(taskIdentity?.firstElementChild?.classList.contains("team-agent-definition"), true);
+  assert.equal(taskIdentity?.lastElementChild?.className, "team-agent-instance");
+  assert.equal(taskIdentity?.lastElementChild?.textContent, "Market survey", "the generated conversation name remains visible secondarily");
+  assert.match(taskRow?.querySelector(".team-agent-open")?.getAttribute("aria-label") || "", /Open Market survey conversation.*Definition research/);
+  assert.match(taskRow?.querySelector(".team-agent-model")?.textContent || "", /my-openai · test-model/);
+
+  const mainRow = document.querySelector<HTMLElement>('[data-agent-id="main"]');
+  assert.equal(mainRow?.querySelector(".team-agent-heading strong")?.textContent, "Assistant");
+  assert.equal(mainRow?.querySelector(".team-agent-instance"), null, "the main assistant keeps its existing identity layout");
+  const legacyRow = document.querySelector<HTMLElement>('[data-agent-id="legacy-child"]');
+  assert.equal(legacyRow?.querySelector(".team-agent-heading strong")?.textContent, "Legacy conversation",
+    "without a profile, the generated conversation name remains the primary fallback");
+  assert.equal(legacyRow?.querySelector(".team-agent-instance"), null);
+  assert.equal(legacyRow?.querySelector(".team-agent-definition"), null);
 
   const configuration = renderToStaticMarkup(createElement(AgentConfiguration, {
     agent: research, token: "", sessionId: "root", changed() {}, close() {}, configureDefinition() {},
@@ -250,8 +264,10 @@ test("starting a definition creates a separate child while preserving running ro
     assert.ok(newChildRow);
     assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow,
       "starting another child preserves the existing run's DOM row");
-    assert.equal(document.querySelector('[data-agent-id="new-research"] .team-agent-heading strong')?.textContent, "Follow-up study");
-    assert.equal(document.querySelector('[data-agent-id="new-research"] .team-agent-definition')?.textContent, "research");
+    const newIdentity = document.querySelector('[data-agent-id="new-research"] .team-agent-identity');
+    assert.equal(newIdentity?.querySelector("strong")?.textContent, "research");
+    assert.equal(newIdentity?.lastElementChild?.className, "team-agent-instance");
+    assert.equal(newIdentity?.lastElementChild?.textContent, "Follow-up study");
     assert.equal(team.selected, "new-research");
     assert.equal(team.prompt, "", "the new child consumes only its own draft");
 
