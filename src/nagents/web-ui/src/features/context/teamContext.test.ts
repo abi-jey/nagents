@@ -10,7 +10,9 @@ import type { ContextStats, RetainedTask } from "../../types.js";
 
 const context: ContextStats = {
   components: [], total_tokens: 144875, context_window: 1000000, context_window_source: "provider",
-  remaining_tokens: 751221, observed_prompt_tokens: 248779, observed_completion_tokens: 1200,
+  remaining_tokens: 750021, observed_prompt_tokens: 248779, observed_completion_tokens: 1200,
+  observed_reasoning_tokens: 80, observed_reasoning_in_output: "included",
+  observed_context_tokens: 249979, pending_context_tokens: 0, context_tokens: 249979, context_tokens_source: "provider",
   provider: "litellm-opus", model: "eu.anthropic.claude-opus-5-5", estimate_method: "chars/4 heuristic",
   compaction: { trigger: "tokens", token_threshold: 420000, token_budget: 600000 },
 };
@@ -23,18 +25,19 @@ const render = (value: TeamAgent) => new JSDOM(renderToStaticMarkup(createElemen
 
 test("main and child rows keep one context line and place the compaction tick against their own model window", () => {
   const root = render(agent);
-  assert.equal(root.querySelector(".team-agent-context")?.textContent, "249k / 1M");
+  assert.equal(root.querySelector(".team-agent-context")?.textContent, "250k / 1M");
   assert.equal(root.querySelector(".team-agent-meter i")?.getAttribute("style"), "width:25%");
   assert.equal(root.querySelector(".team-agent-threshold")?.getAttribute("style"), "left:42%");
   assert.equal(root.querySelector(".team-agent-open")?.getAttribute("aria-description"), "Compaction at 420,000 tokens (42% of context window)");
   assert.doesNotMatch(root.body.textContent || "", /Compact at|Compaction at|~249k|100k|exceeds/);
   const child = taskAgent({ id: "child", name: "Research", status: "running", context: { ...context, context_window: 200000,
-    observed_prompt_tokens: 110000, compaction: { trigger: "tokens", token_threshold: 105000, token_budget: 150000 } },
+    observed_prompt_tokens: 110000, observed_context_tokens: 111200, context_tokens: 111200, remaining_tokens: 88800,
+    compaction: { trigger: "tokens", token_threshold: 105000, token_budget: 150000 } },
     compact_tokens: 900000, compaction: { trigger: "tokens", token_threshold: 630000, token_budget: 900000 },
   } as RetainedTask);
   assert.equal(child.compactTokens, 150000, "Accepted context policy wins over a stale task snapshot");
   const doc = render(child);
-  assert.equal(doc.querySelector(".team-agent-context")?.textContent, "110k / 200k");
+  assert.equal(doc.querySelector(".team-agent-context")?.textContent, "111k / 200k");
   assert.equal(doc.querySelector(".team-agent-threshold")?.getAttribute("style"), "left:52.5%");
   assert.equal(doc.querySelector(".team-agent-threshold")?.getAttribute("title"), "Compaction at 105,000 tokens (52.5% of context window)");
   assert.doesNotMatch(doc.body.textContent || "", /Compact at|Compaction at|900k|600k/);

@@ -72,7 +72,11 @@ from .reasoning import validate_reasoning_choice
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from collections.abc import Sequence
 
+    from ..compaction import CompactionSnapshot
+    from ..context_stats import ContextStats
+    from ..events import TokenUsage
     from ..http import HTTPLogger
     from ..live import LiveConfig
     from ..realtime import RealtimeConfig
@@ -267,6 +271,51 @@ class Provider:
         """Apply a trusted connection's defaults and exact-model overrides."""
         self.context_window = validate_context_window(context_window)
         self.model_context_windows = validate_model_context_windows(model_context_windows)
+
+    def context_stats(
+        self,
+        *,
+        messages: "Sequence[Message]" = (),
+        tools: "Sequence[ToolDefinition]" = (),
+        system_prompt: str = "",
+        instructions: str = "",
+        skill_manifest: str = "",
+        skill_text: str = "",
+        observed: "TokenUsage | None" = None,
+        additional_messages: "Sequence[Message]" = (),
+        streaming_reply: str = "",
+        compaction: "CompactionSnapshot | None" = None,
+    ) -> "ContextStats":
+        """Account for context through the library's normalized provider usage.
+
+        The last measured response includes input, output and reasoning once,
+        according to this provider's inclusion semantics. Newly appended data
+        and unsaved text are explicitly estimated. ``total_tokens`` and its
+        breakdown describe estimated next input; ``context_tokens`` describes
+        the measured response budget plus that pending data. Neither is the
+        session's accumulated billing total or a tokenizer count of an unseen
+        future request. Call ``resolve_context_window`` first to refresh optional
+        model metadata; this snapshot itself makes no HTTP requests.
+        """
+        from ..context_stats import estimate_context_stats
+
+        window = self.cached_context_window()
+        return estimate_context_stats(
+            messages=messages,
+            tools=tools,
+            system_prompt=system_prompt,
+            instructions=instructions,
+            skill_manifest=skill_manifest,
+            skill_text=skill_text,
+            observed=observed,
+            additional_messages=additional_messages,
+            streaming_reply=streaming_reply,
+            compaction=compaction,
+            context_window=window.tokens,
+            context_window_source=window.source,
+            provider=self.provider_type.value,
+            model=self.model,
+        )
 
     def _context_metadata_identity(self) -> tuple[str, str, str]:
         auth = hashlib.sha256(

@@ -15,6 +15,7 @@ from .types import Message
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .context_stats import ContextStats
     from .events import Event
     from .events import ToolResultEvent
     from .provider import Provider
@@ -98,6 +99,7 @@ class CompactionRequest:
     estimated_tokens: int
     force: bool = False
     actual_input_tokens: int = 0
+    context_stats: ContextStats | None = None
 
 
 @dataclass

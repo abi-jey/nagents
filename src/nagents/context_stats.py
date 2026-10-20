@@ -1,4 +1,4 @@
-"""Estimated token accounting for the model request a session would send.
+"""Provider context accounting and an estimated next-input breakdown.
 
 The numbers reported here are estimates from the same character/byte heuristics
 the compaction module uses (roughly four characters per token for text and a
@@ -7,8 +7,9 @@ spotting which part of a request dominates, but they are not provider tokenizer
 counts and will not match billed usage exactly.
 
 The breakdown partitions the estimate so the components always sum to the
-reported total. Each component has a stable key and a human-readable label so
-clients can render and test them consistently.
+estimated input total. Provider measurements remain separate: input, output and
+reported reasoning are counted once for the last response, with explicitly
+estimated additions for subsequent messages and an unsaved streaming reply.
 """
 
 from __future__ import annotations
@@ -16,11 +17,13 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from .compaction import CHARS_PER_TOKEN
 from .compaction import CompactionSnapshot
 from .compaction import estimate_tokens
+from .provider.context import reported_context_tokens
 from .types import ContentPart
 from .types import Message
 from .types import TextContent
@@ -28,8 +31,10 @@ from .types import ToolDefinition
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import Literal
 
     from .events import TokenUsage
+    from .provider.context import ContextTokenSource
     from .provider.context import ContextWindowSource
 
 SYSTEM_PROMPT_KEY = "system_prompt"
@@ -75,11 +80,16 @@ class ContextStats:
         components: Stable, ordered components that sum to ``total_tokens``.
         total_tokens: Estimated input tokens for the assembled request.
         context_window: Provider/model context window when known, else ``None``.
-        remaining_tokens: ``context_window - (observed_prompt_tokens or total_tokens)`` when the window is
-            known, else ``None``. It can be negative if the estimate exceeds it.
+        remaining_tokens: ``context_window - context_tokens`` when the window is
+            known, else ``None``. It can be negative when the budget is exceeded.
         observed_prompt_tokens: Last provider-reported input tokens, when the
             agent has seen a real usage event for the session.
         observed_completion_tokens: Last provider-reported output tokens.
+        observed_reasoning_tokens: Last reported reasoning count, including a
+            reported zero; ``None`` when the breakdown was not supplied.
+        observed_context_tokens: Input and generated output for the last
+            measured response, including reported reasoning exactly once.
+        pending_context_tokens: Estimated new data beyond that response.
         provider: Provider identifier the estimate was computed for.
         model: Model identifier the estimate was computed for.
         estimate_method: Human-readable note describing the heuristic.
@@ -96,6 +106,30 @@ class ContextStats:
     estimate_method: str = ESTIMATE_METHOD
     context_window_source: ContextWindowSource = "heuristic"
     compaction: CompactionSnapshot | None = None
+    observed_reasoning_tokens: int | None = None
+    observed_reasoning_in_output: Literal["included", "separate", "unknown"] = "unknown"
+    observed_context_tokens: int | None = None
+    observed_context_source: ContextTokenSource = "provider"
+    pending_context_tokens: int = 0
+
+    @property
+    def context_tokens(self) -> int:
+        """Last measured response context plus explicitly estimated new data.
+
+        With no matching measurement, use the estimated next input. Never
+        confuse either quantity with accumulated tokens billed over a session.
+        """
+        if self.observed_context_tokens is not None:
+            return self.observed_context_tokens + self.pending_context_tokens
+        return self.total_tokens
+
+    @property
+    def context_tokens_source(self) -> ContextTokenSource:
+        if self.observed_context_tokens is None:
+            return "estimated"
+        if self.pending_context_tokens:
+            return "mixed"
+        return self.observed_context_source
 
     def component(self, key: str) -> ContextComponent | None:
         """Return the component with ``key``, or ``None`` when it is absent."""
@@ -115,6 +149,12 @@ class ContextStats:
             "remaining_tokens": self.remaining_tokens,
             "observed_prompt_tokens": self.observed_prompt_tokens,
             "observed_completion_tokens": self.observed_completion_tokens,
+            "observed_reasoning_tokens": self.observed_reasoning_tokens,
+            "observed_reasoning_in_output": self.observed_reasoning_in_output,
+            "observed_context_tokens": self.observed_context_tokens,
+            "pending_context_tokens": self.pending_context_tokens,
+            "context_tokens": self.context_tokens,
+            "context_tokens_source": self.context_tokens_source,
             "provider": self.provider,
             "model": self.model,
             "estimate_method": self.estimate_method,
@@ -215,6 +255,8 @@ def estimate_context_stats(
     provider: str = "",
     model: str = "",
     observed: TokenUsage | None = None,
+    additional_messages: Sequence[Message] = (),
+    streaming_reply: str = "",
 ) -> ContextStats:
     """Estimate a request breakdown from its assembled inputs.
 
@@ -233,7 +275,11 @@ def estimate_context_stats(
         context_window: Known model context window, or ``None`` when unknown.
         provider: Provider identifier for reporting.
         model: Model identifier for reporting.
-        observed: Last real provider usage for comparison with the estimate.
+        observed: Last real provider usage, scoped to one matching response.
+        additional_messages: Messages appended after the measured response's
+            assistant output, such as tool results and a new user message.
+        streaming_reply: An unsaved visible response; measured output usage
+            already covering these tokens is not added again.
     """
     values = {key: 0 for key, _ in COMPONENT_LABELS}
     values[SYSTEM_PROMPT_KEY] = estimate_tokens(system_prompt)
@@ -244,18 +290,38 @@ def estimate_context_stats(
         values[key] += tokens
 
     components = tuple(ContextComponent(key, label, values[key]) for key, label in COMPONENT_LABELS)
+    streaming = estimate_tokens(streaming_reply) + 4 if streaming_reply else 0
+    if streaming:
+        components = (*components, ContextComponent("streaming_reply", "Streaming reply (not yet saved)", streaming))
     total = sum(component.tokens for component in components)
-    return ContextStats(
+    observed_context: int | None = None
+    source: ContextTokenSource = "provider"
+    pending = 0
+    if observed is not None:
+        observed_context, source = reported_context_tokens(observed)
+        pending = sum(_history_tokens(additional_messages).values())
+        # Cumulative output usage can arrive while text is still streaming.
+        # Count an unsaved visible draft only beyond what usage already covers.
+        measured_output = max(0, observed_context - observed.prompt_tokens)
+        pending += max(0, streaming - measured_output)
+    result = ContextStats(
         components=components,
         total_tokens=total,
         context_window=context_window,
         context_window_source=context_window_source,
         compaction=compaction,
-        remaining_tokens=(context_window - (observed.prompt_tokens if observed is not None else total))
-        if context_window is not None
-        else None,
         observed_prompt_tokens=observed.prompt_tokens if observed is not None else None,
         observed_completion_tokens=observed.completion_tokens if observed is not None else None,
+        observed_reasoning_tokens=observed.reasoning_tokens
+        if observed is not None and observed.reasoning_reported
+        else None,
+        observed_reasoning_in_output=observed.reasoning_in_output if observed is not None else "unknown",
+        observed_context_tokens=observed_context,
+        observed_context_source=source,
+        pending_context_tokens=pending,
         provider=provider,
         model=model,
+    )
+    return replace(
+        result, remaining_tokens=context_window - result.context_tokens if context_window is not None else None
     )

@@ -27,7 +27,65 @@ Live session budgets remain separate. Retry policy is unchanged.
         - generate
         - get_model_list
         - verify_model
+        - context_stats
+        - resolve_context_window
         - close
+
+## Context accounting
+
+`Provider.context_stats(...)` is the library's context-accounting entry point.
+It uses the selected connection's cached model limit and normalized usage.
+`Agent.context_stats(session_id)` resolves optional model metadata, assembles the
+session, and delegates to this method. ngn's main chat and subagent status views
+consume that same result, including an unsaved streaming response.
+
+The result distinguishes two quantities:
+
+- `context_tokens` is the last measured response's input and generated output,
+  including reasoning once, plus estimated messages added afterward.
+  `remaining_tokens` is the model window minus this quantity.
+- `total_tokens` and `components` are a heuristic breakdown of the next input.
+  They are not provider tokenizer counts or accumulated session billing.
+
+For example, 400 input tokens and 120 output tokens that include 80 reasoning
+tokens consume 520 tokens. If a provider instead reports 40 visible output
+tokens and 80 separate reasoning tokens, the same context consumption is 520.
+The normalized `reasoning_in_output` contract controls this calculation; an
+unknown inclusion relationship is never permission to add reasoning twice.
+
+`observed_reasoning_tokens` preserves a provider-reported zero and uses `None`
+when no reasoning breakdown was supplied. `context_tokens_source` is `provider`
+for complete reported counts, `mixed` for partial counts or estimated additions,
+and `estimated` when no matching measurement exists. The UI marks estimates with
+`~`. Measurements are invalidated after model, connection, instructions, tool,
+or saved-context changes. New user messages and tool results grow the budget
+without adding the same assistant response again.
+
+```python
+from nagents.events import TokenUsage
+
+await provider.resolve_context_window()  # Optional bounded model metadata refresh.
+stats = provider.context_stats(
+    observed=TokenUsage(
+        prompt_tokens=400,
+        completion_tokens=120,
+        reasoning_tokens=80,
+        reasoning_reported=True,
+        reasoning_in_output="included",
+    ),
+)
+assert stats.context_tokens == 520
+assert stats.observed_reasoning_tokens == 80
+
+# An Agent supplies matching usage, history and streaming state automatically.
+stats = await agent.context_stats(session_id)
+```
+
+This is a response-budget measurement, not a promise that all earlier reasoning
+will be retained in the next request. Retention depends on the provider, model
+and transmitted reasoning items. See OpenAI's
+[reasoning context documentation](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-across-calls).
+Future reasoning that the model has not generated cannot be measured in advance.
 
 ## Foundry credentials
 

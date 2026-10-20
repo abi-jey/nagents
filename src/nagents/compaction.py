@@ -81,7 +81,11 @@ class ModelCompaction:
         identity = (request.provider.model, request.provider.base_url, request.provider.api)
         if threshold is None:
             threshold = (await request.provider.resolve_context_window()).tokens * 7 // 10
-        observed = request.actual_input_tokens or request.estimated_tokens
+        observed = (
+            request.context_stats.context_tokens
+            if request.context_stats is not None
+            else request.actual_input_tokens or request.estimated_tokens
+        )
         if identity != (request.provider.model, request.provider.base_url, request.provider.api):
             observed = request.estimated_tokens
         return observed >= threshold

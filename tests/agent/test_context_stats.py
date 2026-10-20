@@ -116,7 +116,9 @@ def test_component_sums_equal_total_and_observed_window_is_reported() -> None:
     )
 
     assert stats.total_tokens == sum(component.tokens for component in stats.components)
-    assert stats.remaining_tokens == 1000 - 321
+    assert stats.observed_context_tokens == 333
+    assert stats.context_tokens_source == "provider"
+    assert stats.remaining_tokens == 1000 - 333
     assert stats.observed_prompt_tokens == 321
     assert stats.observed_completion_tokens == 12
     assert stats.provider == "openai_compatible"
@@ -177,16 +179,107 @@ def test_observed_usage_is_scoped_to_live_history_and_request_setup(tmp_path: Pa
             assert [event async for event in agent.run("hello", session_id="s")]
             stats = await agent.context_stats("s")
             assert stats.observed_prompt_tokens == 248_779
-            assert stats.remaining_tokens == 1_000_000 - 248_779
+            assert stats.observed_context_tokens == 248_791
+            assert stats.remaining_tokens == 1_000_000 - 248_791
             assert stats.total_tokens == sum(component.tokens for component in stats.components)
             assert stats.context_window_source == "configured"
             assert stats.as_dict()["compaction"] == {"trigger": "off"}
-            # Appended outputs/history preserve the last measured prompt; its
-            # label is explicitly last-provider input, not an exact next request.
+            # The measured response remains scoped to its generation, and the
+            # newly appended user message is estimated once on top of it.
             await agent.session.add_message("s", Message(role="user", content="continue"))
-            assert (await agent.context_stats("s")).observed_prompt_tokens == 248_779
+            appended = await agent.context_stats("s")
+            assert appended.observed_prompt_tokens == 248_779
+            assert appended.observed_context_tokens == 248_791
+            assert appended.pending_context_tokens > 0
+            assert appended.context_tokens == appended.observed_context_tokens + appended.pending_context_tokens
+            assert appended.context_tokens_source == "mixed"
+            pending_after_user = appended.pending_context_tokens
+            tool_result = Message(role="tool", name="lookup", tool_call_id="call-1", content="result" * 20)
+            await agent.session.add_message("s", tool_result)
+            after_tool = await agent.context_stats("s")
+            assert after_tool.pending_context_tokens == pending_after_user + estimate_messages_tokens([tool_result])
+            assert after_tool.observed_context_tokens == 248_791
+            assert after_tool.context_tokens == after_tool.observed_context_tokens + after_tool.pending_context_tokens
             agent.system_prompt = "A different request setup"
             assert (await agent.context_stats("s")).observed_prompt_tokens is None
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_agent_context_stats_preserves_reported_reasoning_accounting(tmp_path: Path) -> None:
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+
+    async def drive() -> None:
+        provider = OfflineProvider(
+            [
+                [
+                    TextDoneEvent(
+                        text="answer",
+                        usage=Usage(
+                            prompt_tokens=400,
+                            completion_tokens=120,
+                            total_tokens=520,
+                            reasoning_tokens=80,
+                            reasoning_reported=True,
+                            reasoning_in_output="included",
+                            reported=True,
+                            prompt_reported=True,
+                            completion_reported=True,
+                            total_reported=True,
+                        ),
+                    )
+                ]
+            ]
+        )
+        provider.configure_context_window(1_000, {})
+        agent = Agent(provider, SessionManager(tmp_path / "reasoning.db"), compaction_strategy=None)
+        try:
+            assert [event async for event in agent.run("hello", session_id="s")]
+            stats = await agent.context_stats("s")
+            assert stats.observed_prompt_tokens == 400
+            assert stats.observed_completion_tokens == 120
+            assert stats.observed_reasoning_tokens == 80
+            assert stats.observed_reasoning_in_output == "included"
+            assert stats.observed_context_tokens == 520
+            assert stats.context_tokens_source == "provider"
+            assert stats.remaining_tokens == 480
+        finally:
+            await agent.close()
+
+    asyncio.run(drive())
+
+
+def test_agent_context_stats_preserves_reported_zero_prompt_usage(tmp_path: Path) -> None:
+    from nagents.events import TextDoneEvent
+    from nagents.events import Usage
+
+    async def drive() -> None:
+        provider = OfflineProvider(
+            [
+                [
+                    TextDoneEvent(
+                        text="answer",
+                        usage=Usage(
+                            reported=True,
+                            prompt_reported=True,
+                            completion_reported=True,
+                            total_reported=True,
+                        ),
+                    )
+                ]
+            ]
+        )
+        provider.configure_context_window(1_000, {})
+        agent = Agent(provider, SessionManager(tmp_path / "reported-zero.db"), compaction_strategy=None)
+        try:
+            assert [event async for event in agent.run("hello", session_id="s")]
+            stats = await agent.context_stats("s")
+            assert stats.observed_prompt_tokens == 0
+            assert stats.observed_context_tokens == 0
+            assert stats.context_tokens_source == "provider"
         finally:
             await agent.close()
 
