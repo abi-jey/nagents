@@ -3,7 +3,7 @@ import { Icon } from "../../components/Icon.js";
 import { ProviderLogo } from "../../components/ProviderLogo.js";
 import { contextPercent, contextSummary, contextUsage, contextUsageLabel, contextWindowSource } from "../context/controller.js";
 import { compactionMarker, compactionWarning } from "./context.js";
-import { agentAncestors, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
+import { agentAncestors, definitionUsage, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
 import { profileTarget } from "./useTeam.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
 
@@ -30,8 +30,8 @@ export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: 
   const motion = useArrivalStyle(arrivalAt);
   return <article className={`team-agent-row${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
     <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={marker?.description}
-      aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${provider ? `. ${provider} ${agent.model}` : ""}`}>
-      <span className="team-agent-heading"><strong>{agent.name}</strong><AgentState agent={agent} /></span>
+      aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
+      <span className="team-agent-heading"><span className="team-agent-identity"><strong>{agent.name}</strong>{agent.id && agent.profile && <span className="team-agent-definition" title={`Agent definition: ${agent.profile}`}>{agent.profile}</span>}</span><AgentState agent={agent} /></span>
       <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
       <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
         {context ? contextSummary(context) : "Context unavailable"}
@@ -54,6 +54,7 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
   const [limits, setLimits] = useState(new Map<string, number>());
   const [profileLimit, setProfileLimit] = useState(3);
   const tree = useRef<HTMLDivElement>(null);
+  const definitions = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Only a changed recipient reveals ancestry. New activity never overrides a manual collapse.
     const ancestors = agentAncestors(selected, agents);
@@ -74,12 +75,21 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
       for (const entry of entries) if (entry.isIntersecting && entry.target instanceof HTMLElement) {
         const parent = entry.target.dataset.moreParent;
         if (parent !== undefined) setLimits(current => new Map(current).set(parent, Math.min((children.get(parent) || []).length, (current.get(parent) || 6) + 6)));
-        if (entry.target.dataset.moreProfiles !== undefined) setProfileLimit(current => Math.min(profiles.filter(profile => !profile.used).length, current + 6));
       }
     }, { root: tree.current, rootMargin: "0px 0px 48px 0px" });
-    for (const sentinel of tree.current.querySelectorAll("[data-more-parent], [data-more-profiles]")) observer.observe(sentinel);
+    for (const sentinel of tree.current.querySelectorAll("[data-more-parent]")) observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [children, limits, expanded, profileLimit, profiles]);
+  }, [children, limits, expanded]);
+  useEffect(() => {
+    const list = definitions.current;
+    if (!list || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) setProfileLimit(current => Math.min(profiles.length, current + 6));
+    }, { root: list, rootMargin: "0px 0px 48px 0px" });
+    const sentinel = list.querySelector("[data-more-profiles]");
+    if (sentinel) observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [profiles.length, profileLimit]);
   function branch(agent: TeamAgent, depth: number) {
     const descendants = children.get(agent.id) || [], open = expanded.get(agent.id) ?? depth < 2;
     const limit = limits.get(agent.id) || 6;
@@ -94,16 +104,20 @@ export function TeamTree({ agents, profiles, selected, inspect, configure, arriv
       </ol> : <button className="team-collapsed-count" type="button" onClick={() => setExpanded(current => new Map(current).set(agent.id, true))}>{descendants.length} nested agent{descendants.length === 1 ? "" : "s"}</button>)}
     </li>;
   }
-  const available = profiles.filter(profile => !profile.used);
-  return <div className="team-tree-scroll" ref={tree}>
+  return <div className="team-navigation">
+    <div className="team-tree-scroll" ref={tree}>
     {error && <p className="team-load-error" role="status">{error}<button type="button" onClick={refresh}>Retry</button></p>}
     <ol className="team-tree" aria-label="Agent conversations">{agents[0] && branch(agents[0], 0)}</ol>
-    {!!available.length && <div className="team-profiles"><span className="team-profiles-label">Available agents</span>
-      {available.slice(0, profileLimit).map(profile => <div key={profile.id} className="team-profile-row"><button type="button" className={`team-profile${selected === profileTarget(profile.id) ? " is-selected" : ""}`}
-        onClick={() => inspect(profileTarget(profile.id))}><span><strong>{profile.name}</strong><span>Not started</span></span><small>{profile.description || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small></button>
-        <button type="button" className="team-profile-settings" aria-label={`Model settings for ${profile.name}`} onClick={() => configure(profileTarget(profile.id))}><Icon name="settings" size={14} /></button></div>)}
-      {available.length > profileLimit && <button type="button" className="team-profile-more" data-more-profiles="" onClick={() => setProfileLimit(value => value + 6)}>More agents <span>{available.length - profileLimit}</span></button>}
-    </div>}
+    </div>
+    {!!profiles.length && <section className="team-profiles" aria-label="Agent definitions"><h3 className="team-profiles-label">Agent definitions</h3>
+      <div className="team-profile-list" ref={definitions}>
+      {profiles.slice(0, profileLimit).map(profile => <div key={profile.id} className="team-profile-row"><button type="button" className={`team-profile${selected === profileTarget(profile.id) ? " is-selected" : ""}`}
+        title={profile.source ? `Definition file: ${profile.source}` : undefined}
+        onClick={() => inspect(profileTarget(profile.id))}><span><strong>{profile.name}</strong><span>{definitionUsage(profile, agents)}</span></span><small>{profile.description || [profile.provider, profile.model].filter(Boolean).join(" · ")}</small></button>
+        <button type="button" className="team-profile-settings" aria-label={`Settings for ${profile.name} definition`} onClick={() => configure(profileTarget(profile.id))}><Icon name="settings" size={14} /></button></div>)}
+      {profiles.length > profileLimit && <button type="button" className="team-profile-more" data-more-profiles="" onClick={() => setProfileLimit(value => value + 6)}>More definitions <span>{profiles.length - profileLimit}</span></button>}
+      </div>
+    </section>}
   </div>;
 }
 

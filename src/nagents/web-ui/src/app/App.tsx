@@ -93,7 +93,7 @@ export function App() {
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />
       </main>
       {configuredAgent && configured && <AgentConfiguration key={`${client.sessions.sessionId}:${configuredAgent}`} agent={configured} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} changed={client.team.refresh} close={() => setConfiguredAgent("")}
-        configureDefinition={() => { setConfiguredAgent(""); openAgentSettings(configured.task?.profile || configured.name); }} />}
+        configureDefinition={configured.profile ? () => { setConfiguredAgent(""); openAgentSettings(configured.profile); } : undefined} />}
       {client.sessions.config && <AgentNavigator key={client.sessions.config.token} request={navigatorRequest} token={client.sessions.config.token} audio={navigatorAudio}
         close={() => setNavigatorRequest(undefined)} changed={settingsChanged} acceptSettings={acceptSettings}
         catalogRevision={JSON.stringify(client.team.profiles.map(profile => [profile.id, profile.name, profile.description, profile.provider, profile.model]))}

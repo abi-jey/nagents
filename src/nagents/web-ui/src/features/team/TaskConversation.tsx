@@ -36,16 +36,19 @@ export function TaskConversation({ team, agents, arrivals, token, sessionId, bac
   const name = agent?.name || team.profile?.name || (isProfileTarget(team.selected) ? team.selected.slice("profile:".length) : "Agent");
   const rootName = agents.find(item => item.id === MAIN_AGENT)?.name || "Assistant";
   const parentName = agents.find(item => item.id === (agent?.parentId ?? MAIN_AGENT))?.name || rootName;
+  const definition = agent?.profile || team.profile?.id || "";
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })); return () => cancelAnimationFrame(frame); }, [team.selected]);
   const entries = useMemo(() => taskEntries(team.detail, team.activity), [team.detail, team.activity]);
   return <section className="focused-task-conversation" aria-label={`${name} conversation`}>
     <header className="focused-task-header"><button type="button" className="task-back" onClick={back}><Icon name="chevron" size={14} />{rootName}</button>
-      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
+      <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{definition && <span className="focused-task-definition">Definition <b>{definition}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
       {agent && <AgentState agent={agent} />}
     </header>
     {removedProfile ? <p className="task-history-notice" role="status">This agent profile was removed or renamed. Choose an agent in Team or return to {rootName}. Your draft is kept.</p>
-      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Not started"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || "Send a message below to assign its first task."}</p></div> : <>
+      : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || "Send a message below to start a new conversation using this definition."}</p>
+        {team.profile.source && <dl className="team-profile-source"><dt>Definition file</dt><dd><code>{team.profile.source}</code></dd></dl>}
+      </div> : <>
       {team.loading && !team.detail && <p className="task-loading" role="status">Loading conversation…</p>}
       {(team.detail?.truncated || team.detail?.history_truncated) && <p className="task-history-notice">Some recorded content was shortened for this view.</p>}
       {(team.detail?.activity_truncated || team.activity.some(event => event.sequence > (team.detail?.activity_cursor || 0) && event.payload.type === "resync_required")) && <p className="task-history-notice" role="status">Some live updates were interrupted. Recorded activity will refresh when this response is saved.</p>}

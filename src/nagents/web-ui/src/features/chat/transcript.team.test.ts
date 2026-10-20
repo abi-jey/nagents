@@ -7,6 +7,7 @@ import { JSDOM } from "jsdom";
 import { Composer } from "./Composer.js";
 import { appendEvent } from "./transcript.js";
 import { TaskTimeline } from "../team/TaskTimeline.js";
+import { AgentConfiguration } from "../team/TeamPane.js";
 import { TeamTree } from "../team/TeamTree.js";
 import { TaskConversation, taskEntries } from "../team/TaskConversation.js";
 import { profileTarget, useTeam, type TeamController } from "../team/useTeam.js";
@@ -119,12 +120,155 @@ test("timeline renders nested task branches with compact terminal rows and reada
   assert.match(markup, /Spawned by a/); assert.doesNotMatch(markup, /started 2 agents|View agents/);
 });
 
-test("unused discovered profiles appear as not started and used profiles are not duplicated", () => {
-  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root], profiles: [
-    { id: "research", name: "Researcher", description: "Survey", provider: "openai", model: "model", used: false, available: true },
+test("used definitions remain in their own list and task names stay distinct from their definition", () => {
+  const research = taskAgent({ ...task("market-survey"), name: "Market survey", profile: "research" });
+  const profiles: TeamProfile[] = [
+    { id: "research", name: "Researcher", description: "Survey", provider: "openai", model: "model",
+      source: "definitions/researcher.yaml", used: true, available: true },
+    { id: "summary", name: "Summarizer", description: "Write a concise summary", provider: "openai", model: "model",
+      used: false, available: true },
     { id: "assistant", name: "Assistant", description: "Main", provider: "openai", model: "model", used: true, available: true },
-  ], selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
-  assert.match(markup, /Researcher/); assert.match(markup, /Not started/); assert.equal((markup.match(/class="team-profile"/g) || []).length, 1);
+  ];
+  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root, research], profiles,
+    selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
+  const document = new JSDOM(markup).window.document;
+  const definitions = document.querySelector<HTMLElement>('[aria-label="Agent definitions"]');
+  assert.ok(definitions);
+  assert.ok(document.querySelector(".team-tree-scroll"));
+  assert.ok(definitions.querySelector(".team-profile-list"), "definitions have their own scroll region");
+  assert.equal(definitions.querySelectorAll(".team-profile-row").length, 3,
+    "used definitions remain listed alongside unused definitions");
+  const usedDefinition = [...definitions.querySelectorAll<HTMLButtonElement>(".team-profile")]
+    .find(button => button.querySelector("strong")?.textContent === "Researcher");
+  assert.ok(usedDefinition);
+  assert.match(usedDefinition.textContent || "", /1 active/);
+  assert.doesNotMatch(usedDefinition.textContent || "", /Not started/);
+  assert.equal(usedDefinition.title, "Definition file: definitions/researcher.yaml");
+  const unusedDefinition = [...definitions.querySelectorAll<HTMLButtonElement>(".team-profile")]
+    .find(button => button.querySelector("strong")?.textContent === "Summarizer");
+  assert.match(unusedDefinition?.textContent || "", /Not started/);
+
+  const taskRow = document.querySelector<HTMLElement>('[data-agent-id="market-survey"]');
+  assert.equal(taskRow?.querySelector(".team-agent-heading strong")?.textContent, "Market survey");
+  assert.equal(taskRow?.querySelector(".team-agent-definition")?.textContent, "research");
+  assert.match(taskRow?.querySelector(".team-agent-open")?.getAttribute("aria-label") || "", /Definition research/);
+
+  const configuration = renderToStaticMarkup(createElement(AgentConfiguration, {
+    agent: research, token: "", sessionId: "root", changed() {}, close() {}, configureDefinition() {},
+  }));
+  const configDocument = new JSDOM(configuration).window.document;
+  const definitionTerm = [...configDocument.querySelectorAll("dt")].find(term => term.textContent === "Definition");
+  assert.equal(definitionTerm?.nextElementSibling?.textContent, "research");
+  assert.ok([...configDocument.querySelectorAll("button")].some(button => button.textContent?.includes("Edit research definition")));
+});
+
+test("starting a definition creates a separate child while preserving running row identity and drafts", async (t) => {
+  const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  const previous = Object.getOwnPropertyDescriptors(globalThis);
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: () => 0, cancelAnimationFrame() {} };
+  Object.assign(globalThis, globals);
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  type PendingRequest = { path: string; init: RequestInit; responded: boolean; respond: (value: Response) => void };
+  const requests: PendingRequest[] = [];
+  t.mock.method(globalThis, "fetch", (path: string | URL, init: RequestInit = {}) => {
+    let fulfill!: (value: Response) => void;
+    const result = new Promise<Response>(resolve => { fulfill = resolve; });
+    const pending: PendingRequest = { path: String(path), init, responded: false,
+      respond(value) { pending.responded = true; fulfill(value); } };
+    requests.push(pending);
+    return result;
+  });
+  const react = createRoot(dom.window.document.getElementById("root")!);
+  let mounted = true;
+  let team!: TeamController;
+  const existing = { ...task("active-research"), name: "Current research run", profile: "research" };
+  const definition: TeamProfile = { id: "research", name: "Researcher", description: "Survey", provider: "openai",
+    model: "model", used: true, available: true, can_start: true };
+  function View() {
+    team = useTeam("token", "root", 0, true, []);
+    const agents = [root, ...team.tasks.map(taskAgent)];
+    return createElement(TeamTree, { agents, profiles: team.profiles, selected: team.selected, inspect: team.select,
+      configure() {}, arrivals: {}, error: team.error, refresh: team.refresh });
+  }
+  const respondIndexes = async (tasks: RetainedTask[]) => {
+    const pending = requests.filter(request => !request.responded && request.path === "/api/sessions/root/tasks"
+      && (!request.init.method || request.init.method === "GET"));
+    assert.ok(pending.length, "a task-index refresh is pending");
+    for (const request of pending) await act(async () => {
+      request.respond(Response.json({ tasks, profiles: [definition] }));
+    });
+  };
+  const refreshWith = async (tasks: RetainedTask[]) => {
+    await act(async () => team.refresh());
+    await respondIndexes(tasks);
+  };
+  try {
+    await act(async () => react.render(createElement(View)));
+    await respondIndexes([existing]);
+    const existingRow = document.querySelector<HTMLElement>('[data-agent-id="active-research"]');
+    assert.ok(existingRow);
+    assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/);
+
+    await act(async () => team.select("active-research"));
+    await act(async () => team.setPrompt("Keep this draft on the active run"));
+
+    const definitionButton = [...document.querySelectorAll<HTMLButtonElement>(".team-profile")]
+      .find(button => button.querySelector("strong")?.textContent === "Researcher");
+    assert.ok(definitionButton);
+    await act(async () => definitionButton.click());
+    assert.equal(team.selected, profileTarget("research"));
+    assert.equal(team.profile?.id, "research");
+    await act(async () => team.setPrompt("Start another research conversation"));
+    let submission!: Promise<void>;
+    await act(async () => { submission = team.submit(); });
+    const startIndex = requests.length - 1;
+    assert.equal(requests[startIndex].path, "/api/sessions/root/tasks");
+    assert.equal(requests[startIndex].init.method, "POST");
+    const submittedBody = JSON.parse(String(requests[startIndex].init.body)) as { message_id: string; text: string; agent: string };
+    assert.equal(submittedBody.text, "Start another research conversation");
+    assert.equal(submittedBody.agent, "research", "the selected definition is sent as the new child recipient");
+    assert.ok(submittedBody.message_id);
+    const newChild = { ...task("new-research"), name: "Follow-up study", profile: "research" };
+    await act(async () => {
+      requests[startIndex].respond(Response.json({ task: newChild,
+        receipt: { message_id: "new-message", task_id: "new-research", status: "picked_up", revision: 1 } }));
+      await submission;
+    });
+    const newChildRow = document.querySelector<HTMLElement>('[data-agent-id="new-research"]');
+    assert.ok(newChildRow);
+    assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow,
+      "starting another child preserves the existing run's DOM row");
+    assert.equal(document.querySelector('[data-agent-id="new-research"] .team-agent-heading strong')?.textContent, "Follow-up study");
+    assert.equal(document.querySelector('[data-agent-id="new-research"] .team-agent-definition')?.textContent, "research");
+    assert.equal(team.selected, "new-research");
+    assert.equal(team.prompt, "", "the new child consumes only its own draft");
+
+    await refreshWith([{ ...existing }, { ...newChild, status: "completed", phase: "done" }]);
+    assert.equal(document.querySelector('[data-agent-id="new-research"]'), newChildRow,
+      "the new child's row survives its completion update");
+    assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow);
+    assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/);
+
+    await refreshWith([existing]);
+    assert.equal(document.querySelector('[data-agent-id="new-research"]'), null,
+      "removing a conversation removes only its row");
+    assert.equal(document.querySelector('[data-agent-id="active-research"]'), existingRow);
+    assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/,
+      "the definition remains in the persistent list after one conversation is removed");
+    await act(async () => team.select("active-research"));
+    assert.equal(team.prompt, "Keep this draft on the active run");
+  } finally {
+    if (mounted) await act(async () => react.unmount());
+    for (const pending of requests.filter(request => !request.responded)) {
+      pending.respond(Response.json({ tasks: [], profiles: [definition], task: existing, history: [] }));
+    }
+    t.mock.timers.reset();
+    dom.window.close();
+    for (const name of Object.keys(globals)) {
+      if (previous[name]) Object.defineProperty(globalThis, name, previous[name]); else Reflect.deleteProperty(globalThis, name);
+    }
+  }
 });
 
 test("team refreshes added and renamed definitions during a run without retargeting drafts or existing children", async (t) => {

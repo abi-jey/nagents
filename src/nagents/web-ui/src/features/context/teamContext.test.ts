@@ -14,7 +14,7 @@ const context: ContextStats = {
   provider: "litellm-opus", model: "eu.anthropic.claude-opus-5-5", estimate_method: "chars/4 heuristic",
   compaction: { trigger: "tokens", token_threshold: 420000, token_budget: 600000 },
 };
-const agent: TeamAgent = { id: "", name: "Assistant", parentId: "", prompt: "", phase: "ready", reason: "",
+const agent: TeamAgent = { id: "", name: "Assistant", profile: "assistant", parentId: "", prompt: "", phase: "ready", reason: "",
   provider: context.provider, providerKind: "litellm", model: context.model, startedAt: 0, updatedAt: 0,
   context, compactTrigger: "tokens", compactTokens: 600000, compactThreshold: 420000, canMessage: true, messageReason: "" };
 const render = (value: TeamAgent) => new JSDOM(renderToStaticMarkup(createElement(AgentRow, {

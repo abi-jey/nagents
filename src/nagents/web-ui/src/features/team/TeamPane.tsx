@@ -58,12 +58,12 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close, co
   }
   return <dialog className="agent-configuration-dialog" ref={dialog} aria-labelledby="agent-config-title" onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2 id="agent-config-title">{agent.name}</h2><button type="button" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
-    <p>Accepted configuration for this agent.</p><dl><dt>Provider</dt><dd>{agent.provider || (agent.providerKind ? `${agent.providerKind} · default connection` : "Unavailable")}</dd><dt>Model</dt><dd>{agent.model || "Unavailable"}</dd>
+    <p>Accepted configuration for this conversation.</p><dl><dt>Definition</dt><dd>{agent.profile || "Unavailable"}</dd><dt>Provider</dt><dd>{agent.provider || (agent.providerKind ? `${agent.providerKind} · default connection` : "Unavailable")}</dd><dt>Model</dt><dd>{agent.model || "Unavailable"}</dd>
       <dt>Reasoning effort</dt><dd>{effortLabel(agent.reasoningEffort)}</dd>
       <dt>Compaction</dt><dd>{compactLabel(agent) || "Unavailable"}{compactionWarning(agent) && <p className="team-context-warning">{compactionWarning(agent)}</p>}</dd>
       <dt>Context</dt><dd>{agent.context ? <>{contextSummary(agent.context)}<small>{contextUsageLabel(agent.context)} · {contextWindowSource(agent.context)}</small></> : "Unavailable"}</dd>
       <dt>Status</dt><dd>{agent.phase === "waiting" ? agent.reason : agent.phase}</dd>
-    </dl>{configureDefinition && <button type="button" disabled={saving} onClick={configureDefinition}>Model defaults for {agent.task?.profile || agent.name}</button>}<form className="agent-next-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
+    </dl>{configureDefinition && <button type="button" disabled={saving} onClick={configureDefinition}>Edit {agent.profile} definition</button>}<form className="agent-next-settings" onSubmit={event => { event.preventDefault(); void save(); }}>
       <h3>Next activation</h3><p>Saved changes apply when this agent next starts from idle. Messages queued during its current work use the settings above.</p>
       <ModelBindingPicker token={token} value={{ provider, id: model }} disabled={saving}
         change={binding => { setProvider(binding.provider); setModel(binding.id); }} />

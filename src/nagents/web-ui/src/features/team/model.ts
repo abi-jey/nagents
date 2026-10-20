@@ -8,7 +8,7 @@ export function providerLabel(agent: Pick<TeamAgent, "provider" | "providerKind"
 }
 export type AgentPhase = "running" | "waiting" | "done" | "failed" | "cancelled" | "ready";
 export type TeamAgent = {
-  id: string; name: string; parentId: string; prompt: string; phase: AgentPhase; reason: string;
+  id: string; name: string; profile: string; parentId: string; prompt: string; phase: AgentPhase; reason: string;
   provider: string; providerKind: string; model: string; startedAt: number; updatedAt: number;
   reasoningEffort?: string;
   context?: ContextStats; compactTrigger?: string; compactTokens?: number; compactThreshold?: number; compactMessages?: number;
@@ -31,12 +31,21 @@ export type TaskDetail = {
   history_truncated?: boolean;
   before?: string;
 };
-export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string };
+export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string };
+
+/** Definitions outlive individual conversations; their names are not task display names. */
+export function definitionUsage(profile: TeamProfile, agents: readonly TeamAgent[]): string {
+  const conversations = agents.filter(agent => agent.profile === profile.id);
+  const active = conversations.filter(agent => agent.phase === "running" || agent.phase === "waiting").length;
+  if (active) return `${active} active`;
+  if (conversations.length) return `${conversations.length} conversation${conversations.length === 1 ? "" : "s"}`;
+  return profile.used ? "Used in chat" : "Not started";
+}
 
 export function conversationAgent(selection: SessionAgentSelection | undefined, context: ContextStats | undefined,
   running: boolean, approval: boolean): TeamAgent {
   const identity = selection?.active || selection?.effective;
-  return { id: MAIN_AGENT, parentId: MAIN_AGENT, name: identity?.agent || "Assistant", prompt: "",
+  return { id: MAIN_AGENT, parentId: MAIN_AGENT, name: identity?.agent || "Assistant", profile: identity?.agent || "", prompt: "",
     reason: approval ? "Waiting for approval" : "", phase: approval ? "waiting" : running ? "running" : "ready",
     provider: identity?.provider || "", providerKind: identity?.provider_kind || "", model: identity?.model || "",
     reasoningEffort: identity?.reasoning_effort,
@@ -55,7 +64,7 @@ export function taskAgent(task: RetainedTask): TeamAgent {
     : task.phase === "waiting_children" || task.phase === "waiting_delegation" ? "Waiting for delegated work"
     : task.phase === "waiting_input" ? "Waiting for a message" : task.phase === "stopping" ? "Stopping"
     : phase === "waiting" ? "Waiting for delegated work" : phase === "failed" ? task.error : phase === "done" ? task.result : task.prompt);
-  return { id: task.id, name: task.name, parentId: task.parent_task_id || MAIN_AGENT, prompt: task.prompt,
+  return { id: task.id, name: task.name, profile: task.profile || "", parentId: task.parent_task_id || MAIN_AGENT, prompt: task.prompt,
     phase, reason, provider: task.provider || "", providerKind: task.provider_kind || task.provider || "", model: task.model || "",
     reasoningEffort: task.reasoning_effort,
     startedAt: task.started_at || 0, updatedAt: task.updated_at || task.completed_at || task.started_at || 0,
