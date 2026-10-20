@@ -31,6 +31,8 @@ class JsonSchemaProperty(TypedDict, total=False):
     type: str
     description: str
     enum: list[str]
+    minimum: float
+    maximum: float
     items: "JsonSchemaProperty"
     properties: dict[str, "JsonSchemaProperty"]
     required: list[str]

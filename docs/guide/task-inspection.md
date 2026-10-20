@@ -18,7 +18,7 @@ access. An absent task or a task belonging to another root returns 404.
 
 | Route | Result |
 | --- | --- |
-| `GET /api/sessions/{root}/tasks` | `{tasks, profiles}` |
+| `GET /api/sessions/{root}/tasks` | `{tasks, profiles, profile_revision}` and `subagent_usage` while its runtime is available |
 | `GET /api/sessions/{root}/tasks/{task}` | Task, bounded history, current activity, receipts, context |
 | `POST /api/sessions/{root}/tasks` | Start `{message_id, agent, text}`; returns `{task, receipt}` |
 | `POST /api/sessions/{root}/tasks/{task}/messages` | Send `{message_id, text}`; returns receipt |
@@ -26,6 +26,12 @@ access. An absent task or a task belonging to another root returns 404.
 
 Messages require a UUID and 1–16,000 characters of nonblank text. Identical
 retries return the same receipt without another quota debit or execution.
+
+`subagent_usage` reports accepted `limits` (`max_concurrent_subagents`,
+`max_subagent_executions`, `max_subagent_depth`), `used_executions`,
+`remaining_executions`, `occupied_slots`, `available_slots`, `retained_tasks`,
+`max_retained_tasks`, `depth`, and the `reset` explanation. It is omitted for
+unavailable runtimes: persisted history does not reconstruct live budget state.
 Reusing a UUID for another root, task, profile, or text returns 409. Check the
 receipt's status; HTTP acceptance does not mean that the model read the message.
 

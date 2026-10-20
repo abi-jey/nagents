@@ -149,6 +149,7 @@ class Executions:
         if primary not in self.owners.values() and primary not in self._leases:
             return
         replacement = self.factory(primary.clone_configuration())
+        replacement.tasks.settings_host = self.state.subagent_settings
         if replacement is primary or replacement in self.owners.values():
             raise RuntimeError("The harness factory must provide an independent configuration runtime")
         installed: list[ToolDefinition] = []
@@ -199,6 +200,7 @@ class Executions:
                 if harness in self.owners.values():
                     raise RuntimeError("The harness factory must provide an independent runtime for another chat")
                 self.owners[run.session_id] = harness
+                harness.tasks.settings_host = self.state.subagent_settings
                 run.harness = harness
                 if harness is not primary:
                     try:

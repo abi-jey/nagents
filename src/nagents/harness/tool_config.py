@@ -14,6 +14,8 @@ import yaml
 
 from nagents.tools.registry import ToolRegistry
 
+from .subagent_settings import LIMIT_FIELDS
+from .subagent_settings import LIMIT_RANGES
 from .tools import MODIFYING_TOOLS
 from .tools import READ_ONLY_TOOLS
 
@@ -149,8 +151,18 @@ class HarnessToolRegistry(ToolRegistry):
         """
         tools = super().get_all()
         for index, tool in enumerate(tools):
+            if tool.func in (self.harness.tasks.subagent_configuration, self.harness.tasks.subagent_configure):
+                tool = replace(tool, parameters=deepcopy(tool.parameters))
+                tools[index] = tool
+                properties = tool.parameters.get("properties", {})
+                properties["scope"]["enum"] = ["global", "workspace"]
+                if tool.func == self.harness.tasks.subagent_configure:
+                    for name, (minimum, maximum) in zip(LIMIT_FIELDS, LIMIT_RANGES, strict=True):
+                        properties[name]["minimum"] = minimum
+                        properties[name]["maximum"] = maximum
             if tool.func == self.harness.tasks.delegate:
                 tool = replace(tool, parameters=deepcopy(tool.parameters))
+                tool.description += "\nCurrent shared limits and usage: " + str(self.harness.tasks.usage())
                 tools[index] = tool
                 parameter = tool.parameters.get("properties", {}).get("agent")
                 if parameter is not None:
@@ -166,6 +178,8 @@ class HarnessToolRegistry(ToolRegistry):
         harness = self.harness
         builtin = tool.func is not None and tool.func == harness.tools.builtins.get(tool.name)
         if tool.name == "delegate" and not harness.can_delegate:
+            return False
+        if tool.name == "subagent_configure" and (harness._is_subagent or harness.mode != "build"):
             return False
         if harness.config.demo and (not builtin or tool.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}):
             return False

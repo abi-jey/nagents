@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import TextDoneEvent
+from nagents.harness.subagent_settings import SubagentLimits
 from tests.support.providers import collect
 from tests.support.providers import setup_harness
 
@@ -74,7 +75,15 @@ async def test_children_use_root_scheduler_depth_and_workspace_restrictions(
         child.refresh_instructions()
         assert "Scheduling acknowledges immediately" in str(child.agent.system_prompt)
         assert "use delegate(" in str(child.agent.system_prompt)
-        root.config.max_subagent_depth = child.subagent_depth
+        current = await root.tasks.settings_host.read("workspace")
+        limits = SubagentLimits(
+            current.limits.max_concurrent_subagents,
+            current.limits.max_subagent_executions,
+            child.subagent_depth,
+        )
+        await root.tasks.settings_host.save("workspace", current.revision, limits)
+        await root.tasks.refresh_limits()
+        await child.tasks.refresh_limits()
         child.refresh_instructions()
         assert "use delegate(" not in str(child.agent.system_prompt)
         root.tool_settings.save({"assistant": {"schedule_wakeup": False}}, "")

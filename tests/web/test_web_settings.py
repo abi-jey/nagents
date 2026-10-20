@@ -51,6 +51,7 @@ PROVIDER_FIELDS = ("provider", "base_url", "api", "auth", "api_key_env")
 COMPACTION_FIELDS = ("compact_trigger", "compact_tokens", "compact_messages")
 SUBMIT_FIELDS = ("submit_mode",)
 READ_ONLY_FIELDS = ("read_only",)
+SUBAGENT_LIMIT_FIELDS = ("max_concurrent_subagents", "max_subagent_executions")
 
 
 def legacy_values(version: int, values: dict[str, object]) -> dict[str, object]:
@@ -217,6 +218,7 @@ def test_settings_safe_projection(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
                         *COMPACTION_FIELDS,
                         *SUBMIT_FIELDS,
                         *READ_ONLY_FIELDS,
+                        *SUBAGENT_LIMIT_FIELDS,
                         "reasoning_effort",
                     }
                 )
@@ -460,6 +462,14 @@ def test_settings_runtime_profile_model_limits_and_identity(tmp_path: Path) -> N
         ("max_subagent_depth", 9),
         ("max_subagent_depth", False),
         ("max_subagent_depth", 2.0),
+        ("max_concurrent_subagents", 0),
+        ("max_concurrent_subagents", 65),
+        ("max_concurrent_subagents", True),
+        ("max_concurrent_subagents", 2.0),
+        ("max_subagent_executions", 0),
+        ("max_subagent_executions", 4097),
+        ("max_subagent_executions", False),
+        ("max_subagent_executions", 2.0),
         ("compact_trigger", "sometimes"),
         ("compact_trigger", "AUTO"),
         ("compact_trigger", ""),

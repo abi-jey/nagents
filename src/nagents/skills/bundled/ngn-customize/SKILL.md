@@ -55,6 +55,8 @@ then CLI flags. Use `ngn --help` and `ngn doctor` for the installed build;
   "agent": "audit",
   "max_tool_rounds": 30,
   "max_subagent_depth": 2,
+  "max_concurrent_subagents": 3,
+  "max_subagent_executions": 8,
   "skill_token_limit": 10000,
   "plugins": ["extensions.py:setup"],
   "profiles": {
@@ -446,15 +448,31 @@ Choose an explicitly configured profile for other behavior; permissions cannot e
 Results notify the immediate parent as user-role data. `Harness.tasks.list()`,
 `task_history(task_id, limit=...)`, and `continue_task(task_id, prompt)` support
 inspection and retained-child follow-ups. Default depth is 2 (root 0), with
-3 concurrent and 8 total child executions per root run. Children use separate
-sessions/providers. Their model resolves from an explicit invocation binding,
-their own agent binding, workspace defaults, then global defaults. Accepted work
-keeps its captured connection. Parent plugins/custom tools are not automatically
-inherited. Execution handles are process-local.
+3 concurrent subagents and 8 executions per root run; these are defaults, not
+fixed limits. Trusted configuration accepts depth 0–8, concurrency 1–64, and
+executions 1–4,096.
+
+Before estimating a delegation plan, call `subagent_configuration(scope="workspace")`
+or `subagent_configuration(scope="global")`. Use its effective limits and usage
+fields for executions used/remaining, occupied/available slots, and depth. Do not
+infer available budget from task identity count: retained-child activations and
+admitted messages can consume executions too. Internal model turns and settings
+reloads do not reset accounting; only a new external human root run does.
+
+Waiting parents occupy concurrency slots, so leave room for descendants or
+complete branches in waves. If the explicit user request requires more capacity
+than current settings allow, read the current revision and propose exact values
+with `subagent_configure`. The host presents scope, current and proposed values,
+and next-turn timing for explicit approval. A general task request is not approval
+to raise limits. Approved changes apply at the next model turn, retain used
+executions and existing work, and do not cancel running tasks when limits are
+lowered. Children use separate sessions/providers. Their model resolves from an
+explicit invocation binding, their own agent binding, workspace defaults, then
+global defaults. Accepted work keeps its captured connection. Parent plugins/custom
+tools are not automatically inherited. Execution handles are process-local.
 
 The web host supplies `Harness.wakeup_handler` for
-`schedule_wakeup(minutes=5, reason="Check the result.")`; `wake_up_in` is the
-legacy tool alias. A custom host must own timer lifecycle, serialization, and
+`schedule_wakeup(minutes=5, reason="Check the result.")`. A custom host must own timer lifecycle, serialization, and
 cleanup before acknowledging timers. Ordinary CLI/TUI reject unavailable timers.
 Wakeups target the original root or retained child, wait for an idle boundary,
 and disappear on restart. Durable channel admission is a different mechanism.

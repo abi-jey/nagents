@@ -125,6 +125,18 @@ class Tasks:
             for info in owner.tasks.list():
                 task = self.task(asdict(info), owner)
                 saved[info.id] = task
+        usage_owner = owner
+        primary = self.state.harness
+        if (
+            usage_owner is None
+            and not primary._closed
+            and primary.session_id == root
+            and primary.tasks._session_id in ("", root)
+        ):
+            # Read-only counters can outlive a run without retained children.
+            # This fallback never grants authority to message/start a task, and
+            # must not relabel another root's last-run budget as this session's.
+            usage_owner = primary
         if (
             self.state.session_agents.unavailable(self.state.session_agents.selected(root))
             and self.state.run_for(root) is None
@@ -175,6 +187,7 @@ class Tasks:
                 "tasks": list(saved.values()),
                 "profiles": profiles,
                 "profile_revision": profile_owner.profile_revision,
+                **({"subagent_usage": usage_owner.tasks.usage()} if usage_owner is not None else {}),
             }
 
     @staticmethod

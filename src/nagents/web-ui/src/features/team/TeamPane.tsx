@@ -22,7 +22,12 @@ export function TeamPane({ team, agents, arrivals, open, close, configure }: {
     element.showModal();
     return () => { element.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true }); };
   }, [open, narrow]);
+  const usage = team.subagentUsage;
+  const usageTitle = usage ? `Depth ${usage.depth}/${usage.limits.max_subagent_depth}. ${usage.remaining_executions} executions remain. ${usage.reset}` : "";
   const body = <><header className="team-pane-heading"><h2><TeamIcon size={17} />Team<span>{agents.length}</span></h2><button type="button" aria-label="Close team" onClick={close}><Icon name="close" size={15} /></button></header>
+    {usage && <p className="team-usage" aria-label="Subagent limits and usage" title={usageTitle}>
+      {usage.occupied_slots}/{usage.limits.max_concurrent_subagents} slots · {usage.used_executions}/{usage.limits.max_subagent_executions} executions
+    </p>}
     <TeamTree agents={agents} profiles={team.profiles} selected={team.selected} inspect={id => { team.select(id); if (narrow) close(); }} configure={configure} arrivals={arrivals} error={team.error} refresh={team.refresh} /></>;
   if (narrow) return open ? <dialog ref={dialog} className="team-drawer" aria-label="Team conversations" onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>{body}</dialog> : null;
   return open ? <aside className="team-pane" aria-label="Team conversations">{body}</aside> : null;

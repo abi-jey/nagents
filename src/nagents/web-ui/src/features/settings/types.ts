@@ -15,6 +15,8 @@ export type SettingsValues = {
   max_file_bytes: number;
   max_tool_rounds: number;
   max_subagent_depth: number;
+  max_concurrent_subagents: number;
+  max_subagent_executions: number;
   compact_trigger: string;
   compact_tokens: number;
   compact_messages: number;

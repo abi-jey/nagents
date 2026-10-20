@@ -10,6 +10,7 @@ import pytest
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
+from nagents.harness.subagent_settings import SubagentLimits
 from nagents.tools.registry import ToolRegistry
 from nagents.types import ToolCall
 from tests.support.config import connection
@@ -22,6 +23,19 @@ if TYPE_CHECKING:
 
 def names(harness: Harness) -> set[str]:
     return {tool.name for tool in harness.agent.tool_registry.get_all()}
+
+
+async def set_depth(*harnesses: Harness, depth: int) -> None:
+    root = harnesses[0]
+    current = await root.tasks.settings_host.read("workspace")
+    limits = SubagentLimits(
+        current.limits.max_concurrent_subagents,
+        current.limits.max_subagent_executions,
+        depth,
+    )
+    await root.tasks.settings_host.save("workspace", current.revision, limits)
+    for harness in harnesses:
+        await harness.tasks.refresh_limits()
 
 
 @pytest.mark.parametrize("read_only", [False, True])
@@ -57,11 +71,13 @@ def test_inherited_mode_depth_and_root_scheduler_are_resolved_for_each_request(t
             assert child.agent.tool_registry.get("wake_up_in") is None
             child.wakeup_handler = None  # Scheduling is owned by the root client, not this child.
             assert "schedule_wakeup" in names(child)
-            root.config.max_subagent_depth = 1
+            await set_depth(root, child, depth=1)
+            child.refresh_instructions()
             assert "delegate" not in names(child)
             denied = await child.agent.tool_executor.execute(ToolCall("depth", "delegate", {"prompt": "no child"}))
             assert denied.error and "depth limit" in denied.error
-            root.config.max_subagent_depth = 2
+            await set_depth(root, child, depth=2)
+            child.refresh_instructions()
             assert "delegate" in names(child)
             root.allow_subagents = False
             assert "delegate" not in names(child)
@@ -138,7 +154,7 @@ def test_demo_catalog_keeps_unavailable_definitions(tmp_path: Path) -> None:
             assert "wake_up_in" not in raw
             assert not {"edit", "write", "shell", "delegate", "schedule_wakeup"} & names(harness)
             assert {"read_file", "list_files", "demo_preview"} <= names(harness)
-            harness.config.max_subagent_depth = 2
+            await set_depth(harness, depth=2)
             harness.refresh_instructions()
             assert "delegate" in names(harness)
             assert "end this model turn" in str(harness.agent.system_prompt)

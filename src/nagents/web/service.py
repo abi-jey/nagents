@@ -55,6 +55,7 @@ from .queued_inputs import SkillInvocationError
 from .replay import RunReplay
 from .response_metadata import Responses
 from .session_agents import SessionAgents
+from .subagent_settings import WebSubagentSettings
 from .subscriptions import EventBus
 from .tasks import Tasks
 from .tool_approvals import ToolApprovals
@@ -262,6 +263,8 @@ class WebState:
 
     def __init__(self, harness: Harness, factory: Callable[[HarnessConfig], Harness] | None = None) -> None:
         self.harness = harness
+        self.subagent_settings = WebSubagentSettings(self)
+        harness.tasks.settings_host = self.subagent_settings
         self._running_harness = harness
         self.approval_timeout: Callable[[], float] = lambda: APPROVAL_TIMEOUT
         self.selected_session_id = harness.session_id
@@ -554,7 +557,7 @@ class WebState:
         ):
             identity = {"generation_id": generation, "index": index}
         harness = self.running_harness
-        binding = self.tool_approvals.requested_binding(harness, request)
+        binding = None if request.mandatory else self.tool_approvals.requested_binding(harness, request)
         try:
             allowed = binding is not None and await self.tool_approvals.check_allowed(binding)
         except sqlite3.Error:
@@ -566,7 +569,7 @@ class WebState:
             or run.finished
             or run.task.done()
             or run.task.cancelling()
-            or self.tool_approvals.requested_binding(harness, request) != binding
+            or (None if request.mandatory else self.tool_approvals.requested_binding(harness, request)) != binding
         ):
             return False
         if allowed:

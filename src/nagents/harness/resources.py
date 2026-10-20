@@ -770,6 +770,7 @@ class HarnessResources(AgentPlugin):
         # Unlike plugin/MCP setup this also runs for ordinary child harnesses.
         # Read-only web catalog refreshes never activate an in-flight profile.
         harness = self.harness
+        await harness.tasks.refresh_limits()
         harness.refresh_agent_definitions()
         authored = harness.agent.system_prompt != harness._generated_system_prompt
         harness.activate_agent_definitions()

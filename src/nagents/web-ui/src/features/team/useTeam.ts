@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { request, RequestError } from "../../api/client.js";
 import type { RetainedTask } from "../../types.js";
-import { TaskDrafts, type TaskActivity, type TaskDetail, type TaskReceipt, type TeamProfile } from "./model.js";
+import { TaskDrafts, type TaskActivity, type TaskDetail, type TaskReceipt, type TeamProfile, type TeamSubagentUsage } from "./model.js";
 
 const profilePrefix = "profile:";
 export const profileTarget = (id: string) => `${profilePrefix}${id}`;
@@ -10,7 +10,7 @@ export const isProfileTarget = (id: string) => id.startsWith(profilePrefix);
 export function useTeam(token: string, sessionId: string, revision: number, running: boolean, activity: TaskActivity[]) {
   const [selectedState, setSelected] = useState({ session: sessionId, id: "" });
   const selected = selectedState.session === sessionId ? selectedState.id : "";
-  const [index, setIndex] = useState<{ session: string; tasks: RetainedTask[]; profiles: TeamProfile[] }>({ session: "", tasks: [], profiles: [] });
+  const [index, setIndex] = useState<{ session: string; tasks: RetainedTask[]; profiles: TeamProfile[]; subagentUsage?: TeamSubagentUsage }>({ session: "", tasks: [], profiles: [] });
   const [details, setDetails] = useState<{ session: string; task: string; value: TaskDetail }>();
   const [failure, setFailure] = useState<{ session: string; text: string; source?: string }>({ session: "", text: "" });
   const [startNotice, setStartNotice] = useState({ session: "", target: "", text: "" });
@@ -36,8 +36,10 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
       if (pending) { rerun = true; return; }
       pending = true;
       try {
-        const result = await (await request(path, token, undefined, controller.signal)).json() as { tasks: RetainedTask[]; profiles: TeamProfile[] };
-        if (!disposed) { setIndex({ session: sessionId, tasks: result.tasks, profiles: result.profiles || [] }); setFailure(current => current.session === sessionId && current.source === "index" ? { session: sessionId, text: "" } : current); }
+        const result = await (await request(path, token, undefined, controller.signal)).json() as {
+          tasks: RetainedTask[]; profiles: TeamProfile[]; subagent_usage?: TeamSubagentUsage;
+        };
+        if (!disposed) { setIndex({ session: sessionId, tasks: result.tasks, profiles: result.profiles || [], subagentUsage: result.subagent_usage }); setFailure(current => current.session === sessionId && current.source === "index" ? { session: sessionId, text: "" } : current); }
       } catch (error) { if (!disposed) setFailure({ session: sessionId, source: "index", text: error instanceof Error ? error.message : "Could not load agents." }); }
       finally { pending = false; if (rerun && !disposed) { rerun = false; void refresh(); } }
     };
@@ -101,7 +103,7 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
       }
       drafts.current.confirmed(root, target, message); setDraftVersion(value => value + 1);
       if ("task" in result && result.task.id && active.current.session === root && active.current.selected === target) {
-        setIndex(current => ({ session: root, tasks: [...(current.session === root ? current.tasks.filter(item => item.id !== result.task.id) : []), result.task], profiles: current.profiles }));
+        setIndex(current => ({ session: root, tasks: [...(current.session === root ? current.tasks.filter(item => item.id !== result.task.id) : []), result.task], profiles: current.profiles, subagentUsage: current.subagentUsage }));
         setSelected({ session: root, id: result.task.id });
       } else if ("task" in result && !result.task.id) {
         setStartNotice({ session: root, target, text: "Your message is queued while this agent starts. Its conversation will appear in the team tree." });
@@ -127,7 +129,8 @@ export function useTeam(token: string, sessionId: string, revision: number, runn
     finally { setLoadingEarlier(false); }
   }
 
-  return { selected, select: (id: string) => setSelected({ session: sessionId, id }), tasks, profiles, task, profile, detail, loaded: index.session === sessionId,
+  return { selected, select: (id: string) => setSelected({ session: sessionId, id }), tasks, profiles,
+    subagentUsage: index.session === sessionId ? index.subagentUsage : undefined, task, profile, detail, loaded: index.session === sessionId,
     activity: activity.filter(event => event.task_id === selected), loading, error: failure.session === sessionId ? failure.text : "",
     startNotice: startNotice.session === sessionId && startNotice.target === selected ? startNotice.text : "",
     refresh: () => setRefreshVersion(value => value + 1), dismissError: () => setFailure({ session: sessionId, text: "" }),

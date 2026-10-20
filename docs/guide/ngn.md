@@ -344,15 +344,44 @@ Depth counts the root as `0`, a child as `1`, and a grandchild as `2`. The defau
 therefore permits grandchildren, but not great-grandchildren. Set it to `0` to
 disable delegation, or `1` to allow only direct children.
 
-Depth is separate from concurrency and job budgets. Additional initial bounds
-are three concurrent subagents and eight child executions per root user run,
-shared across the entire descendant tree and including automatic continuations
-and accepted human follow-ups. A quota-full delegation fails immediately instead
+`max_concurrent_subagents` defaults to `3` (supported range `1`–`64`).
+`max_subagent_executions` defaults to `8` (supported range `1`–`4096`). These
+limits are shared across the entire descendant tree, including automatic
+continuations and accepted human follow-ups. They are available in trusted JSON
+configuration, the corresponding `NGN_*` environment variables, CLI flags, and
+global/workspace **Settings → Execution limits**. A quota-full delegation fails immediately instead
 of waiting indefinitely for a slot; a parent still working or waiting for its
 own children occupies a slot. Further limits are at most
 `min(max_tool_rounds, 12)` tool rounds per child, a five-minute child timeout,
 a 16,000-character delegation prompt, and
-12,000-character results. These are implementation limits, not extra YAML knobs.
+12,000-character results, 64 retained task identities per root harness, and eight
+human follow-ups per child. Raising the execution budget does not raise those
+separate bounds.
+
+`subagent_configuration(scope="workspace")` reports saved and accepted limits,
+the settings revision, used/remaining executions, and occupied/available slots.
+The root build agent can propose exact new values using `subagent_configure` and
+that revision. The host always asks for one-time approval of the scope, old/new
+values and application timing; a saved tool allowance does not bypass this.
+Denial, cancellation before persistence, and a stale revision leave settings
+unchanged. Web proposals use the same scoped store as Settings; terminal and
+embedded hosts persist scoped preferences in `subagent-settings.db` under the
+application data directory.
+
+Each model generation accepts a coherent limit snapshot, including generations
+after tool results and background notifications. Reloading never resets accounting
+or releases occupied slots. Raising limits supplies the remaining headroom at the
+next generation; lowering them preserves existing work and blocks admissions
+above the new bounds. Only a new external human root run resets its used-execution
+counter. Profile tool restrictions, read-only mode and host delegation restrictions
+still apply.
+
+Five parents with two children each create 15 identities. They can run in waves
+under three slots: keep one parent active with its two children, consume both
+results, then start the next parent. Inactive-parent reactivations and follow-ups
+cost additional executions; plan from the actual usage rather than identity count.
+If all five branches must run simultaneously, explicitly approve enough concurrency
+for the parents and their children. Waiting parents never release their slots.
 Children use separate sessions/providers and share the parent's credential
 manager for in-process refresh coordination. They receive the delegated prompt
 and applicable instruction context, not a copy of the full parent conversation.
@@ -397,7 +426,7 @@ tool result or silently treat child output as higher-priority instructions.
 
 Each identity permits eight explicit human follow-ups, and the root retains up
 to 64 identities for its process lifetime. Every continuation also consumes one
-of the current root run's eight execution slots. Full quotas and unsupported
+of the current root run's configured execution budget. Full quotas and unsupported
 continuations are rejected explicitly. These handles do not survive restarting
 ngn, even though the underlying transcripts remain on disk.
 
@@ -676,6 +705,8 @@ location need not be `.ngn/config.json`. Settings are top-level JSON with no
   "agent": "assistant",
   "shell_timeout": 60.0,
   "max_subagent_depth": 2,
+  "max_concurrent_subagents": 3,
+  "max_subagent_executions": 8,
   "profiles": {
     "audit": {
       "mode": "reviewer",

@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import secrets
+import sqlite3
 import time
 import uuid
 from collections import deque
@@ -36,11 +38,16 @@ from .provider import HarnessProvider
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
 from .reasoning import validate_effort
+from .subagent_settings import LocalSubagentSettings
+from .subagent_settings import SubagentLimits
+from .subagent_settings import SubagentSettingsHost
+from .subagent_settings import limit_scope
 from .task_activity import ChildActivity
 from .task_activity import TaskOptions
 from .task_activity import compaction_snapshot
 from .task_activity import public_payload
 from .tools import READ_ONLY_TOOLS as _READ_ONLY_TOOLS
+from .types import Notice
 from .types import TaskActivity
 from .types import TaskCompleted
 from .types import TaskDeliveryWarning
@@ -53,14 +60,13 @@ if TYPE_CHECKING:
 
     from nagents.types import Message
     from nagents.types import ReasoningEffort
+    from nagents.types import ToolArguments
 
     from .config import AgentProfile
     from .model_bindings import ModelBinding
     from .providers import ProviderProfile
     from .runtime import Harness
 
-MAX_CONCURRENT = 3
-MAX_TASKS = 8
 MAX_RETAINED_TASKS = 64
 MAX_FOLLOWUPS = 8
 MAX_PROMPT = 16_000
@@ -110,12 +116,16 @@ class SubagentManager:
 
     Quotas reserve synchronously and fail fast; waiting parents still occupy a
     slot, so descendants must never wait on a semaphore. Only external root runs
-    reset the eight-execution budget. Follow-ups cost one execution too.
+    reset the execution budget. Follow-ups cost one execution too.
     """
 
     def __init__(self, harness: Harness, root: SubagentManager | None = None) -> None:
         self.harness = harness
         self.root = root or self
+        self.settings_host: SubagentSettingsHost = LocalSubagentSettings(harness.config)
+        self.limits = SubagentLimits.from_config(harness.config)
+        self._shared_limits = self.limits
+        self._limits_error = ""
         self._infos: dict[str, TaskInfo] = {} if root is None else root._infos
         self._workers: dict[str, asyncio.Task[None]] = {} if root is None else root._workers
         self._children: dict[str, Harness] = {} if root is None else root._children
@@ -146,6 +156,125 @@ class SubagentManager:
         # check current limits, so changing settings never replaces this binding.
         self.harness.tools.builtins["delegate"] = self.delegate
         self.harness.agent.register_tool(self.delegate)
+        for function in (self.subagent_configuration, self.subagent_configure):
+            self.harness.tools.builtins[function.__name__] = function
+            self.harness.agent.register_tool(function)
+
+    async def refresh_limits(self) -> None:
+        """Accept one limits snapshot; never touch execution counts or workers."""
+        try:
+            snapshot = await self.root.settings_host.read("workspace")
+        except (OSError, ValueError, sqlite3.Error) as error:
+            name = type(error).__name__
+            if name != self._limits_error:
+                self._limits_error = name
+                self.harness.resources.logger.log(
+                    logging.WARNING,
+                    "Subagent settings refresh failed: task=%s error_type=%s; previous limits retained",
+                    self.harness._task_id or "root",
+                    name,
+                )
+                await self.harness.emit(
+                    Notice("Subagent settings could not be refreshed; previous limits are kept.", "warning")
+                )
+            return
+        self._limits_error = ""
+        self.accept_limits(snapshot.effective)
+
+    def accept_limits(self, limits: SubagentLimits) -> None:
+        """Publish a validated turn (or idle host) snapshot without new capacity accounting."""
+        previous = self.limits
+        self.root._shared_limits = limits
+        self.limits = limits
+        for name, value in self.limits.values().items():
+            setattr(self.harness.config, name, value)
+        if previous != self.limits:
+            self.harness.resources.logger.log(
+                logging.INFO,
+                "Subagent limits accepted: task=%s depth=%s limits=%s used_executions=%s",
+                self.harness._task_id or "root",
+                self.harness.subagent_depth,
+                self.limits.values(),
+                self.root._used,
+            )
+
+    def admission_limits(self) -> SubagentLimits:
+        # A newly lowered shared limit also constrains tools from an older
+        # in-flight turn. Raising it becomes available at that turn's next boundary.
+        return SubagentLimits(
+            **{
+                name: min(value, getattr(self.root._shared_limits, name))
+                for name, value in self.limits.values().items()
+            }
+        )
+
+    def usage(self) -> dict[str, object]:
+        limits = self.admission_limits()
+        occupied = sum(
+            info.status == "running" or (info.id in self._workers and not self._workers[info.id].done())
+            for info in self._infos.values()
+        )
+        return {
+            "limits": limits.values(),
+            "used_executions": self.root._used,
+            "remaining_executions": max(0, limits.max_subagent_executions - self.root._used),
+            "occupied_slots": occupied,
+            "available_slots": max(0, limits.max_concurrent_subagents - occupied),
+            "retained_tasks": len(self._infos),
+            "max_retained_tasks": MAX_RETAINED_TASKS,
+            "depth": self.harness.subagent_depth,
+            "reset": "Only a new external human root run resets used executions; settings reload does not.",
+        }
+
+    async def subagent_configuration(self, scope: str = "workspace") -> dict[str, object]:
+        """Read scoped subagent limits and the shared tree's actual execution/slot usage.
+        Read before proposing a change. Counts include nested work and follow-ups;
+        waiting parents occupy slots. A new agent is not the same as an execution.
+        """
+        snapshot = await self.root.settings_host.read(limit_scope(scope))
+        return {**snapshot.values(), "usage": self.usage()}
+
+    async def subagent_configure(
+        self,
+        revision: str,
+        max_concurrent_subagents: int,
+        max_subagent_executions: int,
+        max_subagent_depth: int,
+        scope: str = "workspace",
+    ) -> dict[str, object]:
+        """Propose an exact scoped limit change for explicit one-time human approval.
+        Read subagent_configuration first and use its revision. Every change needs
+        approval; a general task request or saved tool allowance is insufficient.
+        Approved settings apply at the next model turn without resetting accounting
+        or cancelling work. Only a build-mode root can propose changes.
+        """
+        if self.harness._is_subagent or self.harness.mode != "build":
+            raise PermissionError("Only the root build agent can propose shared subagent settings")
+        selected = limit_scope(scope)
+        limits = SubagentLimits(max_concurrent_subagents, max_subagent_executions, max_subagent_depth)
+        before = await self.root.settings_host.read(selected)
+        if before.revision != revision:
+            raise ValueError("Subagent settings changed. Read the current settings before proposing again.")
+        if limits == before.limits:
+            return {**before.values(), "status": "unchanged", "usage": self.usage()}
+        arguments: ToolArguments = {
+            "scope": selected,
+            "revision": revision,
+            "current": before.limits.values(),
+            "proposed": limits.values(),
+            "apply_at": "next_model_turn",
+        }
+        preview = "\n".join(f"{name}: {old} → {getattr(limits, name)}" for name, old in before.limits.values().items())
+        await self.harness.approve(
+            "subagent_configure",
+            arguments,
+            f"Change {selected} subagent limits for the next model turn. Existing work and used executions are retained.",
+            preview,
+            self.harness.tools.call_id.get(),
+            mandatory=True,
+        )
+        saved = await self.root.settings_host.save(selected, revision, limits)
+        return {**saved.values(), "status": "saved", "usage": self.usage()}
 
     def list(self) -> list[TaskInfo]:
         """Detached snapshots of all descendants retained in this root session."""
@@ -206,18 +335,21 @@ class SubagentManager:
         self._check_active()
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
             raise ValueError(f"Delegation prompt must contain 1 to {MAX_PROMPT} characters")
-        if self.root._used >= MAX_TASKS:
+        limits = self.admission_limits()
+        if self.root._used >= limits.max_subagent_executions:
             raise ValueError(
-                f"Subagent budget exhausted: at most {MAX_TASKS} executions per root run, including follow-ups"
+                f"Subagent budget exhausted: {self.root._used} of {limits.max_subagent_executions} executions used in this root run, including follow-ups. Read subagent_configuration before proposing an increase."
             )
         if slot and (
             sum(
                 info.status == "running" or (info.id in self._workers and not self._workers[info.id].done())
                 for info in self._infos.values()
             )
-            >= MAX_CONCURRENT
+            >= limits.max_concurrent_subagents
         ):
-            raise ValueError(f"At most {MAX_CONCURRENT} subagents may run concurrently; retry after a child finishes")
+            raise ValueError(
+                f"At most {limits.max_concurrent_subagents} subagents may run concurrently, including waiting parents. Leave slots for descendants or work in waves."
+            )
 
     async def delegate(
         self,
@@ -235,8 +367,11 @@ class SubagentManager:
         turn without tool calls; the harness waits and resumes you with untrusted
         results. Then complete the task.
         Children inherit your permission ceiling; writes and shell pass through
-        the host approval policy. The whole tree shares 3 concurrent
-        slots and 8 executions per root run; full quotas fail immediately.
+        the host approval policy. The whole tree shares its configured slots and
+        execution budget; read subagent_configuration for actual limits and usage.
+        Full quotas fail immediately. Waiting parents occupy slots: leave capacity
+        for their children or complete branches in waves. Only an explicitly
+        approved subagent_configure proposal can raise saved limits.
 
         Args:
             prompt: A self-contained task; the child does not receive parent conversation history.

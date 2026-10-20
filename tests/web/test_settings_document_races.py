@@ -251,7 +251,9 @@ def test_settings_reads_keep_committed_snapshot_until_model_document_commit(
                 response = await asyncio.wait_for(request, HANG_GUARD)
 
             assert response.status_code == 200, response.text
-            assert commit_count == (3 if scope == "global" else 1)
+            # Global reloads are read-only now; the save still performs its
+            # schema setup commit and one final settings transaction.
+            assert commit_count == (2 if scope == "global" else 1)
             workspace_after = (await client.get("/api/settings", headers=headers)).json()
             global_after = (await client.get("/api/settings/global", headers=headers)).json()
             if scope == "global":

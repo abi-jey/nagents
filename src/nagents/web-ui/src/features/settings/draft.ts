@@ -46,6 +46,22 @@ export const executionLimits = [
     max: 8,
     help: "0 to 8 nested levels. 0 prevents delegation.",
   },
+  {
+    key: "max_concurrent_subagents",
+    label: "Concurrent subagents",
+    unit: "agents",
+    min: 1,
+    max: 64,
+    help: "1 to 64 active subagents. Waiting parents occupy slots; leave room for their children.",
+  },
+  {
+    key: "max_subagent_executions",
+    label: "Subagent executions",
+    unit: "executions",
+    min: 1,
+    max: 4096,
+    help: "1 to 4,096 executions per root run, including follow-ups. Saving limits does not reset usage.",
+  },
 ] as const;
 
 export const providerApis = ["auto", "chat_completions", "responses", "messages"] as const;
@@ -89,6 +105,8 @@ export function createDraft(values: SettingsValues, binding?: ModelBinding): Set
     max_file_bytes: String(values.max_file_bytes),
     max_tool_rounds: String(values.max_tool_rounds),
     max_subagent_depth: String(values.max_subagent_depth),
+    max_concurrent_subagents: String(values.max_concurrent_subagents),
+    max_subagent_executions: String(values.max_subagent_executions),
     compact_trigger: values.compact_trigger,
     compact_tokens: String(values.compact_tokens),
     compact_messages: String(values.compact_messages),
@@ -126,6 +144,8 @@ export function parseDraft(
     max_file_bytes: 0,
     max_tool_rounds: 0,
     max_subagent_depth: 0,
+    max_concurrent_subagents: 0,
+    max_subagent_executions: 0,
     compact_trigger: draft.compact_trigger,
     compact_tokens: 0,
     compact_messages: 0,

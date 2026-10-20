@@ -10,11 +10,14 @@ from typing import cast
 import pytest
 
 from nagents.cli import _parser
+from nagents.cli import _record_cli_subagent_limit_overrides
 from nagents.harness import Harness
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.harness.providers import API_NAMES
+from nagents.harness.subagent_settings import LocalSubagentSettings
+from nagents.harness.subagent_settings import SubagentLimits
 from tests.support.config import connection
 
 
@@ -22,6 +25,8 @@ def test_new_defaults_and_generic_agent(tmp_path: Path) -> None:
     config = HarnessConfig(workspace=tmp_path)
     assert config.provider_profile().api == "auto"
     assert config.max_subagent_depth == 2
+    assert config.max_concurrent_subagents == 3
+    assert config.max_subagent_executions == 8
     assert config.agent == "assistant"
     assert config.profile("assistant").mode == "build"
     assert config.theme_background == "auto"
@@ -161,6 +166,14 @@ def test_saved_login_does_not_override_explicit_api(
         '{"max_subagent_depth": 9}',
         '{"max_subagent_depth": true}',
         '{"max_subagent_depth": 1.5}',
+        '{"max_concurrent_subagents": 0}',
+        '{"max_concurrent_subagents": 65}',
+        '{"max_concurrent_subagents": true}',
+        '{"max_concurrent_subagents": 1.5}',
+        '{"max_subagent_executions": 0}',
+        '{"max_subagent_executions": 4097}',
+        '{"max_subagent_executions": false}',
+        '{"max_subagent_executions": 1.5}',
         '{"profiles": {"assistant": {"mode": "reviewer"}}}',
     ],
 )
@@ -177,19 +190,44 @@ def test_depth_is_strict_for_python_configs(tmp_path: Path, depth: int) -> None:
         HarnessConfig(workspace=tmp_path, max_subagent_depth=depth)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_concurrent_subagents", False),
+        ("max_concurrent_subagents", 0),
+        ("max_concurrent_subagents", 65),
+        ("max_concurrent_subagents", 1.5),
+        ("max_subagent_executions", True),
+        ("max_subagent_executions", 0),
+        ("max_subagent_executions", 4097),
+        ("max_subagent_executions", 1.5),
+    ],
+)
+def test_subagent_limits_are_strict_for_python_configs(tmp_path: Path, field: str, value: object) -> None:
+    with pytest.raises(ValueError, match=field):
+        if field == "max_concurrent_subagents":
+            HarnessConfig(workspace=tmp_path, max_concurrent_subagents=cast("int", value))
+        else:
+            HarnessConfig(workspace=tmp_path, max_subagent_executions=cast("int", value))
+
+
 def test_scalar_environment_defaults_and_file_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for key, value in {
         "MAX_SUBAGENT_DEPTH": "3",
+        "MAX_CONCURRENT_SUBAGENTS": "5",
+        "MAX_SUBAGENT_EXECUTIONS": "32",
         "THEME_BACKGROUND": "terminal",
     }.items():
         monkeypatch.setenv(f"NGN_{key}", value)
     config = load_config(tmp_path)
     assert config.provider_profile().api == "auto" and config.max_subagent_depth == 3
+    assert config.max_concurrent_subagents == 5 and config.max_subagent_executions == 32
     assert config.theme_background == "terminal"
     path = tmp_path / "config.json"
-    path.write_text('{"max_subagent_depth": 0}\n')
+    path.write_text('{"max_subagent_depth": 0, "max_concurrent_subagents": 7, "max_subagent_executions": 64}\n')
     config = load_config(tmp_path, path)
     assert config.provider_profile().api == "auto" and config.max_subagent_depth == 0
+    assert config.max_concurrent_subagents == 7 and config.max_subagent_executions == 64
 
 
 def test_cli_overrides(tmp_path: Path) -> None:
@@ -202,17 +240,116 @@ def test_cli_overrides(tmp_path: Path) -> None:
             "work",
             "--max-subagent-depth",
             "0",
+            "--max-concurrent-subagents",
+            "5",
+            "--max-subagent-executions",
+            "15",
             "hello",
         ]
     )
     assert args.theme_background == "theme"
     assert args.provider_id == "work" and args.max_subagent_depth == 0
+    assert args.max_concurrent_subagents == 5 and args.max_subagent_executions == 15
     assert args.prompt == ["hello"]
     config = replace(
         HarnessConfig(workspace=tmp_path),
         max_subagent_depth=args.max_subagent_depth,
+        max_concurrent_subagents=args.max_concurrent_subagents,
+        max_subagent_executions=args.max_subagent_executions,
     )
     assert config.provider_profile().api == "auto" and config.max_subagent_depth == 0
+    assert config.max_concurrent_subagents == 5 and config.max_subagent_executions == 15
+
+
+def test_environment_limit_layer_survives_reread_without_overriding_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data-home"))
+    monkeypatch.setenv("NGN_MAX_CONCURRENT_SUBAGENTS", "5")
+    monkeypatch.setenv("NGN_MAX_SUBAGENT_EXECUTIONS", "15")
+    monkeypatch.setenv("NGN_MAX_SUBAGENT_DEPTH", "1")
+    path = tmp_path / "trusted.json"
+    path.write_text(json.dumps({"max_concurrent_subagents": 7}), encoding="utf-8")
+
+    config = load_config(tmp_path, path)
+    assert config.max_concurrent_subagents == 7
+    assert config.max_subagent_executions == 15 and config.max_subagent_depth == 1
+    settings = LocalSubagentSettings(config)
+    initial = asyncio.run(settings.read("workspace"))
+    assert initial.limits == SubagentLimits(7, 15, 1)
+
+    path.write_text(json.dumps({"max_concurrent_subagents": 9, "max_subagent_executions": 20}), encoding="utf-8")
+    updated = asyncio.run(settings.read("workspace"))
+    assert updated.limits == SubagentLimits(9, 20, 1)
+    assert initial.revision != updated.revision
+
+
+def test_direct_harness_limit_overrides_after_load_remain_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data-home"))
+    monkeypatch.setenv("NGN_MAX_CONCURRENT_SUBAGENTS", "5")
+    monkeypatch.setenv("NGN_MAX_SUBAGENT_EXECUTIONS", "15")
+    monkeypatch.setenv("NGN_MAX_SUBAGENT_DEPTH", "1")
+    path = tmp_path / "trusted.json"
+    path.write_text(
+        json.dumps({"max_concurrent_subagents": 7, "max_subagent_executions": 64, "max_subagent_depth": 4}),
+        encoding="utf-8",
+    )
+    config = load_config(tmp_path, path)
+    assert SubagentLimits.from_config(config) == SubagentLimits(7, 64, 4)
+    config = replace(config, max_concurrent_subagents=5, max_subagent_executions=15, max_subagent_depth=1)
+    settings = LocalSubagentSettings(config)
+
+    path.write_text(
+        json.dumps({"max_concurrent_subagents": 9, "max_subagent_executions": 80, "max_subagent_depth": 5}),
+        encoding="utf-8",
+    )
+    assert asyncio.run(settings.read("workspace")).limits == SubagentLimits(5, 15, 1)
+
+
+def test_cli_limit_layer_pins_explicit_values_even_when_equal_to_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config-home"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data-home"))
+    for name in ("NGN_MAX_CONCURRENT_SUBAGENTS", "NGN_MAX_SUBAGENT_EXECUTIONS", "NGN_MAX_SUBAGENT_DEPTH"):
+        monkeypatch.delenv(name, raising=False)
+    path = tmp_path / "trusted.json"
+    path.write_text(
+        json.dumps({"max_concurrent_subagents": 3, "max_subagent_executions": 8, "max_subagent_depth": 2}),
+        encoding="utf-8",
+    )
+    config = load_config(tmp_path, path)
+    args = _parser().parse_args(
+        [
+            "--max-concurrent-subagents",
+            "3",
+            "--max-subagent-executions",
+            "8",
+            "--max-subagent-depth",
+            "2",
+            "run",
+            "hello",
+        ]
+    )
+    config = replace(
+        config,
+        max_concurrent_subagents=args.max_concurrent_subagents,
+        max_subagent_executions=args.max_subagent_executions,
+        max_subagent_depth=args.max_subagent_depth,
+    )
+    _record_cli_subagent_limit_overrides(config, args)
+    settings = LocalSubagentSettings(config)
+    assert asyncio.run(settings.read("workspace")).limits == SubagentLimits(3, 8, 2)
+
+    path.write_text(
+        json.dumps({"max_concurrent_subagents": 7, "max_subagent_executions": 64, "max_subagent_depth": 4}),
+        encoding="utf-8",
+    )
+    assert asyncio.run(settings.read("workspace")).limits == SubagentLimits(3, 8, 2)
 
 
 def test_same_name_profiles_replace_whole_profile_only_in_trusted_layers(

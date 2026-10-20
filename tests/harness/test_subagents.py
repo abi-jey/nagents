@@ -27,6 +27,7 @@ from nagents.harness import subagents
 from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.runtime import Harness
+from nagents.harness.subagent_settings import SubagentLimits
 from nagents.harness.subagents import MAX_RESULT
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
@@ -56,6 +57,12 @@ if TYPE_CHECKING:
     from nagents.harness.types import HarnessEvent
 
     Script = Callable[["FakeProvider", list[Message]], AsyncIterator[Event]]
+
+
+async def set_limits(harness: Harness, limits: SubagentLimits) -> None:
+    current = await harness.tasks.root.settings_host.read("workspace")
+    await harness.tasks.root.settings_host.save("workspace", current.revision, limits)
+    await harness.tasks.refresh_limits()
 
 
 # Controlled providers still run through real harness initialization and file guards.
@@ -526,9 +533,9 @@ def test_repeated_cancellation_waits_for_child_provider_cleanup(
             await original_close(provider)
 
         monkeypatch.setattr(FakeProvider, "close", slow_close)
-        monkeypatch.setattr(subagents, "MAX_CONCURRENT", 1)
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         await harness.initialize()
+        await set_limits(harness, SubagentLimits(max_concurrent_subagents=1))
         harness.tasks.begin(harness.session_id)
         try:
             await harness.tasks.delegate("Review")
@@ -620,6 +627,7 @@ def test_task_limits_names_and_shared_recursive_budget(tmp_path: Path, monkeypat
         monkeypatch.setattr(secrets, "choice", lambda values: values[0])
         await harness.initialize()
         try:
+            await set_limits(harness, SubagentLimits(max_concurrent_subagents=3, max_subagent_executions=8))
             with pytest.raises(RuntimeError, match="active parent run"):
                 await harness.tasks.delegate("Outside a run")
             harness.tasks.begin(harness.session_id)
@@ -646,7 +654,7 @@ def test_task_limits_names_and_shared_recursive_budget(tmp_path: Path, monkeypat
                 await child.close()
             release.set()
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
-            monkeypatch.setattr(subagents, "MAX_TASKS", 3)
+            await set_limits(harness, SubagentLimits(max_concurrent_subagents=3, max_subagent_executions=3))
             with pytest.raises(ValueError, match="budget exhausted"):
                 await harness.tasks.delegate("New wave must not reset total budget")
             await harness.tasks.notification()
@@ -672,9 +680,9 @@ def test_auto_continuations_share_one_total_budget(tmp_path: Path, monkeypatch: 
                     id=f"spawn-{len(provider.requests)}", name="delegate", arguments={"prompt": "Review again"}
                 )
 
-        monkeypatch.setattr(subagents, "MAX_TASKS", 2)
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
         try:
+            await set_limits(harness, SubagentLimits(max_subagent_executions=2))
             events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             assert len(providers) == 3
             assert len([event for event in events if isinstance(event, TaskStarted)]) == 2
@@ -893,11 +901,12 @@ def test_recursive_tree_depth_permission_ceiling_and_fail_fast_slots(
                 yield TextDoneEvent(text=f"Finished {provider.index}")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script, agent=mode)
-        harness.config.max_subagent_depth = depth
         try:
+            limits = SubagentLimits(max_concurrent_subagents=3, max_subagent_executions=8, max_subagent_depth=depth)
+            await set_limits(harness, limits)
             events = await asyncio.wait_for(collect(harness), HANG_GUARD)
             infos = harness.tasks.list()
-            assert len(infos) == min(depth, subagents.MAX_CONCURRENT)
+            assert len(infos) == min(depth, limits.max_concurrent_subagents)
             assert [info.depth for info in infos] == list(range(1, len(infos) + 1))
             assert len({info.name for info in infos}) == len(infos)
             assert all(
@@ -914,7 +923,7 @@ def test_recursive_tree_depth_permission_ceiling_and_fail_fast_slots(
                 assert all(("shell" in schema) == (mode == "build") for schema in providers[index + 1].schemas)
                 assert_balanced(await harness.task_history(info.id))
             leaf_history = await harness.task_history(infos[-1].id) if infos else await harness.history()
-            denial = "concurrently" if depth > subagents.MAX_CONCURRENT else "depth limit"
+            denial = "concurrently" if depth > limits.max_concurrent_subagents else "depth limit"
             assert any(message.role == "tool" and denial in str(message.content) for message in leaf_history)
             assert_balanced(await harness.history())
             if depth == 0:
@@ -947,15 +956,16 @@ def test_descendant_notification_waves_do_not_reset_root_budget(
         try:
             # This checks budget continuity across persisted child waves, not latency.
             events = await asyncio.wait_for(collect(harness), HANG_GUARD)
-            assert len(providers) == subagents.MAX_TASKS + 1
-            assert harness.tasks._used == subagents.MAX_TASKS
-            assert len([event for event in events if isinstance(event, TaskCompleted)]) == subagents.MAX_TASKS
+            execution_limit = SubagentLimits().max_subagent_executions
+            assert len(providers) == execution_limit + 1
+            assert harness.tasks._used == execution_limit
+            assert len([event for event in events if isinstance(event, TaskCompleted)]) == execution_limit
             child = harness.tasks.list()[0]
             assert any("budget exhausted" in str(message.content) for message in await harness.task_history(child.id))
             again = await asyncio.wait_for(collect(harness, "An unrelated root turn"), HANG_GUARD)
             assert not any(isinstance(event, TaskStarted | TaskCompleted) for event in again)
             assert harness.tasks._used == 0
-            assert len(harness.tasks.list()) == subagents.MAX_TASKS
+            assert len(harness.tasks.list()) == execution_limit
         finally:
             await harness.close()
 
@@ -1126,11 +1136,11 @@ def test_busy_followup_does_not_split_parent_tool_block_or_drop_busy_child_messa
             await asyncio.wait_for(parent_waiting.wait(), HANG_GUARD)
             await asyncio.wait_for(asyncio.gather(*harness.tasks._workers.values()), HANG_GUARD)
             info = harness.tasks.list()[0]
-            monkeypatch.setattr(subagents, "MAX_TASKS", 1)
+            await set_limits(harness, SubagentLimits(max_subagent_executions=1))
             with pytest.raises(ValueError, match="budget exhausted"):
                 _ = [event async for event in harness.continue_task(info.id, "Must share the root budget")]
             assert harness.tasks.list()[0].followups == 0
-            monkeypatch.setattr(subagents, "MAX_TASKS", 8)
+            await set_limits(harness, SubagentLimits())
             accepted = [event async for event in harness.continue_task(info.id, "Human message while parent busy")]
             assert len(accepted) == 1
             await asyncio.wait_for(child_waiting.wait(), HANG_GUARD)
@@ -1242,10 +1252,10 @@ def test_followup_and_retention_limits_and_cancelled_children_are_not_replayed(
         try:
             await collect(harness)
             info = harness.tasks.list()[0]
-            harness.config.max_subagent_depth = 0
+            await set_limits(harness, SubagentLimits(max_subagent_depth=0))
             with pytest.raises(PermissionError, match="depth limit"):
                 _ = [event async for event in harness.continue_task(info.id, "Disabled")]
-            harness.config.max_subagent_depth = 2
+            await set_limits(harness, SubagentLimits(max_subagent_depth=2))
             monkeypatch.setattr(subagents, "MAX_FOLLOWUPS", 0)
             with pytest.raises(ValueError, match="human follow-ups"):
                 _ = [event async for event in harness.continue_task(info.id, "Too many")]
@@ -1563,7 +1573,6 @@ def test_continuation_intersects_retained_ancestor_ceiling(
                 yield TextDoneEvent(text="Completed")
 
         harness, providers = setup_harness(tmp_path, monkeypatch, script)
-        harness.config.max_subagent_depth = depth
         approvals: list[ApprovalRequest] = []
 
         async def approve(request: ApprovalRequest) -> bool:
@@ -1572,6 +1581,7 @@ def test_continuation_intersects_retained_ancestor_ceiling(
 
         harness.approval_handler = approve
         try:
+            await set_limits(harness, SubagentLimits(max_subagent_depth=depth))
             await asyncio.wait_for(collect(harness), HANG_GUARD)
             infos = harness.tasks.list()
             assert len(infos) == depth and all(info.mode == "build" for info in infos)
@@ -1667,12 +1677,16 @@ def test_idle_followup_cannot_reset_exhausted_budget_but_new_root_run_can(
 
         async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
             nonlocal spawned
-            if not provider.index and messages[-1].role != "tool" and spawned < subagents.MAX_TASKS:
+            if (
+                not provider.index
+                and messages[-1].role != "tool"
+                and spawned < SubagentLimits().max_subagent_executions
+            ):
                 spawned += 1
                 yield ToolCallEvent(
                     id=f"spawn-{len(provider.requests)}", name="delegate", arguments={"prompt": "Use the shared budget"}
                 )
-            elif provider.index > subagents.MAX_TASKS and len(provider.requests) == 1:
+            elif provider.index > SubagentLimits().max_subagent_executions and len(provider.requests) == 1:
                 yield ToolCallEvent(
                     id="write", name="write", arguments={"path": "ninth-job.txt", "content": "forbidden"}
                 )
@@ -1689,7 +1703,7 @@ def test_idle_followup_cannot_reset_exhausted_budget_but_new_root_run_can(
         harness.approval_handler = approve
         try:
             await asyncio.wait_for(collect(harness), HANG_GUARD)
-            assert harness.tasks._used == subagents.MAX_TASKS == 8
+            assert harness.tasks._used == SubagentLimits().max_subagent_executions == 8
             info = harness.tasks.list()[0]
             workers = dict(harness.tasks._workers)
             histories = await harness.history(), await harness.task_history(info.id)
