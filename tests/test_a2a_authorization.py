@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 ISSUER = "https://issuer.example"
+
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="A2A private authorization storage requires POSIX")
 
 
 def principal(

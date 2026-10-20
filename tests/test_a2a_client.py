@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import socket
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ from a2a.types import TaskState
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from google.protobuf.json_format import MessageToDict
+from starlette.applications import Starlette
 
 from nagents.a2a import RemoteAgent
 from nagents.a2a import RemoteAgentError
@@ -54,8 +56,6 @@ if TYPE_CHECKING:
     from nagents.types import Message
     from nagents.types import ToolDefinition
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite test storage requires POSIX")
-
 
 class AuthorizationCapture:
     """Capture bearer values in memory for exact origin-scoping assertions."""
@@ -82,7 +82,7 @@ async def serve_asgi(app: ASGIApp, sock: socket.socket | None = None) -> AsyncIt
         sock.listen(128)
         sock.setblocking(False)
     port = int(sock.getsockname()[1])
-    server = uvicorn.Server(uvicorn.Config(app, log_level="critical", access_log=False, lifespan="on"))
+    server = uvicorn.Server(uvicorn.Config(app, log_config=None, log_level=None, access_log=True, lifespan="on"))
     task = asyncio.create_task(server.serve(sockets=[sock]))
     try:
         for _ in range(500):
@@ -98,6 +98,29 @@ async def serve_asgi(app: ASGIApp, sock: socket.socket | None = None) -> AsyncIt
         server.should_exit = True
         await asyncio.wait_for(task, timeout=10)
         sock.close()
+
+
+def _uvicorn_logger_state() -> dict[str, tuple[int, tuple[int, ...], bool, bool, tuple[int, ...]]]:
+    states: dict[str, tuple[int, tuple[int, ...], bool, bool, tuple[int, ...]]] = {}
+    for name in ("", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"):
+        logger = logging.getLogger(name)
+        states[name] = (
+            logger.level,
+            tuple(id(handler) for handler in logger.handlers),
+            logger.propagate,
+            logger.disabled,
+            tuple(id(filter_) for filter_ in logger.filters),
+        )
+    return states
+
+
+@pytest.mark.asyncio
+async def test_serve_asgi_preserves_global_logger_configuration() -> None:
+    before = _uvicorn_logger_state()
+    async with serve_asgi(Starlette()) as origin:
+        assert origin.startswith("http://127.0.0.1:")
+        assert _uvicorn_logger_state() == before
+    assert _uvicorn_logger_state() == before
 
 
 class RemoteProvider(Provider):
@@ -127,6 +150,7 @@ class RemoteProvider(Provider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite test storage requires POSIX")
 async def test_remote_agent_uses_fresh_bearers_for_configured_origin_and_sdk_lifecycle(tmp_path: Path) -> None:
     key = signing_key("RS256", "remote-client-key")
     async with local_issuer(IssuerState([key.public_jwk])) as (issuer, _):
@@ -232,6 +256,7 @@ async def test_remote_agent_uses_fresh_bearers_for_configured_origin_and_sdk_lif
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["hostile-card", "redirect"])
+@pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite test storage requires POSIX")
 async def test_remote_agent_never_follows_redirect_or_contacts_card_advertised_origin(
     tmp_path: Path, mode: str
 ) -> None:
