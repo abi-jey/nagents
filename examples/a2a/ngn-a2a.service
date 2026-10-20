@@ -1,0 +1,31 @@
+# Install nagents[a2a] in this venv and create the ngn-a2a OS account first.
+# Configure the exported profile in /etc/ngn/a2a.json; TLS terminates at a
+# reverse proxy on this machine. Only that loopback proxy is trusted below.
+[Unit]
+Description=Authenticated ngn A2A agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ngn-a2a
+Group=ngn-a2a
+WorkingDirectory=/srv/maintenance
+StateDirectory=ngn-a2a
+StateDirectoryMode=0700
+UMask=0077
+EnvironmentFile=/etc/ngn/a2a.env
+Environment=XDG_DATA_HOME=/var/lib/ngn-a2a/data
+Environment=XDG_CONFIG_HOME=/var/lib/ngn-a2a/config
+ExecStart=/opt/ngn-a2a/venv/bin/ngn a2a serve --workspace /srv/maintenance --config /etc/ngn/config.json --a2a-config /etc/ngn/a2a.json --host 127.0.0.1 --port 8781 --trusted-proxies 127.0.0.1,::1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/maintenance
+
+[Install]
+WantedBy=multi-user.target

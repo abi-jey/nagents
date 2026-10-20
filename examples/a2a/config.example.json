@@ -1,0 +1,15 @@
+{
+  "public_url": "https://machine-agent.example.com",
+  "agent": "machine",
+  "name": "Machine inspector",
+  "description": "Read-only OS and filesystem information from one server.",
+  "data_dir": "/var/lib/ngn-a2a",
+  "issuer": {
+    "issuer": "https://identity.example.com/realms/agents",
+    "audience": "nagents-a2a",
+    "algorithms": ["RS256"],
+    "token_kind_claim": "typ",
+    "token_kind_value": "Bearer"
+  },
+  "browser_client_id": "nagents-browser"
+}

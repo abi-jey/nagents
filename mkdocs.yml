@@ -91,6 +91,7 @@ nav:
       - ngn Local Web Client: guide/ngn-web.md
       - Inspecting Delegated Agents: guide/task-inspection.md
       - Private Web Deployment: guide/ngn-web-deployment.md
+      - Remote Agents over A2A: guide/a2a.md
       - Providers: guide/providers.md
       - Foundry Authentication: guide/foundry-authentication.md
       - Tools: guide/tools.md
@@ -120,6 +121,7 @@ nav:
   - Development:
       - Contributing: development/contributing.md
       - Harness Research: development/harness-research.md
+      - A2A Interoperability: development/a2a-conformance.md
       - Built-in UI Channels Design: development/builtin-ui-channels.md
 
 extra:

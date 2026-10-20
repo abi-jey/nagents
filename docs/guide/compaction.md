@@ -8,15 +8,19 @@ summarize the history. It is enabled by default; pass
 ```python
 from nagents import Agent, ModelCompaction
 
-# Trigger at 80,000 observed input tokens, or at 100 messages.
+# Trigger at 80,000 context tokens, or at 100 messages.
 agent = Agent(provider, session_manager, compaction_strategy=ModelCompaction(token_threshold=80_000))
 agent_by_messages = Agent(provider, session_manager, compaction_strategy=ModelCompaction(message_threshold=100))
 ```
 
 `token_threshold` and `message_threshold` are optional positive integers and
 cannot be set together. With no threshold, `ModelCompaction` triggers at 70%
-of the provider model's estimated context limit. It uses observed input tokens
-when available and falls back to an estimate. The prompt defaults to a concise
+of the provider model's resolved context limit. It uses the library provider's
+shared context budget: measured input and output, with reasoning counted once,
+plus estimated additions. Without a matching measurement it uses the estimated
+next input. This is the same budget displayed by ngn; it is not accumulated
+session billing. See [context statistics](../api/context-stats.md).
+The prompt defaults to a concise
 continuity summary; supply `prompt` to customize it. Supply `provider` to use a
 dedicated provider for summaries. Otherwise the agent's provider is used.
 
@@ -34,7 +38,10 @@ algorithm. `should_compact(request)` decides whether to run; forced requests
 skip that check. `compact(request)` returns a nonempty replacement message list
 and an optional summary. The request contains detached active history,
 `estimated_tokens`, `actual_input_tokens` (zero when unavailable), the session
-and provider. The replacement is validated and committed atomically, so a
+and provider. Agent-created requests also carry the shared `context_stats`
+snapshot. The built-in strategy uses its `context_tokens`; external requests
+without a snapshot fall back to actual input or the estimate. The replacement
+is validated and committed atomically, so a
 strategy error, cancellation, empty result, or invalid tool exchange leaves
 the persisted history intact. Compaction does not include `Agent.system_prompt`
 in the history it replaces.

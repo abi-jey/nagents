@@ -1,30 +1,44 @@
 # Context Statistics API
 
-Context statistics report an **estimated** token breakdown of the request a
-session would send: the system prompt, request-local instructions, tool
-definitions, skill text, conversation history, and media. They are meant for
-budgeting and for understanding which part of a request dominates.
+Context statistics distinguish a provider-backed **context budget** from a
+heuristic breakdown of the **next input**. The library provider owns the
+calculation; `Agent.context_stats(session_id)` assembles the session and delegates
+to it. ngn's context indicator, agent status pane and token-based compaction use
+the same budget.
 
-!!! warning "These are estimates, not tokenizer counts"
+## Context budget and reasoning
 
-    Values use the same heuristic as
-    [context compaction](../guide/compaction.md): roughly four characters per
-    token for text, plus a size-based approximation for base64 media. Cached
-    tokens, provider-specific framing, and attachment tokenization are
-    approximate. Do not treat them as billed usage.
+`context_tokens` uses the last matching provider measurement: input plus
+generated output, including reasoning exactly once. Estimated user/tool messages
+added afterward and an unsaved streaming reply become `pending_context_tokens`.
+Without a matching measurement it falls back to the estimated next input.
 
-`estimate_context_stats` is a pure function over already-assembled inputs. The
-`Agent.context_stats(session_id)` method assembles the same system prompt, tool
-schemas, skill catalog, and persisted history the next text request would use,
-without calling the provider or changing session state. Explicit `$skill`
-activation text is request-local and never persisted, so an idle estimate does
-not include it.
+Reasoning already included in a provider's output is not added again. Separately
+reported reasoning is added once. An unknown inclusion relationship does not
+justify double counting; the source reflects incomplete information.
+`observed_reasoning_tokens` is `None` when absent and preserves a reported zero.
 
-## Components
+`context_tokens_source` is `provider`, `mixed` or `estimated`.
+`remaining_tokens` subtracts `context_tokens` from the model window, and can be
+negative. These numbers describe a response budget, not cumulative session
+billing or a promise that every earlier hidden reasoning item will be retained
+in the next request. See [provider context accounting](provider.md#context-accounting).
 
-Components always appear in a stable order with stable keys and labels, even
-when their estimate is zero. Component estimates sum exactly to
-`total_tokens`.
+`Provider.context_stats(...)` is synchronous and makes no HTTP request.
+`Agent.context_stats(...)` may resolve bounded model metadata, but never asks a
+model to generate a response. It accounts for current instructions, tool schemas,
+skills, history and streamed text. Explicit `$skill` activation is request-local
+and is not part of an idle session's saved history.
+
+## Estimated next-input components
+
+`total_tokens` and `components` estimate the assembled next input. Components
+appear in stable order and sum exactly to `total_tokens`; they do not partition
+the provider-measured `context_tokens` total.
+
+The heuristic uses roughly four characters per text token and a size-based
+approximation for base64 media. Provider framing and attachment tokenization can
+differ. These component estimates are not tokenizer counts or billed usage.
 
 | Key | Label |
 | --- | --- |
@@ -38,37 +52,32 @@ when their estimate is zero. Component estimates sum exactly to
 | `history_other` | Conversation history (other) |
 | `media` | Media and attachments |
 
-Loaded skill bodies returned through the `skill(name)` tool are reported under
-`skills`; their media (if any) remains under `media`.
+Loaded skill bodies returned by `skill(name)` appear under `skills`; their media
+remains under `media`. `estimate_context_stats` is the pure function for callers
+that already have assembled inputs; a library Agent supplies matching provider
+usage, history and streaming state automatically.
 
 ## Python
 
 ```python title="context_stats.py"
-from pathlib import Path
-
-from nagents import Agent, Provider, ProviderType, SessionManager
-
-agent = Agent(
-    provider=Provider(ProviderType.OPENAI_COMPATIBLE, "sk-...", "gpt-4o"),
-    session_manager=SessionManager(Path("sessions.db")),
-    system_prompt="You are a helpful assistant.",
-)
-
-# ...after some runs...
+# After running an ordinary Agent:
 stats = await agent.context_stats("session-123")
+print(f"Context: {stats.context_tokens} ({stats.context_tokens_source})")
+print(f"Estimated next input: {stats.total_tokens}")
 for component in stats.components:
     print(f"{component.label}: {component.tokens}")
-print(f"Total: {stats.total_tokens}")
 if stats.context_window is not None:
     print(f"Remaining: {stats.remaining_tokens} of {stats.context_window}")
-if stats.observed_prompt_tokens is not None:
-    print(f"Last provider-reported input: {stats.observed_prompt_tokens}")
+if stats.observed_reasoning_tokens is not None:
+    print(f"Last reported reasoning: {stats.observed_reasoning_tokens}")
 ```
 
-The model context window comes from
-[`get_model_context_limit`](agent.md); it is `None` when the window is not
-known. The window is reported only for reference and never changes model
-behavior.
+The provider resolves the model window from explicit configuration, matching
+provider metadata or a heuristic fallback. `context_window_source` identifies
+which one was used. The pure estimator can leave the window as `None` when no
+limit is supplied. A model, connection, instructions, tool or saved-context
+change invalidates a previous measurement rather than applying it to unrelated
+input.
 
 ::: nagents.context_stats.ContextStats
 
