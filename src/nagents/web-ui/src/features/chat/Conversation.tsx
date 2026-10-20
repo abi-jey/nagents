@@ -5,7 +5,7 @@ import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ResponseDetails, type ResponseDetailsProps } from "./ResponseDetails.js";
 import { agentLabels, transcriptEntries } from "./agentLabels.js";
-import { activityCategory, activityLabels, activityLayout, activityState, importantActivity } from "./activityLayout.js";
+import { ActivityLayout, activityCategory, activityLabels, activityState, importantActivity } from "./activityLayout.js";
 import type { ChatAppearance } from "../settings/appearance.js";
 import { hasResponseDetails } from "./responseMetadata.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
@@ -66,9 +66,17 @@ export function TranscriptItems({
   agentName?: string;
   renderReasoning?: (props: ResponseDetailsProps) => ReactNode;
 }) {
+  const layout = useRef(new ActivityLayout());
+  const shownResponses = useRef(new Set<string>());
+  if (!items.length) shownResponses.current.clear();
+  const reasoningPlacement = useRef(appearance?.activity.reasoning.placement);
+  if (reasoningPlacement.current !== appearance?.activity.reasoning.placement) {
+    reasoningPlacement.current = appearance?.activity.reasoning.placement;
+    shownResponses.current.clear();
+  }
   const visibleItems = renderTask ? items.filter(item => item.kind !== "retained") : items;
   const bylines = labels ?? agentLabels(transcriptEntries(items), agentName, names, appearance);
-  return activityLayout(visibleItems, appearance, insideGroup).map((item) => {
+  return layout.current.render(visibleItems, appearance, insideGroup).map((item) => {
     if (item.kind === "activity_group") {
       const { label, icon } = activityLabels[item.category];
       const state = activityState(item.items);
@@ -173,13 +181,15 @@ export function TranscriptItems({
     const reasoning = appearance?.activity.reasoning;
     const hasReasoning = reasoning?.placement !== "hidden" && hasResponseDetails(entry.responseMetadata) ||
       !!entry.responseMetadata && ["failed", "cancelled"].includes(entry.responseMetadata.status);
-    if (entry.kind === "assistant" && !entry.text && !hasReasoning) return null;
+    if (entry.kind === "assistant" && (entry.text || hasReasoning)) shownResponses.current.add(entry.id);
+    const keepVisible = shownResponses.current.has(entry.id);
+    if (entry.kind === "assistant" && !entry.text && !hasReasoning && !keepVisible) return null;
     const category = activityCategory(item);
     const expanded = importantActivity(item) || !!category && appearance?.activity[category].details === "expanded";
-    const props: ResponseDetailsProps = { metadata: entry.responseMetadata, hideSummary: reasoning?.placement === "hidden",
+    const props: ResponseDetailsProps = { metadata: entry.responseMetadata, hideSummary: reasoning?.placement === "hidden", keepVisible,
       open: disclosures.get(`reasoning:${entry.responseId}`) ?? reasoning?.details === "expanded",
       toggle: open => toggle(`reasoning:${entry.responseId}`, open) };
-    const responseDetails = entry.kind === "assistant" && hasReasoning && (renderReasoning ? renderReasoning(props) : <ResponseDetails {...props} />);
+    const responseDetails = entry.kind === "assistant" && (hasReasoning || keepVisible && !entry.text) && (renderReasoning ? renderReasoning(props) : <ResponseDetails {...props} />);
     return (
       <article
         key={entry.id}

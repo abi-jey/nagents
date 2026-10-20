@@ -8,12 +8,13 @@ export type ResponseDetailsProps = {
   open: boolean;
   toggle: (open: boolean) => void;
   hideSummary?: boolean;
+  keepVisible?: boolean;
 };
-export function ResponseDetails({ metadata, open, toggle, hideSummary = false }: ResponseDetailsProps) {
+export function ResponseDetails({ metadata, open, toggle, hideSummary = false, keepVisible = false }: ResponseDetailsProps) {
   if (!metadata) return null;
   const thinking = metadata.status === "thinking";
   const interrupted = ["cancelled", "failed"].includes(metadata.status);
-  if (!interrupted && (hideSummary || !hasResponseDetails(metadata))) return null;
+  if (!interrupted && (hideSummary || !hasResponseDetails(metadata)) && !keepVisible) return null;
   const interruption = interrupted && <span className="response-interrupted" role="status">{metadata.status === "cancelled" ? "Stopped" : "Interrupted"}</span>;
   const { title, body } = reasoningParts(metadata.summary);
   const excerpt = reasoningExcerpt(body, title);
@@ -30,11 +31,12 @@ export function ResponseDetails({ metadata, open, toggle, hideSummary = false }:
         {body ? <MessageContent text={body} /> : <p className="response-reasoning-note">{thinking ? "Waiting for the first summary words…" : "The provider supplied a heading without further summary text."}</p>}
         {metadata.summary_truncated && <p className="response-reasoning-note">Summary shortened to the 16,384-character retention limit.</p>}
       </div>
-    </details> : ((!hideSummary && (thinking || metadata.summary_expired)) || interrupted) && <span className="response-reasoning-meta">
+    </details> : ((!hideSummary && (thinking || metadata.summary_expired)) || interrupted || keepVisible) && <span className="response-reasoning-meta">
       {!hideSummary && (thinking ? <span className="response-thinking" role="status"><span className="response-reasoning-mark" aria-hidden="true"><i /><i /><i /></span><span className="sr-only">Thinking</span></span>
         : metadata.summary_expired && <span className="response-reasoning-expired" title="Summaries are retained for the latest 100 responses in this conversation. Usage is kept separately.">Summary no longer retained</span>
       )}
       {interruption}
+      {keepVisible && !thinking && !interrupted && !metadata.summary_expired && <span className="response-reasoning-settled" aria-label="Reasoning completed"><span className="response-reasoning-mark" aria-hidden="true"><i /><i /><i /></span></span>}
     </span>}
 
   </div>;
