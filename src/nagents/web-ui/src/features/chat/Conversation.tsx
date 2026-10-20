@@ -68,7 +68,14 @@ export function TranscriptItems({
 }) {
   const layout = useRef(new ActivityLayout());
   const shownResponses = useRef(new Set<string>());
-  if (!items.length) shownResponses.current.clear();
+  const expandedRecords = useRef(new Set<string>());
+  const appearanceKey = JSON.stringify(appearance);
+  const expandedAppearance = useRef(appearanceKey);
+  if (!items.length || expandedAppearance.current !== appearanceKey) {
+    expandedAppearance.current = appearanceKey;
+    expandedRecords.current.clear();
+    if (!items.length) shownResponses.current.clear();
+  }
   const reasoningPlacement = useRef(appearance?.activity.reasoning.placement);
   if (reasoningPlacement.current !== appearance?.activity.reasoning.placement) {
     reasoningPlacement.current = appearance?.activity.reasoning.placement;
@@ -80,7 +87,8 @@ export function TranscriptItems({
     if (item.kind === "activity_group") {
       const { label, icon } = activityLabels[item.category];
       const state = activityState(item.items);
-      const groupOpen = disclosures.get(item.id) ?? (item.items.some(importantActivity) || appearance?.activity[item.category].details === "expanded");
+      if (item.items.some(importantActivity)) expandedRecords.current.add(item.id);
+      const groupOpen = disclosures.get(item.id) ?? (expandedRecords.current.has(item.id) || appearance?.activity[item.category].details === "expanded");
       const targets = [...new Set(item.items.flatMap(child => child.kind === "entry" ? [executionTarget(child.entry)] : child.kind === "thread" ? [child.thread.name] : []).filter(Boolean))].slice(0, 2).join(" · ");
       return <details key={item.id} className="chat-activity-group" data-category={item.category}
         data-state={state} data-record-key={item.id} data-disclosure-key={item.id}
@@ -185,7 +193,8 @@ export function TranscriptItems({
     const keepVisible = shownResponses.current.has(entry.id);
     if (entry.kind === "assistant" && !entry.text && !hasReasoning && !keepVisible) return null;
     const category = activityCategory(item);
-    const expanded = importantActivity(item) || !!category && appearance?.activity[category].details === "expanded";
+    if (importantActivity(item)) expandedRecords.current.add(entry.id);
+    const expanded = expandedRecords.current.has(entry.id) || !!category && appearance?.activity[category].details === "expanded";
     const props: ResponseDetailsProps = { metadata: entry.responseMetadata, hideSummary: reasoning?.placement === "hidden", keepVisible,
       open: disclosures.get(`reasoning:${entry.responseId}`) ?? reasoning?.details === "expanded",
       toggle: open => toggle(`reasoning:${entry.responseId}`, open) };

@@ -214,6 +214,49 @@ test("approval-forced visibility is sticky for a tool under hidden activity appe
   } finally { await ui.close(); }
 });
 
+test("grouped approval activity stays open through completion until the user collapses it", async () => {
+  const ui = fixture();
+  let entries: Entry[] = [];
+  const call = { event: "tool_call" as const, run_id: "run", id: "approval-call", name: "lookup", arguments: { query: "x" } };
+  const closeByUser = async (element: HTMLDetailsElement) => act(async () => {
+    element.open = false;
+    element.dispatchEvent(new ui.dom.window.Event("toggle"));
+  });
+  try {
+    entries = appendEvent(entries, call);
+    entries = appendEvent(entries, {
+      event: "approval", run_id: "run", id: "approval-call", tool: "lookup", approval_id: "approval-grouped", arguments: call.arguments,
+    });
+    await ui.render(entries, { appearance: defaultAppearance });
+    const group = ui.container.querySelector<HTMLDetailsElement>('details.chat-activity-group[data-category="tools"]');
+    const tool = ui.container.querySelector<HTMLElement>('article.entry.tool');
+    const details = ui.container.querySelector<HTMLDetailsElement>("details.execution-record.tool-record");
+    assert.ok(group?.open, "approval-required activity should auto-open its grouped parent");
+    assert.ok(tool);
+    assert.ok(details?.open, "approval-required tool details should auto-open");
+
+    entries = appendEvent(entries, { event: "approval_closed", run_id: "run", approval_id: "approval-grouped", decision: "allow" });
+    await ui.render(entries, { appearance: defaultAppearance });
+    entries = appendEvent(entries, { event: "tool_result", run_id: "run", id: "approval-call", result: "Done" });
+    await ui.render(entries, { appearance: defaultAppearance });
+    assert.equal(ui.container.querySelector('details.chat-activity-group[data-category="tools"]'), group);
+    assert.equal(ui.container.querySelector('article.entry.tool'), tool);
+    assert.equal(group.open, true, "resolution must not close the auto-expanded group");
+    assert.equal(details.open, true, "resolution must not close the auto-expanded tool details");
+
+    await closeByUser(group);
+    await closeByUser(details);
+    assert.equal(group.open, false);
+    assert.equal(details.open, false);
+    entries = appendEvent(entries, { event: "tool_output", run_id: "run", id: "approval-call", text: "Late diagnostic output" });
+    await ui.render(entries, { appearance: defaultAppearance });
+    assert.equal(ui.container.querySelector('details.chat-activity-group[data-category="tools"]'), group);
+    assert.equal(ui.container.querySelector('article.entry.tool'), tool);
+    assert.equal(group.open, false, "an explicit user collapse stays closed through later activity");
+    assert.equal(details.open, false, "an explicit user collapse stays closed through later activity");
+  } finally { await ui.close(); }
+});
+
 test("optimistic user row stays mounted through admission, canonical history and active checkpoint", async () => {
   const ui = fixture();
   const cache = new LiveSessions();
