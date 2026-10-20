@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
+
+
 def proposal_script(
     revision: str, limits: SubagentLimits, *, delegate_first: bool = False
 ) -> Callable[[FakeProvider, list[Message]], AsyncIterator[Event]]:

@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     from nagents.types import Message
 
 
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
+
+
 async def save_limits(harness: Harness, limits: SubagentLimits) -> None:
     current = await harness.tasks.root.settings_host.read("workspace")
     await harness.tasks.root.settings_host.save("workspace", current.revision, limits)

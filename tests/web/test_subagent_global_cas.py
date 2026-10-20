@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from tests.support.providers import FakeProvider
 
 
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
+
+
 def _external_global_write(path: Path, limits: SubagentLimits, revision: str) -> None:
     """Emulate another web process updating the shared defaults database."""
     with sqlite3.connect(path) as db:
