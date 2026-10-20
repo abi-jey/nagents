@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import aclosing
 from typing import TYPE_CHECKING
@@ -131,6 +132,7 @@ def test_context_builder_keeps_only_validated_identity_and_extensions() -> None:
     assert list(context.requested_extensions) == ["https://example.test/ext"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite tests require POSIX")
 def test_sdk_handler_runs_once_for_same_message_and_replays_owned_completion(tmp_path: Path) -> None:
     async def scenario() -> None:
         executor = ProbeExecutor.__new__(ProbeExecutor)
@@ -200,6 +202,7 @@ def test_sdk_handler_runs_once_for_same_message_and_replays_owned_completion(tmp
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite tests require POSIX")
 def test_stream_disconnect_does_not_duplicate_execution_and_task_can_be_resubscribed(tmp_path: Path) -> None:
     async def scenario() -> None:
         executor = ProbeExecutor.__new__(ProbeExecutor)
@@ -251,6 +254,7 @@ def test_stream_disconnect_does_not_duplicate_execution_and_task_can_be_resubscr
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite tests require POSIX")
 def test_cancel_reaches_active_sdk_executor_and_records_terminal_task(tmp_path: Path) -> None:
     async def scenario() -> None:
         executor = ProbeExecutor.__new__(ProbeExecutor)
@@ -290,6 +294,7 @@ def test_cancel_reaches_active_sdk_executor_and_records_terminal_task(tmp_path: 
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="A2A private SQLite tests require POSIX")
 def test_handler_enforces_owner_scopes_and_validates_duplicate_payloads(tmp_path: Path) -> None:
     async def scenario() -> None:
         executor = ProbeExecutor.__new__(ProbeExecutor)
