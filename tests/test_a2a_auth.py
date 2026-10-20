@@ -37,7 +37,6 @@ SigningPrivateKey = RSAPrivateKey | EllipticCurvePrivateKey
 
 
 AUDIENCE = "nagents-a2a"
-NOW = int(time.time())
 
 
 @dataclass
@@ -73,12 +72,13 @@ def signing_key(algorithm: str, kid: str) -> SignedKey:
 
 
 def access_claims(issuer: str, **changes: object) -> dict[str, object]:
+    now = int(time.time())
     values: dict[str, object] = {
         "iss": issuer,
         "sub": "alice-subject",
         "aud": [AUDIENCE, "account"],
-        "iat": NOW,
-        "exp": NOW + 300,
+        "iat": now,
+        "exp": now + 300,
         "scope": "ngn:access",
         "tenant_id": "tenant-a",
         "realm_access": {"roles": ["approver"]},
@@ -243,7 +243,9 @@ def test_keycloak_bearer_claim_is_explicit_and_id_token_is_rejected(tmp_path: Pa
                 assert access.subject == "alice-subject"
                 id_token = make_token(
                     key,
-                    access_claims(base, typ="ID", nonce="browser-nonce", azp="browser-client"),
+                    access_claims(
+                        base, typ="ID", nonce="browser-nonce", auth_time=int(time.time()), azp="browser-client"
+                    ),
                     header_type="JWT",
                 )
                 with pytest.raises(AuthenticationError) as rejected:
@@ -260,7 +262,7 @@ def test_rfc9068_header_rejects_id_token_even_when_audience_matches(tmp_path: Pa
         async with local_issuer(state) as (base, _), authenticator(config(issuer_config(base), tmp_path)) as auth:
             id_token = make_token(
                 key,
-                access_claims(base, nonce="browser-nonce", auth_time=NOW, azp="browser-client"),
+                access_claims(base, nonce="browser-nonce", auth_time=int(time.time()), azp="browser-client"),
                 header_type="JWT",
             )
             with pytest.raises(AuthenticationError) as rejected:
@@ -272,22 +274,33 @@ def test_rfc9068_header_rejects_id_token_even_when_audience_matches(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    "claim_changes",
+    "case",
     [
-        {"aud": "other-resource"},
-        {"iss": "https://attacker.invalid"},
-        {"exp": NOW - 61},
-        {"nbf": NOW + 61},
-        {"sub": ""},
-        {"scope": {"unexpected": "shape"}},
-        {"tenant_id": ""},
+        "wrong_audience",
+        "wrong_issuer",
+        "expired",
+        "not_yet_valid",
+        "missing_subject",
+        "malformed_scope",
+        "missing_tenant",
     ],
 )
-def test_rejects_wrong_or_malformed_security_claims(tmp_path: Path, claim_changes: dict[str, object]) -> None:
+def test_rejects_wrong_or_malformed_security_claims(tmp_path: Path, case: str) -> None:
     async def scenario() -> None:
         key = signing_key("RS256", "claims-key")
         state = IssuerState([key.public_jwk])
         async with local_issuer(state) as (base, _), authenticator(config(issuer_config(base), tmp_path)) as auth:
+            now = int(time.time())
+            claim_cases: dict[str, dict[str, object]] = {
+                "wrong_audience": {"aud": "other-resource"},
+                "wrong_issuer": {"iss": "https://attacker.invalid"},
+                "expired": {"exp": now - 61},
+                "not_yet_valid": {"nbf": now + 61},
+                "missing_subject": {"sub": ""},
+                "malformed_scope": {"scope": {"unexpected": "shape"}},
+                "missing_tenant": {"tenant_id": ""},
+            }
+            claim_changes = claim_cases[case]
             token = make_token(key, access_claims(base, **claim_changes))
             with pytest.raises(AuthenticationError) as rejected:
                 await auth.authenticate(token)
@@ -375,7 +388,7 @@ def test_introspection_uses_operator_endpoint_and_rejects_redirects(
                 "iss": "placeholder",
                 "aud": AUDIENCE,
                 "sub": "service-subject",
-                "exp": NOW + 300,
+                "exp": int(time.time()) + 300,
                 "scope": "ngn:access",
                 "tenant_id": "tenant-a",
             },
