@@ -36,6 +36,46 @@ export function itemKey(item: TranscriptItem): string {
 export type ActivityGroup = { kind: "activity_group"; id: string; category: Exclude<ActivityCategory, "reasoning">; scope: string; items: TranscriptItem[] };
 export type PresentationItem = TranscriptItem | ActivityGroup;
 
+/** Keep the first displayed slot and parent of each live record. */
+export class ActivityLayout {
+  private appearance = "";
+  private slots = new Map<string, { group?: string }>();
+
+  render(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
+    const signature = JSON.stringify([appearance, insideGroup]);
+    if (signature !== this.appearance) { this.appearance = signature; this.slots.clear(); }
+    if (!items.length) this.slots.clear();
+    const result: PresentationItem[] = [], groups = new Map<string, ActivityGroup>();
+    for (const item of items) {
+      const key = itemKey(item), category = activityCategory(item), rule = category && appearance?.activity[category];
+      let slot = this.slots.get(key);
+      if (!slot) {
+        if (rule?.placement === "hidden" && !importantActivity(item)) continue;
+        if (category && rule?.placement === "grouped" && !insideGroup) {
+          const previous = result.at(-1), itemScope = scope(item);
+          // A streamed name can change category. Give that call its own stable
+          // group rather than moving it between parents as its name arrives.
+          const pending = item.kind === "entry" && item.entry.toolProgress === "streaming";
+          const previousPending = previous?.kind === "activity_group" && previous.items.some(child =>
+            child.kind === "entry" && child.entry.toolProgress === "streaming");
+          slot = { group: !pending && !previousPending && previous?.kind === "activity_group" &&
+            previous.category === category && previous.scope === itemScope ? previous.id : `activity:${key}` };
+        } else slot = {};
+        this.slots.set(key, slot);
+      }
+      if (slot.group) {
+        let group = groups.get(slot.group);
+        if (!group) {
+          group = { kind: "activity_group", id: slot.group, category: category || "tools", scope: scope(item), items: [] };
+          groups.set(group.id, group); result.push(group);
+        }
+        group.items.push(item);
+      } else result.push(item);
+    }
+    return result;
+  }
+}
+
 /** Derive reading layout without changing transcript identities or execution state. */
 export function activityLayout(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
   const result: PresentationItem[] = [];

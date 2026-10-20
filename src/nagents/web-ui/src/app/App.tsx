@@ -87,7 +87,7 @@ export function App() {
           conversation={{ appearance, agentName: root.name, token: client.sessions.config?.token || "", active: !client.team.selected,
             entries: client.chat.entries, sessionId: client.sessions.sessionId, demo: !!client.sessions.config?.demo,
             providerSetup: client.sessions.config?.provider_setup, canSubmit: client.available.submit, submit: value => void submit(value),
-            renderTask: thread => agents.some(agent => agent.id === thread.id) ? <TaskTimeline id={thread.id} agents={agents} inspect={client.team.select} arrivals={arrivals} /> : undefined }}
+            renderTask: thread => <TaskTimeline id={thread.id} thread={thread} agents={agents} inspect={client.team.select} arrivals={arrivals} /> }}
           composer={<WorkspaceComposer client={client} composer={composer} submit={() => void submit()} select={select}
             configureSettings={() => openAgentSettings(client.sessionAgent.selection?.agent || "assistant", "Voice")} audioChanged={setNavigatorAudio} />}
           team={{ team: client.team, agents, arrivals, open: teamOpen, close: () => setTeamOpen(false), configure }} />

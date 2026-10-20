@@ -83,7 +83,7 @@ function newRow(entry: Entry, history?: Snapshot["history"]): boolean {
 // never an identity; complete replay or a history baseline must establish a
 // still-streaming response's place before it can claim a committed row.
 export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announceNewUsers = false,
-  knownHistory?: Snapshot["history"], canonicalRuns: ReadonlySet<string> = new Set()): Entry[] {
+  knownHistory?: Snapshot["history"], canonicalRuns: ReadonlySet<string> = new Set(), preserveObserved = false): Entry[] {
   const saved = fromHistory(snapshot);
   const roots = saved.filter((item) => item.kind !== "task" && item.kind !== "retained_tasks");
   const oldOwners = turnOwners(previous), savedOwners = turnOwners(roots);
@@ -123,7 +123,10 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
     // those copies to a row by text, run order, or a stale history baseline.
     if (entry.kind === "assistant" && !entry.taskId && !entry.historyId && canonicalRuns.has(entry.runId || "")) return;
     const freshCaption = ["live_caption", "agent_change"].includes(entry.kind) && !knownHistory?.some((row) => row.history_id === entry.historyId);
-    if (!entry.delivery && (freshCaption || entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
+    const owner = oldOwners.get(entry);
+    const observed = preserveObserved && !entry.recorded && (!rowIds(entry).length || rowIds(entry).some(id =>
+      !knownHistory?.some(row => row.history_id === id))) && (!owner || roots.some(saved => sameTurn(owner, saved)));
+    if (!entry.delivery && (observed || freshCaption || entry.runId || entry.queued || (!entry.recorded && entry.taskId))) { next.push(entry); used.add(entry.id); }
   }
   for (const [position, entry] of roots.entries()) {
     const index = matches[position];
@@ -149,7 +152,8 @@ export function reconcileHistory(previous: Entry[], snapshot: Snapshot, announce
           // published its final text event. Keep that same live slot open until
           // the event arrives, or aggregated active chunks create a second row.
           streaming: entry.kind === "assistant"
-            ? !!old.streaming && !!snapshot.active_run && snapshot.active_run.id === old.runId && !finished(snapshot.active_run.status)
+            ? !!old.streaming && (preserveObserved && !finished(entry.responseMetadata?.status || "") ||
+                !!snapshot.active_run && snapshot.active_run.id === old.runId && !finished(snapshot.active_run.status))
             : old.streaming,
           result: entry.result ?? old.result, queued: false });
     if (entry.kind === "tool" && entry.result !== undefined &&
