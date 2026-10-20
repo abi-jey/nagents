@@ -32,6 +32,7 @@ from nagents.harness.model_bindings import ModelBinding
 from nagents.harness.providers import API_NAMES
 from nagents.harness.providers import PROVIDERS
 from nagents.harness.reasoning import resolve_effort
+from nagents.harness.subagent_settings import SubagentLimits
 from nagents.provider.reasoning import reasoning_effort_options
 from nagents.types import ReasoningEffort
 
@@ -132,6 +133,8 @@ class SettingsValues(_SettingsValuesV1):
     submit_mode: Literal["queue", "interrupt"] = "queue"
     read_only: bool = False
     reasoning_effort: ReasoningEffort = ""
+    max_concurrent_subagents: int = Field(default=3, ge=1, le=64)
+    max_subagent_executions: int = Field(default=8, ge=1, le=4096)
 
     @field_validator("compact_trigger")
     @classmethod
@@ -195,6 +198,8 @@ class SettingsValues(_SettingsValuesV1):
             max_file_bytes=config.max_file_bytes,
             max_tool_rounds=config.max_tool_rounds,
             max_subagent_depth=config.max_subagent_depth,
+            max_concurrent_subagents=config.max_concurrent_subagents,
+            max_subagent_executions=config.max_subagent_executions,
             provider=config.provider_profile().kind,
             base_url=config.provider_profile().base_url,
             api=config.provider_profile().api,
@@ -233,6 +238,12 @@ class SettingsValues(_SettingsValuesV1):
         config.max_file_bytes = self.max_file_bytes
         config.max_tool_rounds = self.max_tool_rounds
         config.max_subagent_depth = self.max_subagent_depth
+        config.max_concurrent_subagents = self.max_concurrent_subagents
+        config.max_subagent_executions = self.max_subagent_executions
+        if not harness.tasks.root._active:
+            # An idle configuration owner has no in-flight model generation.
+            # Running lanes accept the same saved values at their next turn.
+            harness.tasks.accept_limits(SubagentLimits.from_config(config))
         config.submit_mode = self.submit_mode
         config.reasoning_effort = self.reasoning_effort
         config.read_only = self.read_only or harness._permission_ceiling == "reviewer"
@@ -351,6 +362,8 @@ class WebSettings:
 
     def _settings_revision(self, scope: Literal["global", "workspace"]) -> str:
         parts = [self.global_revision if scope == "global" else self.revision]
+        if scope == "workspace":
+            parts.append(self.global_revision)
         layers: tuple[Literal["global", "workspace"], ...] = ("global", "workspace")
         for layer in layers:
             document_revision = self._uncommitted_document_revisions.get(layer)
@@ -871,46 +884,55 @@ class WebSettings:
         """Defaults shared by workspaces using the same application data directory."""
         if self._uncommitted_document_revisions:
             return
-        self.defaults = self.startup_defaults.model_copy(update={"model": self._global_startup_model})
+        accepted_revision = self.global_revision
+        defaults = self.startup_defaults.model_copy(update={"model": self._global_startup_model})
         current_model = self.harness.provider_store.model_store("global").load()
         if current_model and not self._pinned_startup_model:
-            self.defaults = self.defaults.model_copy(update={"model": current_model})
-        self._publish_bindings()
-        self.global_revision = "0" * 64
-        self.global_persisted = False
-        if not self.global_path.is_file():
-            return
-        async with aiosqlite.connect(self.global_path, timeout=5) as db:
-            await db.execute(_GLOBAL_SETTINGS_TABLE)
-            await db.commit()
-            async with db.execute(
-                "SELECT version, CASE WHEN length(CAST(values_json AS BLOB)) <= ? THEN values_json END, revision "
-                "FROM ngn_web_global_settings WHERE id = 1",
-                (MAX_SETTINGS_BYTES,),
-            ) as cursor:
-                row = await cursor.fetchone()
-        if row is None:
-            return
-        version, payload, revision = row
-        if (
-            version != 1
-            or not isinstance(payload, str)
-            or not isinstance(revision, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", revision)
-        ):
-            raise ValueError("Invalid global settings")
-        values = json.loads(payload)
-        if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
-            raise ValueError("Invalid global settings fields")
-        values = {key: value for key, value in values.items() if key not in _CONNECTION_FIELDS}
-        values.pop("model", None)
-        self.defaults = SettingsValues.model_validate({**self.defaults.model_dump(), **values})
+            defaults = defaults.model_copy(update={"model": current_model})
+        revision = "0" * 64
+        persisted = False
+        if self.global_path.is_file():
+            async with aiosqlite.connect(self.global_path, timeout=5) as db:
+                # Reads never acquire a schema/write lock. The save path owns
+                # table creation; an empty defaults DB is simply inheritance.
+                async with db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ngn_web_global_settings'"
+                ) as cursor:
+                    exists = await cursor.fetchone()
+                if exists:
+                    async with db.execute(
+                        "SELECT version, CASE WHEN length(CAST(values_json AS BLOB)) <= ? THEN values_json END, revision "
+                        "FROM ngn_web_global_settings WHERE id = 1",
+                        (MAX_SETTINGS_BYTES,),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                    if row is not None:
+                        version, payload, revision = row
+                        if (
+                            version != 1
+                            or not isinstance(payload, str)
+                            or not isinstance(revision, str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", revision)
+                        ):
+                            raise ValueError("Invalid global settings")
+                        values = json.loads(payload)
+                        if not isinstance(values, dict) or set(values) - (set(SettingsValues.model_fields) - {"agent"}):
+                            raise ValueError("Invalid global settings fields")
+                        values = {key: value for key, value in values.items() if key not in _CONNECTION_FIELDS}
+                        values.pop("model", None)
+                        defaults = SettingsValues.model_validate({**defaults.model_dump(), **values})
+                        persisted = True
         model_store = self.harness.provider_store.model_store("global")
         selected_model = model_store.load()
         if selected_model and not self._pinned_startup_model:
-            self.defaults = self.defaults.model_copy(update={"model": selected_model})
+            defaults = defaults.model_copy(update={"model": selected_model})
+        if self._uncommitted_document_revisions or self.global_revision != accepted_revision:
+            return  # A concurrent host write already published a newer view.
+        # No await while publishing the committed scope. Model-turn reads and
+        # browser GETs never observe a mixture of old and new defaults.
+        self.defaults = defaults
         self.global_revision = revision
-        self.global_persisted = True
+        self.global_persisted = persisted
         self._publish_bindings()
 
     def global_snapshot(self) -> dict[str, object]:
@@ -957,6 +979,9 @@ class WebSettings:
             values = values.model_copy(update={"submit_mode": self.defaults.submit_mode})
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.defaults.read_only})
+        for name in ("max_concurrent_subagents", "max_subagent_executions"):
+            if name not in values.model_fields_set:
+                values = values.model_copy(update={name: getattr(self.defaults, name)})
         values = values.model_copy(update={"agent": self.startup_defaults.agent})
         if any(getattr(values, name) != getattr(self.defaults, name) for name in _CONNECTION_FIELDS):
             raise HTTPException(422, "Edit connections in Provider connections.")
@@ -1057,6 +1082,9 @@ class WebSettings:
             values = values.model_copy(update={"submit_mode": self.values.submit_mode})
         if "read_only" not in values.model_fields_set:
             values = values.model_copy(update={"read_only": self.values.read_only})
+        for name in ("max_concurrent_subagents", "max_subagent_executions"):
+            if name not in values.model_fields_set:
+                values = values.model_copy(update={name: getattr(self.values, name)})
         if revision != self._settings_revision("workspace"):
             raise HTTPException(409, "Settings changed. Reload settings before saving.")
         try:
@@ -1148,6 +1176,8 @@ class WebSettings:
                     config.max_file_bytes,
                     config.max_tool_rounds,
                     config.max_subagent_depth,
+                    config.max_concurrent_subagents,
+                    config.max_subagent_executions,
                     config.submit_mode,
                     config.read_only,
                     config.reasoning_effort,
@@ -1203,12 +1233,16 @@ class WebSettings:
                         config.max_file_bytes,
                         config.max_tool_rounds,
                         config.max_subagent_depth,
+                        config.max_concurrent_subagents,
+                        config.max_subagent_executions,
                         config.submit_mode,
                         config.read_only,
                         config.reasoning_effort,
                         harness._selected_model,
                         harness._default_provider_name,
                     ) = previous
+                    if not harness.tasks.root._active:
+                        harness.tasks.accept_limits(SubagentLimits.from_config(config))
                     harness.agent.provider.model = model
                     harness.agent.max_tool_rounds = rounds
                     harness.agent.system_prompt = prompt

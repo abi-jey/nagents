@@ -12,6 +12,7 @@
 .team-pane-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; font-weight: 550; }
 .team-pane-heading h2 > span { color: var(--text-secondary); font-size: 10px; font-weight: 400; }
 .team-pane-heading > button { display: grid; place-items: center; min-height: 28px; width: 28px; padding: 0; border-color: transparent; background: transparent; }
+.team-usage { margin: 0; padding: 0 12px 8px; color: var(--text-secondary); font-size: 10px; line-height: 1.4; }
 .team-navigation { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
 .team-tree-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 16px 5px; scrollbar-width: thin; overflow-anchor: none; }
 .team-tree, .team-tree-children { list-style: none; padding: 0; margin: 0; }

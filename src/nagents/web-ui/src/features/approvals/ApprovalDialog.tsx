@@ -66,7 +66,7 @@ export function ApprovalDialog({
         <h2 id="approval-title" ref={heading} tabIndex={-1}>
           Review <code>{approval.tool}</code>
         </h2>
-        <p>Review this call and choose how long to allow it.</p>
+        <p>{approval.allow_tool ? "Review this call and choose how long to allow it." : "Review this call. Approval applies only to these inputs."}</p>
       </header>
       <div className="approval-body">
         <dl className="request-identity">

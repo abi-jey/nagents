@@ -7,7 +7,7 @@ import { JSDOM } from "jsdom";
 import { Composer } from "./Composer.js";
 import { appendEvent } from "./transcript.js";
 import { TaskTimeline } from "../team/TaskTimeline.js";
-import { AgentConfiguration } from "../team/TeamPane.js";
+import { AgentConfiguration, TeamPane } from "../team/TeamPane.js";
 import { TeamTree } from "../team/TeamTree.js";
 import { TaskConversation, taskEntries } from "../team/TaskConversation.js";
 import { profileTarget, useTeam, type TeamController } from "../team/useTeam.js";
@@ -166,7 +166,8 @@ test("starting a definition creates a separate child while preserving running ro
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
-    IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: () => 0, cancelAnimationFrame() {} };
+    IS_REACT_ACT_ENVIRONMENT: true, requestAnimationFrame: () => 0, cancelAnimationFrame() {},
+    matchMedia: (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList };
   Object.assign(globalThis, globals);
   t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
   type PendingRequest = { path: string; init: RequestInit; responded: boolean; respond: (value: Response) => void };
@@ -188,15 +189,21 @@ test("starting a definition creates a separate child while preserving running ro
   function View() {
     team = useTeam("token", "root", 0, true, []);
     const agents = [root, ...team.tasks.map(taskAgent)];
-    return createElement(TeamTree, { agents, profiles: team.profiles, selected: team.selected, inspect: team.select,
-      configure() {}, arrivals: {}, error: team.error, refresh: team.refresh });
+    return createElement(TeamPane, { team, agents, arrivals: {}, open: true, close() {}, configure() {} });
   }
   const respondIndexes = async (tasks: RetainedTask[]) => {
     const pending = requests.filter(request => !request.responded && request.path === "/api/sessions/root/tasks"
       && (!request.init.method || request.init.method === "GET"));
     assert.ok(pending.length, "a task-index refresh is pending");
     for (const request of pending) await act(async () => {
-      request.respond(Response.json({ tasks, profiles: [definition] }));
+      const occupied = tasks.filter(item => item.status === "running").length;
+      request.respond(Response.json({ tasks, profiles: [definition], subagent_usage: {
+        limits: { max_concurrent_subagents: 3, max_subagent_executions: 8, max_subagent_depth: 2 },
+        used_executions: tasks.length, remaining_executions: Math.max(0, 8 - tasks.length),
+        occupied_slots: occupied, available_slots: Math.max(0, 3 - occupied),
+        retained_tasks: tasks.length, max_retained_tasks: 64, depth: 0,
+        reset: "Only a new external human root run resets used executions; settings reload does not.",
+      } }));
     });
   };
   const refreshWith = async (tasks: RetainedTask[]) => {
@@ -209,6 +216,10 @@ test("starting a definition creates a separate child while preserving running ro
     const existingRow = document.querySelector<HTMLElement>('[data-agent-id="active-research"]');
     assert.ok(existingRow);
     assert.match(document.querySelector(".team-profile")?.textContent || "", /1 active/);
+    const usageLine = document.querySelector<HTMLElement>('[aria-label="Subagent limits and usage"]');
+    assert.equal(usageLine?.textContent?.trim(), "1/3 slots · 1/8 executions");
+    assert.match(usageLine?.title || "", /Depth 0\/2\. 7 executions remain/);
+    assert.match(usageLine?.title || "", /Only a new external human root run resets/);
 
     await act(async () => team.select("active-research"));
     await act(async () => team.setPrompt("Keep this draft on the active run"));

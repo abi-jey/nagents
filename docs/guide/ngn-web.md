@@ -21,6 +21,14 @@ in its conversation header and settings. Definition entries expose their current
 source file; this is not a historical snapshot of the file used by an older run.
 Each conversation's accepted provider and model remain visible independently.
 
+The Team header also shows actual occupied slots and used executions against the
+shared root limits. Its tooltip includes delegation depth, remaining capacity and
+budget-reset timing. Global/workspace **Execution limits** controls configure
+concurrency, executions per root run and depth. An agent's proposed change opens
+the usual approval UI with exact old/new values, scope and next-generation timing;
+it requires a one-time decision. Saving limits does not cancel work or reset its
+accounting. See [Native background subagents](ngn.md#native-background-subagents).
+
 ## Source Availability
 
 Published distributions include `ngn serve`, the `web` extra, and built

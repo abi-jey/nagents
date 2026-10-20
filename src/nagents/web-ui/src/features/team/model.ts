@@ -32,6 +32,17 @@ export type TaskDetail = {
   before?: string;
 };
 export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string };
+export type TeamSubagentUsage = {
+  limits: { max_concurrent_subagents: number; max_subagent_executions: number; max_subagent_depth: number };
+  used_executions: number;
+  remaining_executions: number;
+  occupied_slots: number;
+  available_slots: number;
+  retained_tasks: number;
+  max_retained_tasks: number;
+  depth: number;
+  reset: string;
+};
 
 /** Definitions outlive individual conversations; their names are not task display names. */
 export function definitionUsage(profile: TeamProfile, agents: readonly TeamAgent[]): string {

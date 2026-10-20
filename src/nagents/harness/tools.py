@@ -53,7 +53,16 @@ from .execution import _mask_delivery_authority
 from .types import ToolOutput
 
 READ_ONLY_TOOLS = frozenset(
-    {"read_file", "list_files", "find", "search", "skill", "schedule_wakeup", "compact_history"}
+    {
+        "read_file",
+        "list_files",
+        "find",
+        "search",
+        "skill",
+        "schedule_wakeup",
+        "compact_history",
+        "subagent_configuration",
+    }
 )
 MODIFYING_TOOLS = frozenset({"edit", "write", "shell"})
 
@@ -204,6 +213,8 @@ class HarnessExecutor(ToolExecutor):
             builtin = tool is not None and tool.func == self.tools.builtins.get(call.name)
             if call.name == "delegate" and not self.harness.can_delegate:
                 raise PermissionError("Delegation is disabled at the configured subagent depth limit")
+            if call.name == "subagent_configure" and (self.harness._is_subagent or self.harness.mode != "build"):
+                raise PermissionError("Only the root build agent can propose shared subagent settings")
             if self.harness.config.demo and (
                 not builtin or call.name not in READ_ONLY_TOOLS | {"demo_preview", "delegate"}
             ):

@@ -161,6 +161,15 @@ class HarnessConfig:
     submit_mode: Literal["queue", "interrupt"] = "queue"
     tab_action: str = "agent"
     max_subagent_depth: int = 2
+    max_concurrent_subagents: int = 3
+    max_subagent_executions: int = 8
+    # Keep non-file limit layers explicit so LocalSubagentSettings can reread
+    # trusted files without losing CLI intent. Environment values remain below
+    # JSON; CLI values are final.
+    subagent_limit_overrides: dict[str, int] = field(default_factory=dict, repr=False, compare=False)
+    subagent_limit_environment: dict[str, int] = field(default_factory=dict, repr=False, compare=False)
+    subagent_limit_file_values: dict[str, int] = field(default_factory=dict, repr=False, compare=False)
+    subagent_limit_file_fields: tuple[str, ...] = field(default=(), repr=False, compare=False)
     theme_background: str = "auto"
     skill_token_limit: int = 10000
     # Distinguish a selected model from the built-in API default when switching to ChatGPT.
@@ -216,6 +225,32 @@ class HarnessConfig:
             raise ValueError("max_tool_rounds must be between 1 and 1000")
         if type(self.max_subagent_depth) is not int or not 0 <= self.max_subagent_depth <= 8:
             raise ValueError("max_subagent_depth must be an integer between 0 and 8 (root depth is 0)")
+        for name, maximum in (("max_concurrent_subagents", 64), ("max_subagent_executions", 4096)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+        limit_ranges = {
+            "max_concurrent_subagents": (1, 64),
+            "max_subagent_executions": (1, 4096),
+            "max_subagent_depth": (0, 8),
+        }
+        for values in (
+            self.subagent_limit_overrides,
+            self.subagent_limit_environment,
+            self.subagent_limit_file_values,
+        ):
+            if not isinstance(values, dict):
+                raise ValueError("Subagent limit provenance must be a mapping")
+            for name, value in values.items():
+                if name not in limit_ranges:
+                    raise ValueError(f"Invalid subagent limit provenance field: {name}")
+                minimum, maximum = limit_ranges[name]
+                if type(value) is not int or not minimum <= value <= maximum:
+                    raise ValueError(f"{name} provenance must be an integer between {minimum} and {maximum}")
+        if not isinstance(self.subagent_limit_file_fields, tuple) or any(
+            name not in limit_ranges for name in self.subagent_limit_file_fields
+        ):
+            raise ValueError("Subagent limit file provenance must contain recognized fields")
 
     def provider_profile(self) -> ProviderProfile:
         """Resolve the selected name; an unconfigured harness can still open setup."""
@@ -492,6 +527,8 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         "max_file_bytes",
         "skill_token_limit",
         "max_tool_rounds",
+        "max_concurrent_subagents",
+        "max_subagent_executions",
         "max_subagent_depth",
     }
     booleans = {"demo", "animations", "read_only", "reasoning_summaries"}
@@ -501,6 +538,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
         | booleans
         | {"plugins", "data_dir", "shell_timeout", "profiles", "providers", "mcp_servers", "agent_imports"}
     )
+    limit_names = {"max_concurrent_subagents", "max_subagent_executions", "max_subagent_depth"}
+    environment_limit_values: dict[str, int] = {}
+    file_limit_values = {name: getattr(defaults, name) for name in limit_names}
+    file_limit_fields: set[str] = set()
     for key in strings | integers | booleans | {"data_dir", "shell_timeout"}:
         env_value = os.environ.get(f"NGN_{key.upper()}")
         if env_value is None:
@@ -512,7 +553,10 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 raise ValueError(f"NGN_{key.upper()} must be true/false or 1/0")
             setattr(config, key, env_value.lower() in {"true", "1"})
         elif key in integers:
-            setattr(config, key, int(env_value))
+            parsed_value = int(env_value)
+            setattr(config, key, parsed_value)
+            if key in limit_names:
+                environment_limit_values[key] = parsed_value
         elif key == "shell_timeout":
             config.shell_timeout = float(env_value)
         else:
@@ -606,6 +650,9 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
                 for name, profile in value.items():
                     _install_profile(config, name, _json_profile(profile, path), diagnostics)
                 continue
+            if key in limit_names:
+                file_limit_values[key] = value
+                file_limit_fields.add(key)
             if key == "provider_id":
                 assert isinstance(value, str)
                 if not isinstance(values.get("model"), dict):
@@ -646,6 +693,9 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
     config.agent_source_profiles = {name: replace(profile) for name, profile in config.profiles.items()}
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)
+    config.subagent_limit_environment = environment_limit_values
+    config.subagent_limit_file_values = file_limit_values
+    config.subagent_limit_file_fields = tuple(sorted(file_limit_fields))
     config.explicit_config_paths = (explicit,) if explicit is not None else ()
     config.resource_paths = tuple(reversed(dict.fromkeys(paths[::-1])))
     config.global_model_default = global_model

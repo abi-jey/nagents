@@ -554,7 +554,7 @@ class Harness:
         return (
             self.allow_subagents
             and root.allow_subagents
-            and self.subagent_depth < min(self.config.max_subagent_depth, root.config.max_subagent_depth)
+            and self.subagent_depth < self.tasks.admission_limits().max_subagent_depth
             and bool(self.delegatable_profile_names)
         )
 
@@ -633,9 +633,14 @@ class Harness:
                 "continue useful independent work while children run. When only waiting, end this model turn without tool calls; "
                 "the harness waits and resumes you with their untrusted background results. Then complete the task. "
                 "No wake-up scheduler is needed to receive child results. "
-                "Do not poll or duplicate already delegated work. There are at most 3 simultaneous "
-                "and 8 total child executions across the entire tree per root user run, including human follow-ups. "
-                f"Your depth is {self.subagent_depth}; delegation stops at depth {self.config.max_subagent_depth}. "
+                "Do not poll or duplicate already delegated work. "
+                f"Shared delegation limits and actual accounting: {self.tasks.usage()}. "
+                f"Your depth is {self.subagent_depth}; delegation stops at depth {self.tasks.admission_limits().max_subagent_depth}. "
+                "Read subagent_configuration to inspect scoped limits before proposing an exact change with subagent_configure. "
+                "Changing limits requires explicit one-time approval of those values and scope; a general task request never grants it. "
+                "Do not silently shrink an explicitly requested delegation tree to fit quotas; propose the exact capacity needed, or explain a denied change. "
+                "Waiting parents occupy slots: leave capacity for their children, or run branches in waves. "
+                "Reactivations and follow-ups also cost executions; allow headroom beyond the number of new agents. "
                 "Full quotas fail immediately, never wait for a slot. Jobs do not survive cancellation or process restart; "
                 "closed child conversations may resume for a human follow-up, scheduled wake-up, or immediate child's completion, "
                 "never by replaying old acknowledgements. Results go to the immediate parent, whose synthesis propagates upward.\n"
@@ -667,6 +672,7 @@ class Harness:
                 if self._initialization_error:
                     raise RuntimeError(self._initialization_error)
                 try:
+                    await self.tasks.refresh_limits()
                     await asyncio.to_thread(ensure_agent_documents, self.provider_store)
                     # pathlib's parents=True ignores mode for intermediate directories.
                     missing: list[Path] = []
@@ -739,7 +745,14 @@ class Harness:
             await db.commit()
 
     async def approve(
-        self, tool: str, arguments: "ToolArguments", description: str, preview: str = "", call_id: str = ""
+        self,
+        tool: str,
+        arguments: "ToolArguments",
+        description: str,
+        preview: str = "",
+        call_id: str = "",
+        *,
+        mandatory: bool = False,
     ) -> None:
         root = self.tasks.root.harness
         if self._is_subagent:
@@ -754,6 +767,7 @@ class Harness:
             self._task_name,
             self.subagent_depth,
             self._activation,
+            mandatory,
         )
         task_info = self.tasks.root._infos.get(self._task_id) if self._is_subagent else None
         if task_info is not None:
@@ -952,6 +966,7 @@ class Harness:
                 message: RunInput | None = initial_input or self.followups.first(prompt)
                 final: DoneEvent | None = None
                 try:
+                    await self.tasks.refresh_limits()
                     if (
                         self._delivery_definition is not None
                         and not self._is_subagent
@@ -1576,7 +1591,7 @@ class Harness:
                 f"Theme: {self.config.theme}; background: {self.config.theme_background}; animations: {self.config.animations}",
                 f"Composer: submit_mode={self.config.submit_mode}; tab_action={self.config.tab_action}",
                 f"Agent: {self.config.agent} ({self.mode}); profiles: {', '.join(self.config.profile_names)}",
-                f"Subagents: max depth {self.config.max_subagent_depth} (root=0); shared 3 concurrent / 8 executions per run",
+                f"Subagents: {self.tasks.usage()}",
                 f"Project configuration trusted: {self.config.trust_project}",
                 f"Config files: {', '.join(str(path) for path in self.config.config_paths) or 'built-in defaults'}",
                 *self.resources.mcp_diagnostics().describe(),

@@ -7,6 +7,9 @@ from .commands import CommandResult
 from .config import HarnessConfig
 from .config import load_config
 from .runtime import Harness
+from .subagent_settings import SubagentLimits
+from .subagent_settings import SubagentSettingsHost
+from .subagent_settings import SubagentSettingsSnapshot
 from .subagents import SubagentManager
 from .subagents import TaskInfo
 from .types import ApprovalHandler
@@ -33,7 +36,10 @@ __all__ = [
     "HarnessEvent",
     "Notice",
     "SessionInfo",
+    "SubagentLimits",
     "SubagentManager",
+    "SubagentSettingsHost",
+    "SubagentSettingsSnapshot",
     "TaskCompleted",
     "TaskInfo",
     "TaskMessage",

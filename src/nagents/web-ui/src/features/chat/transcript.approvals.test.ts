@@ -28,7 +28,10 @@ test("approval dialog explains durable workspace scope and extension reload boun
   assert.match(html, /Saved across server restarts/);
   assert.match(html, /Change saved permissions in Tools/);
   assert.match(render({ ...approval, allow_tool_persistent: false }), /extension asks again after it is reloaded/);
-  assert.doesNotMatch(render({ ...approval, allow_tool: false }), /Always allow this tool/);
+  const mandatory = render({ ...approval, allow_tool: false, allow_tool_persistent: false });
+  assert.match(mandatory, /Allow once/);
+  assert.match(mandatory, /Approval applies only to these inputs/);
+  assert.doesNotMatch(mandatory, /Always allow this tool|all chats and agents in this workspace/);
 });
 
 test("permission buttons send distinct decisions and Escape still denies", async (t) => {

@@ -15,6 +15,7 @@ from nagents.events import ToolCallEvent
 from nagents.extensions import AgentPlugin
 from nagents.harness import subagents
 from nagents.harness.runtime import Harness
+from nagents.harness.subagent_settings import SubagentLimits
 from nagents.harness.types import TaskCompleted
 from nagents.harness.types import TaskMessage
 from nagents.harness.types import TaskNotification
@@ -40,6 +41,12 @@ if TYPE_CHECKING:
 
 
 pytestmark = pytest.mark.requires_posix
+
+
+async def set_limits(harness: Harness, limits: SubagentLimits) -> None:
+    current = await harness.tasks.root.settings_host.read("workspace")
+    await harness.tasks.root.settings_host.save("workspace", current.revision, limits)
+    await harness.tasks.refresh_limits()
 
 
 @pytest.mark.parametrize("mode", ["assistant", "reviewer"])
@@ -197,9 +204,9 @@ def test_root_wake_without_children_preserves_budget_and_normal_hooks(
         harness.agent.plugins.append(Hooks())
         try:
             await collect(harness, "Root work")
-            harness.tasks._used = subagents.MAX_TASKS
+            harness.tasks._used = SubagentLimits().max_subagent_executions
             events = [event async for event in harness.wake("Root reminder")]
-            assert harness.tasks._used == subagents.MAX_TASKS
+            assert harness.tasks._used == SubagentLimits().max_subagent_executions
             assert harness.tasks.list() == [] and len(providers) == 1
             notes = [event for event in events if isinstance(event, TaskNotification)]
             assert len(notes) == 1
@@ -309,7 +316,7 @@ def test_parent_reactivation_quota_failure_does_not_fall_back_to_root(
             await collect(harness, "ROOT")
             b = next(info for info in harness.tasks.list() if info.prompt == "B")
             requests = len(providers[0].requests)
-            monkeypatch.setattr(subagents, "MAX_TASKS", 4)
+            await set_limits(harness, SubagentLimits(max_subagent_executions=4))
             events = [event async for event in harness.wake("Wake B", task_id=b.id)]
             assert harness.tasks._used == 4 and len(providers[0].requests) == requests
             assert any(isinstance(event, ErrorEvent) and "quota exhausted" in event.message for event in events)
@@ -527,7 +534,7 @@ def test_automatic_activations_do_not_consume_human_followups_or_reset_budget(
                 (2, 0, "notification"),
             ]
             assert harness.tasks._used == 7
-            monkeypatch.setattr(subagents, "MAX_TASKS", 7)
+            await set_limits(harness, SubagentLimits(max_subagent_executions=7))
             count = len(providers)
             with pytest.raises(ValueError, match="budget exhausted"):
                 _ = [event async for event in harness.wake("No eighth execution", task_id=b.id)]
@@ -559,7 +566,7 @@ def test_wake_admission_rejects_invalid_ancestry_without_activation(
             elif invalid == "cancelled-parent":
                 harness.tasks._infos[a.id].status = "cancelled"
             elif invalid == "depth":
-                harness.config.max_subagent_depth = 1
+                await set_limits(harness, SubagentLimits(max_subagent_depth=1))
             elif invalid == "other-session":
                 await harness.new_session()
             else:
@@ -637,8 +644,8 @@ def test_closed_deep_tree_reactivates_each_parent_not_all_ancestors_at_once(
                 yield TextDoneEvent(text=f"{original}_SYNTHESIS")
 
         harness, _ = setup_harness(tmp_path, monkeypatch, script)
-        harness.config.max_subagent_depth = 3
         try:
+            await set_limits(harness, SubagentLimits(max_subagent_depth=3))
             await collect(harness, "ROOT")
             infos = {info.prompt: info for info in harness.tasks.list()}
             events = [event async for event in harness.wake("Leaf", task_id=infos["C"].id)]

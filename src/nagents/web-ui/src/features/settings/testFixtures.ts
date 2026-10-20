@@ -4,7 +4,8 @@ import type { SettingsValues } from "./types.js";
 export function settingsValues(overrides: Partial<SettingsValues> = {}): SettingsValues {
   return {
     model: "startup-model", reasoning_effort: "", agent: "assistant", provider: "openai", base_url: "", api: "auto", auth: "auto", api_key_env: "OPENAI_API_KEY",
-    shell_timeout: 30, max_output: 16384, max_file_bytes: 1048576, max_tool_rounds: 100, max_subagent_depth: 2,
+    shell_timeout: 30, max_output: 16384, max_file_bytes: 1048576, max_tool_rounds: 100,
+    max_subagent_depth: 2, max_concurrent_subagents: 3, max_subagent_executions: 8,
     compact_trigger: "auto", compact_tokens: 200000, compact_messages: 100, submit_mode: "queue", read_only: false, ...overrides,
   };
 }

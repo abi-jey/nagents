@@ -35,6 +35,7 @@ from .harness import load_config
 from .harness import provider_login
 from .harness.config import THEME_BACKGROUNDS
 from .harness.config import THEME_NAMES
+from .harness.config import HarnessConfig
 from .harness.credentials import ProviderLogin
 from .harness.providers import API_NAMES
 from .harness.types import ApprovalRequest
@@ -66,6 +67,16 @@ def _parser() -> argparse.ArgumentParser:
         "--max-subagent-depth",
         type=int,
         help="Delegation depth: 0 disables, 2 permits children and grandchildren (default)",
+    )
+    common.add_argument(
+        "--max-concurrent-subagents",
+        type=int,
+        help="Maximum concurrent subagents (1-64; default: 3)",
+    )
+    common.add_argument(
+        "--max-subagent-executions",
+        type=int,
+        help="Maximum subagent executions per root run, including follow-ups (1-4096; default: 8)",
     )
     common.add_argument(
         "--theme", choices=THEME_NAMES, help="Terminal appearance (default: terminal inherits terminal colors)"
@@ -472,6 +483,14 @@ async def _headless(harness: Harness, args: argparse.Namespace) -> int:
         await harness.close()
 
 
+def _record_cli_subagent_limit_overrides(config: HarnessConfig, args: argparse.Namespace) -> None:
+    fields = ("max_concurrent_subagents", "max_subagent_executions", "max_subagent_depth")
+    explicit = {
+        name: getattr(args, name) for name in fields if hasattr(args, name) and type(getattr(args, name)) is int
+    }
+    config.subagent_limit_overrides = {**config.subagent_limit_overrides, **explicit}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the terminal client or execute a headless command."""
     args = _parser().parse_args(argv)
@@ -499,6 +518,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "submit_mode",
                 "tab_action",
                 "max_subagent_depth",
+                "max_concurrent_subagents",
+                "max_subagent_executions",
                 "theme_background",
             )
             if hasattr(args, name)
@@ -515,6 +536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides["plugins"] = tuple(plugins)
             overrides["cli_plugins"] = tuple(plugins[len(config.plugins) :])
         config = replace(config, **overrides)
+        _record_cli_subagent_limit_overrides(config, args)
         if not config.profile(config.agent).user_invocable:
             raise ValueError(f"Agent {config.agent!r} is available only for delegation")
         if "model" in overrides:

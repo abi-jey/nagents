@@ -42,6 +42,7 @@ class ApprovalRequest:
     task_name: str = ""
     depth: int = 0
     activation: int = 0
+    mandatory: bool = False
 
 
 @dataclass
