@@ -28,10 +28,11 @@ export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: 
   const warning = compactionWarning(agent);
   const provider = providerLabel(agent);
   const motion = useArrivalStyle(arrivalAt);
+  const hasDefinition = !!agent.id && !!agent.profile;
   return <article className={`team-agent-row${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
     <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={marker?.description}
       aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
-      <span className="team-agent-heading"><span className="team-agent-identity"><strong>{agent.name}</strong>{agent.id && agent.profile && <span className="team-agent-definition" title={`Agent definition: ${agent.profile}`}>{agent.profile}</span>}</span><AgentState agent={agent} /></span>
+      <span className="team-agent-heading"><span className="team-agent-identity"><strong className={hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{hasDefinition ? agent.profile : agent.name}</strong>{hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}</span><AgentState agent={agent} /></span>
       <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
       <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
         {context ? contextSummary(context) : "Context unavailable"}
