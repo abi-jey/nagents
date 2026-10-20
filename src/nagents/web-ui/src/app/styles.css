@@ -1234,13 +1234,20 @@ button.deny:hover:not(:disabled) {
   background: var(--text-reading);
   color: var(--surface-reading);
 }
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) {
   .app-shell {
     position: fixed;
     top: var(--app-viewport-top, 0px);
     left: 0;
+    width: 100%;
     height: var(--app-viewport-height, 100dvh);
   }
+  #composer {
+    /* Smaller fields trigger automatic focus zoom in mobile Safari. */
+    font-size: 16px;
+  }
+}
+@media (max-width: 760px) {
   main {
     display: flex;
     flex-direction: column;
@@ -1310,10 +1317,6 @@ button.deny:hover:not(:disabled) {
   .composer-area {
     padding: 6px 8px max(6px, env(safe-area-inset-bottom));
     flex-shrink: 0;
-  }
-  #composer {
-    /* Smaller fields trigger automatic focus zoom in mobile Safari. */
-    font-size: 16px;
   }
   .welcome {
     margin-top: 4px;
