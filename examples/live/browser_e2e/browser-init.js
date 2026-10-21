@@ -13,6 +13,7 @@
   const input = [];
   const events = [];
   const health = [];
+  const seenLiveEvents = new Set();
   const limit = Math.max(30, Math.min(config.maxSeconds || 120, 900));
   const eventLimit = Math.ceil(limit * 160 + 6000);
   const origin = performance.timeOrigin;
@@ -23,6 +24,8 @@
   let measurementStarted;
   let receivedSamples = 0;
   let omitted = 0;
+  let currentUIState = [];
+  let selectedSessionId = "";
   const stamp = () => ({ monotonicMs: performance.now(), wallMs: Date.now() });
   const record = (type, detail = {}) => {
     if (events.length < eventLimit) events.push({ type, ...stamp(), ...detail });
@@ -50,7 +53,7 @@
   };
   const safeEvent = (value) => {
     if (!value || typeof value !== "object") return {};
-    const fields = ["seq", "type", "speaker", "text", "status", "message", "delegation_id", "voice_session_id",
+    const fields = ["seq", "type", "id", "name", "tool", "call_id", "task_id", "activation", "parent_task_id", "session_id", "speaker", "text", "status", "message", "delegation_id", "voice_session_id",
       "chat_session_id", "run_id", "provider", "model", "detail_type", "phase", "error", "code", "kind", "outcome", "wire_type",
       "start_ms", "end_ms", "offset_ms"];
     return Object.fromEntries(fields.filter(key => ["string", "number", "boolean"].includes(typeof value[key]))
@@ -63,6 +66,37 @@
       throw new Error("Voice E2E requires AudioContext sinkId: { type: 'none' }; no physical-device fallback");
     }
     record("audio.virtual-sink", { role, sinkType: context.sinkId.type });
+  };
+  const safeWireRecord = (source, frame) => {
+    if (!source || typeof source !== "object") return;
+    const outer = source;
+    const nested = outer.event === "task_activity" && outer.payload && typeof outer.payload === "object" ? outer.payload : outer;
+    const eventType = nested.event || nested.type;
+    if (!new Set(["run_started", "run_finished", "tool_call", "tool_execution_started", "tool_result",
+      "task_started", "task_completed", "task_activity", "approval_closed"]).has(eventType)) return;
+    const allowed = ["id", "name", "tool", "call_id", "task_id", "activation", "parent_task_id", "run_id", "status"];
+    const detail = Object.fromEntries(allowed.filter(key => ["string", "number", "boolean"].includes(typeof nested[key]))
+      .map(key => [key, typeof nested[key] === "string" ? nested[key].slice(0, 300) : nested[key]]));
+    for (const key of ["task_id", "activation", "parent_task_id", "run_id"])
+      if (detail[key] === undefined && ["string", "number", "boolean"].includes(typeof outer[key])) detail[key] = outer[key];
+    record("live.event", {
+      ...detail,
+      eventType,
+      call_id: detail.call_id || (String(eventType).startsWith("tool_") ? detail.id : ""),
+      session_id: frame.session_id,
+      eventCursor: frame.cursor,
+    });
+  };
+  const safeEventFrame = frame => {
+    if (!frame || typeof frame !== "object" || frame.session_id !== selectedSessionId) return;
+    if (frame.type === "event") safeWireRecord(frame.record, frame);
+    if (frame.type === "snapshot" && frame.snapshot && typeof frame.snapshot === "object") {
+      const run = frame.snapshot.active_run;
+      if (run && typeof run === "object") {
+        const items = Array.isArray(run.events) ? run.events : Array.isArray(run.records) ? run.records : [];
+        for (const item of items) safeWireRecord(item, frame);
+      }
+    }
   };
   const stopRecorder = async entry => {
     await entry.ready;
@@ -185,22 +219,25 @@
       verifySoftwareSink(context, "microphone");
       const resumed = context.resume();
       const destination = context.createMediaStreamDestination();
-      const response = await nativeFetch(config.wavPath);
-      if (!response.ok) throw new Error(`Voice fixture download failed (${response.status})`);
-      const bytes = await response.arrayBuffer();
-      const digest = await crypto.subtle.digest("SHA-256", bytes);
-      const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
-      if (hash !== config.fixtureSha256) throw new Error("Voice fixture SHA-256 mismatch");
-      const buffer = await context.decodeAudioData(bytes);
+      const fixtures = Array.isArray(config.rounds) && config.rounds.length ? config.rounds : [config];
+      const buffers = [];
+      for (const fixture of fixtures) {
+        const response = await nativeFetch(fixture.wavPath || config.wavPath);
+        if (!response.ok) throw new Error(`Voice fixture download failed (${response.status})`);
+        const bytes = await response.arrayBuffer();
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+        if (hash !== (fixture.fixtureSha256 || config.fixtureSha256)) throw new Error("Voice fixture SHA-256 mismatch");
+        buffers.push(await context.decodeAudioData(bytes));
+      }
       const keepAlive = context.createConstantSource();
       keepAlive.offset.value = 0;
       nativeConnect.call(keepAlive, destination);
       keepAlive.start();
-      microphone = { context, destination, buffer, sources: [] };
+      microphone = { context, destination, buffers, fixtures, sources: [] };
       await resumed;
-      record("microphone.ready", { sampleRate: context.sampleRate, fixtureDuration: buffer.duration,
-        sinkType: context.sinkId.type,
-        fixtureText: config.fixtureText, fixtureSha256: config.fixtureSha256 });
+      record("microphone.ready", { sampleRate: context.sampleRate, fixtureCount: buffers.length,
+        fixtureDurations: buffers.map(buffer => buffer.duration), sinkType: context.sinkId.type });
     }
     return microphone.destination.stream.clone();
   };
@@ -208,20 +245,32 @@
     constructor(url, protocols) {
       super(url, protocols);
       const path = new URL(url, location.href).pathname;
-      if (!/^\/api\/live\/sessions\/[^/]+\/audio$/.test(path)) return;
+      const liveSocket = /^\/api\/live\/sessions\/[^/]+\/audio$/.test(path);
+      const eventSocket = path === "/api/events";
+      if (!liveSocket && !eventSocket) return;
       record("socket.created", { path }); // Never retain token-bearing protocols.
       this.addEventListener("open", () => record("socket.open", { path }));
       this.addEventListener("close", event => record("socket.close", { path, code: event.code, clean: event.wasClean }));
       this.addEventListener("error", () => record("socket.error", { path }));
       this.addEventListener("message", ({ data }) => {
-        if (data instanceof ArrayBuffer) {
+        if (liveSocket && data instanceof ArrayBuffer) {
           receivedSamples += data.byteLength / 2;
           record("socket.receive", { path, bytes: data.byteLength, receivedSamples, ...stats(new Uint8Array(data)) });
         }
-        else if (typeof data === "string") record("socket.control", { path, text: data.slice(0, 256) });
+        else if (liveSocket && typeof data === "string") record("socket.control", { path, text: data.slice(0, 256) });
+        else if (eventSocket && typeof data === "string") {
+          try { safeEventFrame(JSON.parse(data)); }
+          catch { record("harness.error", { message: "Malformed app event frame; no frame content retained" }); }
+        }
       });
       const send = this.send.bind(this);
       this.send = data => {
+        if (eventSocket && typeof data === "string") {
+          try {
+            const request = JSON.parse(data);
+            if (request.type === "subscribe" && typeof request.session_id === "string") selectedSessionId = request.session_id;
+          } catch { /* Do not retain app socket payloads. */ }
+        }
         if (data instanceof ArrayBuffer && !stopped) {
           const bytes = new Uint8Array(data);
           const item = { ...stamp(), ...stats(bytes), bytes: bytes.length };
@@ -243,6 +292,15 @@
         record("http.response", { path, status: response.status, elapsedMs: performance.now() - began });
         void response.clone().json().then(body => {
           if (Array.isArray(body.events)) for (const event of body.events) {
+            const session = body.session_id || path.match(/^\/api\/live\/sessions\/([^/]+)/)?.[1];
+            if (!session || !Number.isSafeInteger(event.seq)) {
+              record("harness.error", { message: "Live event lacks a session or sequence identity" });
+              continue;
+            }
+            const identity = `${session}:${event.seq}`;
+            if (seenLiveEvents.has(identity)) continue;
+            if (seenLiveEvents.size >= eventLimit) { omitted++; continue; }
+            seenLiveEvents.add(identity);
             const detail = safeEvent(event);
             detail.eventType = detail.type;
             delete detail.type;
@@ -280,6 +338,7 @@
       selector, text: element.textContent?.trim().slice(0, 4000) || "",
       phase: element.getAttribute("data-phase") || "", status: element.getAttribute("data-status") || "",
     })));
+    currentUIState = state;
     const next = JSON.stringify(state);
     if (next !== lastUI) { lastUI = next; record("ui.voice", { state }); }
   };
@@ -287,8 +346,11 @@
   observer.observe(document, { childList: true, subtree: true, characterData: true,
     attributes: true, attributeFilter: ["data-phase", "data-status"] });
   const api = {
-    async play(delayMs = 250) {
+    async play(delayMs = 250, roundNumber = 1) {
       if (!microphone || stopped) throw new Error("Start voice first; microphone must be ready and harness active");
+      if (!Number.isInteger(roundNumber) || roundNumber < 1 || roundNumber > microphone.buffers.length)
+        throw new Error("Unknown spoken fixture round");
+      const fixture = microphone.fixtures[roundNumber - 1];
       await microphone.context.resume();
       const outputStarts = await Promise.all(contexts.map(async entry => {
         await entry.ready;
@@ -304,14 +366,14 @@
         record("measurement.start", { maxSeconds: limit });
       }
       const source = microphone.context.createBufferSource();
-      source.buffer = microphone.buffer;
+      source.buffer = microphone.buffers[roundNumber - 1];
       nativeConnect.call(source, microphone.destination);
       const audioTime = microphone.context.currentTime + delayMs / 1000;
       source.start(audioTime);
       microphone.sources.push(source);
-      const round = microphone.sources.length;
-      record("fixture.start", { round, audioTime, duration: source.buffer.duration, delayMs, outputStarts });
-      source.addEventListener("ended", () => record("fixture.ended", { round, audioTime: microphone.context.currentTime }));
+      record("fixture.start", { round: roundNumber, audioTime, duration: source.buffer.duration, delayMs, outputStarts,
+        fixtureText: fixture.fixtureText || config.fixtureText || "" });
+      source.addEventListener("ended", () => record("fixture.ended", { round: roundNumber, audioTime: microphone.context.currentTime }));
       return { audioTime, duration: source.buffer.duration, outputStarts };
     },
     mark(label) { record("operator.mark", { label: String(label).slice(0, 200) }); },
@@ -332,13 +394,28 @@
       return stopPromise;
     },
     status() {
+      const liveEvents = events.filter(event => event.type === "live.event");
+      const transcripts = liveEvents.filter(event => event.eventType === "transcript").map(event => ({
+        speaker: event.speaker || "", text: event.text || "", monotonicMs: event.monotonicMs,
+      }));
+      const delegations = liveEvents.filter(event => ["delegation", "task_started", "task_completed"].includes(event.eventType)).map(event => ({
+        delegationId: event.delegation_id || "", taskId: event.task_id || "", runId: event.run_id || "",
+        eventType: event.eventType, status: event.status || "", monotonicMs: event.monotonicMs,
+      }));
+      const toolCalls = liveEvents.filter(event => ["tool_call", "tool_execution_started", "tool_result"].includes(event.eventType)).map(event => ({
+        eventType: event.eventType, callId: event.call_id || event.id || "", name: event.name || event.tool || "",
+        runId: event.run_id || "", monotonicMs: event.monotonicMs,
+      }));
+      const audible = capture.filter(block => block.rms > 0.01).at(-1);
       return { mode: config.mode, stopped, microphone: !!microphone,
         measurementElapsedMs: measurementStarted === undefined ? 0 : performance.now() - measurementStarted,
         maxSeconds: limit,
         voiceClosed: events.some(event => event.type === "live.status" && event.status === "closed"),
         providerFinalized: events.some(event => `${event.text || ""}${event.message || ""}`.includes("Finalization confirmed.")),
         outputArmed: contexts.length > 0 && contexts.every(entry => entry.armed), outputBlocks: capture.length,
-        inputFrames: input.length, events: events.length, health: health.at(-1), omitted };
+        inputFrames: input.length, events: events.length, health: health.at(-1), omitted,
+        transcripts, delegations, toolCalls, subscribedSessionId: selectedSessionId,
+        ui: currentUIState, lastAudibleOutputMs: audible?.monotonicMs || 0 };
     },
     export() {
       return { schema: "ngn-browser-voice-e2e/v1", mode: config.mode,

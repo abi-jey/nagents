@@ -1,0 +1,56 @@
+{
+  "id": "conversation-load-delegate-followup",
+  "description": "Six-turn voice conversation over five minutes, including continuous spoken output, a child delegation, and a follow-up after completion.",
+  "rounds": [
+    {
+      "id": "greeting",
+      "name": "Greeting",
+      "text": "Good morning. Please greet me and tell me briefly how you can help.",
+      "expect_text": "help",
+      "load": "baseline",
+      "wait_after_seconds": 60
+    },
+    {
+      "id": "continuous-speech",
+      "name": "Continuous spoken output",
+      "text": "Please answer aloud in one continuous response. Count from one to twenty at a steady pace. Finish by saying the sequence ends at twenty.",
+      "expect_text": "sequence ends at twenty",
+      "load": "continuous speech",
+      "wait_after_seconds": 60
+    },
+    {
+      "id": "spoken-followup",
+      "name": "Spoken follow-up",
+      "text": "Give me one short practical tip for remembering that count, and say it aloud.",
+      "expect_text": "remember",
+      "load": "follow-up",
+      "wait_after_seconds": 60
+    },
+    {
+      "id": "delegated-read",
+      "name": "Delegated read-only tool request",
+      "text": "Please delegate this read-only lookup to the helper agent. Ask it to read voice-e2e-sentinel.txt from the workspace, then tell me the exact marker it finds.",
+      "expect_text": ["NGN voice E2E 5017", "five thousand seventeen"],
+      "require_tool_call": true,
+      "require_delegation": true,
+      "require_subagent": true,
+      "load": "tool + delegation",
+      "wait_after_seconds": 60
+    },
+    {
+      "id": "after-delegation",
+      "name": "Follow-up after delegation completes",
+      "text": "Now that the helper has completed its lookup, repeat the exact marker and tell me that the file read succeeded.",
+      "expect_text": ["NGN voice E2E 5017", "five thousand seventeen"],
+      "load": "delegation follow-up",
+      "wait_after_seconds": 60
+    },
+    {
+      "id": "closing-turn",
+      "name": "Closing turn",
+      "text": "Please close with a short spoken summary of what the helper verified.",
+      "expect_text": "verified",
+      "load": "closing"
+    }
+  ]
+}

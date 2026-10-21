@@ -7,6 +7,7 @@ import struct
 from functools import partial
 from typing import cast
 
+from examples.live.browser_e2e.artifacts import check_authenticated_scenario
 from examples.live.browser_e2e.artifacts import check_capture
 from examples.live.browser_e2e.artifacts import extract_report
 from examples.live.browser_e2e.artifacts import timing_metrics
@@ -46,10 +47,306 @@ def baseline() -> dict[str, object]:
     }
 
 
+def authenticated_scenario_capture() -> dict[str, object]:
+    report = baseline()
+    report["mode"] = "authenticated"
+    report["input"] = [
+        {**block(), "monotonicMs": 1100},
+        {**block(), "monotonicMs": 5100},
+    ]
+    report["output"] = [
+        {**block(), "sampleRate": 4, "monotonicMs": 3000, "contextTimeAtDelivery": 0},
+        {**block(4), "sampleRate": 4, "monotonicMs": 6000, "contextTimeAtDelivery": 1},
+    ]
+    report["health"] = [
+        {"receivedSamples": 4, "playedSamples": 4, "underruns": 0, "droppedSamples": 0, "bufferedMs": 0},
+        {"receivedSamples": 8, "playedSamples": 8, "underruns": 0, "droppedSamples": 0, "bufferedMs": 0},
+    ]
+    events = cast("list[dict[str, object]]", report["events"])
+    events.extend(
+        [
+            {"type": "measurement.start", "monotonicMs": 20},
+            {"type": "recorder.capture-start", "contextId": 0, "frame": 0, "monotonicMs": 20},
+            {"type": "fixture.start", "round": 1, "monotonicMs": 1000, "duration": 0.1, "delayMs": 0},
+            {
+                "type": "live.event",
+                "eventType": "transcript",
+                "speaker": "user",
+                "text": "Say hello",
+                "monotonicMs": 1100,
+            },
+            {
+                "type": "live.event",
+                "eventType": "transcript",
+                "speaker": "assistant",
+                "text": "Hello there.",
+                "monotonicMs": 3200,
+            },
+            {"type": "fixture.start", "round": 2, "monotonicMs": 5000, "duration": 0.1, "delayMs": 0},
+            {
+                "type": "live.event",
+                "eventType": "transcript",
+                "speaker": "user",
+                "text": "Calculate seventeen times twenty three.",
+                "monotonicMs": 5100,
+            },
+            {
+                "type": "live.event",
+                "eventType": "tool_call",
+                "name": "calculator",
+                "call_id": "call-1",
+                "monotonicMs": 5400,
+            },
+            {
+                "type": "live.event",
+                "eventType": "tool_execution_started",
+                "name": "calculator",
+                "call_id": "call-1",
+                "monotonicMs": 5500,
+            },
+            {
+                "type": "live.event",
+                "eventType": "delegation",
+                "delegation_id": "delegation-1",
+                "status": "queued",
+                "monotonicMs": 5600,
+            },
+            {
+                "type": "live.event",
+                "eventType": "tool_result",
+                "name": "calculator",
+                "call_id": "call-1",
+                "monotonicMs": 5800,
+            },
+            {
+                "type": "live.event",
+                "eventType": "delegation",
+                "delegation_id": "delegation-1",
+                "status": "working",
+                "monotonicMs": 6000,
+            },
+            {
+                "type": "live.event",
+                "eventType": "delegation",
+                "delegation_id": "delegation-1",
+                "status": "completed",
+                "monotonicMs": 6900,
+            },
+            {
+                "type": "live.event",
+                "eventType": "transcript",
+                "speaker": "assistant",
+                "text": "The result is three hundred and ninety one.",
+                "monotonicMs": 7200,
+            },
+            {
+                "type": "live.event",
+                "eventType": "status",
+                "text": "Live session closed. Finalization confirmed.",
+                "monotonicMs": 9000,
+            },
+            {"type": "live.status", "status": "closed", "monotonicMs": 9000},
+            {
+                "type": "ui.voice",
+                "state": [{"selector": ".voice-controls", "phase": "connected", "text": "LiveLiveStop"}],
+                "monotonicMs": 1000,
+            },
+            {"type": "recorder.capture-stop", "contextId": 0, "finalFrame": 8, "armed": True, "monotonicMs": 9100},
+        ]
+    )
+    return report
+
+
+def test_latency_mapping_ignores_connection_warmup_epoch_but_not_recording_resets() -> None:
+    report = baseline()
+    report["events"] = [
+        {"type": "measurement.start", "monotonicMs": 20},
+        {"type": "socket.receive", "path": "/api/live/sessions/owned/audio", "receivedSamples": 400, "monotonicMs": 30},
+    ]
+    report["health"] = [
+        {"epoch": 0, "contextId": 0, "monotonicMs": 10, "receivedSamples": 0, "playedSamples": 0},
+        {
+            "epoch": 1,
+            "contextId": 0,
+            "monotonicMs": 50,
+            "receivedSamples": 400,
+            "playedSamples": 100,
+            "bufferedMs": 12.5,
+            "renderedAt": 0.01,
+            "audioTime": 0.01,
+        },
+    ]
+    timing = timing_metrics(report)
+    assert timing["sampleAgeAvailable"] is True
+    windows = cast("list[dict[str, object]]", timing["minuteWindows"])
+    assert windows[0]["healthSamples"] == 1
+    assert cast("dict[str, object]", windows[0]["sampleAgeMs"])["max"] == 20
+    cast("list[dict[str, object]]", report["health"]).append(
+        {"epoch": 2, "contextId": 0, "monotonicMs": 60, "playedSamples": 100}
+    )
+    assert timing_metrics(report)["sampleAgeAvailable"] is False
+
+
 def test_terminal_eof_is_not_an_in_speech_glitch() -> None:
     result = check_capture(baseline(), mode="offline", reply_samples=4)
     assert result["passed"] is True
     assert cast("dict[str, object]", result["details"])["terminalUnderruns"] == 1
+
+
+def test_authenticated_scenario_requires_each_answer_tool_and_delegation() -> None:
+    scenario: list[dict[str, object]] = [
+        {"name": "greeting", "expect_text": "Hello there."},
+        {
+            "name": "tool-delegation",
+            "expect_text": "three hundred and ninety one",
+            "require_tool_call": True,
+            "require_delegation": True,
+            "load": "tool + delegation",
+        },
+    ]
+    report = authenticated_scenario_capture()
+    result = check_authenticated_scenario(report, scenario)
+    assert result["passed"] is True
+    assert cast("dict[str, bool]", result["checks"])["round1ExpectedResponse"] is True
+    assert cast("dict[str, bool]", result["checks"])["round2ExpectedResponse"] is True
+    details = cast("dict[str, object]", result["details"])
+    latency_by_load = cast("dict[str, dict[str, object]]", details["latencyMsByLoad"])
+    assert latency_by_load["tool + delegation"]["samples"] == 1
+
+    no_answer = copy.deepcopy(report)
+    events = cast("list[dict[str, object]]", no_answer["events"])
+    events[:] = [event for event in events if event.get("text") != "The result is three hundred and ninety one."]
+    result = check_authenticated_scenario(no_answer, scenario)
+    assert result["passed"] is False
+    assert cast("dict[str, bool]", result["checks"])["round2ExpectedResponse"] is False
+
+    no_tool_result = copy.deepcopy(report)
+    events = cast("list[dict[str, object]]", no_tool_result["events"])
+    events[:] = [event for event in events if event.get("eventType") != "tool_result"]
+    result = check_authenticated_scenario(no_tool_result, scenario)
+    assert result["passed"] is False
+    assert cast("dict[str, bool]", result["checks"])["round2ExpectedResponse"] is False
+
+
+def test_authenticated_natural_network_pause_is_reported_not_called_jitter() -> None:
+    scenario: list[dict[str, object]] = [{"name": "greeting", "expect_text": "Hello there."}]
+    report = authenticated_scenario_capture()
+    events = cast("list[dict[str, object]]", report["events"])
+    events.extend(
+        [
+            {"type": "socket.receive", "monotonicMs": 10000},
+            {"type": "socket.receive", "monotonicMs": 12500},
+        ]
+    )
+    assert check_authenticated_scenario(report, scenario)["passed"] is True
+
+    health = cast("list[dict[str, object]]", report["health"])
+    health.append(
+        {
+            "receivedSamples": 12,
+            "playedSamples": 8,
+            "underruns": 1,
+            "droppedSamples": 0,
+            "bufferedMs": 25,
+            "monotonicMs": 12600,
+        }
+    )
+    result = check_authenticated_scenario(report, scenario)
+    assert result["passed"] is False
+    assert cast("dict[str, bool]", result["checks"])["noUnclassifiedQueuedUnderruns"] is False
+
+
+def test_authenticated_delegation_can_be_proved_by_owned_task_lifecycle() -> None:
+    scenario: list[dict[str, object]] = [
+        {"name": "greeting", "expect_text": "Hello there."},
+        {
+            "name": "delegated",
+            "expect_text": ["five thousand seventeen", "NGN voice E2E 5017"],
+            "require_tool_call": True,
+            "require_subagent": True,
+        },
+    ]
+    report = authenticated_scenario_capture()
+    events = cast("list[dict[str, object]]", report["events"])
+    events[:] = [event for event in events if event.get("eventType") != "delegation"]
+    for event in events:
+        if event.get("speaker") == "assistant" and str(event.get("text", "")).startswith("The result is"):
+            event["text"] = "The marker is NGN voice E2E 5017."
+    events.extend(
+        [
+            {
+                "type": "live.event",
+                "eventType": "delegation",
+                "delegation_id": "voice-handoff",
+                "status": "queued",
+                "monotonicMs": 2000,
+            },
+            {
+                "type": "live.event",
+                "eventType": "delegation",
+                "delegation_id": "voice-handoff",
+                "status": "working",
+                "monotonicMs": 2100,
+            },
+            {
+                "type": "live.event",
+                "eventType": "delegation",
+                "delegation_id": "voice-handoff",
+                "status": "completed",
+                "monotonicMs": 2200,
+            },
+            {
+                "type": "live.event",
+                "eventType": "task_started",
+                "run_id": "run-owned",
+                "task_id": "task-owned",
+                "monotonicMs": 5600,
+            },
+            {
+                "type": "live.event",
+                "eventType": "task_completed",
+                "run_id": "run-owned",
+                "task_id": "task-owned",
+                "status": "completed",
+                "monotonicMs": 6900,
+            },
+        ]
+    )
+    result = check_authenticated_scenario(report, scenario)
+    assert result["passed"] is True
+    details = cast("dict[str, object]", result["details"])
+    round_detail = cast("list[dict[str, object]]", details["scenarioRounds"])[1]
+    assert round_detail["delegationCompleted"] is None
+    assert round_detail["subagentCompleted"] is True
+    assert round_detail["taskLifecycles"] == {"run-owned:task-owned": ["task_completed", "task_started"]}
+
+    unfinished = copy.deepcopy(report)
+    events = cast("list[dict[str, object]]", unfinished["events"])
+    events[:] = [event for event in events if event.get("eventType") != "task_completed"]
+    result = check_authenticated_scenario(unfinished, scenario)
+    assert result["passed"] is False
+
+
+def test_authenticated_empty_queue_underrun_is_reported_as_ambiguous() -> None:
+    scenario: list[dict[str, object]] = [{"name": "greeting", "expect_text": "Hello there."}]
+    report = authenticated_scenario_capture()
+    health = cast("list[dict[str, object]]", report["health"])
+    health.append(
+        {
+            "receivedSamples": 8,
+            "playedSamples": 8,
+            "underruns": 1,
+            "droppedSamples": 0,
+            "bufferedMs": 0,
+            "monotonicMs": 8500,
+            "lastUnderrunAt": 7.2,
+        }
+    )
+    result = check_authenticated_scenario(report, scenario)
+    assert result["passed"] is True
+    details = cast("dict[str, object]", result["details"])
+    assert len(cast("list[object]", details["ambiguousQueueEmptyUnderruns"])) == 1
+    assert "does not prove all perceived audio smoothness" in str(details["smoothnessConclusion"])
 
 
 def test_known_response_gap_fails_baseline_and_passes_negative_control() -> None:

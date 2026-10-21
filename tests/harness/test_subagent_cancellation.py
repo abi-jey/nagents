@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from nagents.events import ToolCallEvent
-from nagents.harness import subagents
 from nagents.harness.runtime import Harness
 from nagents.harness.types import TaskStarted
 from tests.support.hang_guard import HANG_GUARD
@@ -128,7 +127,9 @@ def test_parent_stop_preserves_cancellation_after_owned_initialization(
             elif cancel:
                 assert info.error == "Subagent cancelled with its parent run; it will not be replayed."
             elif failure == "timeout":
-                assert info.error == "Subagent exceeded its time limit."
+                assert info.error == (
+                    "Subagent operation timed out during setup or execution; no successful result is available."
+                )
             else:
                 assert info.error == "Subagent failed during setup or execution; no successful result is available."
             history = await harness.history()
@@ -216,36 +217,6 @@ def test_parent_stop_preserves_cancellation_when_child_execution_also_raises(
         finally:
             root.cancel()
             await asyncio.gather(root, return_exceptions=True)
-            await harness.close()
-        assert all(provider.closed for provider in providers)
-
-    asyncio.run(scenario())
-
-
-def test_child_own_deadline_without_parent_cancellation_remains_a_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def scenario() -> None:
-        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
-            pytest.fail("An already expired child deadline must not call the provider")
-            yield ToolCallEvent(id="unreachable", name="delegate", arguments={})  # pragma: no cover
-
-        harness, providers = setup_harness(tmp_path, monkeypatch, script)
-        await harness.initialize()
-        harness.tasks.begin(harness.session_id)
-        # Expire on the first suspension, without relying on initialization speed.
-        monkeypatch.setattr(subagents, "CHILD_TIMEOUT", 0)
-        try:
-            await harness.tasks.delegate("Review")
-            info = harness.tasks.list()[0]
-            worker = harness.tasks._workers[info.id]
-            await asyncio.wait_for(asyncio.shield(worker), HANG_GUARD)
-            info = harness.tasks.list()[0]
-            assert info.status == "failed" and info.error == "Subagent exceeded its time limit."
-            assert not worker.cancelled() and worker.cancelling() == 0
-            assert len(providers) == 2 and providers[1].closed
-            assert all(provider.requests == [] for provider in providers)
-        finally:
             await harness.close()
         assert all(provider.closed for provider in providers)
 

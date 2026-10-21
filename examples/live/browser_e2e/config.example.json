@@ -1,0 +1,14 @@
+{
+  "providers": "./providers.example.json",
+  "model": {"provider": "local-codex", "id": "gpt-6-luna"},
+  "agent_imports": [{"path": "./assistant.example.md", "format": "native"}],
+  "mcp_servers": {},
+  "plugins": [],
+  "profiles": {
+    "helper": {
+      "description": "Read-only browser voice test helper. Read the requested fixture and return its exact marker.",
+      "tools": ["read_file", "list_files"],
+      "allowed_agents": []
+    }
+  }
+}

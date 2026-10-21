@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "revision": "0000000000000000000000000000000000000000000000000000000000000000",
+  "active": "local-codex",
+  "providers": {
+    "local-codex": {"kind": "openai", "auth": "codex"}
+  }
+}

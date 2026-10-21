@@ -352,11 +352,17 @@ configuration, the corresponding `NGN_*` environment variables, CLI flags, and
 global/workspace **Settings → Execution limits**. A quota-full delegation fails immediately instead
 of waiting indefinitely for a slot; a parent still working or waiting for its
 own children occupies a slot. Further limits are at most
-`min(max_tool_rounds, 12)` tool rounds per child, a five-minute child timeout,
-a 16,000-character delegation prompt, and
+`min(max_tool_rounds, 12)` tool rounds per child, a 16,000-character delegation prompt, and
 12,000-character results, 64 retained task identities per root harness, and eight
 human follow-ups per child. Raising the execution budget does not raise those
 separate bounds.
+
+There is no overall execution timeout for native or remote A2A subagents.
+They remain active until they finish or an explicit Stop, parent cancellation,
+or harness shutdown cancels them. Individual tool, approval, and network
+operations retain their own deadlines. Remote cancellation is confirmed only
+when the remote host reports a terminal state; an uncertain operation is never
+automatically replayed.
 
 `subagent_configuration(scope="workspace")` reports saved and accepted limits,
 the settings revision, used/remaining executions, and occupied/available slots.

@@ -115,6 +115,18 @@ def percentile(values: list[float], fraction: float = 0.95) -> float:
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))] if ordered else 0
 
 
+def normalized_text(value: str) -> str:
+    return " ".join(re.findall(r"\w+", value.casefold()))
+
+
+def expected_phrases(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item.strip()]
+    return []
+
+
 def render_monotonic_ms(block: dict[str, object], sample_offset: int = 0) -> float:
     """Audio-frame position, aligned with the browser's output clock when available."""
     rate = number(block.get("sampleRate"))
@@ -135,6 +147,9 @@ def timing_metrics(report: dict[str, object]) -> dict[str, object]:
     output = objects(report.get("output"))
     measurement = [number(event.get("monotonicMs")) for event in events if event.get("type") == "measurement.start"]
     beginning = min(measurement, default=min((number(item.get("monotonicMs")) for item in starts), default=0))
+    # Connection setup may reset playback before recording is armed. Retain it
+    # in the raw trace, but never mistake a warmup epoch for a recording reset.
+    health = [item for item in health if number(item.get("monotonicMs")) >= beginning]
     voiced_times: list[float] = []
     for block in output:
         data = pcm_bytes(block)
@@ -623,17 +638,35 @@ def check_capture(
         checks["expectedSpokenText"] = " ".join(expect_text.casefold().split()) in " ".join(spoken.casefold().split())
     if mode == "authenticated":
         lifecycles: dict[str, set[str]] = {}
+        task_lifecycles: dict[str, set[str]] = {}
         for event in events:
             if event.get("eventType") == "delegation":
                 identifier = str(event.get("delegation_id", ""))
                 lifecycles.setdefault(identifier, set()).add(str(event.get("status", "")))
-        checks["realDelegationCompleted"] = any(
+            if event.get("eventType") in {"task_started", "task_completed"}:
+                task_id = str(event.get("task_id", ""))
+                run_id = str(event.get("run_id", ""))
+                if task_id and run_id:
+                    event_type = str(event.get("eventType", ""))
+                    task_state = (
+                        ("task_completed" if event.get("status") == "completed" else "task_failed")
+                        if event_type == "task_completed"
+                        else event_type
+                    )
+                    task_lifecycles.setdefault(f"{run_id}:{task_id}", set()).add(task_state)
+        direct_delegation = any(
             identifier and {"queued", "working", "completed"} <= statuses for identifier, statuses in lifecycles.items()
         )
+        completed_task = any(
+            {"task_started", "task_completed"} <= statuses and "task_failed" not in statuses
+            for statuses in task_lifecycles.values()
+        )
+        checks["realDelegationCompleted"] = direct_delegation or completed_task
         checks["providerFinalized"] = any(
             "Finalization confirmed." in str(event.get("text", "")) + str(event.get("message", "")) for event in events
         )
         details["delegationStatuses"] = {key: sorted(value) for key, value in lifecycles.items()}
+        details["delegatedTaskLifecycles"] = {key: sorted(value) for key, value in task_lifecycles.items()}
     else:
         checks["knownResponseLength"] = reply_samples > 0 and number(last.get("receivedSamples")) == reply_samples
         checks["allResponseSamplesPlayed"] = reply_samples > 0 and number(last.get("playedSamples")) == reply_samples
@@ -664,6 +697,255 @@ def check_capture(
                 "maximumReceiveIntervalMs": max_interval,
             }
         )
+    return {"passed": all(checks.values()), "checks": checks, "details": details}
+
+
+def check_authenticated_scenario(
+    report: dict[str, object],
+    rounds: list[dict[str, object]],
+    *,
+    minimum_active_span_seconds: float = 0,
+    max_sample_age_p95_ms: float = 0,
+    max_sample_age_peak_ms: float = 0,
+    require_sample_age_telemetry: bool = False,
+) -> dict[str, object]:
+    """Require each real spoken prompt to receive its expected answer and work lifecycle."""
+    base = check_capture(
+        report,
+        mode="authenticated",
+        min_rounds=len(rounds),
+        min_active_span_seconds=minimum_active_span_seconds,
+    )
+    checks = cast("dict[str, bool]", base["checks"])
+    events = objects(report.get("events"))
+    timing = timing_metrics(report)
+    timing_rounds = {int(number(item.get("round"))): item for item in objects(timing.get("rounds"))}
+    starts = {
+        int(number(event.get("round"))): number(event.get("monotonicMs"))
+        for event in events
+        if event.get("type") == "fixture.start"
+    }
+    round_details: list[dict[str, object]] = []
+    load_latencies: dict[str, list[float]] = {}
+    for index, scenario_round in enumerate(rounds, start=1):
+        start_ms = starts.get(index)
+        next_start = min((value for key, value in starts.items() if key > index), default=float("inf"))
+        segment = [
+            event
+            for event in events
+            if start_ms is not None and start_ms <= number(event.get("monotonicMs")) < next_start
+        ]
+        transcripts = [event for event in segment if event.get("eventType") == "transcript"]
+        user_text = " ".join(str(event.get("text", "")) for event in transcripts if event.get("speaker") == "user")
+        assistant_text = " ".join(
+            str(event.get("text", "")) for event in transcripts if event.get("speaker") == "assistant"
+        )
+        expected = expected_phrases(scenario_round.get("expect_text"))
+        normalized_response = normalized_text(assistant_text)
+        matched_expected = next((phrase for phrase in expected if normalized_text(phrase) in normalized_response), "")
+        phrase_present = bool(matched_expected)
+        round_timing = timing_rounds.get(index, {})
+        round_audio = bool(round_timing.get("microphoneSpeechAfterFixture")) and bool(
+            round_timing.get("renderedSpeechAfterFixture")
+        )
+        lifecycles: dict[str, set[str]] = {}
+        task_lifecycles: dict[str, set[str]] = {}
+        for event in segment:
+            if event.get("eventType") == "delegation":
+                identifier = str(event.get("delegation_id", ""))
+                if identifier:
+                    lifecycles.setdefault(identifier, set()).add(str(event.get("status", "")))
+            if event.get("eventType") in {"task_started", "task_completed"}:
+                task_id = str(event.get("task_id", ""))
+                run_id = str(event.get("run_id", ""))
+                if task_id and run_id:
+                    event_type = str(event.get("eventType", ""))
+                    status = str(event.get("status", ""))
+                    task_state = (
+                        ("task_completed" if status == "completed" else "task_failed")
+                        if event_type == "task_completed"
+                        else event_type
+                    )
+                    task_lifecycles.setdefault(f"{run_id}:{task_id}", set()).add(task_state)
+        requires_delegation = scenario_round.get("require_delegation") is True
+        direct_delegation_complete = any(
+            {"queued", "working", "completed"} <= statuses for statuses in lifecycles.values()
+        )
+        round_ok = start_ms is not None and bool(user_text.strip()) and phrase_present and round_audio
+        if requires_delegation:
+            round_ok = round_ok and direct_delegation_complete
+        requires_subagent = scenario_round.get("require_subagent") is True
+        subagent_complete = any(
+            {"task_started", "task_completed"} <= statuses and "task_failed" not in statuses
+            for statuses in task_lifecycles.values()
+        )
+        if requires_subagent:
+            round_ok = round_ok and subagent_complete
+        pending_tasks = [
+            key
+            for key, statuses in task_lifecycles.items()
+            if "task_started" in statuses and "task_completed" not in statuses
+        ]
+        failed_tasks = [key for key, statuses in task_lifecycles.items() if "task_failed" in statuses]
+        round_ok = round_ok and not pending_tasks and not failed_tasks
+        requires_tool = scenario_round.get("require_tool_call") is True
+        tool_events = [
+            event
+            for event in segment
+            if event.get("eventType") in {"tool_call", "tool_execution_started", "tool_result"}
+        ]
+        tool_lifecycles: dict[str, set[str]] = {}
+        for event in tool_events:
+            call_id = str(event.get("call_id") or event.get("id") or "")
+            run_id = str(event.get("run_id", ""))
+            if call_id:
+                tool_lifecycles.setdefault(f"{run_id}:{call_id}", set()).add(str(event.get("eventType", "")))
+        tool_completed = any(
+            {"tool_call", "tool_execution_started", "tool_result"} <= statuses for statuses in tool_lifecycles.values()
+        )
+        if requires_tool:
+            round_ok = round_ok and tool_completed
+        checks[f"round{index}ExpectedResponse"] = round_ok
+        load = str(scenario_round.get("load", "baseline"))[:80]
+        latency = number(round_timing.get("firstAudibleAfterFixtureEndMs"), -1)
+        if latency >= 0:
+            load_latencies.setdefault(load, []).append(latency)
+        round_details.append(
+            {
+                "round": index,
+                "name": str(scenario_round.get("name", f"round-{index}"))[:100],
+                "load": load,
+                "userCaptionObserved": bool(user_text.strip()),
+                "expectedTexts": expected,
+                "matchedExpectedText": matched_expected,
+                "assistantText": assistant_text,
+                "expectedTextObserved": phrase_present,
+                "spokenPcmObserved": round_audio,
+                "requireDelegation": requires_delegation,
+                "requireSubagent": requires_subagent,
+                "delegationStatuses": {key: sorted(value) for key, value in lifecycles.items()},
+                "taskLifecycles": {key: sorted(value) for key, value in task_lifecycles.items()},
+                "pendingTasks": pending_tasks,
+                "failedTasks": failed_tasks,
+                "delegationCompleted": direct_delegation_complete if requires_delegation else None,
+                "subagentCompleted": subagent_complete if requires_subagent else None,
+                "requireToolCall": requires_tool,
+                "toolCallProgress": {key: sorted(value) for key, value in tool_lifecycles.items()},
+                "toolCallCompleted": tool_completed if requires_tool else None,
+                "firstAudibleAfterFixtureEndMs": latency if latency >= 0 else None,
+            }
+        )
+
+    health = objects(report.get("health"))
+    outputs = objects(report.get("output"))
+    classified_underruns: list[dict[str, object]] = []
+    unclassified_underruns: list[dict[str, object]] = []
+    ambiguous_queue_empty_underruns: list[dict[str, object]] = []
+    starvation_during_audio: list[dict[str, object]] = []
+    previous_underruns = 0.0
+    previous_health_ms: float | None = None
+    for sample in health:
+        underruns = number(sample.get("underruns"))
+        received = number(sample.get("receivedSamples"))
+        played = number(sample.get("playedSamples"))
+        buffered = number(sample.get("bufferedMs"))
+        current_ms = number(sample.get("monotonicMs"), -1)
+        change = max(0, underruns - previous_underruns)
+        if change:
+            item: dict[str, object] = {
+                "monotonicMs": current_ms if current_ms >= 0 else None,
+                "underruns": change,
+                "queuedSamples": max(0, received - played),
+                "bufferedMs": buffered,
+                "lastUnderrunAtAudioSeconds": number(sample.get("lastUnderrunAt"), -1),
+            }
+            if received <= played and buffered <= 0:
+                item["classification"] = (
+                    "ambiguous queue-empty pause: provider DTX/natural pause and starvation cannot be distinguished"
+                )
+                ambiguous_queue_empty_underruns.append(item)
+            elif current_ms < 0 or previous_health_ms is None or number(sample.get("lastUnderrunAt"), -1) < 0:
+                item["classification"] = "unclassifiable: missing monotonic health interval"
+                unclassified_underruns.append(item)
+            else:
+                output_timestamp = sample.get("outputTimestamp")
+                underrun_ms = -1.0
+                if isinstance(output_timestamp, dict) and number(output_timestamp.get("performanceTime")) > 0:
+                    underrun_ms = (
+                        number(output_timestamp.get("performanceTime"))
+                        + (number(sample.get("lastUnderrunAt")) - number(output_timestamp.get("contextTime"))) * 1000
+                    )
+                active_audio = False
+                for block in outputs:
+                    pcm = pcm_bytes(block)
+                    rate = number(block.get("sampleRate"))
+                    if not pcm or rate <= 0 or underrun_ms < 0:
+                        continue
+                    samples = array.array("h")
+                    samples.frombytes(pcm)
+                    if sys.byteorder != "little":
+                        samples.byteswap()
+                    frame_start_ms = render_monotonic_ms(block)
+                    start_sample = max(0, int((underrun_ms - frame_start_ms - 25) * rate / 1000))
+                    end_sample = min(len(samples), int((underrun_ms - frame_start_ms + 25) * rate / 1000))
+                    active_audio = any(abs(sample_value) > 327 for sample_value in samples[start_sample:end_sample])
+                    if active_audio:
+                        break
+                if active_audio:
+                    item["monotonicMs"] = underrun_ms
+                    item["classification"] = "starvation counter advanced during captured non-silent output PCM"
+                    starvation_during_audio.append(item)
+                else:
+                    item["monotonicMs"] = underrun_ms if underrun_ms >= 0 else None
+                    item["classification"] = "unclassifiable: queued audio underrun did not overlap captured speech PCM"
+                    unclassified_underruns.append(item)
+        previous_underruns = max(previous_underruns, underruns)
+        if current_ms >= 0:
+            previous_health_ms = current_ms
+    checks["noClassifiedStarvationDuringSpeech"] = not starvation_during_audio
+    checks["noUnclassifiedQueuedUnderruns"] = not unclassified_underruns
+    if require_sample_age_telemetry:
+        minute_windows = objects(timing.get("minuteWindows"))
+        p95_values = [
+            number(cast("dict[str, object]", window.get("sampleAgeMs", {})).get("p95")) for window in minute_windows
+        ]
+        peak_values = [
+            number(cast("dict[str, object]", window.get("sampleAgeMs", {})).get("max")) for window in minute_windows
+        ]
+        has_age_samples = any(
+            number(cast("dict[str, object]", window.get("sampleAgeMs", {})).get("samples")) > 0
+            for window in minute_windows
+        )
+        checks["sampleAgeTelemetryAvailable"] = timing.get("sampleAgeAvailable") is True and has_age_samples
+        if max_sample_age_p95_ms > 0:
+            checks["sampleAgeP95WithinBound"] = bool(p95_values) and max(p95_values) <= max_sample_age_p95_ms
+        if max_sample_age_peak_ms > 0:
+            checks["sampleAgePeakWithinBound"] = bool(peak_values) and max(peak_values) <= max_sample_age_peak_ms
+    gaps = [number(event.get("gapMs")) for event in events if event.get("type") == "main-thread.gap"]
+    details = cast("dict[str, object]", base["details"])
+    details.update(
+        {
+            "scenarioRounds": round_details,
+            "latencyMsByLoad": {
+                name: {"samples": len(values), "p95": percentile(values), "max": max(values)}
+                for name, values in sorted(load_latencies.items())
+            },
+            "mainThreadGapsOver80Ms": {
+                "count": len(gaps),
+                "p95Ms": percentile(gaps),
+                "maxMs": max(gaps, default=0),
+            },
+            "ambiguousQueueEmptyUnderruns": ambiguous_queue_empty_underruns,
+            "classifiedQueueEmptyUnderruns": classified_underruns,
+            "unclassifiedUnderruns": unclassified_underruns,
+            "starvationDuringRenderedSpeech": starvation_during_audio,
+            "smoothnessConclusion": (
+                "No classified starvation overlapped captured non-silent PCM. Queue-empty underruns remain ambiguous "
+                "between provider DTX/natural pauses and starvation, so this run does not prove all perceived audio smoothness."
+            ),
+            "receiveIntervalMeaning": "Network intervals include provider pacing and natural pauses; they are reported, not treated as jitter by themselves.",
+        }
+    )
     return {"passed": all(checks.values()), "checks": checks, "details": details}
 
 

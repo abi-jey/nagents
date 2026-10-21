@@ -25,6 +25,113 @@ to exercise the real public ingress and deployed ngn process.
 
 ## Prepare and launch
 
+### Automated loopback CDP runner
+
+For repeatable runs, use `cdp_runner.py`. It attaches to Chrome's loopback CDP
+endpoint, creates one disposable browser context and page, clicks the ordinary
+voice controls with native CDP mouse input, and closes only that owned context.
+It launches and stops its own local server unless `--url` points at another
+loopback server exposing the same private E2E routes. It never uses
+Playwright/Selenium, browser storage from an existing profile, or physical audio
+devices.
+
+Prerequisites are the repository `.venv`, FFmpeg with Flite, the built frontend,
+and Chrome already listening on `127.0.0.1:9222`. Keep the scenario, config,
+workspace, and artifact directory private. The offline runner isolates
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` inside the artifact directory; it makes
+no provider calls. The runner captures transcripts and audio PCM, so its output
+directory is created with mode `0700`; JSON, logs, and screenshots use `0600`.
+
+Offline baseline should exit `0`:
+
+```bash
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode offline \
+  --artifacts /tmp/ngn-voice-cdp-baseline \
+  --workspace /tmp/ngn-voice-cdp-baseline-workspace
+```
+
+An injected 200 ms audio gap without an expected-fault flag should exit `1`:
+
+```bash
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode offline --gap-ms 200 \
+  --artifacts /tmp/ngn-voice-cdp-gap-fails \
+  --workspace /tmp/ngn-voice-cdp-gap-fails-workspace
+```
+
+The same fault as an explicit negative control should exit `0` because the
+checker confirms the gap was detected:
+
+```bash
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode offline --gap-ms 200 --expect-gap-ms 200 \
+  --artifacts /tmp/ngn-voice-cdp-gap-control \
+  --workspace /tmp/ngn-voice-cdp-gap-control-workspace
+```
+
+Authenticated mode is opt-in and requires a private local ngn config, a
+separate workspace, and a scenario JSON. The example scenario runs six
+conversation turns, holds the live session across five minutes, and requires
+real tool and delegation evidence; the runner writes the deterministic
+read-only sentinel file into that test workspace. Use a config that explicitly
+allows the selected tool and delegate target. It does not infer credentials or
+fall back to offline mode:
+
+For an isolated starting configuration, copy `config.example.json`,
+`providers.example.json`, and `assistant.example.md` together into a private
+directory and use the copied config below. They select normal local Codex
+credential discovery, enable Live, and define the read-only `helper` requested
+by the scenario. No credentials are copied.
+Set `XDG_CONFIG_HOME` and `XDG_DATA_HOME` to separate, private test directories
+to avoid editing your normal ngn preferences; leave `CODEX_HOME` pointing to
+your existing signed-in Codex installation. Alternatively use your own local
+config and adjust the scenario's helper/tool names to match it.
+
+```bash
+XDG_CONFIG_HOME=/path/to/private/isolated-config \
+XDG_DATA_HOME=/path/to/private/isolated-data \
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode authenticated \
+  --scenario-json examples/live/browser_e2e/authenticated-scenario.example.json \
+  --config /path/to/private/ngn-config.json \
+  --workspace /path/to/private/e2e-workspace \
+  --artifacts /path/to/private/e2e-artifacts
+```
+
+The report records the scenario/round IDs, mode, package and source revision,
+source-module hashes, and the hashes of same-origin JS/CSS build assets. A
+failure leaves private status, the full bounded capture when available,
+timestamped server logs, cleanup/finalization status, and a screenshot.
+Re-run the same command after each relevant source change; use a fresh
+workspace/artifact path to avoid reusing stale fixture state.
+
+The runner requires authenticated scenario rounds to include expected spoken
+text and actual call progress. `require_delegation` means the voice handoff
+reported `queued`, `working`, and `completed`; `require_subagent` separately
+requires a native child task to start and complete. Tool lifecycle events are
+read from the app's `/api/events` socket for the subscribed session, and only
+safe IDs/names/statuses are retained. Arguments, tool results, prompts, and
+token-bearing WebSocket subprotocols are not copied to the event trace.
+
+Before sending a fixture the driver waits for the normal UI's connected state.
+It advances only after the expected final phrase, required work completion,
+and three seconds of rendered silence with a bounded playback queue. Live RTP
+can continue sending silence, so an empty queue is not required. This settling
+rule is a heuristic, not a provider turn-final acknowledgment: use concise
+answers with the expected phrase at the end, and inspect the timeline if a
+provider pauses longer in mid-answer. `--max-seconds` bounds the whole test's
+measurement window; it does not change the application's agent run policy.
+
+Underruns are not treated as proof of a glitch by themselves. The report
+correlates the audio-thread underrun timestamp with captured non-silent output
+PCM, while queue-empty periods remain explicitly ambiguous between provider
+DTX/natural pauses and starvation. A passing report confirms the configured
+PCM continuity, drop, response, and latency gates; it cannot prove what a
+person would perceive through a physical speaker.
+
+### Manual Chrome DevTools MCP procedure
+
 Use the repository virtual environment. Build the frontend first with
 `npm --prefix src/nagents/web-ui run build`. Keep generated audio, init scripts, and traces outside Git.
 

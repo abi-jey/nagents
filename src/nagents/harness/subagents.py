@@ -72,7 +72,6 @@ MAX_RETAINED_TASKS = 64
 MAX_FOLLOWUPS = 8
 MAX_PROMPT = 16_000
 MAX_RESULT = 12_000
-CHILD_TIMEOUT = 300.0
 _ADJECTIVES = ("quiet", "bright", "calm", "gentle", "swift", "clear", "small", "warm")
 _NOUNS = ("maple", "cedar", "willow", "birch", "fern", "brook", "finch", "otter")
 DEFAULT_TASK_OPTIONS = TaskOptions()
@@ -997,81 +996,95 @@ class SubagentManager:
     ) -> None:
         child: Harness | None = None
         message = message or self._initial_inputs.pop(info.id, None)
+        started = time.monotonic()
+        logger.info(
+            "Subagent execution started: task=%s profile=%s session=%s child_session=%s activation=%d",
+            info.id,
+            info.profile,
+            info.session_id,
+            info.child_session_id,
+            info.activation,
+        )
         try:
-            async with asyncio.timeout(CHILD_TIMEOUT):
-                if info.activation:
-                    await self.root.harness.emit(self._started(info, prompt))
-                child = self._create_child(info.profile, info, continuing=bool(info.activation))
-                self._children[info.id] = child
-                await _await_cleanup(asyncio.create_task(child.initialize(), name=f"ngn-subagent-initialize-{info.id}"))
-                child.refresh_instructions()
-                info.mode = child.mode
-                info.provider, info.provider_kind, info.model = (
-                    child.config.provider,
-                    child.config.provider_profile().kind,
-                    child.agent.provider.model,
-                )
-                info.reasoning_effort = child.reasoning_effort()
-                info.compaction = compaction_snapshot(child)
-                if child._remote_profile.configured:
-                    info.provider, info.provider_kind, info.model = "a2a", "a2a", ""
-                    info.reasoning_effort, info.compaction = "", {}
-                child.agent.plugins.append(ChildActivity(self, info, child))
-                done: DoneEvent | None = None
+            if info.activation:
+                await self.root.harness.emit(self._started(info, prompt))
+            child = self._create_child(info.profile, info, continuing=bool(info.activation))
+            self._children[info.id] = child
+            await _await_cleanup(asyncio.create_task(child.initialize(), name=f"ngn-subagent-initialize-{info.id}"))
+            child.refresh_instructions()
+            info.mode = child.mode
+            info.provider, info.provider_kind, info.model = (
+                child.config.provider,
+                child.config.provider_profile().kind,
+                child.agent.provider.model,
+            )
+            info.reasoning_effort = child.reasoning_effort()
+            info.compaction = compaction_snapshot(child)
+            if child._remote_profile.configured:
+                info.provider, info.provider_kind, info.model = "a2a", "a2a", ""
+                info.reasoning_effort, info.compaction = "", {}
+            child.agent.plugins.append(ChildActivity(self, info, child))
+            done: DoneEvent | None = None
 
-                async def read_input() -> RunInput | None:
-                    pending = self._inputs.get(info.id)
-                    return pending.popleft() if pending else None
+            async def read_input() -> RunInput | None:
+                pending = self._inputs.get(info.id)
+                return pending.popleft() if pending else None
 
-                consumed_turn = ""
+            consumed_turn = ""
 
-                def observe_turn(turn: RunTurn) -> None:
-                    nonlocal consumed_turn
-                    consumed_turn = turn.id
+            def observe_turn(turn: RunTurn) -> None:
+                nonlocal consumed_turn
+                consumed_turn = turn.id
 
-                with child.followups.source(read_input), child.followups.observe(observe_turn):
-                    async with aclosing(
-                        child._run(prompt, trigger=info.trigger, notifications=notifications, initial_input=message)
-                    ) as events:
-                        async for event in events:
-                            await self._emit_activity(info, public_payload(event), turn_id=consumed_turn)
-                            if isinstance(event, TextDoneEvent) and child.tasks._running():
-                                await self._emit_activity(
-                                    info, {"type": "status", "phase": "waiting", "detail": "Waiting for delegated work"}
-                                )
-                            if isinstance(event, ErrorEvent) and not event.recoverable:
-                                remote_error = remote_error_message(event) if child._remote_profile.configured else ""
-                                info.error = remote_error or (
-                                    "Subagent reached its tool-round limit; its response is not a successful result."
-                                    if event.code == "MAX_TOOL_ROUNDS"
-                                    else "Subagent reported a provider or tool-loop error; its response is not a successful result."
-                                )
-                                if remote_error and event.code == "A2A_TASK_CANCELLED":
-                                    info.status = "cancelled"
-                                logger.warning(
-                                    "Subagent failed: task=%s profile=%s remote=%s code=%s",
-                                    info.id,
-                                    info.profile,
-                                    child._remote_profile.configured,
-                                    event.code if remote_error else "subagent_error",
-                                )
-                            elif isinstance(event, DoneEvent):
-                                done = event
-                if done is None and not info.error:
-                    info.error = "Subagent ended without a completed response."
-                elif done is not None and not info.error:
-                    info.result = done.final_text[:MAX_RESULT]
-                    if len(done.final_text) > MAX_RESULT:
-                        info.result = info.result[: MAX_RESULT - 24] + "\n[Result truncated]"
+            with child.followups.source(read_input), child.followups.observe(observe_turn):
+                async with aclosing(
+                    child._run(prompt, trigger=info.trigger, notifications=notifications, initial_input=message)
+                ) as events:
+                    async for event in events:
+                        await self._emit_activity(info, public_payload(event), turn_id=consumed_turn)
+                        if isinstance(event, TextDoneEvent) and child.tasks._running():
+                            await self._emit_activity(
+                                info, {"type": "status", "phase": "waiting", "detail": "Waiting for delegated work"}
+                            )
+                        if isinstance(event, ErrorEvent) and not event.recoverable:
+                            remote_error = remote_error_message(event) if child._remote_profile.configured else ""
+                            info.error = remote_error or (
+                                "Subagent reached its tool-round limit; its response is not a successful result."
+                                if event.code == "MAX_TOOL_ROUNDS"
+                                else "Subagent reported a provider or tool-loop error; its response is not a successful result."
+                            )
+                            if remote_error and event.code == "A2A_TASK_CANCELLED":
+                                info.status = "cancelled"
+                            logger.warning(
+                                "Subagent failed: task=%s profile=%s remote=%s code=%s",
+                                info.id,
+                                info.profile,
+                                child._remote_profile.configured,
+                                event.code if remote_error else "subagent_error",
+                            )
+                        elif isinstance(event, DoneEvent):
+                            done = event
+            if done is None and not info.error:
+                info.error = "Subagent ended without a completed response."
+            elif done is not None and not info.error:
+                info.result = done.final_text[:MAX_RESULT]
+                if len(done.final_text) > MAX_RESULT:
+                    info.result = info.result[: MAX_RESULT - 24] + "\n[Result truncated]"
         except asyncio.CancelledError:
             info.status = "cancelled"
             info.error = "Subagent cancelled with its parent run; it will not be replayed."
             raise
         except Exception as error:
             logger.warning(
-                "Subagent execution failed: task=%s profile=%s error_type=%s",
+                "Subagent execution failed: task=%s profile=%s session=%s child_session=%s activation=%d "
+                "remote=%d elapsed_ms=%.1f error_type=%s",
                 info.id,
                 info.profile,
+                info.session_id,
+                info.child_session_id,
+                info.activation,
+                int(child is not None and child._remote_profile.configured),
+                (time.monotonic() - started) * 1000,
                 type(error).__name__,
             )
             # Provider/extension exceptions may contain credentials or raw HTTP bodies.
@@ -1085,7 +1098,7 @@ class SubagentManager:
                 raise asyncio.CancelledError from None
             info.status = "failed"
             info.error = (
-                "Subagent exceeded its time limit."
+                "Subagent operation timed out during setup or execution; no successful result is available."
                 if isinstance(error, TimeoutError)
                 else "Subagent failed during setup or execution; no successful result is available."
             )
@@ -1122,6 +1135,17 @@ class SubagentManager:
                     info.status = "failed" if info.error else "completed"
                 info.phase = info.status
                 info.updated_at = info.completed_at = time.time()
+                logger.info(
+                    "Subagent execution finished: task=%s profile=%s session=%s child_session=%s activation=%d "
+                    "status=%s elapsed_ms=%.1f",
+                    info.id,
+                    info.profile,
+                    info.session_id,
+                    info.child_session_id,
+                    info.activation,
+                    info.status,
+                    (time.monotonic() - started) * 1000,
+                )
                 self._inputs.pop(info.id, None)
                 self._admitted.pop(info.id, None)
                 self._publish(
