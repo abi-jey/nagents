@@ -591,6 +591,39 @@ def test_refresh_lock_reports_safe_operation_and_errno(
         assert private not in caplog.text
 
 
+def test_refresh_lock_avoids_create_or_open_race_and_keeps_one_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_open = os.open
+    flags_seen: list[int] = []
+
+    def guarded_open(path: str, flags: int, mode: int = 0o777, **kwargs: int) -> int:
+        if path.endswith(".refresh.lock"):
+            flags_seen.append(flags)
+            if flags & os.O_CREAT and not flags & os.O_EXCL:
+                # macOS can return ENOENT when simultaneous openat callers
+                # create-or-open one new lock. Reject that syscall shape.
+                raise FileNotFoundError(errno.ENOENT, "simulated create-or-open race")
+        return original_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(os, "open", guarded_open)
+    credentials = isolated_credentials(tmp_path, oauth_profile(), "shared-lock")
+
+    async def scenario() -> None:
+        async with credentials._refresh_lock():
+            lock = credentials.path.parent / f".{credentials.profile.fingerprint}.refresh.lock"
+            first_inode = lock.stat().st_ino
+        async with credentials._refresh_lock():
+            assert lock.stat().st_ino == first_inode
+            assert lock.stat().st_mode & 0o777 == 0o600
+
+    asyncio.run(scenario())
+    assert len(flags_seen) == 3
+    assert all(flags & os.O_NOFOLLOW for flags in flags_seen)
+    assert flags_seen[0] & os.O_EXCL and flags_seen[1] & os.O_EXCL
+    assert not flags_seen[2] & os.O_CREAT
+
+
 def test_refresh_lock_reports_unsafe_file_without_private_details(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

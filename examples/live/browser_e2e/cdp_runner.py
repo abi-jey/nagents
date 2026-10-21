@@ -416,7 +416,9 @@ def scenario_capture(
 
 def export_capture(cdp: CDP, session: str) -> dict[str, object]:
     """Freeze once; chunking must not repeatedly stringify minutes of PCM."""
-    cdp.evaluate("globalThis.__voiceE2EExportJson = JSON.stringify(globalThis.__voiceE2E.export())", session=session)
+    cdp.evaluate(
+        "void (globalThis.__voiceE2EExportJson = JSON.stringify(globalThis.__voiceE2E.export()))", session=session
+    )
     try:
         total_chars = int(cast("float", cdp.evaluate("globalThis.__voiceE2EExportJson.length", session=session)))
         if total_chars <= 0 or total_chars > 256_000_000:

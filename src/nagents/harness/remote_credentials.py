@@ -348,12 +348,15 @@ class RemoteCredentials(ProtectedFileStore):
             try:
                 with self._directory(create=True) as directory:
                     phase = "open_lock"
-                    descriptor = os.open(
-                        f".{self.profile.fingerprint}.refresh.lock",
-                        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                        0o600,
-                        dir_fd=directory,
-                    )
+                    name = f".{self.profile.fingerprint}.refresh.lock"
+                    # Avoid macOS openat's create-or-open race on the first
+                    # concurrent refresh. Never unlink or replace this lock.
+                    try:
+                        descriptor = os.open(
+                            name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
+                        )
+                    except FileExistsError:
+                        descriptor = os.open(name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=directory)
                 phase = "validate_lock"
                 info = os.fstat(descriptor)
                 if (
