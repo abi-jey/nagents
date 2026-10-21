@@ -5,11 +5,21 @@ import { runInNewContext } from "node:vm";
 
 type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number; interruptedSamples: number; silenceRefills: number };
 type Played = { type: "played"; epoch: number; at: number; until: number; sourceStart: number; buffer: ArrayBuffer };
+type Trace = { type: "trace"; epoch: number; sequence: number; omittedIntervals: number; intervals: { sourceStart: number; samples: number; at: number; until: number }[] };
 function fixture(rate = 48000) {
   let Processor!: new () => { port: { onmessage(event: { data: object }): void }; process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean };
-  const health: Health[] = [], played: Played[] = [];
-  let acknowledge = true;
-  class Base { port = { onmessage: (_event: { data: object }) => {}, postMessage(data: Health | Played) { if (data.type === "health") health.push(data); else { played.push(data); if (acknowledge) processor.port.onmessage({ data: { type: "played-ack", epoch: data.epoch } }); } } }; }
+  const health: Health[] = [], played: Played[] = [], traces: Trace[] = [];
+  let acknowledge = true, acknowledgeTrace = true;
+  class Base { port = { onmessage: (_event: { data: object }) => {}, postMessage(data: Health | Played | Trace) {
+    if (data.type === "health") health.push(data);
+    else if (data.type === "trace") {
+      traces.push(data);
+      if (acknowledgeTrace) processor.port.onmessage({ data: { type: "trace-ack", epoch: data.epoch, sequence: data.sequence } });
+    } else {
+      played.push(data);
+      if (acknowledge) processor.port.onmessage({ data: { type: "played-ack", epoch: data.epoch } });
+    }
+  } }; }
   const globals = { AudioWorkletProcessor: Base, sampleRate: rate, currentTime: 0, ArrayBuffer, Int16Array, Float64Array, DataView, Number, Math,
     registerProcessor(name: string, type: typeof Processor) { assert.equal(name, "ngn-live-playback"); Processor = type; } };
   runInNewContext(readFileSync(new URL("../../../public/assets/live-playback.js", import.meta.url), "utf8"), globals);
@@ -21,7 +31,10 @@ function fixture(rate = 48000) {
     processor.process([], [[output]]); position += output.length;
     return output;
   };
-  return { health, played, render, acknowledge: (value: boolean) => { acknowledge = value; },
+  return { health, played, traces, render, acknowledge: (value: boolean) => { acknowledge = value; },
+    acknowledgeTrace(value: boolean) { acknowledgeTrace = value; },
+    trace(enabled = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace", enabled, epoch: suppliedEpoch } }); },
+    traceAck(sequence: number, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace-ack", sequence, epoch: suppliedEpoch } }); },
     realtime(value = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "mode", epoch: suppliedEpoch, realtime: value } }); },
     barrier() { epoch++; processor.port.onmessage({ data: { type: "barrier", epoch } }); },
     get time() { return position / rate; },
@@ -31,6 +44,12 @@ function fixture(rate = 48000) {
   };
 }
 function pcm(size = 480, value = 8192) { const samples = new Int16Array(size); samples.fill(value); return samples.buffer; }
+function voicedThenQuietPcm(voicedSamples = 780, totalSamples = 960) {
+  const samples = new Int16Array(totalSamples);
+  samples.fill(8192, 0, voicedSamples);
+  samples.fill(100, voicedSamples);
+  return samples.buffer;
+}
 function voicedPcm(offset: number, size = 480) {
   const samples = new Int16Array(size);
   for (let i = 0; i < size; i++) {
@@ -235,6 +254,79 @@ test("real-time silence replenishes a learned reserve before speech without disc
   assert.equal(stats.receivedSamples, stats.playedSamples + Math.round(stats.bufferedMs * 24));
 });
 
+function learnedReserveBeforeUnderflow(quietTail: boolean) {
+  const f = fixture(); f.realtime();
+  for (let i = 0; i < 15; i++) f.push(pcm(480));
+  while (f.time < .17) f.render();
+  // A long but non-starving arrival interval teaches a substantial reserve.
+  for (let i = 0; i < 4; i++) f.push(pcm(480));
+  while (f.time < .33) f.render();
+  f.push(quietTail ? voicedThenQuietPcm(780, 960) : pcm(960));
+  while (f.stats().underruns === 0 && f.time < .6) f.render();
+  const underrunAt = f.stats().lastUnderrunAt;
+  assert(underrunAt > 0, "the prepared queue should eventually starve");
+  assert(f.stats().targetMs >= 180, "the setup must learn a substantial ordinary reserve");
+  return { f, underrunAt };
+}
+
+test("a short quiet-tail underflow uses a fast one-shot prime without losing PCM", () => {
+  const { f, underrunAt } = learnedReserveBeforeUnderflow(true);
+  let packet = 0, firstAudibleAfterRecovery = -1;
+  while (f.time < underrunAt + .2) {
+    if (packet === 0 && f.time >= underrunAt + .01) { f.push(pcm(480)); packet++; }
+    if (packet === 1 && f.time >= underrunAt + .03) { f.push(pcm(480)); packet++; }
+    const output = f.render();
+    if (packet > 0 && firstAudibleAfterRecovery < 0 && output.some(value => Math.abs(value) > .01)) {
+      firstAudibleAfterRecovery = f.time;
+    }
+  }
+  assert(firstAudibleAfterRecovery > underrunAt);
+  assert(firstAudibleAfterRecovery - underrunAt < .05,
+    "a quiet tail and arrival within 100ms should use the one-shot 40ms prime");
+  assert(f.stats().targetMs >= 180, "fast recovery must not lower the learned normal target");
+  while (f.time < 1) f.render();
+  const done = f.stats();
+  assert.equal(done.droppedSamples, 0);
+  assert.equal(done.playedSamples, done.receivedSamples, "fast recovery preserves the full PCM stream");
+});
+
+test("a voiced tail keeps the learned reserve when the next packet arrives within 100ms", () => {
+  const { f, underrunAt } = learnedReserveBeforeUnderflow(false);
+  let firstArrival = -1, firstResume = -1, nextPacketAt = underrunAt + .01;
+  while (f.time < underrunAt + .65) {
+    if (f.time >= nextPacketAt) {
+      if (firstArrival < 0) firstArrival = f.time;
+      f.push(pcm(480));
+      nextPacketAt += .02;
+    }
+    const output = f.render();
+    if (firstArrival >= 0 && firstResume < 0 && output.some(value => Math.abs(value) > .01)) firstResume = f.time;
+  }
+  assert(firstArrival - underrunAt < .1, "the voiced-tail case must be inside the fast-arrival window");
+  assert(firstResume - firstArrival > .16,
+    `voiced tails must use the full learned reserve (waited ${firstResume - firstArrival}s)`);
+  assert(f.stats().targetMs >= 180);
+  assert.equal(f.stats().droppedSamples, 0);
+});
+
+test("a quiet-tail recovery arriving after 100ms uses the learned reserve", () => {
+  const { f, underrunAt } = learnedReserveBeforeUnderflow(true);
+  let firstArrival = -1, firstResume = -1, nextPacketAt = underrunAt + .12;
+  while (f.time < underrunAt + .7) {
+    if (f.time >= nextPacketAt) {
+      if (firstArrival < 0) firstArrival = f.time;
+      f.push(pcm(480));
+      nextPacketAt += .02;
+    }
+    const output = f.render();
+    if (firstArrival >= 0 && firstResume < 0 && output.some(value => Math.abs(value) > .01)) firstResume = f.time;
+  }
+  assert(firstArrival - underrunAt > .1, "the arrival is outside the fast-recovery window");
+  assert(firstResume - firstArrival > .1, "late arrivals must retain the ordinary learned prime");
+  assert(f.stats().targetMs >= 180);
+  assert.equal(f.stats().droppedSamples, 0);
+});
+
 test("only explicitly selected real-time mode discards a stale incoming burst", () => {
   const buffered = fixture(); buffered.push(pcm(12000));
   assert.equal(buffered.stats().bufferedMs, 500); assert.equal(buffered.stats().droppedSamples, 0);
@@ -331,5 +423,76 @@ test("played PCM reports are credit-bounded and report barriers preserve audible
   assert.equal(f.played.at(-1)?.epoch, 1);
   assert(f.played[1].sourceStart > f.played[0].sourceStart + 480,
     "skipped visual reports must retain their true position in the input stream");
+  assert.equal(f.stats().droppedSamples, 0);
+});
+
+test("numeric timing trace is opt-in and preserves output when visual reports are skipped", () => {
+  const plain = fixture(), traced = fixture();
+  plain.acknowledge(false); traced.acknowledge(false); traced.trace();
+  let packet = 0;
+  while (plain.time < 2.3) {
+    while (packet < 100 && packet * .02 <= plain.time) {
+      plain.push(voicedPcm(packet * 480)); traced.push(voicedPcm(packet * 480)); packet++;
+    }
+    assert.deepEqual(traced.render(), plain.render(), "diagnostics must not change audible PCM or timing");
+  }
+  assert.equal(plain.traces.length, 0);
+  assert.equal(traced.played.length, 1, "the visual report consumer deliberately stops acknowledging");
+  const intervals = traced.traces.flatMap(batch => batch.intervals);
+  let end = 0;
+  for (const [sequence, batch] of traced.traces.entries()) {
+    assert.equal(batch.sequence, sequence); assert.equal(batch.epoch, 0);
+    assert.equal(batch.omittedIntervals, 0);
+    assert(batch.intervals.length > 0 && batch.intervals.length <= 10);
+  }
+  for (const interval of intervals) {
+    assert.equal(interval.sourceStart, end);
+    assert(interval.at >= 0 && interval.until >= interval.at);
+    assert(Math.abs(interval.until - interval.at - (interval.samples - 1) / 24000) < .0001);
+    end += interval.samples;
+  }
+  assert.equal(end, 48000, "every played source sample has timing evidence, including the final tail");
+  assert.equal(traced.stats().playedSamples, end);
+  assert.equal(traced.stats().droppedSamples, 0);
+  assert(traced.traces.length < 20, "small numeric intervals are batched rather than sent for every packet");
+});
+
+test("a stalled timing observer has one in-flight batch and bounded explicitly incomplete evidence", () => {
+  const f = fixture(); f.trace(); f.acknowledgeTrace(false);
+  let packet = 0;
+  while (f.time < 4.3) {
+    while (packet < 200 && packet * .02 <= f.time) { f.push(pcm()); packet++; }
+    f.render();
+  }
+  assert.equal(f.traces.length, 1, "a stalled diagnostic consumer cannot enqueue unbounded messages");
+  assert.equal(f.stats().playedSamples, 96000, "diagnostic backpressure never blocks audible PCM");
+  assert.equal(f.stats().droppedSamples, 0);
+  f.traceAck(99);
+  assert.equal(f.traces.length, 1, "an unrelated acknowledgement must not release the in-flight batch");
+  f.acknowledgeTrace(true); f.traceAck(0);
+  while (f.time < 4.6) f.render();
+  const intervals = f.traces.flatMap(batch => batch.intervals);
+  assert(intervals.length <= 65, "at most 64 intervals wait behind the one in-flight interval");
+  assert.equal(f.traces.at(-1)?.omittedIntervals, 200 - intervals.length,
+    "all omitted timing intervals are explicit; the recording cannot falsely claim complete coverage");
+});
+
+test("timing epochs reject stale acknowledgements without resetting playback or enabling tracing by accident", () => {
+  const f = fixture(); f.trace(true, 9); f.push(pcm(2400));
+  while (f.time < .2) f.render();
+  assert.equal(f.traces.length, 0, "a stale enable message is ignored");
+  f.trace(); f.acknowledgeTrace(false); f.push(pcm(2400));
+  while (f.time < .4) f.render();
+  assert.equal(f.traces.length, 1);
+  f.reset(); f.push(pcm(2400));
+  while (f.time < .6) f.render();
+  assert.equal(f.traces.length, 2);
+  assert.equal(f.traces[1].epoch, 1); assert.equal(f.traces[1].sequence, 0);
+  f.traceAck(0, 0);
+  while (f.time < .8) f.render();
+  assert.equal(f.traces.length, 2, "an old epoch cannot acknowledge the new epoch's batch");
+  f.traceAck(0); f.acknowledgeTrace(true);
+  while (f.time < 1.1) f.render();
+  assert(f.traces.length > 2, "the matching acknowledgement releases queued evidence");
   assert.equal(f.stats().droppedSamples, 0);
 });
