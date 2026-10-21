@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import time
 from http.cookies import SimpleCookie
 from typing import TYPE_CHECKING
 from typing import cast
@@ -25,6 +26,7 @@ from nagents.harness.config import AgentProfile
 from nagents.harness.config import HarnessConfig
 from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote_store import RemoteAgentMetadata
 from nagents.web import remote_agents
 from nagents.web.security import LocalOnly
 from tests.support.providers import FakeProvider
@@ -606,18 +608,18 @@ def test_probe_uses_sdk_card_discovery_only_and_returns_safe_errors(
         pytest.importorskip("a2a")
         card = card_for(AGENT_URL, tmp_path / "peer-state")
         requests: list[tuple[str, str]] = []
-        statuses = [200, 502]
+        fail_remote_reads = False
 
         def handle(request: httpx.Request) -> httpx.Response:
             requests.append((request.method, request.url.path))
-            status = statuses.pop(0)
+            status = 502 if fail_remote_reads else 200
             if status == 200:
                 return httpx.Response(status, json=card, request=request)
             return httpx.Response(status, text="UPSTREAM_PRIVATE_ERROR_BODY", request=request)
 
         install_sdk_transport(monkeypatch, handle)
 
-        async with client_app(tmp_path, config=config(tmp_path)) as (_, client, headers, _):
+        async with client_app(tmp_path, config=config(tmp_path)) as (_, client, headers, harnesses):
             initial = (await client.get("/api/remote-agents", headers=headers)).json()
             body = input_body(initial["revision"])
             body["connection"] = {"url": AGENT_URL, "timeout": 45}
@@ -629,7 +631,14 @@ def test_probe_uses_sdk_card_discovery_only_and_returns_safe_errors(
             assert connected.json()["connected"] is True
             assert connected.json()["name"] == "Remote fixture"
             assert "No task was sent" in connected.json()["message"]
+            assert harnesses[0]._agent_catalog.remote_store.load().advertised["peer-review"].name == "Remote fixture"
+            refreshed = (await client.get("/api/remote-agents", headers=headers)).json()["agents"][0]
+            assert refreshed["name"] == "peer-review"
+            assert refreshed["description"] == "Remote review agent"
+            assert refreshed["remote_name"] == "Remote fixture"
+            assert refreshed["remote_description"] == "A deterministic card used by the web probe test."
 
+            fail_remote_reads = True
             failed = await client.post("/api/remote-agents/peer-review/probe", headers=headers, json={})
             assert failed.status_code == 502
             assert failed.json()["detail"] == (
@@ -637,10 +646,67 @@ def test_probe_uses_sdk_card_discovery_only_and_returns_safe_errors(
             )
             assert "UPSTREAM_PRIVATE_ERROR_BODY" not in failed.text
             assert "UPSTREAM_PRIVATE_ERROR_BODY" not in caplog.text
-            assert requests == [
-                ("GET", "/.well-known/agent-card.json"),
-                ("GET", "/.well-known/agent-card.json"),
-            ]
+            assert len(requests) >= 2
+            assert all(request == ("GET", "/.well-known/agent-card.json") for request in requests)
+
+    asyncio.run(scenario())
+
+
+def test_task_catalog_poll_refreshes_stale_agent_card_metadata_without_touching_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        pytest.importorskip("a2a")
+        card = card_for(AGENT_URL, tmp_path / "peer-state")
+        card["name"] = "Updated remote display name"
+        card["description"] = "Updated remote card purpose"
+        requests: list[str] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            requests.append(request.url.path)
+            return httpx.Response(200, json=card, request=request)
+
+        install_sdk_transport(monkeypatch, handle)
+
+        async with client_app(tmp_path, config=config(tmp_path)) as (_, client, headers, harnesses):
+            harness = harnesses[0]
+            store = harness._agent_catalog.remote_store
+            profile = AgentProfile(description="Local editorial description", a2a=RemoteProfile(url=AGENT_URL))
+            initial = store.save(
+                {"peer-alias": profile},
+                expected=store.load().revision,
+                trust_updates=(("peer-alias", True),),
+            )
+            metadata = store.metadata_store.load()
+            store.metadata_store.save(
+                {"peer-alias": RemoteAgentMetadata(profile.a2a.fingerprint, "Old card name", "Old card text", 0)},
+                expected=metadata.revision,
+            )
+
+            first = (await client.get("/api/sessions/" + harness.session_id + "/tasks", headers=headers)).json()
+            first_profile = next(item for item in first["profiles"] if item["id"] == "peer-alias")
+            assert first_profile["remote_name"] == "Old card name"
+            assert first_profile["description"] == "Local editorial description"
+
+            deadline = time.monotonic() + 3
+            refreshed = store.load()
+            while refreshed.advertised.get("peer-alias", RemoteAgentMetadata("0" * 64, "", "", 0)).name != (
+                "Updated remote display name"
+            ):
+                if time.monotonic() >= deadline:
+                    raise AssertionError("stale AgentCard metadata did not refresh from the task-index poll")
+                await asyncio.sleep(0.01)
+                refreshed = store.load()
+
+            second = (await client.get("/api/sessions/" + harness.session_id + "/tasks", headers=headers)).json()
+            second_profile = next(item for item in second["profiles"] if item["id"] == "peer-alias")
+            assert second_profile["remote_name"] == "Updated remote display name"
+            assert second_profile["remote_description"] == "Updated remote card purpose"
+            assert second_profile["description"] == "Local editorial description"
+            assert refreshed.revision == initial.revision
+            assert refreshed.trusted_connections == initial.trusted_connections
+            assert refreshed.agents["peer-alias"].a2a.fingerprint == profile.a2a.fingerprint
+            assert requests == ["/.well-known/agent-card.json"]
 
     asyncio.run(scenario())
 

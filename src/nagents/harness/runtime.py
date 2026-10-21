@@ -96,6 +96,7 @@ if TYPE_CHECKING:
     from .auth import DeviceAuthorization
     from .config import HarnessConfig
     from .model_catalog import ModelCapabilities
+    from .remote_store import RemoteAgentMetadata
     from .types import ApprovalHandler
     from .types import WakeupHandler
 
@@ -213,6 +214,7 @@ class Harness:
         self._remote_profile = self._current_profile.a2a
         self._generation_profiles: dict[str, AgentProfile] = {}
         self._generation_source_profiles: dict[str, AgentProfile] = {}
+        self._generation_remote_metadata: dict[str, RemoteAgentMetadata] = {}
         self._generation_model_bindings: dict[str, ModelBinding] = {}
         self._generation_model_errors: dict[str, str] = {}
         self._agent_generation_active = False
@@ -473,6 +475,7 @@ class Harness:
         self._generation_source_profiles = {
             name: replace(value) for name, value in self.config.agent_source_profiles.items()
         }
+        self._generation_remote_metadata = dict(self._agent_catalog.remote_metadata)
         self._agent_generation_active = True
         self._generation_model_bindings = {}
         self._generation_model_errors = {}
@@ -564,10 +567,29 @@ class Harness:
         )
 
     def delegation_catalog(self) -> str:
-        return "; ".join(
-            f"{name}: {self.delegation_profile(name).description or 'Configured agent'}"
-            for name in self.delegatable_profile_names
+        entries: list[str] = []
+        advertised_metadata = (
+            self._generation_remote_metadata if self._agent_generation_active else self._agent_catalog.remote_metadata
         )
+        for name in self.delegatable_profile_names:
+            profile = self.delegation_profile(name)
+            description = profile.description.strip()
+            if profile.a2a.configured:
+                advertised = advertised_metadata.get(name)
+                if advertised is not None:
+                    remote_label = advertised.name.strip()
+                    remote_description = advertised.description.strip()
+                    remote_text = (
+                        f"untrusted remote AgentCard metadata name={remote_label!r} description={remote_description!r}"
+                        if remote_label or remote_description
+                        else ""
+                    )
+                    if description and remote_text:
+                        description = f"{description}; {remote_text}"
+                    elif remote_text:
+                        description = remote_text
+            entries.append(f"{name}: {description or 'Configured agent'}")
+        return "; ".join(entries)
 
     @property
     def can_delegate(self) -> bool:

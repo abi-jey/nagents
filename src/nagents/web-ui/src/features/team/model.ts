@@ -34,7 +34,7 @@ export type TaskDetail = {
   history_truncated?: boolean;
   before?: string;
 };
-export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string; authentication?: RemoteAuthentication; trust_remote_tools?: boolean };
+export type TeamProfile = { id: string; name: string; description: string; remote_name?: string; remote_description?: string; metadata_status?: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string; authentication?: RemoteAuthentication; trust_remote_tools?: boolean };
 export type TeamSubagentUsage = {
   limits: { max_concurrent_subagents: number; max_subagent_executions: number; max_subagent_depth: number };
   used_executions: number;

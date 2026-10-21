@@ -48,6 +48,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from a2a.types import SendMessageRequest
+    from a2a.types import StreamResponse
+
     from nagents.a2a.agent import AgentContext
     from nagents.a2a.client import RemoteAgent
     from nagents.types import GenerationConfig
@@ -368,6 +371,80 @@ async def test_set_agent_runs_remote_without_local_provider_and_records_matching
             assert metadata[0].history_id
             assert metadata[0].response_id == completed[0].extra["response_id"]
             assert observed == ["Run as the peer."]
+            assert sum(len(provider.requests) for provider in providers) == 0
+        finally:
+            await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_remote_requests_in_one_local_session_reuse_context_with_new_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with peer_application(tmp_path) as (peer_app, token, observed):
+        monkeypatch.setenv("NGN_TEST_REMOTE_TOKEN", token)
+        actual_remote_agent = a2a_client.RemoteAgent
+        sent_messages: list[SendMessageRequest] = []
+        response_tasks: set[tuple[str, str]] = set()
+
+        class RecordingRemote:
+            def __init__(self, url: str, tokens: object = None, **kwargs: object) -> None:
+                kwargs["transport"] = httpx.ASGITransport(app=peer_app)  # type: ignore[arg-type]
+                self.remote = actual_remote_agent(url, tokens, **kwargs)  # type: ignore[arg-type]
+                self.card: object = None
+
+            async def __aenter__(self) -> RecordingRemote:
+                await self.remote.__aenter__()
+                self.card = self.remote.card
+                return self
+
+            async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+                await self.remote.__aexit__(exc_type, exc, traceback)  # type: ignore[arg-type]
+
+            async def send(self, request: SendMessageRequest) -> AsyncGenerator[StreamResponse, None]:
+                sent_messages.append(request)
+                async for event in self.remote.send(request):
+                    kind = event.WhichOneof("payload")
+                    if kind == "task":
+                        response_tasks.add((event.task.id, event.task.context_id))
+                    elif kind == "status_update":
+                        response_tasks.add((event.status_update.task_id, event.status_update.context_id))
+                    elif kind == "artifact_update":
+                        response_tasks.add((event.artifact_update.task_id, event.artifact_update.context_id))
+                    yield event
+
+        monkeypatch.setattr(a2a_client, "RemoteAgent", RecordingRemote)
+
+        async def unused_local_provider(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            del provider, messages
+            yield TextDoneEvent(text="Local provider must not run")
+
+        harness, providers = setup_harness(tmp_path, monkeypatch, unused_local_provider)
+        store = harness._agent_catalog.remote_store
+        profile = AgentProfile(
+            description="Configured peer",
+            a2a=RemoteProfile(url="https://peer.example", token_env="NGN_TEST_REMOTE_TOKEN"),
+        )
+        store.save({"peer": profile}, expected=store.load().revision)
+        assert harness.refresh_agent_definitions()
+        try:
+            await harness.set_agent("peer")
+            first = await collect(harness, "First request in this local session.")
+            second = await collect(harness, "Second request in this local session.")
+
+            assert len([event for event in first if isinstance(event, TextDoneEvent)]) == 1
+            assert len([event for event in second if isinstance(event, TextDoneEvent)]) == 1
+            assert observed == ["First request in this local session.", "Second request in this local session."]
+            assert len(sent_messages) == 2
+            first_message, second_message = (request.message for request in sent_messages)
+            assert not first_message.context_id and not first_message.task_id
+            assert second_message.context_id
+            assert second_message.context_id in {context for _, context in response_tasks}
+            assert not second_message.task_id
+            assert len(response_tasks) == 2
+            task_ids = {task for task, _ in response_tasks}
+            context_ids = {context for _, context in response_tasks}
+            assert len(task_ids) == 2
+            assert len(context_ids) == 1
             assert sum(len(provider.requests) for provider in providers) == 0
         finally:
             await harness.close()

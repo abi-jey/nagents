@@ -82,6 +82,64 @@ def test_remote_store_round_trips_json_and_rejects_stale_revision(tmp_path: Path
     assert store.load() == saved
 
 
+def test_agent_card_metadata_is_separate_from_local_alias_description_and_trust(tmp_path: Path) -> None:
+    store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
+    profile = remote_profile(description="Local editorial description")
+    saved = store.save(
+        {"stable-alias": profile}, expected=store.load().revision, trust_updates=(("stable-alias", True),)
+    )
+
+    assert store.update_metadata("stable-alias", profile.a2a.fingerprint, "Advertised display name", "Card description")
+    observed = store.load()
+
+    assert observed.revision == saved.revision
+    assert tuple(observed.agents) == ("stable-alias",)
+    assert observed.agents["stable-alias"].description == "Local editorial description"
+    assert observed.agents["stable-alias"].a2a.fingerprint == profile.a2a.fingerprint
+    assert observed.trusted_connections == saved.trusted_connections
+    assert observed.advertised["stable-alias"].name == "Advertised display name"
+    assert observed.advertised["stable-alias"].description == "Card description"
+
+    changed = AgentProfile(description="Local editorial description", a2a=RemoteProfile(url="https://other.example"))
+    store.save({"stable-alias": changed}, expected=observed.revision)
+    after_binding_change = store.load()
+    assert tuple(after_binding_change.agents) == ("stable-alias",)
+    assert not after_binding_change.advertised
+    assert not after_binding_change.trusted_connections
+
+
+@pytest.mark.asyncio
+async def test_delegate_catalog_uses_card_labels_without_replacing_local_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        del provider, messages
+        yield TextDoneEvent(text="ready")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    store = harness._agent_catalog.remote_store
+    profile = remote_profile(description="Local team note")
+    store.save({"peer-alias": profile}, expected=store.load().revision)
+    store.update_metadata("peer-alias", profile.a2a.fingerprint, "Published Agent Card", "Card purpose")
+    assert harness.refresh_agent_definitions()
+    try:
+        catalog = harness.delegation_catalog()
+        assert (
+            "peer-alias: Local team note; untrusted remote AgentCard metadata "
+            "name='Published Agent Card' description='Card purpose'"
+        ) in catalog
+        assert "peer-alias" in harness.config.profile_names
+        assert harness.config.profile("peer-alias").description == "Local team note"
+        current = store.load()
+        store.save({"peer-alias": remote_profile(description="")}, expected=current.revision)
+        assert harness.refresh_agent_definitions()
+        assert (
+            "peer-alias: untrusted remote AgentCard metadata name='Published Agent Card' description='Card purpose'"
+        ) in harness.delegation_catalog()
+    finally:
+        await harness.close()
+
+
 def test_remote_tool_trust_is_connection_bound_and_preserved_only_for_same_binding(tmp_path: Path) -> None:
     store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
     profile = remote_profile()

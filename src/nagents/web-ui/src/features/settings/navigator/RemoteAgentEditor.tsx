@@ -9,7 +9,7 @@ interface Connection {
   url: string; rpc_url: string; issuer: string; client_id: string; scopes: string[];
   resource: string; token_env: string; ca_file: string; loopback_http: boolean; timeout: number; metadata_url: string;
 }
-interface Remote { name: string; description: string; connection: Connection; signed_in: boolean; authentication: RemoteAuthentication; trust_remote_tools: boolean; login_error?: string; user_invocable: boolean; subagent_available: boolean; }
+interface Remote { name: string; description: string; remote_name?: string; remote_description?: string; metadata_observed_at?: number; metadata_status?: string; connection: Connection; signed_in: boolean; authentication: RemoteAuthentication; trust_remote_tools: boolean; login_error?: string; user_invocable: boolean; subagent_available: boolean; }
 interface Catalog { revision: string; agents: Remote[]; source_path: string; }
 interface Discovery { connection: Connection; name: string; description: string; authentication: string; }
 const initial: Connection = { url: "", rpc_url: "", issuer: "", client_id: "", scopes: ["openid"], resource: "", token_env: "", ca_file: "", loopback_http: false, timeout: 120, metadata_url: "" };
@@ -25,6 +25,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
   const [signedIn, setSignedIn] = useState(false);
   const [authentication, setAuthentication] = useState<RemoteAuthentication>();
   const [trusted, setTrusted] = useState(false);
+  const [discoveredCard, setDiscoveredCard] = useState<Discovery>();
   const [signInPending, setSignInPending] = useState("");
   const statusEpoch = useRef(0);
   const current = catalog?.agents.find(item => item.name === agent);
@@ -53,6 +54,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
         const reply = await (await request("remote-agents", token, undefined, abort.signal)).json() as Catalog;
         if (abort.signal.aborted || epoch !== statusEpoch.current) return;
         const remote = reply.agents.find(item => item.name === agent);
+        setCatalog(reply);
         setSignedIn(remote?.signed_in || false);
         setAuthentication(remote?.authentication); setTrusted(remote?.trust_remote_tools || false);
         if (remote?.login_error) setError(remote.login_error);
@@ -95,10 +97,11 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
     setBusy(true); setError(""); setMessage("");
     try {
       const discovered = await (await request("remote-agents/discover", token, { ...initial, url: connection.url, ca_file: connection.ca_file, timeout: connection.timeout })).json() as Discovery;
+      setDiscoveredCard(discovered);
       if (discovered.authentication === "manual") throw new Error("This host does not advertise browser sign-in. Its administrator needs to publish OAuth/OpenID Connect metadata.");
       const identifier = agent || name || discovered.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
       if (!identifier) throw new Error("Enter a name for this remote agent.");
-      const reply = await request(`remote-agents/${encodeURIComponent(identifier)}`, token, { revision: catalog.revision, description: description || discovered.description, connection: discovered.connection, user_invocable: current?.user_invocable ?? true, subagent_available: current?.subagent_available ?? true }, undefined, "PUT");
+      const reply = await request(`remote-agents/${encodeURIComponent(identifier)}`, token, { revision: catalog.revision, description, connection: discovered.connection, user_invocable: current?.user_invocable ?? true, subagent_available: current?.subagent_available ?? true }, undefined, "PUT");
       const stored = await reply.json() as Catalog;
       setCatalog(stored); setConnection(discovered.connection); setName(identifier);
       const remote = stored.agents.find(item => item.name === identifier);
@@ -134,6 +137,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
     try {
       const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/probe`, token, {})).json() as { message: string; name: string };
       const status = await (await request("remote-agents", token)).json() as Catalog;
+      setCatalog(status);
       const remote = status.agents.find(item => item.name === agent);
       setMessage(`${reply.message} ${reply.name}`); setSignedIn(remote?.signed_in || false); setAuthentication(remote?.authentication);
     }
@@ -168,8 +172,9 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
       <small>Saved across restarts. Changing the connection resets trust. Local tool permissions are separate.</small>
     </section>}
     {hostSetupMissing && <p role="alert">The remote host has not advertised a public sign-in client. Its administrator must configure the client and register this callback URL in the identity provider. You do not need to enter issuer, client ID or scopes here.</p>}
+    {(current?.remote_name || current?.remote_description || discoveredCard?.name || discoveredCard?.description) && <section className="an-remote-card" aria-label="Remote advertised metadata"><strong>Remote advertised metadata</strong>{(current?.remote_name || discoveredCard?.name) && <p>Remote name: {current?.remote_name || discoveredCard?.name}</p>}{(current?.remote_description || discoveredCard?.description) && <p>Remote description: {current?.remote_description || discoveredCard?.description}</p>}{current?.metadata_status === "refresh_failed" ? <small>Refresh failed; showing last known metadata. It retries on a later Team or connection refresh.</small> : current?.metadata_status === "checking" ? <small>Checking the latest remote card metadata…</small> : current?.metadata_observed_at ? <small>Last checked {new Date(current.metadata_observed_at * 1000).toLocaleString()}.</small> : <small>Discovered from the server; the saved local name remains {agent || name || discoveredCard?.name}.</small>}</section>}
     {(connection.issuer || hostSetupMissing) && <div className="an-remote-authorization"><p>Provider callback URL</p><code>{callback}</code><p>If the provider refuses sign-in or reports an invalid redirect, this exact URL must be registered for the host’s public client in the provider.</p></div>}
-    <details><summary>Connection details</summary>{!agent && <label>Agent name · optional<input pattern={"[A-Za-z0-9_\\-]{1,128}"} value={name} onChange={event => setName(event.target.value)} placeholder="Use the remote agent’s name" autoComplete="off" /></label>}<label>Description · optional<input value={description} onChange={event => setDescription(event.target.value)} placeholder="Use the remote agent’s description" /></label><label>Additional CA bundle on ngn server<input value={connection.ca_file} onChange={event => update("ca_file", event.target.value)} placeholder="Optional path to a trusted CA file" /></label><label>Request timeout · seconds<input type="number" min="1" max="3600" value={connection.timeout} onChange={event => update("timeout", Number(event.target.value))} /></label>{connection.issuer && <dl><dt>Sign-in service · advertised by host</dt><dd>{connection.issuer}</dd><dt>Public client</dt><dd>{connection.client_id || "Not advertised"}</dd><dt>Requested scopes</dt><dd>{connection.scopes.join(" ")}</dd></dl>}</details>
+    <details><summary>Connection details</summary>{!agent && <label>Agent name · optional<input pattern={"[A-Za-z0-9_\\-]{1,128}"} value={name} onChange={event => setName(event.target.value)} placeholder="Use the remote agent’s name" autoComplete="off" /></label>}<label>Local description · optional<input value={description} onChange={event => setDescription(event.target.value)} placeholder="Override the remote description" /></label><label>Additional CA bundle on ngn server<input value={connection.ca_file} onChange={event => update("ca_file", event.target.value)} placeholder="Optional path to a trusted CA file" /></label><label>Request timeout · seconds<input type="number" min="1" max="3600" value={connection.timeout} onChange={event => update("timeout", Number(event.target.value))} /></label>{connection.issuer && <dl><dt>Sign-in service · advertised by host</dt><dd>{connection.issuer}</dd><dt>Public client</dt><dd>{connection.client_id || "Not advertised"}</dd><dt>Requested scopes</dt><dd>{connection.scopes.join(" ")}</dd></dl>}</details>
     {error && <p role="alert" className="settings-error">{error}</p>}{message && <p role="status">{message}</p>}
     <footer><button type="submit" disabled={busy || !catalog}>{busy ? "Working…" : agent ? "Refresh connection" : "Connect"}</button>{agent && <button type="button" disabled={busy || dirty} onClick={() => void probe()}>Check connection</button>}<span>JSON · reloads each round</span></footer>
     {catalog && <p className="an-source-path">{catalog.source_path}</p>}

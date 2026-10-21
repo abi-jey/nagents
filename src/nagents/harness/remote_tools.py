@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from typing import TYPE_CHECKING
 
@@ -67,12 +68,13 @@ class RemoteAgentTools:
             f"Save workspace remote agent {name} connected to {url}",
             call_id=self.harness.tools.call_id.get(),
         )
+        discovered_name = discovered_description = ""
         if not issuer and not token_env:
             from nagents.a2a.discovery import discover_remote
 
             discovery = await discover_remote(profile)
             profile = discovery.connection
-            description = description or discovery.description
+            discovered_name, discovered_description = discovery.name, discovery.description
             if discovery.authentication == "manual":
                 raise ValueError(
                     "The remote host requires authentication that is not advertised as browser sign-in. Ask its administrator to publish its OAuth/OpenID Connect metadata."
@@ -80,6 +82,10 @@ class RemoteAgentTools:
         store.save(
             {**current.agents, name: AgentProfile(description=description, a2a=profile)}, expected=current.revision
         )
+        if not issuer and not token_env:
+            await asyncio.to_thread(
+                store.update_metadata, name, profile.fingerprint, discovered_name, discovered_description
+            )
         self.harness.refresh_agent_definitions()
         return {
             "agent": name,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -118,15 +119,24 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
 
     async def snapshot() -> dict[str, object]:
         harness = get().harness
+        harness.refresh_agent_definitions()
         catalog = harness._agent_catalog.remote_store.load()
+        get().remote_metadata_refresh.schedule(harness)
         agents = []
         for name, profile in catalog.agents.items():
+            advertised = catalog.advertised.get(name)
             authentication = await RemoteCredentials(profile.a2a).status()
             signed_in = authentication["state"] in {"signed_in", "token_ready", "not_required"}
             agents.append(
                 {
                     "name": name,
                     "description": profile.description,
+                    "remote_name": advertised.name if advertised is not None else "",
+                    "remote_description": advertised.description if advertised is not None else "",
+                    "metadata_observed_at": advertised.observed_at if advertised is not None else 0.0,
+                    "metadata_status": get().remote_metadata_refresh.status(
+                        profile.a2a.fingerprint, advertised.observed_at if advertised is not None else 0.0
+                    ),
                     "connection": profile.a2a.as_dict(),
                     "signed_in": signed_in,
                     "authentication": authentication,
@@ -305,6 +315,13 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
             async with RemoteAgent.from_config(
                 profile, credentials.token if profile.issuer or profile.token_env else None
             ) as remote:
+                await asyncio.to_thread(
+                    get().harness._agent_catalog.remote_store.update_metadata,
+                    name,
+                    profile.fingerprint,
+                    remote.card.name[:200],
+                    remote.card.description[:2000],
+                )
                 return {
                     "connected": True,
                     "name": remote.card.name[:200],

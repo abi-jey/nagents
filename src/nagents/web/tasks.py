@@ -147,6 +147,7 @@ class Tasks:
             # a profile; the main picker can select a replacement before work.
             return {"tasks": list(saved.values()), "profiles": []}
         async with self.state.session_agents.view(root) as profile_owner:
+            self.state.remote_metadata_refresh.schedule(profile_owner)
             used = {task.get("profile") for task in saved.values()} | {profile_owner.config.agent}
             profiles: list[dict[str, object]] = []
             try:
@@ -156,6 +157,14 @@ class Tasks:
             for name in profile_owner.config.profile_names:
                 profile = profile_owner.config.profile(name)
                 remote = profile.a2a.configured
+                advertised = remote_catalog.advertised.get(name) if remote_catalog is not None else None
+                metadata_status = (
+                    self.state.remote_metadata_refresh.status(
+                        profile.a2a.fingerprint, advertised.observed_at if advertised is not None else 0.0
+                    )
+                    if remote
+                    else ""
+                )
                 authentication = (
                     await RemoteCredentials(profile.a2a).status()
                     if remote
@@ -189,6 +198,9 @@ class Tasks:
                         "id": name,
                         "name": name,
                         "description": profile.description[:2000],
+                        "remote_name": advertised.name if advertised is not None else "",
+                        "remote_description": advertised.description[:2000] if advertised is not None else "",
+                        "metadata_status": metadata_status,
                         "provider": "a2a"
                         if profile.a2a.configured
                         else provider_id
