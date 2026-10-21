@@ -112,15 +112,24 @@ class LocalOnly:
             except (ValueError, UnicodeError):
                 await reject(400, "Invalid remote sign-in callback")
                 return
+        # External links and OAuth redirect chains enter from another site.
+        # Only the static top-level document is safe to navigate into; APIs,
+        # bootstrap, embedded documents and WebSockets keep their boundary.
+        browser_navigation = remote_callback or (
+            scope["method"] == "GET"
+            and scope["path"] == "/"
+            and headers.getlist("sec-fetch-mode") == ["navigate"]
+            and headers.getlist("sec-fetch-dest") == ["document"]
+        )
         origin = f"http://{self.authority}"
         if self.enforce_authority and headers.getlist("host") != [self.authority]:
             await reject(403, "Untrusted Host. Open the exact loopback URL printed by ngn serve.")
             return
-        if not remote_callback and headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}:
+        if not browser_navigation and headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}:
             await reject(403, "Same-origin requests only.")
             return
         if (
-            not remote_callback
+            not browser_navigation
             and self.enforce_authority
             and headers.getlist("origin")
             and headers.getlist("origin") != [origin]

@@ -130,6 +130,12 @@ Tailnet browser, HTTPS, access governed by Tailscale ACLs/grants
   `Sec-Fetch-Site` same-origin checks, query-parameter rejection, path-traversal
   rejection, security headers, and a 64 KiB request-body cap. Access logging stays off because
   URLs may contain accidental secrets.
+  A top-level browser navigation to `GET /` may arrive from another site, such
+  as an external link or the end of an OAuth redirect. That static page is
+  allowed only with `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`;
+  cross-site bootstrap/API requests, embedded pages, and WebSockets remain
+  rejected. No CORS allowlist or ingress header rewriting is needed to open
+  the UI through a link.
 - `/api/events` and `/api/live/sessions/{session_id}/audio` accept WebSocket
   upgrades. `Sec-WebSocket-Protocol` passes through unchanged; ngn validates the
   process token before accepting an event subscription or audio relay. Browser
