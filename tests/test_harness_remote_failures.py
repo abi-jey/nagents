@@ -191,10 +191,14 @@ async def _delegated_failure(
     try:
         if oauth:
             await harness.initialize()
-            credentials = RemoteCredentials(harness.agent.session.db_path.parent, remote)
+            credentials = RemoteCredentials(remote)
             if scenario != "missing-oauth":
-                credentials.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                credentials.path.parent.chmod(0o700)
+                data_home = tmp_path / "data"
+                for directory in credentials.path.parents:
+                    if directory == data_home:
+                        break
+                    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    directory.chmod(0o700)
                 credentials.path.write_text(
                     json.dumps({"access_token": "PRIVATE_EXPIRED_OAUTH_TOKEN", "expires_at": time.time() - 1}),
                     encoding="utf-8",

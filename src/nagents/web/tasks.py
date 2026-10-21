@@ -157,7 +157,7 @@ class Tasks:
                 profile = profile_owner.config.profile(name)
                 remote = profile.a2a.configured
                 authentication = (
-                    await RemoteCredentials(profile_owner.agent.session.db_path.parent, profile.a2a).status()
+                    await RemoteCredentials(profile.a2a).status()
                     if remote
                     else {"state": "not_required", "expires_at": 0.0, "error_code": "", "refreshable": False}
                 )
