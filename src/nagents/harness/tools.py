@@ -64,7 +64,7 @@ READ_ONLY_TOOLS = frozenset(
         "subagent_configuration",
     }
 )
-MODIFYING_TOOLS = frozenset({"edit", "write", "shell"})
+MODIFYING_TOOLS = frozenset({"edit", "write", "shell", "remote_agent_configure"})
 
 if TYPE_CHECKING:
     from .execution import ExecutionBridge

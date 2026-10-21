@@ -29,7 +29,7 @@ class ProviderSetup(TypedDict):
 def provider_setup(harness: Harness) -> ProviderSetup:
     """Never contact a provider or return credential values to the browser."""
     config = harness.config
-    if config.demo:
+    if config.demo or harness._remote_profile.configured:
         return {"configured": True, "message": ""}
     if not config.provider:
         return {"configured": False, "message": "Select or add a named provider connection in Provider connections."}
@@ -76,6 +76,17 @@ def provider_error_diagnostic(event: ErrorEvent) -> str:
 def provider_error(event: ErrorEvent) -> tuple[str, str]:
     """Classify known run codes; upstream messages and metadata may contain secrets."""
     code = event.code
+    remote_errors = {
+        "A2A_CONNECTION": "The remote agent could not be reached or needs sign-in. Open its Remote connection settings. This request was not automatically retried.",
+        "A2A_UNAVAILABLE": "Remote agents require nagents[a2a] on the ngn server. Ask the server administrator to install it.",
+        "A2A_HOST_SETUP": "The remote host has not advertised a public sign-in client. Its administrator must configure that client and register ngn's callback URL in the identity provider. Open Remote connection settings for the exact URL.",
+        "A2A_PERMISSION": "Remote execution is unavailable in read-only or offline demo mode.",
+        "A2A_BINDING_CHANGED": "This conversation belongs to a different remote connection. Start a new chat to use the changed connection.",
+        "A2A_OUTCOME_UNKNOWN": "The previous remote request has an uncertain outcome. It was not sent again. Inspect its remote task before starting another request.",
+        "A2A_TASK_FAILED": "The remote agent did not complete this request. Check its task status before trying again.",
+    }
+    if code in remote_errors:
+        return code.lower(), remote_errors[code]
     if code == "MAX_TOOL_ROUNDS":
         return (
             "tool_round_limit",

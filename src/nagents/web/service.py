@@ -472,10 +472,10 @@ class WebState:
             raise HTTPException(404, "Session not found in this workspace.")
         active = self.run_for(session_id)
         if active is not None and self.harness_for(session_id).session_id == session_id:
-            stats = await self.harness_for(session_id).agent.context_stats(session_id)
+            stats = await self.harness_for(session_id).context_stats(session_id)
         else:
             async with self.session_agents.view(session_id) as harness:
-                stats = await harness.agent.context_stats(session_id)
+                stats = await harness.context_stats(session_id)
         return stats.as_dict()
 
     def user_message(self, run_id: str, record: dict[str, object]) -> None:

@@ -19,6 +19,7 @@ export function ContextIndicator({
   refresh?: () => void;
 }) {
   if (!stats && !error && !loading) return null;
+  if (stats?.provider === "a2a") return <div className="context-indicator"><span className="context-toggle" title="The remote agent manages its context. This server does not receive its model window or token usage.">Remote context</span></div>;
   const rows = stats ? contextRows(stats) : [];
   return (
     <div className="context-indicator">

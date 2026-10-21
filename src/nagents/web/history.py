@@ -73,25 +73,28 @@ class _InputIdentity(AgentPlugin):
         self.session = session
 
     async def before_run(self, context: RunContext, message: Message) -> Message:
-        ingress = self.session.ingress.get()
-        if (
-            ingress is not None
-            and not ingress.consumed
-            and not ingress.expected
-            and context.session_id == ingress.work.session_id
-        ):
-            # Install after configured hooks. Writes made by those hooks before
-            # this point, or by other tasks, cannot steal the ingress identity.
-            ingress.owner = asyncio.current_task()
-            ingress.expected = self.session._message_values(context.session_id, message)
-        voice = self.session.voice.get()
-        if voice is not None and not voice.consumed and not voice.expected and context.session_id == voice.session_id:
-            voice.owner = asyncio.current_task()
-            voice.expected = self.session._message_values(context.session_id, message)
+        self.session.prepare_input(context.session_id, message)
         return message
 
 
 class WebHistory(_HarnessSession):
+    def prepare_input(self, session_id: str, message: Message) -> None:
+        ingress = self.ingress.get()
+        if (
+            ingress is not None
+            and not ingress.consumed
+            and not ingress.expected
+            and session_id == ingress.work.session_id
+        ):
+            # Install after configured hooks. Writes made by those hooks before
+            # this point, or by other tasks, cannot steal the ingress identity.
+            ingress.owner = asyncio.current_task()
+            ingress.expected = self._message_values(session_id, message)
+        voice = self.voice.get()
+        if voice is not None and not voice.consumed and not voice.expected and session_id == voice.session_id:
+            voice.owner = asyncio.current_task()
+            voice.expected = self._message_values(session_id, message)
+
     def __init__(self, path: Path, received: Callable[[str, dict[str, object]], None]) -> None:
         super().__init__(path)
         self.store = InboxStore(path, "web-history", 1000)

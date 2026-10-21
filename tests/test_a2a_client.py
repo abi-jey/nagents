@@ -7,9 +7,12 @@ import hmac
 import logging
 import os
 import socket
+import ssl
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from typing import cast
 
+import httpx
 import pytest
 import uvicorn
 from a2a.helpers import new_text_message
@@ -306,3 +309,97 @@ async def test_remote_agent_never_follows_redirect_or_contacts_card_advertised_o
             assert len(origin_authorizations) == 1
             assert hmac.compare_digest(origin_authorizations[0], f"Bearer {token_value}")
             assert attacker_authorizations == []
+
+
+def mock_card(origin: str, tmp_path: Path) -> dict[str, object]:
+    config = A2AConfig(
+        public_url=origin,
+        agent="assistant",
+        issuer=IssuerConfig(issuer="https://issuer.example", audience="remote-a2a"),
+        data_dir=tmp_path / "unused-remote-state",
+    )
+    return cast("dict[str, object]", MessageToDict(agent_card(config)))
+
+
+@pytest.mark.asyncio
+async def test_remote_agent_accepts_explicit_tls_context_and_mock_transport(tmp_path: Path) -> None:
+    origin = "https://remote.example"
+    card = mock_card(origin, tmp_path)
+    requests: list[tuple[str, str, str]] = []
+    issued: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        authorization = request.headers.get("authorization", "")
+        requests.append((request.method, request.url.path, authorization))
+        if request.method == "GET" and request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=card, request=request)
+        raise AssertionError("opening the remote client must only resolve the card")
+
+    async def tokens() -> str:
+        token = f"remote-token-{len(issued)}"
+        issued.append(token)
+        return token
+
+    transport = httpx.MockTransport(handle)
+    async with RemoteAgent(
+        origin,
+        tokens,
+        verify=ssl.create_default_context(),
+        transport=transport,
+    ) as remote:
+        assert remote.card.name == "ngn"
+
+    assert len(requests) == 1
+    assert requests[0][:2] == ("GET", "/.well-known/agent-card.json")
+    assert requests[0][2] == "Bearer remote-token-0"
+    assert issued == ["remote-token-0"]
+
+
+def test_remote_agent_rejects_disabled_tls_verification() -> None:
+    async def tokens() -> str:
+        return "unused-token"
+
+    with pytest.raises(ValueError, match="verification"):
+        RemoteAgent("https://remote.example", tokens, verify=False)
+
+
+@pytest.mark.asyncio
+async def test_mock_transport_send_failure_is_not_replayed_and_refreshes_bearer(tmp_path: Path) -> None:
+    origin = "https://remote.example"
+    card = mock_card(origin, tmp_path)
+    requests: list[tuple[str, str, str]] = []
+    issued: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        authorization = request.headers.get("authorization", "")
+        requests.append((request.method, request.url.path, authorization))
+        if request.method == "GET" and request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json=card, request=request)
+        if request.method == "POST" and request.url.path == "/rpc":
+            return httpx.Response(503, json={"error": "fixture unavailable"}, request=request)
+        return httpx.Response(404, request=request)
+
+    async def tokens() -> str:
+        token = f"remote-token-{len(issued)}"
+        issued.append(token)
+        return token
+
+    async with RemoteAgent(
+        origin,
+        tokens,
+        verify=True,
+        transport=httpx.MockTransport(handle),
+    ) as remote:
+        message = new_text_message("one stable request")
+        message.role = Role.ROLE_USER
+        message.message_id = "remote-mock-no-replay-0001"
+        with pytest.raises(RemoteAgentError):
+            _ = [event async for event in remote.send(SendMessageRequest(message=message))]
+
+    card_requests = [item for item in requests if item[0] == "GET"]
+    post_requests = [item for item in requests if item[0] == "POST"]
+    assert len(card_requests) == 1
+    assert len(post_requests) == 1
+    assert len(issued) == 2
+    assert card_requests[0][2] == "Bearer remote-token-0"
+    assert post_requests[0][2] == "Bearer remote-token-1"

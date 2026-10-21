@@ -66,6 +66,7 @@ from .providers import ProviderRegistry
 from .providers import ScopedProviderRegistryStore
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
+from .remote_tools import RemoteAgentTools
 from .resources import HarnessResources
 from .skills import HarnessSkillDiscoverer
 from .subagents import SubagentManager
@@ -132,6 +133,9 @@ class _HarnessSession(SessionManager):
     async def session_exists(self, session_id: str) -> bool:
         return await _await_cleanup(asyncio.create_task(super().session_exists(session_id)))
 
+    def prepare_input(self, session_id: str, message: "Message") -> None:
+        """Bind a host receipt before either local or remote input persistence."""
+
     async def add_message(self, session_id: str, message: "Message") -> int:
         reservation = capture_write(self, session_id, message)
         row_id = await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))
@@ -151,6 +155,8 @@ class Harness:
     supports_child_custom_tools = False
 
     def reasoning_effort(self) -> ReasoningEffort:
+        if self._remote_profile.configured:
+            return ""
         return resolve_effort(
             self._reasoning_effort_override or self.current_profile().reasoning_effort,
             self.config.reasoning_effort,
@@ -204,6 +210,7 @@ class Harness:
         self._agent_catalog = AgentCatalog(config)
         self._current_profile_name = config.agent
         self._current_profile = replace(config.profile(config.agent))
+        self._remote_profile = self._current_profile.a2a
         self._generation_profiles: dict[str, AgentProfile] = {}
         self._generation_source_profiles: dict[str, AgentProfile] = {}
         self._generation_model_bindings: dict[str, ModelBinding] = {}
@@ -290,6 +297,8 @@ class Harness:
         )
         self.agent.tool_registry = HarnessToolRegistry(self)
         self.tools.register()
+        self.remote_tools = RemoteAgentTools(self)
+        self.tools.register_builtin(self.remote_tools.remote_agent_configure)
         self.commands = CommandRegistry(self)
         self.tasks = SubagentManager(self)
         self.followups = RunInputs()
@@ -367,6 +376,8 @@ class Harness:
     def _resolve_agent_model(
         self, name: str, profile: AgentProfile, *, require_available: bool = True
     ) -> ResolvedModelBinding:
+        if profile.a2a.configured:
+            return ResolvedModelBinding(ModelBinding(), "agent", profile.source)
         preference = self.provider_store.agent_models.load(name)
         workspace, global_default, builtin = self._default_model_choices()
         # Existing embeddings can supply an unnamed provider and scalar model.
@@ -402,6 +413,10 @@ class Harness:
         )
 
     def delegation_model_binding(self, name: str, *, model: str = "", provider: str = "") -> ModelBinding:
+        if self.delegation_profile(name).a2a.configured:
+            if model or provider:
+                raise ValueError("A remote agent's model and provider are managed by its server")
+            return ModelBinding()
         if model and provider:
             # A complete invocation selection takes precedence even when a
             # profile's saved default references an unavailable connection.
@@ -438,6 +453,7 @@ class Harness:
                 self.config.profile(self.config.agent),
                 model=self._current_profile.model,
                 provider=self._current_profile.provider,
+                a2a=self._remote_profile,
             )
         return self._current_profile
 
@@ -450,7 +466,9 @@ class Harness:
             fresh = self.config.profile(self.config.agent)
             # Routing belongs to the accepted runtime. Editing a profile's route
             # affects new selections/children, never swaps a live provider owner.
-            self._current_profile = replace(fresh, model=profile.model, provider=profile.provider)
+            self._current_profile = replace(
+                fresh, model=profile.model, provider=profile.provider, a2a=self._remote_profile
+            )
         self._generation_profiles = {name: replace(value) for name, value in self.config.profiles.items()}
         self._generation_source_profiles = {
             name: replace(value) for name, value in self.config.agent_source_profiles.items()
@@ -459,6 +477,9 @@ class Harness:
         self._generation_model_bindings = {}
         self._generation_model_errors = {}
         for name in dict.fromkeys(("assistant", *sorted(self._generation_profiles))):
+            if self.delegation_profile(name).a2a.configured:
+                self._generation_model_bindings[name] = ModelBinding()
+                continue
             try:
                 binding = self._resolve_agent_model(name, self.delegation_profile(name)).binding
             except (OSError, ValueError) as error:
@@ -831,6 +852,26 @@ class Harness:
             async for event in events:
                 yield event
 
+    async def _generation_events(self, prompt: str | list[ContentPart]) -> AsyncGenerator[HarnessEvent, None]:
+        if self._remote_profile.configured:
+            from .remote_runtime import run_remote
+
+            if not isinstance(prompt, str):
+                yield ErrorEvent(
+                    message="Remote A2A chat currently accepts text. Send attachments to the main assistant.",
+                    code="A2A_TEXT_REQUIRED",
+                )
+                return
+            async with aclosing(run_remote(self, prompt)) as events:
+                async for event in events:
+                    yield event
+        else:
+            async with aclosing(
+                self.agent.run(prompt, session_id=self.session_id, user_id="harness", config=self.generation_config())
+            ) as events:
+                async for event in events:
+                    yield event
+
     def submit_followup(self, session_id: str, message: RunInput) -> bool:
         """Admit a host-authored input to this root's next complete run boundary."""
         if (
@@ -990,14 +1031,7 @@ class Harness:
                         try:
                             async with (
                                 message.context(),
-                                aclosing(
-                                    self.agent.run(
-                                        message.prompt,
-                                        session_id=session_id,
-                                        user_id="harness",
-                                        config=self.generation_config(),
-                                    )
-                                ) as events,
+                                aclosing(self._generation_events(message.prompt)) as events,
                             ):
                                 async for event in events:
                                     if isinstance(event, DoneEvent):
@@ -1080,6 +1114,16 @@ class Harness:
         Read-only and safe to call while idle; it never changes the selected
         session, prompt content, or model behavior.
         """
+        if self._remote_profile.configured:
+            from nagents.context_stats import ContextStats
+
+            return ContextStats(
+                components=(),
+                total_tokens=0,
+                provider="a2a",
+                model="",
+                estimate_method="Remote context is managed by the remote server and is not reported by A2A",
+            )
         await self.initialize()
         return await self.agent.context_stats(session_id or self.session_id)
 
@@ -1157,17 +1201,21 @@ class Harness:
             profile = self.config.profile(name)
             if not profile.user_invocable:
                 raise ValueError(f"Agent {name!r} is available only for delegation")
-            binding = self._resolve_agent_model(name, profile).binding
-            candidate = replace(self.config, agent=name, provider=binding.provider, model=binding.id)
-            await self.reconfigure_provider(candidate)
+            if not profile.a2a.configured:
+                binding = self._resolve_agent_model(name, profile).binding
+                candidate = replace(self.config, agent=name, provider=binding.provider, model=binding.id)
+                await self.reconfigure_provider(candidate)
             self.config.agent = name
             self._current_profile_name = name
             self._current_profile = replace(profile)
+            self._remote_profile = profile.a2a
             self.config.model_explicit = bool(profile.model) or self._selected_model_explicit
             self.refresh_instructions()
 
     async def set_model(self, model: str) -> None:
         with self.operation("set model"):
+            if self._remote_profile.configured:
+                raise ValueError("This remote agent manages its own model")
             if not model.strip():
                 raise ValueError("Model must not be empty")
             self.config.model = model

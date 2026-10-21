@@ -33,7 +33,7 @@ RUN npm install -g playwright @playwright/mcp && \
 COPY pyproject.toml README.md ./
 COPY src/ src/
 COPY --from=web-build /build/src/nagents/web/static/ src/nagents/web/static/
-RUN pip install hatchling && pip install --no-build-isolation ".[web]" && pip uninstall -y hatchling
+RUN pip install hatchling && pip install --no-build-isolation ".[web,a2a]" && pip uninstall -y hatchling
 
 RUN groupadd -g ${DOCKER_GID} docker-host && \
     useradd -m -u 1000 -G docker-host agent && \

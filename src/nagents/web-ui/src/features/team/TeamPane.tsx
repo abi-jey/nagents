@@ -61,6 +61,12 @@ export function AgentConfiguration({ agent, token, sessionId, changed, close, co
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save agent settings."); }
     finally { setSaving(false); }
   }
+  if (agent.providerKind === "a2a") return <dialog className="agent-configuration-dialog" ref={dialog} aria-labelledby="agent-config-title" onCancel={event => { event.preventDefault(); close(); }}>
+    <header><h2 id="agent-config-title">{agent.name}</h2><button type="button" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
+    <p>This conversation runs on the remote A2A server. Its model, instructions, tools and context are managed there.</p>
+    <dl><dt>Definition</dt><dd>{agent.profile}</dd><dt>Connection</dt><dd>Remote A2A · accepted for this conversation</dd><dt>Status</dt><dd>{agent.phase === "waiting" ? agent.reason : agent.phase}</dd></dl>
+    {configureDefinition && <button type="button" onClick={configureDefinition}>Open {agent.profile} connection</button>}
+  </dialog>;
   return <dialog className="agent-configuration-dialog" ref={dialog} aria-labelledby="agent-config-title" onCancel={event => { event.preventDefault(); close(); }}>
     <header><h2 id="agent-config-title">{agent.name}</h2><button type="button" aria-label="Close agent settings" onClick={close}><Icon name="close" /></button></header>
     <p>Accepted configuration for this conversation.</p><dl><dt>Definition</dt><dd>{agent.profile || "Unavailable"}</dd><dt>Provider</dt><dd>{agent.provider || (agent.providerKind ? `${agent.providerKind} · default connection` : "Unavailable")}</dd><dt>Model</dt><dd>{agent.model || "Unavailable"}</dd>

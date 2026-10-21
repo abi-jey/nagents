@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import ssl
 from collections.abc import AsyncGenerator
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from a2a.types import SendMessageRequest
     from a2a.types import StreamResponse
     from a2a.types import Task
+
+    from .remote_config import RemoteAgentConfig
 
 AccessTokenProvider = Callable[[], Awaitable[str]]
 
@@ -72,11 +75,13 @@ class RemoteAgent:
     def __init__(
         self,
         url: str,
-        tokens: AccessTokenProvider,
+        tokens: AccessTokenProvider | None = None,
         *,
         rpc_url: str = "",
         loopback_http: bool = False,
         timeout: float = 120.0,
+        verify: ssl.SSLContext | bool = True,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.url = endpoint(url, loopback_http=loopback_http).rstrip("/")
         parsed = urlsplit(self.url)
@@ -88,8 +93,12 @@ class RemoteAgent:
             raise ValueError("Remote A2A RPC endpoint must use the configured origin")
         if not 1 <= timeout <= 3600:
             raise ValueError("Remote request timeout must be from 1 to 3600 seconds")
+        if verify is not True and not isinstance(verify, ssl.SSLContext):
+            raise ValueError("Remote A2A TLS verification cannot be disabled")
         self.tokens = tokens
         self.timeout = timeout
+        self.verify = verify
+        self.transport = transport
         self._connected = False
         self.http: httpx.AsyncClient
         self.client: Client
@@ -99,7 +108,9 @@ class RemoteAgent:
         if self._connected:
             raise RemoteAgentError("Remote agent is already connected")
         self.http = httpx.AsyncClient(
-            auth=ResourceBearer(self.tokens, self.url),
+            auth=ResourceBearer(self.tokens, self.url) if self.tokens is not None else None,
+            verify=self.verify,
+            transport=self.transport,
             trust_env=False,
             follow_redirects=False,
             timeout=httpx.Timeout(self.timeout),
@@ -145,6 +156,32 @@ class RemoteAgent:
         if not self._connected:
             raise RemoteAgentError("Use RemoteAgent as an async context manager before calling it")
         return self.client
+
+    @classmethod
+    def from_config(
+        cls,
+        config: RemoteAgentConfig,
+        tokens: AccessTokenProvider | None = None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> RemoteAgent:
+        """Build from parsed JSON; the embedding supplies its credential owner."""
+        if not config.configured:
+            raise ValueError("A remote agent connection requires a URL")
+        if (config.issuer or config.token_env) and tokens is None:
+            raise ValueError("The configured remote authentication requires a token provider")
+        context = ssl.create_default_context()
+        if config.ca_file:
+            context.load_verify_locations(cafile=config.ca_file)
+        return cls(
+            config.url,
+            tokens,
+            rpc_url=config.rpc_url,
+            loopback_http=config.loopback_http,
+            timeout=config.timeout,
+            verify=context,
+            transport=transport,
+        )
 
     async def send(self, request: SendMessageRequest) -> AsyncGenerator[StreamResponse, None]:
         """Send one caller-owned stable message without automatic replay."""

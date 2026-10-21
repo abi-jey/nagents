@@ -23,6 +23,7 @@ from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 from a2a.types import AgentCapabilities
 from a2a.types import AgentCard
+from a2a.types import AgentExtension
 from a2a.types import AgentInterface
 from a2a.types import AgentSkill
 from a2a.types import OpenIdConnectSecurityScheme
@@ -81,6 +82,17 @@ RPC_SCOPES = {
 
 def agent_card(config: A2AConfig) -> AgentCard:
     """Public minimal card: only the explicitly exported profile is disclosed."""
+    from .remote_config import PUBLIC_CLIENT_EXTENSION
+
+    extensions: list[AgentExtension] = []
+    if config.browser_client_id and not config.browser_client_secret_env:
+        public_client = AgentExtension(
+            uri=PUBLIC_CLIENT_EXTENSION,
+            required=False,
+            description="Suggested public PKCE client. Register the caller's callback URI with its identity provider.",
+        )
+        public_client.params.update({"client_id": config.browser_client_id, "scopes": list(config.browser_scopes)})
+        extensions.append(public_client)
     return AgentCard(
         name=config.name,
         description=config.description,
@@ -90,7 +102,9 @@ def agent_card(config: A2AConfig) -> AgentCard:
                 url=f"{config.public_url.rstrip('/')}/rpc", protocol_binding="JSONRPC", protocol_version="1.0"
             )
         ],
-        capabilities=AgentCapabilities(streaming=True, push_notifications=False, extended_agent_card=False),
+        capabilities=AgentCapabilities(
+            streaming=True, push_notifications=False, extended_agent_card=False, extensions=extensions
+        ),
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         skills=[AgentSkill(id=config.agent, name=config.agent, description=config.description, tags=["nagents"])],

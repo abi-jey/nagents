@@ -212,6 +212,15 @@ class SessionAgents:
                 "reasoning_effort": "",
             }
         profile = harness.config.profile(name)
+        if profile.a2a.configured:
+            return {
+                "agent": name,
+                "model": "",
+                "provider": "a2a",
+                "provider_kind": "a2a",
+                "mode": harness.mode_for_profile(name),
+                "reasoning_effort": "",
+            }
         try:
             binding = harness.resolved_model_binding(name).binding
         except ValueError:
@@ -236,6 +245,15 @@ class SessionAgents:
 
     @staticmethod
     def actual(harness: Harness) -> AgentIdentity:
+        if harness._remote_profile.configured:
+            return {
+                "agent": harness.config.agent,
+                "model": "",
+                "provider": "a2a",
+                "provider_kind": "a2a",
+                "mode": harness.mode,
+                "reasoning_effort": "",
+            }
         return {
             "agent": harness.config.agent,
             "model": harness.agent.provider.model,
@@ -263,6 +281,8 @@ class SessionAgents:
         profile = harness.config.profile(name)
         if not profile.user_invocable:
             return "This profile is available only for delegation."
+        if profile.a2a.configured:
+            return ""
         try:
             harness.resolved_model_binding(name)
         except ValueError:

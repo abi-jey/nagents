@@ -13,7 +13,7 @@ export const targetQuery = (target: NavigatorTarget) => `scope=${target.scope}${
 export const scopeName = (target: NavigatorTarget) => target.scope === "agent" ? target.agent : target.scope === "global" ? "Global defaults" : "Workspace";
 export const sourceLabel = (source: string) => ({ agent: "Agent override", definition: "Agent definition", workspace: "Workspace", global: "Global", builtin: "Built-in default", startup: "Startup default" })[source] || source;
 export interface AgentPreferences { instructions?: string; tools?: string[]; }
-export interface AgentProfile { id: string; name: string; description: string; source: string; mode: string; source_format?: string; }
+export interface AgentProfile { id: string; name: string; description: string; source: string; mode: string; source_format?: string; transport?: "local" | "a2a"; }
 export interface AgentSettingsReply {
   scope: NavigatorScope; agent: string; revision: string; preferences: AgentPreferences;
   values: { instructions: string; tools: string[] }; origins: { instructions: string; tools: string };
