@@ -241,6 +241,12 @@ poetry run python examples/live/browser_e2e/artifacts.py unpack \
   /tmp/ngn-voice-e2e/capture.json /tmp/ngn-voice-e2e/result
 ```
 
+The unpacker always preserves received PCM in `speaker-callback-order-*.wav`,
+including failed captures. Those files use message delivery order, without
+sorting samples or inserting silence; they do not establish timing continuity.
+It writes `speaker-rendered-*.wav` only when the recorder clock and blocks are
+continuous. Invalid clock observations stay in `trace.json` and fail validation.
+
 Validate the original capture with a command that exits nonzero on failure:
 
 ```bash

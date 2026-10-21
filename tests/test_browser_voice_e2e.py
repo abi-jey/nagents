@@ -4,13 +4,16 @@ import base64
 import copy
 import json
 import struct
+import wave
 from functools import partial
+from pathlib import Path
 from typing import cast
 
 from examples.live.browser_e2e.artifacts import check_authenticated_scenario
 from examples.live.browser_e2e.artifacts import check_capture
 from examples.live.browser_e2e.artifacts import extract_report
 from examples.live.browser_e2e.artifacts import timing_metrics
+from examples.live.browser_e2e.artifacts import unpack
 
 
 def block(frame: int = 0, *, silent: bool = False) -> dict[str, object]:
@@ -45,6 +48,37 @@ def baseline() -> dict[str, object]:
             {"type": "recorder.capture-stop", "contextId": 0, "finalFrame": 4, "armed": True, "monotonicMs": 200},
         ],
     }
+
+
+def test_unpack_keeps_callback_order_audio_when_clock_overlaps(tmp_path: Path) -> None:
+    report = baseline()
+    first, second = block(4), block(0)
+    first["pcm16"] = base64.b64encode(struct.pack("<4h", 1, 2, 3, 4)).decode()
+    second["pcm16"] = base64.b64encode(struct.pack("<4h", 5, 6, 7, 8)).decode()
+    report["output"] = [first, second]
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(report))
+    destination = tmp_path / "unpacked"
+    unpack(source, destination)
+    with wave.open(str(destination / "speaker-callback-order-0.wav"), "rb") as recording:
+        assert recording.readframes(8) == struct.pack("<8h", 1, 2, 3, 4, 5, 6, 7, 8)
+    assert not (destination / "speaker-rendered-0.wav").exists()
+    metrics = json.loads((destination / "metrics.json").read_text())
+    assert metrics["checks"]["recorderContinuous"] is False
+    assert metrics["outputs"][0]["file"] == ""
+    assert metrics["outputs"][0]["callbackOrderFile"] == "speaker-callback-order-0.wav"
+
+
+def test_unpack_writes_rendered_audio_only_for_continuous_capture(tmp_path: Path) -> None:
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(baseline()))
+    destination = tmp_path / "unpacked"
+    unpack(source, destination)
+    assert (destination / "speaker-rendered-0.wav").read_bytes() == (
+        destination / "speaker-callback-order-0.wav"
+    ).read_bytes()
+    metrics = json.loads((destination / "metrics.json").read_text())
+    assert metrics["checks"]["recorderContinuous"] is True
 
 
 def authenticated_scenario_capture() -> dict[str, object]:

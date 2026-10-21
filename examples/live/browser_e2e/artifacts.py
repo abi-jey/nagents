@@ -363,52 +363,55 @@ def unpack(source: Path, directory: Path) -> None:
         "omittedEvents": report.get("omitted", 0),
     }
     outputs: list[dict[str, object]] = []
+    gaps = recorder_gaps(report)
+    events = objects(report.get("events"))
     for context_id in context_ids:
-        blocks = sorted(
-            (item for item in captures if number(item.get("contextId")) == context_id),
-            key=lambda item: number(item.get("frame")),
-        )
+        # Preserve delivery order even when the render-clock observations are
+        # invalid. Sorting by a faulty clock can itself reorder audible samples.
+        blocks = [item for item in captures if number(item.get("contextId")) == context_id]
         rate = int(number(blocks[0].get("sampleRate")))
-        result = bytearray()
-        cursor = int(number(blocks[0].get("frame")))
-        first = cursor
-        missing = 0
-        for block in blocks:
-            frame = int(number(block.get("frame")))
-            data = base64.b64decode(str(block["pcm16"]))
-            if frame < cursor:
-                raise SystemExit("Overlapping output recorder blocks; capture is invalid")
-            missing += frame - cursor
-            result.extend(bytes((frame - cursor) * 2))
-            result.extend(data)
-            cursor = frame + len(data) // 2
-        filename = f"speaker-rendered-{context_id}.wav"
-        write_wave(directory / filename, bytes(result), rate)
+        result = b"".join(pcm_bytes(block) for block in blocks)
+        raw_filename = f"speaker-callback-order-{context_id}.wav"
+        write_wave(directory / raw_filename, result, rate)
+        context_gaps = [gap for gap in gaps if number(gap.get("contextId")) == context_id]
+        jumps = [
+            event
+            for event in events
+            if event.get("type") == "recorder.clock-discontinuity"
+            and event.get("phase") == "recording"
+            and number(event.get("contextId")) == context_id
+        ]
+        continuous = complete_pcm(blocks, output=True) and not context_gaps and not jumps
+        filename = f"speaker-rendered-{context_id}.wav" if continuous else ""
+        if filename:
+            write_wave(directory / filename, result, rate)
         outputs.append(
             {
                 "file": filename,
+                "callbackOrderFile": raw_filename,
+                "recorderContinuous": continuous,
+                "recordingClockDiscontinuities": len(jumps),
                 "sampleRate": rate,
-                "firstAudioFrame": first,
+                "firstAudioFrame": int(number(blocks[0].get("frame"))),
                 "samples": len(result) // 2,
-                "missingRecorderFrames": missing,
-                "silenceCandidates": silence_spans(bytes(result), rate),
+                "missingRecorderFrames": sum(max(0, number(gap["missingFrames"])) for gap in context_gaps),
+                "silenceCandidates": silence_spans(result, rate),
             }
         )
     metrics["outputs"] = outputs
     health = objects(report.get("health"))
     metrics["lastPlaybackHealth"] = health[-1] if health else {}
-    events = objects(report.get("events"))
     metrics["mainThreadGaps"] = [event for event in events if event.get("type") == "main-thread.gap"]
     errors = [event for event in events if "error" in str(event.get("type", "")) or event.get("eventType") == "error"]
     metrics["errors"] = errors
     intervals: dict[str, object] = {}
     for direction in ("send", "receive"):
         times = [number(event.get("monotonicMs")) for event in events if event.get("type") == f"socket.{direction}"]
-        gaps = sorted(right - left for left, right in pairwise(times))
+        intervals_ms = sorted(right - left for left, right in pairwise(times))
         intervals[direction] = {
             "frames": len(times),
-            "maxMs": max(gaps, default=0),
-            "p95Ms": gaps[min(len(gaps) - 1, int(len(gaps) * 0.95))] if gaps else 0,
+            "maxMs": max(intervals_ms, default=0),
+            "p95Ms": intervals_ms[min(len(intervals_ms) - 1, int(len(intervals_ms) * 0.95))] if intervals_ms else 0,
         }
     metrics["socketIntervalsIncludingNaturalPauses"] = intervals
     metrics["timing"] = timing_metrics(report)
@@ -416,7 +419,7 @@ def unpack(source: Path, directory: Path) -> None:
         "captureStopped": report.get("stopped") is True,
         "transmittedSpeech": any(number(item.get("rms")) > 0.01 for item in inputs),
         "renderedSpeech": any(number(item.get("rms")) > 0.01 for item in captures),
-        "recorderContinuous": bool(outputs) and all(item["missingRecorderFrames"] == 0 for item in outputs),
+        "recorderContinuous": bool(outputs) and all(item["recorderContinuous"] for item in outputs),
         "observedDelegationCompletion": any(
             event.get("eventType") == "delegation" and event.get("status") == "completed" for event in events
         ),
@@ -441,10 +444,7 @@ def recorder_gaps(report: dict[str, object]) -> list[dict[str, object]]:
     blocks = objects(report.get("output"))
     gaps: list[dict[str, object]] = []
     for context_id in {number(block.get("contextId")) for block in blocks}:
-        ordered = sorted(
-            (block for block in blocks if number(block.get("contextId")) == context_id),
-            key=lambda block: number(block.get("frame")),
-        )
+        ordered = [block for block in blocks if number(block.get("contextId")) == context_id]
         for previous, current in pairwise(ordered):
             end = number(previous.get("frame")) + number(previous.get("samples"))
             start = number(current.get("frame"))
