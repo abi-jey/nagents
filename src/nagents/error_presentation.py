@@ -24,6 +24,7 @@ _TRANSPORT_MESSAGES = {
 }
 _REMOTE_MESSAGES = {
     "A2A_AUTH_REQUIRED": "Remote agent sign-in is missing or expired. Open its Remote connection settings and sign in.",
+    "A2A_AUTH_REFRESH_UNCERTAIN": "Remote agent access could not be safely refreshed. Sign in again; the previous refresh token will not be reused.",
     "A2A_AUTH_REJECTED": "The remote agent rejected the access token. Sign in again in its Remote connection settings.",
     "A2A_AUTH_STORAGE": "Remote credentials could not be loaded safely. Ask the ngn administrator to check credential storage permissions.",
     "A2A_TOKEN_MISSING": "The remote agent's configured server token is missing or invalid. Ask the ngn administrator to configure it.",

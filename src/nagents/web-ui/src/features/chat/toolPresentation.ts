@@ -29,7 +29,8 @@ const tools: Record<string, ToolPresentation> = {
   channel_configure: { label: "Queue channel configuration", icon: "channels", family: "channel" },
 };
 
-export function toolPresentation(name: string): ToolPresentation {
+export function toolPresentation(name: string, remoteReview?: { tool: string }): ToolPresentation {
+  if (remoteReview) return { label: `Remote ${remoteReview.tool} review`, icon: tools[remoteReview.tool]?.icon || "tools", family: "generic" };
   if (Object.hasOwn(tools, name)) return tools[name];
   // MCPManager qualifies real names as mcp__<connection>__<method>.
   // Keep the original name in Details, including any further separators.

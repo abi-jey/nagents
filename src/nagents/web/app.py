@@ -452,7 +452,9 @@ def create_app(
 
     @app.post("/api/messages")
     async def message(body: MessageInput) -> dict[str, str]:
-        if not config.demo and not state.harness.config.provider:
+        state.harness.refresh_agent_definitions()
+        target = state.session_agents.identity(state.session_agents.selected(body.session_id))
+        if not config.demo and not state.harness.config.provider and target["provider_kind"] != "a2a":
             raise HTTPException(409, "Select a named provider connection before sending a message.")
         if not body.prompt.strip() and not body.attachments:
             raise HTTPException(422, "Prompt must not be blank.")

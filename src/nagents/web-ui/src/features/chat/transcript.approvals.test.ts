@@ -9,6 +9,8 @@ import { useApproval } from "../approvals/useApproval.js";
 import { appendEvent, type Entry } from "./transcript.js";
 import { LiveSessions } from "./liveTranscript.js";
 import { Conversation } from "./Conversation.js";
+import { ExecutionRecord } from "./ExecutionRecord.js";
+import { activityCategory, importantActivity } from "./activityLayout.js";
 import type { Approval, Decision, Snapshot, WireEvent } from "../../types.js";
 
 const approval: Approval = {
@@ -32,6 +34,22 @@ test("approval dialog explains durable workspace scope and extension reload boun
   assert.match(mandatory, /Allow once/);
   assert.match(mandatory, /Approval applies only to these inputs/);
   assert.doesNotMatch(mandatory, /Always allow this tool|all chats and agents in this workspace/);
+});
+
+test("remote delegate approval names the remote operation and safely handles malformed nested data", () => {
+  const render = (arguments_: unknown) => renderToStaticMarkup(createElement(ApprovalDialog, {
+    approval: { ...approval, tool: "delegate", arguments: arguments_ }, busy: false, error: "", decide() {}, cancel() {},
+  }));
+  const remote = render({ agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "cat report.txt" } } });
+  assert.match(remote, /Review remote <code>shell<\/code>/);
+  assert.match(remote, /Requested by reviewer/);
+  assert.match(remote, /cat report\.txt/);
+  assert.doesNotMatch(remote, /Local tools are not sandboxed/);
+  assert.doesNotMatch(remote, /Always allow this tool/);
+  for (const malformed of [null, "nested", [], { remote_operation: [] }, { remote_operation: { tool: { name: "shell" } } }]) {
+    assert.doesNotThrow(() => render(malformed));
+    assert.match(render(malformed), /Review (?:remote )?<code>(?:delegate|operation)<\/code>/);
+  }
 });
 
 test("permission buttons send distinct decisions and Escape still denies", async (t) => {
@@ -88,6 +106,84 @@ test("saved and one-time approval labels remain bound to the exact task and call
   const first = entries.find(entry => entry.kind === "tool" && entry.taskId === "one")!;
   assert.equal(first.approval, "Always allowed in workspace");
   assert.equal(first.state, "Awaiting execution result");
+});
+
+test("remote approval completion stays a stable tools review record without claiming execution", () => {
+  const arguments_ = { agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "printf A2A_REVIEW_ONLY_OK" } } };
+  const call = { event: "tool_call", run_id: "remote-run", id: "remote-call", name: "delegate", arguments: arguments_ } as const;
+  const request = { event: "approval", run_id: "remote-run", call_id: "remote-call", tool: "delegate",
+    approval_id: "remote-nonce", arguments: arguments_ } as const;
+  const closed = { event: "approval_closed", run_id: "remote-run", approval_id: "remote-nonce", decision: "allow" } as const;
+  let entries = appendEvent([], call);
+  entries = appendEvent(entries, request);
+  entries = appendEvent(entries, closed);
+  const stableId = entries[0].id;
+  entries = appendEvent(entries, { event: "run_finished", run_id: "remote-run", status: "completed" });
+  entries = appendEvent(entries, { event: "run_finished", run_id: "remote-run", status: "completed" });
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].id, stableId);
+  assert.equal(entries[0].state, "Review approved");
+  assert.equal(entries[0].result, undefined, "approval does not fabricate a remote execution result");
+  assert.equal(entries[0].remoteReview?.agent, "reviewer");
+  assert.equal(entries[0].remoteReview?.tool, "shell");
+  assert.equal(activityCategory({ kind: "entry", entry: entries[0] }), "tools");
+  assert.equal(importantActivity({ kind: "entry", entry: entries[0] }), false);
+
+  const replay = [call, request, closed, { event: "run_finished", run_id: "remote-run", status: "completed" }]
+    .reduce<Entry[]>((current, event) => appendEvent(current, event), []);
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].id, stableId);
+  assert.equal(replay[0].state, "Review approved");
+  assert.deepEqual(replay[0].remoteReview, entries[0].remoteReview);
+
+  const dom = new JSDOM(renderToStaticMarkup(createElement(ExecutionRecord, { entry: entries[0], open: true })));
+  try {
+    assert.match(dom.window.document.body.textContent || "", /Remote shell review/);
+    assert.match(dom.window.document.body.textContent || "", /Review of shell requested by reviewer/);
+    assert.match(dom.window.document.body.textContent || "", /A2A_REVIEW_ONLY_OK/);
+    assert.match(dom.window.document.querySelector(".execution-record")?.getAttribute("data-tool-family") || "", /generic/);
+  } finally { dom.window.close(); }
+});
+
+test("remote denial or expiry remains attention, and local delegate approval still awaits its result", () => {
+  const arguments_ = { agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "pwd" } } };
+  const start = (approvalId: string) => appendEvent(appendEvent([], {
+    event: "tool_call", run_id: "review-run", id: `call-${approvalId}`, name: "delegate", arguments: arguments_,
+  }), {
+    event: "approval", run_id: "review-run", call_id: `call-${approvalId}`, tool: "delegate", approval_id: approvalId, arguments: arguments_,
+  });
+  for (const [approvalId, expired] of [["denied", false], ["expired", true]] as const) {
+    const denied = appendEvent(start(approvalId), { event: "approval_closed", run_id: "review-run", approval_id: approvalId,
+      decision: "deny", expired });
+    assert.equal(denied[0].state, "Approval denied");
+    assert.equal(importantActivity({ kind: "entry", entry: denied[0] }), true);
+  }
+
+  let local = appendEvent([], { event: "tool_call", run_id: "local-run", id: "local-call", name: "delegate", arguments: { task: "research" } });
+  local = appendEvent(local, { event: "approval", run_id: "local-run", call_id: "local-call", tool: "delegate",
+    approval_id: "local-nonce", arguments: { task: "research" } });
+  local = appendEvent(local, { event: "approval_closed", run_id: "local-run", approval_id: "local-nonce", decision: "allow" });
+  assert.equal(local[0].remoteReview, undefined);
+  assert.equal(local[0].state, "Awaiting execution result");
+  local = appendEvent(local, { event: "run_finished", run_id: "local-run", status: "completed" });
+  assert.equal(local[0].state, "No result recorded");
+  assert.equal(importantActivity({ kind: "entry", entry: local[0] }), true);
+});
+
+test("malformed remote operation metadata remains safe and cannot inject review markup", () => {
+  for (const remoteOperation of [null, [], { tool: { name: "shell" } }, { tool: "<img src=x onerror=alert(1)>" }]) {
+    const arguments_ = { agent: "<script>alert(1)</script>", remote_operation: remoteOperation };
+    const entries = appendEvent([], { event: "approval", run_id: "run", call_id: "call", tool: "delegate",
+      approval_id: "nonce", arguments: arguments_ });
+    assert.equal(entries.length, 1);
+    assert.ok([undefined, "operation"].includes(entries[0].remoteReview?.tool));
+    const dom = new JSDOM(renderToStaticMarkup(createElement(ExecutionRecord, { entry: entries[0], open: true })));
+    try {
+      assert.equal(dom.window.document.querySelector("script, img"), null);
+      assert.match(dom.window.document.body.textContent || "", /alert\(1\)/);
+    } finally { dom.window.close(); }
+  }
 });
 
 for (const [policy, badge] of [

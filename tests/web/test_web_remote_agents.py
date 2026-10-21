@@ -237,6 +237,13 @@ def test_connection_save_read_revision_conflict_and_no_public_credentials(tmp_pa
             assert peer["connection"]["issuer"] == ISSUER
             assert peer["connection"]["client_id"] == CLIENT_ID
             assert peer["signed_in"] is False
+            assert peer["authentication"] == {
+                "state": "sign_in_required",
+                "expires_at": 0.0,
+                "error_code": "A2A_AUTH_REQUIRED",
+                "refreshable": False,
+            }
+            assert peer["trust_remote_tools"] is False
             no_test_tokens(saved_response.json())
 
             persisted = harnesses[0]._agent_catalog.remote_store.path
@@ -352,12 +359,15 @@ def test_oauth_pkce_cookie_wrong_browser_replay_and_private_token_storage(
             assert credential.path.parent.stat().st_mode & 0o777 == 0o700
             private_contents = json.loads(credential.path.read_text(encoding="utf-8"))
             assert private_contents["access_token"] == ACCESS_TOKEN
-            assert REFRESH_TOKEN not in credential.path.read_text(encoding="utf-8")
+            assert private_contents["refresh_token"] == REFRESH_TOKEN
+            assert private_contents["token_endpoint"] == f"{ISSUER}/token"
             assert ID_TOKEN not in credential.path.read_text(encoding="utf-8")
 
             read_response = await client.get("/api/remote-agents", headers=headers)
             assert read_response.status_code == 200
             assert read_response.json()["agents"][0]["signed_in"] is True
+            assert read_response.json()["agents"][0]["authentication"]["state"] == "signed_in"
+            assert read_response.json()["agents"][0]["authentication"]["refreshable"] is True
             no_test_tokens(read_response.json())
             dom = await client.get("/", headers=headers)
             assert dom.status_code == 200
@@ -724,6 +734,7 @@ def test_root_remote_prompt_is_persisted_when_credentials_are_missing(tmp_path: 
             errors = [event for event in events if event.get("event") == "error"]
             assert len(errors) == 1
             assert errors[0].get("recoverable") is False
+            assert "sign-in is missing or expired" in str(errors[0].get("message", ""))
             response = await client.get(f"/api/sessions/{harness.session_id}", headers=headers)
             assert response.status_code == 200
             history = response.json()["history"]
@@ -764,5 +775,69 @@ def test_demo_remote_endpoints_fail_closed_without_network(tmp_path: Path, monke
 
             assert [response.status_code for response in responses] == [403, 403, 403, 403]
             assert all("offline demo mode" in response.json()["detail"] for response in responses)
+            trust = await client.put(
+                "/api/remote-agents/peer-review/trust",
+                headers=headers,
+                json={"revision": "0" * 64, "trusted": True},
+            )
+            assert trust.status_code == 403
+
+    asyncio.run(scenario())
+
+
+def test_workspace_remote_tool_trust_is_revisioned_and_removed_when_binding_changes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=config(tmp_path)) as (_, client, headers, harnesses):
+            initial = (await client.get("/api/remote-agents", headers=headers)).json()
+            saved = await client.put(
+                "/api/remote-agents/peer-review",
+                headers=headers,
+                json=input_body(initial["revision"]),
+            )
+            assert saved.status_code == 200, saved.text
+            assert saved.json()["agents"][0]["trust_remote_tools"] is False
+
+            trusted = await client.put(
+                "/api/remote-agents/peer-review/trust",
+                headers=headers,
+                json={"revision": saved.json()["revision"], "trusted": True},
+            )
+            assert trusted.status_code == 200, trusted.text
+            assert trusted.json()["agents"][0]["trust_remote_tools"] is True
+            document = json.loads(harnesses[0]._agent_catalog.remote_store.path.read_text(encoding="utf-8"))
+            assert document["agents"]["peer-review"]["trust_remote_tools"] is True
+            no_test_tokens(trusted.json())
+
+            stale = await client.put(
+                "/api/remote-agents/peer-review/trust",
+                headers=headers,
+                json={"revision": saved.json()["revision"], "trusted": False},
+            )
+            assert stale.status_code == 409
+            after_stale = (await client.get("/api/remote-agents", headers=headers)).json()
+            assert after_stale["agents"][0]["trust_remote_tools"] is True
+
+            changed = await client.put(
+                "/api/remote-agents/peer-review",
+                headers=headers,
+                json=input_body(trusted.json()["revision"], url="https://changed.example.test"),
+            )
+            assert changed.status_code == 200, changed.text
+            assert changed.json()["agents"][0]["trust_remote_tools"] is False
+
+    asyncio.run(scenario())
+
+
+def test_remote_tool_trust_cannot_be_enabled_in_reviewer_mode(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async with client_app(tmp_path, config=config(tmp_path)) as (_, client, headers, harnesses):
+            harnesses[0].config.read_only = True
+            response = await client.put(
+                "/api/remote-agents/peer-review/trust",
+                headers=headers,
+                json={"revision": "0" * 64, "trusted": True},
+            )
+            assert response.status_code == 403
+            assert "build mode" in response.json()["detail"]
 
     asyncio.run(scenario())

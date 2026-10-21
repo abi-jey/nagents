@@ -210,8 +210,13 @@ callback URL, `/remote-agent-login/callback`, with the host's public client in
 its identity provider. Provider rejections returned to ngn identify the
 client/callback setup and show that exact URL. A provider may reject an invalid
 callback without returning to ngn; the same registration guidance is shown
-beside sign-in. This version saves access tokens and asks for sign-in again
-after expiry; it does not silently refresh them.
+beside sign-in. The UI shows credential status and expiry from the protected
+local record; checking it does not contact the remote host. When the issuer
+returns a refresh token, ngn stores the access and rotating refresh credentials
+in protected workspace data and refreshes them on use. If the issuer does not
+provide a refresh token, ngn asks for sign-in again after access-token expiry.
+An uncertain refresh is never replayed with the old refresh token; sign in again
+before sending another task.
 
 Tokens and PKCE verifiers stay on the ngn backend. The browser's API traffic
 remains same-origin; the deliberate identity-provider sign-in navigation is
@@ -220,6 +225,18 @@ normal approval UI. Reviewer/demo permission ceilings cannot execute remote
 tasks. The remote server controls its model, instructions and tools, so local
 model/effort/compaction overrides do not apply. Remote context usage is shown
 as unavailable rather than estimated with the local model's window.
+
+Workspace owners can enable **Trust remote tool operations** for a configured
+connection. The choice is stored with the workspace's protected
+`connections/a2a.json` catalog and applies to remote conversations from that
+workspace. It is not limited to one chat. Trust follows the exact connection
+fingerprint and is cleared when its endpoint or authentication binding changes.
+For a currently accepted and trusted connection, ngn can automatically approve
+the validated remote operation while build-mode delegation is enabled. Local
+reviewer, demo, read-only and inherited tool restrictions still apply. Task,
+origin, operation-size, nonce and digest checks remain in force; this trust
+choice does not approve local tools or ordinary task dispatches. Without trust,
+remote operations continue to require the normal mandatory approval.
 
 Receiving a delegation handle confirms local acceptance, not a connection to
 the remote server. A failed remote child returns a safe, specific reason to

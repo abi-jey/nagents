@@ -20,6 +20,12 @@ export function ApprovalDialog({
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const argumentsValue = approval.arguments && typeof approval.arguments === "object" && !Array.isArray(approval.arguments) ? approval.arguments as Record<string, unknown> : undefined;
+  const operation = argumentsValue?.remote_operation;
+  const remoteOperation = approval.tool === "delegate" && operation && typeof operation === "object" && !Array.isArray(operation) ? operation as Record<string, unknown> : undefined;
+  const remoteTool = typeof remoteOperation?.tool === "string" ? remoteOperation.tool : "operation";
+  const remoteAgent = typeof argumentsValue?.agent === "string" ? argumentsValue.agent : "remote agent";
+  const allowTool = !!approval.allow_tool && !remoteOperation;
   useEffect(() => {
     const element = dialog.current;
     const previous = document.activeElement;
@@ -64,9 +70,9 @@ export function ApprovalDialog({
     >
       <header className="approval-heading">
         <h2 id="approval-title" ref={heading} tabIndex={-1}>
-          Review <code>{approval.tool}</code>
+          Review {remoteOperation && "remote "}<code>{remoteOperation ? remoteTool : approval.tool}</code>
         </h2>
-        <p>{approval.allow_tool ? "Review this call and choose how long to allow it." : "Review this call. Approval applies only to these inputs."}</p>
+        <p>{remoteOperation ? `Requested by ${remoteAgent}. Approval applies only to this remote operation.` : allowTool ? "Review this call and choose how long to allow it." : "Review this call. Approval applies only to these inputs."}</p>
       </header>
       <div className="approval-body">
         <dl className="request-identity">
@@ -88,10 +94,9 @@ export function ApprovalDialog({
           <CodeBlock label="Proposed change" text={approval.preview} />
         )}
         <p className="muted">
-          Review the inputs and proposed change, not just the description. Local
-          tools are not sandboxed. Escape denies this call.
+          {remoteOperation ? `This operation runs on ${remoteAgent}'s server. Review the exact inputs; signing in does not approve tools. Escape denies this call.` : "Review the inputs and proposed change, not just the description. Local tools are not sandboxed. Escape denies this call."}
         </p>
-        {approval.allow_tool && <p className="muted" id="approval-scope">
+        {allowTool && <p className="muted" id="approval-scope">
           Always allow applies to this tool in all chats and agents in this workspace.
           {approval.allow_tool_persistent ? " Saved across server restarts." : " This extension asks again after it is reloaded."}
           {" "}Change saved permissions in Tools. Read-only restrictions still apply.
@@ -110,7 +115,7 @@ export function ApprovalDialog({
         <button disabled={busy} onClick={() => decide("allow")}>
           Allow once
         </button>
-        {approval.allow_tool && <button className="primary" disabled={busy} aria-describedby="approval-scope" onClick={() => decide("allow_tool")}>
+        {allowTool && <button className="primary" disabled={busy} aria-describedby="approval-scope" onClick={() => decide("allow_tool")}>
           Always allow this tool
         </button>}
         <button className="cancel" onClick={cancel}>

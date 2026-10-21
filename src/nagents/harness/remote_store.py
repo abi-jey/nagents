@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 class RemoteAgentCatalog:
     agents: dict[str, AgentProfile]
     revision: str
+    trusted_connections: frozenset[str] = frozenset()
 
 
 class RemoteAgentStore(ProtectedFileStore):
@@ -60,6 +61,7 @@ class RemoteAgentStore(ProtectedFileStore):
             if not isinstance(agents, dict) or len(agents) > 256:
                 raise ValueError("Remote agents must be a bounded mapping")
             profiles: dict[str, AgentProfile] = {}
+            trusted_connections: set[str] = set()
             for name, fields in agents.items():
                 if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) or name == "assistant":
                     raise ValueError("Invalid remote agent name")
@@ -68,8 +70,12 @@ class RemoteAgentStore(ProtectedFileStore):
                     "connection",
                     "user_invocable",
                     "subagent_available",
+                    "trust_remote_tools",
                 }:
                     raise ValueError("Invalid remote agent fields")
+                trust_remote_tools = fields.get("trust_remote_tools", False)
+                if type(trust_remote_tools) is not bool:
+                    raise ValueError("Remote tool trust must be a boolean")
                 profile = AgentProfile(
                     description=fields.get("description", ""),
                     a2a=RemoteProfile.parse(fields.get("connection", {})),
@@ -82,27 +88,24 @@ class RemoteAgentStore(ProtectedFileStore):
                 if not profile.a2a.configured:
                     raise ValueError("Remote agent requires a connection URL")
                 profiles[name] = profile
-            return RemoteAgentCatalog(profiles, revision)
+                if trust_remote_tools:
+                    trusted_connections.add(profile.a2a.fingerprint)
+            return RemoteAgentCatalog(profiles, revision, frozenset(trusted_connections))
         except (ValueError, TypeError, UnicodeError):
             raise ValueError("Remote agent JSON is invalid; check its names and connection fields") from None
 
-    def save(self, agents: dict[str, AgentProfile], *, expected: str) -> RemoteAgentCatalog:
-        values = {
-            name: {
-                "description": profile.description,
-                "connection": profile.a2a.as_dict(),
-                "user_invocable": profile.user_invocable,
-                "subagent_available": profile.subagent_available,
-            }
-            for name, profile in agents.items()
-        }
-        raw = (json.dumps({"version": 1, "agents": values}, indent=2) + "\n").encode()
-        if len(raw) > 262144:
-            raise ValueError("Remote agent JSON exceeds 256 KiB")
+    def save(
+        self,
+        agents: dict[str, AgentProfile],
+        *,
+        expected: str,
+        trust_updates: tuple[tuple[str, bool], ...] = (),
+    ) -> RemoteAgentCatalog:
         with self._directory(create=True) as directory:
             descriptor = os.open(".a2a.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
             with os.fdopen(descriptor, "a+b") as stream, _exclusive_lock(stream):
-                if self.load().revision != expected:
+                current = self.load()
+                if current.revision != expected:
                     raise ValueError("Remote agents changed. Reload before saving.")
                 # Reuse parsing validation before installing any bytes.
                 for name, profile in agents.items():
@@ -113,5 +116,33 @@ class RemoteAgentStore(ProtectedFileStore):
                     ):
                         raise ValueError("Invalid remote agent")
                     profile.validate()
+                updates: dict[str, bool] = {}
+                for name, trusted in trust_updates:
+                    if type(trusted) is not bool:
+                        raise ValueError("Remote tool trust updates must be booleans")
+                    if name in updates or name not in agents:
+                        raise ValueError("Invalid remote tool trust update")
+                    updates[name] = trusted
+                fingerprints = {profile.a2a.fingerprint for profile in agents.values()}
+                trusted_connections = set(current.trusted_connections) & fingerprints
+                for name, trusted in updates.items():
+                    fingerprint = agents[name].a2a.fingerprint
+                    if trusted:
+                        trusted_connections.add(fingerprint)
+                    else:
+                        trusted_connections.discard(fingerprint)
+                values = {
+                    name: {
+                        "description": profile.description,
+                        "connection": profile.a2a.as_dict(),
+                        "user_invocable": profile.user_invocable,
+                        "subagent_available": profile.subagent_available,
+                        "trust_remote_tools": profile.a2a.fingerprint in trusted_connections,
+                    }
+                    for name, profile in agents.items()
+                }
+                raw = (json.dumps({"version": 1, "agents": values}, indent=2) + "\n").encode()
+                if len(raw) > 262144:
+                    raise ValueError("Remote agent JSON exceeds 256 KiB")
                 self._write_bytes(raw, prefix=".a2a-")
         return self.load()

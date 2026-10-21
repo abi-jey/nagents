@@ -10,6 +10,7 @@ import { MAIN_AGENT, mergeTaskActivity, providerLabel, type TaskActivity, type T
 import { isProfileTarget, type TeamController } from "./useTeam.js";
 import type { Snapshot, WireEvent } from "../../types.js";
 import type { ChatAppearance } from "../settings/appearance.js";
+import { RemoteStatus } from "./RemoteStatus.js";
 
 function taskRecords(detail: TaskDetail, streamed: TaskActivity[]): TaskActivity[] {
   const later = streamed.filter(event => event.sequence > (detail.activity_cursor ?? Number.MAX_SAFE_INTEGER));
@@ -19,7 +20,10 @@ function taskRecords(detail: TaskDetail, streamed: TaskActivity[]): TaskActivity
 
 function appendTaskRecord(entries: Entry[], event: TaskActivity, childSession: string): Entry[] {
   const payload: WireEvent = { ...event.payload, event: event.payload.type };
-  if (!["response_metadata", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "status", "approval", "approval_closed"].includes(payload.event)) return entries;
+  if (payload.event === "status" && payload.phase === "failed" && typeof payload.detail === "string") {
+    payload.event = "error"; payload.message = payload.detail;
+  }
+  if (!["response_metadata", "text_chunk", "text_done", "tool_call_progress", "tool_call", "tool_execution_started", "tool_output", "tool_result", "status", "error", "approval", "approval_closed"].includes(payload.event)) return entries;
   if (payload.event === "response_metadata" && payload.response_session_id !== childSession) return entries;
   // The envelope activation scopes this selected conversation. Enriched
   // metadata can also carry a root followup counter that text chunks omit;
@@ -60,9 +64,10 @@ export class TaskTranscript {
   }
 }
 
-export function TaskConversation({ team, agents, arrivals, token, sessionId, back, appearance }: {
+export function TaskConversation({ team, agents, arrivals, token, sessionId, back, appearance, configureConnection }: {
   team: TeamController; agents: TeamAgent[]; arrivals: ArrivalTimes; token: string; sessionId: string; back: () => void;
   appearance?: ChatAppearance;
+  configureConnection?: (name: string) => void;
 }) {
   const agent = agents.find(item => item.id === team.selected);
   const removedProfile = team.loaded && isProfileTarget(team.selected) && !team.profile;
@@ -74,11 +79,17 @@ export function TaskConversation({ team, agents, arrivals, token, sessionId, bac
   useEffect(() => { const frame = requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })); return () => cancelAnimationFrame(frame); }, [team.selected]);
   const transcript = useMemo(() => new TaskTranscript(), [sessionId, team.selected]);
   const entries = useMemo(() => transcript.update(team.detail, team.activity), [transcript, team.detail, team.activity]);
+  const failure = team.detail?.task.status === "failed" ? team.detail.task.error : "";
+  const authentication = agent?.authentication || team.profile?.authentication;
+  const remote = agent?.providerKind === "a2a" || team.profile?.provider === "a2a";
   return <section className="focused-task-conversation" aria-label={`${name} conversation`}>
     <header className="focused-task-header"><button type="button" className="task-back" onClick={back}><Icon name="chevron" size={14} />{rootName}</button>
       <div><h2 ref={heading} tabIndex={-1}>{name}</h2><span className="focused-task-model">{definition && <span className="focused-task-definition">Definition <b>{definition}</b><span aria-hidden="true"> · </span></span>}{agent && providerLabel(agent) && <ProviderLogo provider={agent.providerKind} />}{[agent ? providerLabel(agent) : team.profile?.provider, agent?.model || team.profile?.model].filter(Boolean).join(" · ")}</span></div>
       {agent && <AgentState agent={agent} />}
     </header>
+    {remote && <div className="task-remote-connection"><RemoteStatus authentication={authentication} /><span>{agent?.trustRemoteTools || team.profile?.trust_remote_tools ? "Remote tools trusted" : "Remote tools reviewed"}</span>
+      {configureConnection && definition && <button type="button" onClick={() => configureConnection(definition)}>Connection settings</button>}
+    </div>}
     {removedProfile ? <p className="task-history-notice" role="status">This agent profile was removed or renamed. Choose an agent in Team or return to {rootName}. Your draft is kept.</p>
       : team.profile ? <div className="team-profile-introduction"><span className="team-state state-ready">{team.startNotice ? "Starting" : "Agent definition"}</span><p>{team.profile.description || `Start a conversation with ${team.profile.name}.`}</p><p className="team-profile-help" role={team.startNotice ? "status" : undefined}>{team.startNotice || "Send a message below to start a new conversation using this definition."}</p>
         {team.profile.source && <dl className="team-profile-source"><dt>Definition file</dt><dd><code>{team.profile.source}</code></dd></dl>}
@@ -88,6 +99,7 @@ export function TaskConversation({ team, agents, arrivals, token, sessionId, bac
       {(team.detail?.activity_truncated || team.activity.some(event => event.sequence > (team.detail?.activity_cursor || 0) && event.payload.type === "resync_required")) && <p className="task-history-notice" role="status">Some live updates were interrupted. Recorded activity will refresh when this response is saved.</p>}
       {team.detail?.before && <button type="button" className="task-load-earlier" disabled={team.loadingEarlier} onClick={() => void team.loadEarlier()}>{team.loadingEarlier ? "Loading…" : "Load earlier messages"}</button>}
       {agent?.prompt && <details className="task-assignment"><summary>Assigned task</summary><p>{agent.prompt}</p></details>}
+      {failure && !entries.some(entry => entry.kind === "error") && <div className="task-failure" role="alert"><strong>Request failed</strong><p>{failure}</p></div>}
       <Conversation appearance={appearance} agentName={name} parentAgentName={parentName} key={`${team.selected}:${transcript.generation}`} entries={entries} token={token} sessionId={sessionId} demo={false} canSubmit={false} submit={() => {}}
         renderTask={thread => <TaskTimeline id={thread.id} thread={thread} agents={agents} inspect={team.select} arrivals={arrivals} />} />
       {!!team.detail?.receipts?.length && <div className="task-message-receipts" aria-label="Message delivery">

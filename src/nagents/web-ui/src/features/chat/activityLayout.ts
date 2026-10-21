@@ -13,7 +13,7 @@ export function activityCategory(item: TranscriptItem): Exclude<ActivityCategory
   const entry = item.entry;
   if (entry.delivery || entry.liveCaption || entry.uploads?.length) return undefined;
   if (entry.kind === "tool") {
-    const family = toolPresentation(entry.title || "").family;
+    const family = toolPresentation(entry.title || "", entry.remoteReview).family;
     return family === "command" ? "shell" : ["edit", "write"].includes(family) ? "files"
       : family === "team" ? "agents" : ["schedule", "compact"].includes(family) ? "notices" : "tools";
   }

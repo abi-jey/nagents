@@ -15,6 +15,7 @@ from nagents.events import TextChunkEvent
 from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
+from nagents.harness.remote_profiles import RemoteProfile
 from nagents.harness.tools import CodingTools
 from nagents.types import JsonValue
 from nagents.types import Message
@@ -688,6 +689,72 @@ def test_profile_catalog_contains_unused_but_never_enables_main_only_profiles(
                 )
                 assert rejected.status_code == 403
             assert not state.executions.runs
+
+    asyncio.run(scenario())
+
+
+def test_task_profile_exposes_secret_free_auth_and_workspace_remote_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+            del provider, messages
+            yield TextDoneEvent(text="done")
+
+        config_home = tmp_path / "private-config"
+        data_home = tmp_path / "private-data"
+        config_home.mkdir(mode=0o700)
+        config_home.chmod(0o700)
+        (config_home / "ngn" / "workspaces").mkdir(mode=0o700, parents=True)
+        (config_home / "ngn").chmod(0o700)
+        (config_home / "ngn" / "workspaces").chmod(0o700)
+        data_home.mkdir(mode=0o700)
+        data_home.chmod(0o700)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+        monkeypatch.setenv("NGN_TASK_REMOTE_TOKEN", "private-task-token")
+        async with scheduled_app(tmp_path, monkeypatch, script) as (_, client, headers, state, _, _):
+            remote = AgentProfile(
+                description="Workspace remote",
+                a2a=RemoteProfile(url="https://peer.example", token_env="NGN_TASK_REMOTE_TOKEN"),
+            )
+            store = state.harness._agent_catalog.remote_store
+            initial = store.load()
+            saved = store.save({"remote-peer": remote}, expected=initial.revision)
+            state.harness.refresh_agent_definitions()
+            path = f"/api/sessions/{state.selected_session_id}/tasks"
+
+            first = await client.get(path, headers=headers)
+            assert first.status_code == 200
+            profiles = {profile["id"]: profile for profile in first.json()["profiles"]}
+            assert profiles["assistant"]["authentication"] == {
+                "state": "not_required",
+                "expires_at": 0.0,
+                "error_code": "",
+                "refreshable": False,
+            }
+            item = profiles["remote-peer"]
+            assert item["authentication"] == {
+                "state": "token_ready",
+                "expires_at": 0.0,
+                "error_code": "",
+                "refreshable": False,
+            }
+            assert item["trust_remote_tools"] is False
+            assert "private-task-token" not in json.dumps(first.json())
+
+            trusted = store.save(
+                saved.agents,
+                expected=saved.revision,
+                trust_updates=(("remote-peer", True),),
+            )
+            state.harness.refresh_agent_definitions()
+            second = await client.get(path, headers=headers)
+            item = next(profile for profile in second.json()["profiles"] if profile["id"] == "remote-peer")
+            assert item["trust_remote_tools"] is True
+            assert item["authentication"]["state"] == "token_ready"
+            assert store.load().revision == trusted.revision
+            assert "private-task-token" not in json.dumps(second.json())
 
     asyncio.run(scenario())
 

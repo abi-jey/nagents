@@ -54,7 +54,10 @@ export function App() {
   const agents = [root, ...client.team.tasks.map(task => {
     const agent = taskAgent(task);
     return client.chat.approval.pending?.task_id === task.id ? { ...agent, phase: "waiting" as const, reason: "Waiting for approval" } : agent;
-  })];
+  })].map(agent => {
+    const profile = client.team.profiles.find(profile => profile.id === agent.profile);
+    return { ...agent, authentication: profile?.authentication, trustRemoteTools: profile?.trust_remote_tools };
+  });
   const arrivals = useAgentArrivals(client.team.tasks, client.sessions.sessionId, client.team.loaded);
   const configured = agents.find(agent => agent.id === configuredAgent);
   function configure(id: string) {
@@ -86,7 +89,7 @@ export function App() {
         <WorkspaceSidebar client={client} composer={composer} open={navOpen} close={closeNavigation}
           select={select} collapsed={sidebarCollapsed} toggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)} />
         <WorkspaceActivity sessionId={client.sessions.sessionId}
-          task={client.team.selected && <TaskConversation appearance={appearance} team={client.team} agents={agents} arrivals={arrivals} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
+          task={client.team.selected && <TaskConversation appearance={appearance} team={client.team} agents={agents} arrivals={arrivals} token={client.sessions.config?.token || ""} sessionId={client.sessions.sessionId} configureConnection={name => openAgentSettings(name)} back={() => { client.team.select(""); requestAnimationFrame(() => composer.current?.focus({ preventScroll: true })); }} />}
           conversation={{ appearance, agentName: root.name, token: client.sessions.config?.token || "", active: !client.team.selected,
             entries: client.chat.entries, sessionId: client.sessions.sessionId, demo: !!client.sessions.config?.demo,
             providerSetup: root.providerKind === "a2a" ? undefined : client.sessions.config?.provider_setup, canSubmit: client.available.submit, submit: value => void submit(value),
