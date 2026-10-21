@@ -235,6 +235,19 @@ class ChildActivity(AgentPlugin):
         )
         return request
 
+    async def remote_started(self) -> None:
+        """A remote admission is an input boundary, not a local model call."""
+        await self._history_committed()
+        turn = self.child.followups.current
+        if turn.id not in self.seen_turns:
+            self.seen_turns.add(turn.id)
+            await self.manager._input_started(self.info, self.child, turn)
+        self.info.context, self.info.compaction = {}, {}
+        await self.manager._emit_activity(self.info, {"type": "status", "phase": "running"})
+
+    async def remote_finished(self) -> None:
+        await self._history_committed()
+
     async def after_run(self, context: RunContext) -> None:
         current = asyncio.current_task()
         if current is not None and not current.cancelling():

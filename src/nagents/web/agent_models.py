@@ -57,6 +57,8 @@ class AgentModelInput(AgentModelRevision):
 
 def _profile(harness: Harness, name: str) -> None:
     harness.refresh_agent_definitions()
+    if name in harness.config.profiles and harness.config.profiles[name].a2a.configured:
+        raise HTTPException(422, "This remote agent manages its own model. Open Connection settings.")
     if name not in harness.config.profile_names:
         raise HTTPException(404, "This agent profile is no longer available.")
 

@@ -402,6 +402,9 @@ def create_app(
     register_session_actions(app, lambda: state, lambda: live)
     session_agents.register(app, lambda: state)
     agent_settings.register(app, lambda: state)
+    from .remote_agents import register as register_remote_agents
+
+    register_remote_agents(app, lambda: state)
     from .agent_models import register as register_agent_models
 
     register_agent_models(app, lambda: state)

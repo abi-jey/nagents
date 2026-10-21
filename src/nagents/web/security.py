@@ -89,14 +89,42 @@ class LocalOnly:
             await JSONResponse({"detail": detail}, status_code=status)(scope, receive, secure_send)
 
         headers = Headers(scope=scope)
+        remote_callback = False
+        if scope["path"] == "/remote-agent-login/callback" and scope["method"] == "GET":
+            raw_query = scope["query_string"]
+            scope["query_string"] = b""  # Never log an OAuth authorization code in the access URL.
+            try:
+                if len(raw_query) > 16384:
+                    raise ValueError
+                pairs = parse_qsl(
+                    raw_query.decode("ascii"), keep_blank_values=True, strict_parsing=True, max_num_fields=4
+                )
+                values = dict(pairs)
+                if (
+                    len(values) != len(pairs)
+                    or set(values) - {"state", "code", "error", "error_description"}
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{40,128}", values.get("state", ""))
+                    or bool(values.get("code")) == bool(values.get("error"))
+                ):
+                    raise ValueError
+                scope["ngn.remote_callback"] = values
+                remote_callback = True
+            except (ValueError, UnicodeError):
+                await reject(400, "Invalid remote sign-in callback")
+                return
         origin = f"http://{self.authority}"
         if self.enforce_authority and headers.getlist("host") != [self.authority]:
             await reject(403, "Untrusted Host. Open the exact loopback URL printed by ngn serve.")
             return
-        if headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}:
+        if not remote_callback and headers.get("sec-fetch-site", "") not in {"", "none", "same-origin"}:
             await reject(403, "Same-origin requests only.")
             return
-        if self.enforce_authority and headers.getlist("origin") and headers.getlist("origin") != [origin]:
+        if (
+            not remote_callback
+            and self.enforce_authority
+            and headers.getlist("origin")
+            and headers.getlist("origin") != [origin]
+        ):
             await reject(403, "Same-origin requests only.")
             return
         path = scope["path"]

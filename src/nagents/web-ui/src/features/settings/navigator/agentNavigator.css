@@ -1,4 +1,18 @@
 .agent-navigator { display: flex; height: 100%; min-width: 0; }
+.an-remote-editor { grid-column: 1 / -1; width: 100%; max-width: 760px; padding: 24px 28px; display: grid; gap: 18px; }
+.an-remote-editor .an-section-heading { justify-content: flex-start; margin-bottom: 2px; align-items: flex-start; }
+.an-remote-editor label { display: grid; gap: 7px; font-size: 12px; color: var(--text-secondary); }
+.an-remote-editor input, .an-remote-editor select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; color: var(--text-reading); background: var(--surface-input); border: 1px solid var(--border-group); border-radius: 7px; font: inherit; }
+.an-remote-editor input:focus, .an-remote-editor select:focus { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.an-remote-editor details { border-top: 1px solid var(--border-group); padding-top: 14px; }
+.an-remote-editor details > label { margin-top: 16px; }
+.an-remote-editor summary { cursor: pointer; font-size: 12px; }
+.an-remote-editor footer, .an-remote-login { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.an-remote-editor footer > span, .an-remote-login > span, .an-remote-editor small { font-size: 11px; color: var(--text-secondary); }
+.an-remote-editor .an-source-path { overflow-wrap: anywhere; font-size: 10px; color: var(--text-secondary); }
+.an-remote-authorization { background: var(--surface-selected); border: 1px solid var(--border-group); padding: 16px; border-radius: 8px; font-size: 12px; line-height: 1.6; }
+.an-remote-authorization a { color: var(--accent-blue); display: inline-flex; gap: 6px; align-items: center; }
+.an-remote-authorization code { display: block; overflow-wrap: anywhere; padding: 8px 0; }
 .an-navigation { width: 202px; flex-shrink: 0; overflow: auto; padding: 24px 12px 18px; background: var(--surface-navigation); border-right: 1px solid var(--border-group); }
 .an-navigation-heading { display: flex; align-items: center; gap: 9px; padding: 0 10px 24px; color: var(--text-secondary); }
 .an-navigation-heading h2 { color: var(--text-reading); font-size: 13px; font-weight: 570; }

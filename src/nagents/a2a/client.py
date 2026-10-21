@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from a2a.types import StreamResponse
     from a2a.types import Task
 
+    from .remote_config import RemoteAgentConfig
+
 AccessTokenProvider = Callable[[], Awaitable[str]]
 
 
@@ -154,6 +156,32 @@ class RemoteAgent:
         if not self._connected:
             raise RemoteAgentError("Use RemoteAgent as an async context manager before calling it")
         return self.client
+
+    @classmethod
+    def from_config(
+        cls,
+        config: RemoteAgentConfig,
+        tokens: AccessTokenProvider | None = None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> RemoteAgent:
+        """Build from parsed JSON; the embedding supplies its credential owner."""
+        if not config.configured:
+            raise ValueError("A remote agent connection requires a URL")
+        if (config.issuer or config.token_env) and tokens is None:
+            raise ValueError("The configured remote authentication requires a token provider")
+        context = ssl.create_default_context()
+        if config.ca_file:
+            context.load_verify_locations(cafile=config.ca_file)
+        return cls(
+            config.url,
+            tokens,
+            rpc_url=config.rpc_url,
+            loopback_http=config.loopback_http,
+            timeout=config.timeout,
+            verify=context,
+            transport=transport,
+        )
 
     async def send(self, request: SendMessageRequest) -> AsyncGenerator[StreamResponse, None]:
         """Send one caller-owned stable message without automatic replay."""

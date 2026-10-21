@@ -16,7 +16,9 @@ from .config import _install_agents
 from .config import _install_assistant_metadata
 from .config import _install_profile
 from .config import _json_profile
+from .private_store import ProtectedStoreError
 from .providers import ScopedProviderRegistryStore
+from .remote_store import RemoteAgentStore
 
 
 class AgentCatalog:
@@ -28,6 +30,9 @@ class AgentCatalog:
         )
         self._diagnostics = config.agent_diagnostics if not sources else ()
         providers = ScopedProviderRegistryStore(config.workspace, paths=config.provider_paths)
+        self.remote_store = RemoteAgentStore(
+            providers.model_store("workspace").path.parent / "connections" / "a2a.json"
+        )
         if not any(source.kind == "defaults" for source in sources):
             sources = (
                 *(
@@ -129,6 +134,15 @@ class AgentCatalog:
                 candidate.profiles = before
                 del diagnostics[notes_before:]
                 diagnostics.append(f"{source.path}: agent definitions could not be loaded ({type(error).__name__})")
+        try:
+            remotes = self.remote_store.load()
+            for name, profile in remotes.agents.items():
+                if name in candidate.profiles or name in self.overrides:
+                    raise ValueError("A remote agent name conflicts with a local definition")
+                candidate.profiles[name] = profile
+        except (OSError, ValueError, ProtectedStoreError) as error:
+            failed = True
+            diagnostics.append(f"{self.remote_store.path}: remote agents could not be loaded ({type(error).__name__})")
         if failed:
             # A partially written or invalid source never replaces an accepted catalog.
             # Diagnostics can change independently; admission uses the accepted revision.

@@ -191,6 +191,7 @@ def snapshot(state: WebState, scope: BehaviorScope, agent: str) -> dict[str, obj
                 "source": harness.config.profile(name).source,
                 "source_format": harness.config.profile(name).source_format,
                 "mode": harness.mode_for_profile(name),
+                "transport": "a2a" if harness.config.profile(name).a2a.configured else "local",
             }
             for name in harness.config.profile_names
         ],
@@ -219,6 +220,10 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     @app.put("/api/agent-settings")
     async def save(body: BehaviorInput) -> dict[str, object]:
         state = get()
+        if body.scope == "agent" and state.harness.config.profile(body.agent).a2a.configured:
+            raise HTTPException(
+                422, "This remote agent manages its own instructions and tools. Open Connection settings."
+            )
         async with state.queued_mutation():
             try:
                 current = snapshot(state, body.scope, body.agent)

@@ -23,7 +23,7 @@ export function AgentState({ agent }: { agent: TeamAgent }) {
 export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: {
   agent: TeamAgent; selected: boolean; inspect: () => void; settings: () => void; arrivalAt?: number;
 }) {
-  const context = agent.context;
+  const context = agent.providerKind === "a2a" ? undefined : agent.context;
   const marker = compactionMarker(agent);
   const warning = compactionWarning(agent);
   const provider = providerLabel(agent);
@@ -35,7 +35,7 @@ export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: 
       <span className="team-agent-heading"><span className="team-agent-identity"><strong className={hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{hasDefinition ? agent.profile : agent.name}</strong>{hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}</span><AgentState agent={agent} /></span>
       <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>
       <span className="team-agent-context" title={context ? `${contextUsageLabel(context)}: ${contextUsage(context).toLocaleString()} tokens; ${contextWindowSource(context)}${marker ? `; ${marker.description}` : ""}` : undefined}>
-        {context ? contextSummary(context) : "Context unavailable"}
+        {context ? contextSummary(context) : agent.providerKind === "a2a" ? "Context managed remotely" : "Context unavailable"}
       </span>
       {context?.context_window ? <span className="team-agent-meter" aria-hidden="true"><i style={{ width: `${contextPercent(context)}%` }} />
         {marker && <b className="team-agent-threshold" style={{ left: `${marker.percent}%` }} title={marker.description} />}

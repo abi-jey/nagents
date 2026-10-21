@@ -169,10 +169,13 @@ class Tasks:
                         "id": name,
                         "name": name,
                         "description": profile.description[:2000],
-                        "provider": provider_id
+                        "provider": "a2a"
+                        if profile.a2a.configured
+                        else provider_id
                         or profile_owner.config.provider
                         or profile_owner.config.provider_profile().kind,
-                        "model": model_id or profile_owner.agent.provider.model,
+                        "model": "" if profile.a2a.configured else model_id or profile_owner.agent.provider.model,
+                        "transport": "a2a" if profile.a2a.configured else "local",
                         "reasoning_effort": resolve_effort(profile.reasoning_effort, profile_owner.reasoning_effort()),
                         "source": profile.source,
                         "used": name in used,

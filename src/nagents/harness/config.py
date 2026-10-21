@@ -31,6 +31,7 @@ from .providers import ScopedProviderRegistryStore
 from .providers import validate_provider
 from .reasoning import ReasoningPreference
 from .reasoning import resolve_effort
+from .remote_profiles import RemoteProfile
 from .resource_config import parse_mcp_servers
 
 THEME_NAMES: tuple[str, ...] = ("terminal", "graphite", "ocean", "ember")
@@ -64,8 +65,15 @@ class AgentProfile:
     auto_update: bool = False
     default_revision: str = ""
     field_sources: tuple[tuple[str, str], ...] = ()
+    a2a: RemoteProfile = field(default_factory=RemoteProfile)
 
     def validate(self) -> None:
+        if not isinstance(self.a2a, RemoteProfile):
+            raise ValueError("a2a must be a parsed remote agent connection")
+        if self.a2a.configured and (
+            self.model or self.provider or self.reasoning_effort or self.prompt_present or self.tools is not None
+        ):
+            raise ValueError("Remote agents own their model, prompt and tools; configure these on the remote server")
         resolve_effort(self.reasoning_effort)
         if not isinstance(self.live, LiveProfile):
             raise ValueError("live must be a parsed Live profile")
@@ -690,6 +698,13 @@ def load_config(workspace: Path, config_path: Path | None = None, *, trust_proje
             overlay=True,
         )
     config.agent_sources = tuple(agent_sources)
+    from .remote_store import RemoteAgentStore
+
+    remote_agents = RemoteAgentStore(store.model_store("workspace").path.parent / "connections" / "a2a.json").load()
+    for name, profile in remote_agents.agents.items():
+        if name in config.profiles:
+            raise ValueError(f"Remote agent {name!r} conflicts with a local definition")
+        config.profiles[name] = profile
     config.agent_source_profiles = {name: replace(profile) for name, profile in config.profiles.items()}
     config.diagnostics = tuple(diagnostics)
     config.config_paths = tuple(loaded)

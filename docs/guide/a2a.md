@@ -185,6 +185,76 @@ data directory until operator retention/cleanup, independently of token expiry.
 
 ## Client, retries and task lifetime
 
+### Connect from ngn
+
+Ask the assistant to add a named A2A agent using its server URL, or open
+**Settings → Connect remote agent**. ngn discovers the host's Agent Card,
+same-origin JSON-RPC endpoint and sign-in requirements, then saves the
+connection in the workspace's trusted `connections/a2a.json` settings. Remote
+agents appear alongside local definitions in Team and in the conversation
+picker. The next model round can delegate to a newly added agent without a
+restart. Updates affect new work; active and retained work keeps its accepted
+connection. Remote definitions are JSON, separate from local agent Markdown.
+
+Issuer and requested scopes come from the host's advertised authentication
+metadata. A public PKCE client ID can be advertised using the optional
+`urn:nagents:a2a:oauth-client:v1` Agent Card extension. Native servers advertise
+their `browser_client_id` and `browser_scopes` when the client has no
+`browser_client_secret_env`; confidential credentials are never advertised.
+The extension is an ngn convention, not a standard A2A client-registration
+field. Identity-provider registration remains necessary.
+
+The UI offers **Sign in**, without issuer/client/scope input fields. Missing
+public client metadata produces a host-setup error. Register the exact ngn
+callback URL, `/remote-agent-login/callback`, with the host's public client in
+its identity provider. Provider rejections returned to ngn identify the
+client/callback setup and show that exact URL. A provider may reject an invalid
+callback without returning to ngn; the same registration guidance is shown
+beside sign-in. This version saves access tokens and asks for sign-in again
+after expiry; it does not silently refresh them.
+
+Tokens and PKCE verifiers stay on the ngn backend. The browser's API traffic
+remains same-origin; the deliberate identity-provider sign-in navigation is
+separate. The backend also proxies native ngn remote action reviews into the
+normal approval UI. Reviewer/demo permission ceilings cannot execute remote
+tasks. The remote server controls its model, instructions and tools, so local
+model/effort/compaction overrides do not apply. Remote context usage is shown
+as unavailable rather than estimated with the local model's window.
+
+### Use the library directly
+
+`RemoteAgentConfig` is a data-only JSON schema and can be imported without the
+optional SDK. `discover_remote` and `RemoteConversation` are framework APIs;
+they do not depend on the ngn harness or pretend to be model providers.
+
+```python
+import os
+import uuid
+
+from nagents.a2a import RemoteAgent, RemoteAgentConfig, RemoteConversation, discover_remote
+
+
+async def access_token() -> str:
+    # A resource-specific token supplied by the embedding's private auth layer.
+    return os.environ["PEER_ACCESS_TOKEN"]
+
+
+async def ask_peer() -> str:
+    discovered = await discover_remote(RemoteAgentConfig(url="https://agent.example.test"))
+    async with RemoteAgent.from_config(discovered.connection, access_token) as peer:
+        conversation = RemoteConversation(peer)
+        answer = ""
+        async for update in conversation.exchange("Inspect the server's available tools", message_id=str(uuid.uuid4())):
+            answer = update.text
+        return answer
+```
+
+Embeddings own credential acquisition and durable send admission. Connection
+JSON contains public metadata and optional `token_env` secret references, never
+tokens. `ca_file` adds a trusted private CA without disabling HTTPS verification.
+An explicit HTTPX transport can be supplied for embedding/testing. No remote
+token is sent during public discovery, to redirects or to a different origin.
+
 `RemoteAgent` uses the official SDK underneath. Supply a fixed origin and a
 host-owned async access-token callback; the callback runs for each HTTP request
 and can use your IdP library's resource-specific token cache. Discovery is

@@ -389,6 +389,8 @@ class SubagentManager:
         profile = self.harness.delegation_profile(agent)
         options = TaskOptions(provider, model, compact_trigger, compact_tokens, compact_messages, reasoning_effort)
         options.validate(self.harness)
+        if profile.a2a.configured and (compact_trigger or reasoning_effort):
+            raise ValueError("Remote agents manage their own compaction and reasoning settings")
         binding = self.harness.delegation_model_binding(agent, model=model, provider=provider)
         if agent not in self.harness.delegatable_profile_names:
             raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
@@ -420,6 +422,8 @@ class SubagentManager:
             started_at=time.time(),
             updated_at=time.time(),
         )
+        if profile.a2a.configured:
+            info.provider, info.provider_kind, info.model, info.reasoning_effort = "a2a", "a2a", "", ""
         if info.parent_task_id:
             parent_info = self._infos[info.parent_task_id]
             info.origin_history_id = parent_info.origin_history_id
@@ -443,7 +447,7 @@ class SubagentManager:
                 info.origin_run_id = bridge.run_id
         # Reserve both quotas before the first await, including concurrent callers.
         self.root._used += 1
-        if info.provider:
+        if info.provider and not profile.a2a.configured:
             info.provider_kind = self.harness.providers.providers[info.provider].kind
         self._infos[info.id] = info
         self._profile_snapshots[info.id] = (
@@ -544,6 +548,8 @@ class SubagentManager:
             raise RuntimeError("Cancelled tasks cannot be configured for continuation")
         options.validate(self.harness)
         accepted = self.child(task_id)
+        if accepted._remote_profile.configured:
+            raise ValueError("The remote server manages this agent's model, reasoning and compaction settings")
         route = (
             self.harness.providers.providers[options.provider]
             if options.provider
@@ -567,6 +573,8 @@ class SubagentManager:
     async def context_stats(self, task_id: str) -> dict[str, object]:
         info = self._lookup(task_id)
         child = self.child(task_id)
+        if child._remote_profile.configured:
+            return {**(await child.context_stats(info.child_session_id)).as_dict(), "compaction": {}}
         context = (await child.agent.context_stats(info.child_session_id)).as_dict()
         return {**context, "compaction": compaction_snapshot(child)}
 
@@ -840,6 +848,10 @@ class SubagentManager:
         profile = parent.config.profile("assistant") if agent == "assistant" else profiles.get(agent)
         if profile is None or not profile.subagent_available:
             raise PermissionError(f"Agent {agent!r} is no longer available for delegation")
+        if continuing and parent._remote_profile.configured:
+            # Retained work belongs to its accepted connection, even after a catalog edit.
+            profile = replace(profile, a2a=parent._remote_profile)
+            profiles = {**profiles, agent: profile}
         if not continuing and agent not in parent.delegatable_profile_names:
             raise PermissionError(f"Agent {agent!r} is not available for delegation from this profile")
         if continuing:
@@ -871,7 +883,12 @@ class SubagentManager:
             defined.refresh_instructions()
             return defined
         chatgpt = isinstance(parent.agent.provider, OpenAIProvider) and parent.agent.provider.uses_chatgpt_auth
-        if not isinstance(parent.agent.provider, HarnessProvider) and not chatgpt and not parent.config.provider:
+        if (
+            not profile.a2a.configured
+            and not isinstance(parent.agent.provider, HarnessProvider)
+            and not chatgpt
+            and not parent.config.provider
+        ):
             raise ValueError(
                 "Custom provider cloning for subagents is not implemented; no fallback provider is substituted"
             )
@@ -994,6 +1011,9 @@ class SubagentManager:
                 )
                 info.reasoning_effort = child.reasoning_effort()
                 info.compaction = compaction_snapshot(child)
+                if child._remote_profile.configured:
+                    info.provider, info.provider_kind, info.model = "a2a", "a2a", ""
+                    info.reasoning_effort, info.compaction = "", {}
                 child.agent.plugins.append(ChildActivity(self, info, child))
                 done: DoneEvent | None = None
 
