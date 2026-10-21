@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 
-function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}) {
+function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660, autoCheckpoint = true } = {}) {
   const created = [];
   const sockets = [];
   let now = 100;
@@ -49,11 +49,22 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
       super(context);
       this.name = name;
       this.posted = [];
+      this.acceptedSamples = 0;
       const listeners = [];
       this.port = {
         onmessage: null,
         postMessage: message => {
           this.posted.push(message);
+          if (message?.type === "pcm") this.acceptedSamples += message.buffer.byteLength / 2;
+          if (autoCheckpoint && message?.type === "trace-checkpoint") {
+            if (this.acceptedSamples > 0) this.port.emit({ type: "trace", epoch: message.epoch, sequence: 0,
+              omittedIntervals: 0, batchIntervals: 1,
+              intervals: [{ sourceStart: 0, samples: this.acceptedSamples, at: 1,
+                until: 1 + (this.acceptedSamples - 1) / 24000 }] });
+            this.port.emit({ type: "trace-checkpoint", epoch: message.epoch, requestId: message.requestId,
+              status: "completed", acceptedEnd: this.acceptedSamples, renderedEnd: this.acceptedSamples,
+              receivedEnd: this.acceptedSamples, renderedAt: 1, omittedIntervals: 0 });
+          }
           if (message === "arm") this.port.onmessage?.({ data: { type: "capture-start", schema: 2,
             frameOrigin: 4096, observedFrame: 4096, sampleOffset: 0, sequence: 0, sampleRate: 48000 } });
           if (message === "stop") this.port.onmessage?.({ data: { type: "capture-stop", schema: 2,
@@ -286,17 +297,21 @@ test("received live PCM preserves packet bytes/order and playback-clock metadata
   const capture = globals.__voiceE2E.export();
   assert.equal(capture.schema, "ngn-browser-voice-e2e/v2");
   assert.deepEqual(Array.from(capture.received, packet => [packet.sequence, packet.transportSequence, packet.sampleOffset,
-    packet.receivedSamples, packet.transportReceivedSamples, packet.samples, packet.sampleRate, packet.contextId, packet.epoch, packet.realtime]), [
-    [0, 1, 0, 2, 3, 2, 24000, 0, 3, true], [1, 2, 2, 3, 4, 1, 24000, 0, 3, true],
+    packet.receivedSamples, packet.measurementSampleOffset, packet.measurementReceivedSamples,
+    packet.transportReceivedSamples, packet.samples, packet.sampleRate, packet.contextId, packet.epoch, packet.realtime]), [
+    [0, 0, 0, 1, null, 0, 1, 1, 24000, 0, 0, false],
+    [1, 1, 1, 3, 0, 2, 3, 2, 24000, 0, 3, true],
+    [2, 2, 3, 4, 2, 3, 4, 1, 24000, 0, 3, true],
   ]);
   assert.deepEqual(Array.from(capture.received, packet => Buffer.from(packet.pcm16, "base64").toString("hex")), [
-    "01000200", "0300",
+    "0909", "01000200", "0300",
   ]);
-  assert.equal(capture.received[0].audioTime, 12.02);
-  assert.equal(capture.received[1].audioTime, 12.04);
+  assert.equal(capture.received[0].audioTime, 0);
+  assert.equal(capture.received[1].audioTime, 12.02);
+  assert.equal(capture.received[2].audioTime, 12.04);
   assert.equal(typeof capture.received[0].monotonicMs, "number");
   assert.equal(typeof capture.received[0].wallMs, "number");
-  assert.equal(capture.receivedPcm.capturedBytes, 6);
+  assert.equal(capture.receivedPcm.capturedBytes, 8);
   assert.equal(capture.receivedPcm.omittedPackets, 0);
   assert.equal(capture.clock.measurementStartedAudioTime, 12);
   const submissions = capture.events.filter(event => event.type === "playback.submit");
@@ -305,7 +320,7 @@ test("received live PCM preserves packet bytes/order and playback-clock metadata
     [0, 1, 1, true], [1, 3, 3, true], [2, 4, 4, true],
   ]);
   assert.equal(submissions[1].receivedSamples, 2); // This count is measurement-relative, unlike transport totals.
-  assert.equal(submissions[1].receivedSequence, capture.received[0].transportSequence);
+  assert.equal(submissions[1].receivedSequence, capture.received[1].transportSequence);
   assert.equal(submissions[1].audioTime, 12.02);
   const controls = capture.events.filter(event => event.type === "playback.control");
   assert.deepEqual(Array.from(controls, event => [event.controlType, event.epoch, event.realtime]), [
@@ -317,8 +332,9 @@ test("received live PCM preserves packet bytes/order and playback-clock metadata
 
 test("received PCM is not falsely counted as submitted when a packet never reaches the playback port", async () => {
   const { globals } = fixture();
-  new globals.AudioContext();
+  const speaker = new globals.AudioContext();
   await globals.navigator.mediaDevices.getUserMedia({ audio: true });
+  new globals.AudioWorkletNode(speaker, "ngn-live-playback");
   const socket = new globals.WebSocket("ws://localhost/api/live/sessions/voice-owned/audio");
   await globals.__voiceE2E.play(0, 1);
   socket.emit("message", new globals.ArrayBuffer(8));
@@ -327,10 +343,53 @@ test("received PCM is not falsely counted as submitted when a packet never reach
   assert.equal(capture.events.filter(event => event.type === "playback.submit").length, 0);
 });
 
-test("received PCM capture is byte-bounded, reports omissions, and never stores excess packets", async () => {
-  const { globals } = fixture({ maxSeconds: 30 });
+test("measurement ends only after a matching checkpoint and complete trace prefix", async () => {
+  const { globals, created } = fixture({ autoCheckpoint: false });
   new globals.AudioContext();
   await globals.navigator.mediaDevices.getUserMedia({ audio: true });
+  const socket = new globals.WebSocket("ws://localhost/api/live/sessions/voice-owned/audio");
+  const playback = new globals.AudioWorkletNode(created[0], "ngn-live-playback");
+  const playing = globals.__voiceE2E.play(0, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  const begin = playback.posted.at(-1);
+  playback.port.emit({ type: "trace-checkpoint", epoch: 0, requestId: begin.requestId, status: "completed",
+    acceptedEnd: 0, renderedEnd: 0, receivedEnd: 0, renderedAt: 1, omittedIntervals: 0 });
+  await playing;
+  const packet = new globals.ArrayBuffer(4);
+  socket.emit("message", packet);
+  playback.port.postMessage({ type: "pcm", epoch: 0, buffer: packet });
+  const finish = globals.__voiceE2E.finishMeasurement();
+  const request = playback.posted.at(-1);
+  assert.equal(request.type, "trace-checkpoint");
+  const continuousTail = new globals.ArrayBuffer(4);
+  socket.emit("message", continuousTail);
+  playback.port.postMessage({ type: "pcm", epoch: 0, buffer: continuousTail });
+  playback.port.emit({ type: "trace-checkpoint", epoch: 0, requestId: request.requestId, status: "completed",
+    acceptedEnd: 2, renderedEnd: 2, receivedEnd: 4, renderedAt: 1 + 1 / 24000, omittedIntervals: 0 });
+  let finished = false;
+  void finish.then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, false); // Response alone is not proof that the ACKed trace prefix arrived.
+  playback.port.emit({ type: "trace", epoch: 0, sequence: 0, omittedIntervals: 0, batchIntervals: 1,
+    intervals: [{ sourceStart: 0, samples: 2, at: 1, until: 1 + 1 / 24000 }] });
+  const result = await finish;
+  assert.equal(result.verified, true);
+  assert.equal(result.acceptedEnd, 2); // Continuous RTP after the snapshot is a separate tail.
+  assert.equal(result.receivedEnd, 4);
+  const events = globals.__voiceE2E.export().events;
+  assert.equal(events.filter(event => event.type === "measurement.end").length, 1);
+  const checkpoint = events.find(event => event.type === "playback.trace-checkpoint");
+  assert.equal(checkpoint.type, "playback.trace-checkpoint");
+  assert.equal(checkpoint.status, "completed");
+  assert.equal(events.find(event => event.type === "measurement.end").renderedEnd, 2);
+  assert.equal(events.find(event => event.type === "playback.trace").samples, 2);
+});
+
+test("received PCM capture is byte-bounded, reports omissions, and never stores excess packets", async () => {
+  const { globals } = fixture({ maxSeconds: 30 });
+  const speaker = new globals.AudioContext();
+  await globals.navigator.mediaDevices.getUserMedia({ audio: true });
+  new globals.AudioWorkletNode(speaker, "ngn-live-playback");
   const socket = new globals.WebSocket("ws://localhost/api/live/sessions/voice-owned/audio");
   await globals.__voiceE2E.play(0, 1);
   const packet = new globals.ArrayBuffer(48000); // One second of accepted mono s16le at 24 kHz.

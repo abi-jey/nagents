@@ -5,6 +5,7 @@ import ast
 import base64
 import copy
 import json
+import math
 import os
 import shutil
 import struct
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from examples.live.browser_e2e.artifacts import _normalized_pcm_correlation
 from examples.live.browser_e2e.artifacts import check_authenticated_scenario
 from examples.live.browser_e2e.artifacts import check_capture
 from examples.live.browser_e2e.artifacts import extract_report
@@ -409,10 +411,105 @@ def test_latency_mapping_ignores_connection_warmup_epoch_but_not_recording_reset
     assert timing_metrics(report)["sampleAgeAvailable"] is False
 
 
+def add_measurement_checkpoint(report: dict[str, object], rendered_end: int) -> None:
+    events = cast("list[dict[str, object]]", report["events"])
+    trace = next((event for event in events if event.get("type") in {"playback.trace", "playback.rendered"}), {})
+    context_id = trace.get("contextId", 0)
+    epoch = trace.get("epoch", 0)
+    source_start = trace.get("sourceStart", 0)
+    starts = [event for event in events if event.get("type") == "measurement.start"]
+    if not starts:
+        start = {
+            "type": "measurement.start",
+            "contextId": context_id,
+            "epoch": epoch,
+            "sourceStart": source_start,
+            "beginRequestId": 6,
+            "beginAcceptedEnd": source_start,
+            "transportReceivedSamplesAtStart": source_start,
+            "monotonicMs": 1000,
+        }
+        events.append(start)
+    else:
+        start = starts[0]
+        start.update(
+            {
+                "contextId": context_id,
+                "epoch": epoch,
+                "sourceStart": source_start,
+                "beginRequestId": 6,
+                "beginAcceptedEnd": source_start,
+                "transportReceivedSamplesAtStart": source_start,
+            }
+        )
+    events.extend(
+        [
+            {
+                "type": "measurement.checkpoint-request",
+                "phase": "begin",
+                "requestId": 6,
+                "contextId": context_id,
+                "epoch": epoch,
+                "submittedEnd": source_start,
+                "receivedSamples": 0,
+                "transportReceivedSamples": source_start,
+                "captureOrder": 99_999,
+                "monotonicMs": 900,
+            },
+            {
+                "type": "playback.trace-checkpoint",
+                "requestId": 6,
+                "contextId": context_id,
+                "epoch": epoch,
+                "status": "completed",
+                "acceptedEnd": source_start,
+                "receivedEnd": source_start,
+                "renderedEnd": source_start,
+                "renderedAt": 2.0,
+                "omittedIntervals": 0,
+            },
+            {
+                "type": "measurement.checkpoint-request",
+                "requestId": 7,
+                "contextId": context_id,
+                "epoch": epoch,
+                "phase": "end",
+                "submittedEnd": rendered_end,
+                "receivedSamples": rendered_end - cast("int", source_start),
+                "transportReceivedSamples": rendered_end,
+                "captureOrder": 100_000,
+                "monotonicMs": 2000,
+            },
+            {
+                "type": "playback.trace-checkpoint",
+                "requestId": 7,
+                "contextId": context_id,
+                "epoch": epoch,
+                "status": "completed",
+                "acceptedEnd": rendered_end,
+                "receivedEnd": rendered_end,
+                "renderedEnd": rendered_end,
+                "renderedAt": 2.02,
+                "omittedIntervals": 0,
+            },
+            {
+                "type": "measurement.end",
+                "requestId": 7,
+                "contextId": context_id,
+                "epoch": epoch,
+                "acceptedEnd": rendered_end,
+                "renderedEnd": rendered_end,
+                "transportReceivedSamples": rendered_end,
+                "monotonicMs": 2020,
+            },
+        ]
+    )
+
+
 def rendered_speech_report(*, audible: bool = True, source_start: int = 0) -> dict[str, object]:
     pcm = struct.pack("<4h", 0, 1000, -1200, 0)
     output = struct.pack("<8h", *([1000] * 8)) if audible else struct.pack("<8h", *([0] * 8))
-    return {
+    report = {
         "contexts": [{"id": 0, "sampleRate": 48000}],
         "events": [
             {
@@ -459,6 +556,8 @@ def rendered_speech_report(*, audible: bool = True, source_start: int = 0) -> di
         ],
         "sourcePcm": base64.b64encode(pcm).decode(),
     }
+    add_measurement_checkpoint(report, source_start + 4)
+    return report
 
 
 def test_rendered_speech_age_fails_delayed_voiced_pcm_but_ignores_quiet_queue() -> None:
@@ -526,7 +625,7 @@ def test_rendered_speech_age_fails_closed_on_invalid_source_coordinates() -> Non
 def test_rendered_speech_age_rejects_missing_render_report_coverage() -> None:
     report = rendered_speech_report()
     events = cast("list[dict[str, object]]", report["events"])
-    second = events[-1].copy()
+    second = next(event for event in events if event.get("type") == "playback.rendered").copy()
     second["sourceStart"] = 8
     cast("list[dict[str, object]]", report["events"]).append(second)
     result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
@@ -713,6 +812,7 @@ def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
             "outputTimestamp": {"contextTime": 48004 / 48000, "performanceTime": 6000},
         }
     ]
+    add_measurement_checkpoint(report, 4)
     return report
 
 
@@ -862,6 +962,41 @@ def traced_graph_report(*, delayed_gap: bool = False, output_silent: bool = Fals
             "underruns": 0,
         }
     ]
+    add_measurement_checkpoint(report, 480)
+    return report
+
+
+def fractional_phase_report(*, isolated_transient: bool = False, unrelated_output: bool = False) -> dict[str, object]:
+    state = 0x12345678
+    source = []
+    for _ in range(480):
+        state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+        source.append(((state >> 8) & 0xFFFF) - 32768)
+    if isolated_transient:
+        source = [0] * 480
+        source[240] = 12000
+    report = traced_graph_report()
+    packet_bytes = struct.pack("<480h", *source)
+    cast("list[dict[str, object]]", report["received"])[0]["pcm16"] = base64.b64encode(packet_bytes).decode()
+    source_output = source
+    if unrelated_output:
+        state = 0x9ABCDEF0
+        source_output = []
+        for _ in range(480):
+            state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+            source_output.append(((state >> 8) & 0xFFFF) - 32768)
+    output = [0] * 10_100
+    phase_frames = 1.8
+    for frame in range(2 * len(source) + 6):
+        source_position = (frame - phase_frames) / 2
+        left = math.floor(source_position)
+        phase = source_position - left
+        left_value = source_output[left] if 0 <= left < len(source_output) else 0
+        right_value = source_output[left + 1] if 0 <= left + 1 < len(source_output) else 0
+        output[frame] = round(left_value * (1 - phase) + right_value * phase)
+    cast("list[dict[str, object]]", report["output"])[0]["pcm16"] = base64.b64encode(
+        struct.pack(f"<{len(output)}h", *output)
+    ).decode()
     return report
 
 
@@ -886,6 +1021,185 @@ def test_graph_render_age_uses_trace_and_correlates_attenuated_output_pcm() -> N
     assert attenuated["available"] is True
 
 
+def test_graph_checkpoint_excludes_preloaded_unaligned_warmup_from_measured_prefix() -> None:
+    report = traced_graph_report()
+    received = cast("list[dict[str, object]]", report["received"])
+    warmup_bytes = struct.pack("<7h", *([0] * 7))
+    warmup = {
+        **received[0],
+        "sequence": 0,
+        "transportSequence": 0,
+        "captureOrder": 50,
+        "sampleOffset": 0,
+        "receivedSamples": 7,
+        "transportReceivedSamples": 7,
+        "samples": 7,
+        "bytes": len(warmup_bytes),
+        "measurementSampleOffset": None,
+        "measurementReceivedSamples": 0,
+        "pcm16": base64.b64encode(warmup_bytes).decode(),
+    }
+    voice = received[0]
+    voice.update(
+        {
+            "sequence": 1,
+            "transportSequence": 1,
+            "captureOrder": 51,
+            "sampleOffset": 7,
+            "receivedSamples": 487,
+            "transportReceivedSamples": 487,
+        }
+    )
+    received.insert(0, warmup)
+    cast("dict[str, object]", report["receivedPcm"]).update(
+        packetCount=2, capturedPackets=2, samples=487, capturedSamples=487, capturedBytes=974
+    )
+    events = cast("list[dict[str, object]]", report["events"])
+    start = next(event for event in events if event.get("type") == "measurement.start")
+    start.update(
+        {
+            "sourceStart": 7,
+            "beginAcceptedEnd": 7,
+            "transportReceivedSamplesAtStart": 7,
+            "transportReceivedPacketsAtStart": 1,
+        }
+    )
+    begin_request = next(
+        event
+        for event in events
+        if event.get("type") == "measurement.checkpoint-request" and event.get("phase") == "begin"
+    )
+    begin_request.update({"submittedEnd": 7, "transportReceivedSamples": 7})
+    begin_response = next(
+        event for event in events if event.get("type") == "playback.trace-checkpoint" and event.get("requestId") == 6
+    )
+    begin_response.update({"acceptedEnd": 7, "receivedEnd": 7, "renderedEnd": 7})
+    end_request = next(
+        event
+        for event in events
+        if event.get("type") == "measurement.checkpoint-request" and event.get("phase") == "end"
+    )
+    end_request.update({"submittedEnd": 487, "receivedSamples": 480, "transportReceivedSamples": 487})
+    end_response = next(
+        event for event in events if event.get("type") == "playback.trace-checkpoint" and event.get("requestId") == 7
+    )
+    end_response.update({"acceptedEnd": 487, "receivedEnd": 487, "renderedEnd": 487})
+    next(event for event in events if event.get("type") == "measurement.end").update(
+        {"acceptedEnd": 487, "renderedEnd": 487, "transportReceivedSamples": 487}
+    )
+    voice_submit = next(event for event in events if event.get("type") == "playback.submit")
+    voice_submit.update({"submittedSamples": 487, "receivedSequence": 1, "receivedSamples": 487})
+    events.insert(
+        events.index(voice_submit),
+        {
+            "type": "playback.submit",
+            "contextId": 0,
+            "epoch": 0,
+            "samples": 7,
+            "bytes": 14,
+            "submittedSamples": 7,
+            "receivedSequence": 0,
+            "receiveMonotonicMs": 900,
+        },
+    )
+    voiced_trace = next(event for event in events if event.get("type") == "playback.trace")
+    voiced_trace.update({"sourceStart": 7, "sequence": 1, "captureOrder": 101})
+    events.insert(
+        events.index(voiced_trace),
+        {
+            **voiced_trace,
+            "sourceStart": 0,
+            "samples": 7,
+            "sequence": 0,
+            "batchIntervals": 1,
+            "at": 1.0,
+            "until": 1 + 6 / 24000,
+            "captureOrder": 100,
+        },
+    )
+
+    metric = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert metric["available"] is True
+    assert metric["checkpointSourceStart"] == 7
+    assert metric["checkpointRenderedEnd"] == 487
+    assert metric["unsubmittedReceivedPackets"] == 0
+
+
+def test_graph_checkpoint_rejects_an_interval_that_crosses_the_start_boundary() -> None:
+    report = traced_graph_report()
+    events = cast("list[dict[str, object]]", report["events"])
+    start = next(event for event in events if event.get("type") == "measurement.start")
+    start.update({"sourceStart": 1, "beginAcceptedEnd": 1, "transportReceivedSamplesAtStart": 1})
+    begin_request = next(
+        event
+        for event in events
+        if event.get("type") == "measurement.checkpoint-request" and event.get("phase") == "begin"
+    )
+    begin_request.update({"submittedEnd": 1, "transportReceivedSamples": 1})
+    begin_response = next(
+        event for event in events if event.get("type") == "playback.trace-checkpoint" and event.get("requestId") == 6
+    )
+    begin_response.update({"acceptedEnd": 1, "receivedEnd": 1, "renderedEnd": 1})
+
+    metric = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert metric["available"] is False
+    assert metric["checkpointBoundaryCoordinateErrors"] == 1
+
+
+def test_graph_render_correlation_handles_fractional_phase_and_quiet_context() -> None:
+    report = fractional_phase_report()
+    source = array.array(
+        "h",
+        struct.unpack(
+            "<480h", base64.b64decode(cast("str", cast("list[dict[str, object]]", report["received"])[0]["pcm16"]))
+        ),
+    )
+    output = array.array(
+        "h",
+        struct.unpack(
+            "<10100h", base64.b64decode(cast("str", cast("list[dict[str, object]]", report["output"])[0]["pcm16"]))
+        ),
+    )
+    interval = next(
+        event for event in cast("list[dict[str, object]]", report["events"]) if event.get("type") == "playback.trace"
+    )
+    offsets = list(range(480))
+    coarse = max(
+        _normalized_pcm_correlation(source, output, offsets, 2, 2 + 479 / 24000, 480, 48000, 96_000, shift)
+        for shift in range(-128, 129, 8)
+    )
+    fine = max(
+        _normalized_pcm_correlation(
+            source,
+            output,
+            offsets,
+            cast("float", interval["at"]),
+            cast("float", interval["until"]),
+            480,
+            48000,
+            96_000,
+            shift,
+        )
+        for shift in range(-2, 3)
+    )
+    assert coarse < 0.65
+    assert fine > 0.9
+    result = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert result["available"] is True
+
+    transient = cast(
+        "dict[str, object]",
+        timing_metrics(fractional_phase_report(isolated_transient=True))["graphRenderedSpeechAge"],
+    )
+    assert transient["available"] is True
+    unrelated = cast(
+        "dict[str, object]",
+        timing_metrics(fractional_phase_report(unrelated_output=True))["graphRenderedSpeechAge"],
+    )
+    assert unrelated["available"] is False
+    assert unrelated["uncorrelatedOutputIntervals"] == 1
+
+
 def test_graph_render_age_rejects_missing_trace_tail_and_silent_output() -> None:
     report = traced_graph_report()
     events = cast("list[dict[str, object]]", report["events"])
@@ -898,11 +1212,54 @@ def test_graph_render_age_rejects_missing_trace_tail_and_silent_output() -> None
     partial = traced_graph_report()
     cast("list[dict[str, object]]", partial["health"])[0]["playedSamples"] = 960
     tail = cast("dict[str, object]", timing_metrics(partial)["graphRenderedSpeechAge"])
-    assert tail["available"] is False
-    assert tail["tailCoordinateErrors"] == 1
+    assert tail["available"] is True  # Atomic checkpoint is authoritative; final health can be stale.
+    assert tail["checkpointValid"] is True
+
+    missing_checkpoint = traced_graph_report()
+    cast("list[dict[str, object]]", missing_checkpoint["events"]).__delitem__(slice(None))
+    cast("list[dict[str, object]]", missing_checkpoint["events"]).extend(
+        event
+        for event in cast("list[dict[str, object]]", traced_graph_report()["events"])
+        if event.get("type")
+        not in {"measurement.start", "measurement.checkpoint-request", "playback.trace-checkpoint", "measurement.end"}
+    )
+    missing = cast("dict[str, object]", timing_metrics(missing_checkpoint)["graphRenderedSpeechAge"])
+    assert missing["available"] is False
+    assert missing["checkpointValid"] is False
+
+    interrupted = traced_graph_report()
+    checkpoint = next(
+        event
+        for event in cast("list[dict[str, object]]", interrupted["events"])
+        if event.get("type") == "playback.trace-checkpoint"
+    )
+    checkpoint["status"] = "interrupted"
+    invalid = cast("dict[str, object]", timing_metrics(interrupted)["graphRenderedSpeechAge"])
+    assert invalid["available"] is False
+
+    wrong_id = traced_graph_report()
+    end_request = next(
+        event
+        for event in cast("list[dict[str, object]]", wrong_id["events"])
+        if event.get("type") == "measurement.checkpoint-request" and event.get("phase") == "end"
+    )
+    end_request["requestId"] = 999
+    assert cast("dict[str, object]", timing_metrics(wrong_id)["graphRenderedSpeechAge"])["available"] is False
+
+    overshoot = traced_graph_report()
+    end_checkpoint = next(
+        event
+        for event in cast("list[dict[str, object]]", overshoot["events"])
+        if event.get("type") == "playback.trace-checkpoint" and event.get("requestId") == 7
+    )
+    end_checkpoint["renderedEnd"] = 700
+    assert cast("dict[str, object]", timing_metrics(overshoot)["graphRenderedSpeechAge"])["available"] is False
+    assert tail["tailCoordinateErrors"] == 0
 
     omitted = traced_graph_report()
-    cast("list[dict[str, object]]", omitted["events"])[-1]["omittedIntervals"] = 1
+    next(
+        event for event in cast("list[dict[str, object]]", omitted["events"]) if event.get("type") == "playback.trace"
+    )["omittedIntervals"] = 1
     missing_interval = cast("dict[str, object]", timing_metrics(omitted)["graphRenderedSpeechAge"])
     assert missing_interval["available"] is False
     assert missing_interval["omittedIntervals"] == 1
@@ -912,6 +1269,42 @@ def test_graph_render_age_rejects_missing_trace_tail_and_silent_output() -> None
     )
     assert silent["available"] is False
     assert silent["uncorrelatedOutputIntervals"] == 1
+
+
+def test_post_checkpoint_pcm_is_retained_and_reported_outside_the_verified_prefix() -> None:
+    report = traced_graph_report()
+    packet_bytes = struct.pack("<480h", *([0] * 480))
+    cast("list[dict[str, object]]", report["received"]).append(
+        {
+            "sequence": 1,
+            "transportSequence": 1,
+            "captureOrder": 100_001,
+            "sampleOffset": 480,
+            "receivedSamples": 960,
+            "transportReceivedSamples": 960,
+            "samples": 480,
+            "bytes": 960,
+            "sampleRate": 24000,
+            "contextId": 0,
+            "epoch": 0,
+            "monotonicMs": 2021,
+            "pcm16": base64.b64encode(packet_bytes).decode(),
+        }
+    )
+    cast("dict[str, object]", report["receivedPcm"]).update(
+        packetCount=2, capturedPackets=2, samples=960, capturedSamples=960, capturedBytes=1920
+    )
+    events = cast("list[dict[str, object]]", report["events"])
+    trace = next(event for event in events if event.get("type") == "playback.trace")
+    events.append(
+        {**trace, "sequence": 1, "sourceStart": 480, "at": 2.02, "until": 2.02 + 479 / 24000, "captureOrder": 100_001}
+    )
+
+    metric = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert metric["available"] is True
+    assert metric["postCheckpointReceivedSamples"] == 480
+    assert metric["traceIntervalsOutsideMeasuredPrefix"] == 1
+    assert metric["unsubmittedReceivedPackets"] == 0
 
 
 def test_graph_render_age_requires_complete_received_ledger_including_quiet_packets() -> None:
@@ -1113,6 +1506,7 @@ def traced_pause_report(*, pause_samples: int, extra_ms: float) -> dict[str, obj
             "underruns": 1,
         }
     ]
+    add_measurement_checkpoint(report, len(source))
     return report
 
 

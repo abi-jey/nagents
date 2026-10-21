@@ -147,6 +147,8 @@ def test_realistic_continuous_live_queue_and_late_run_id_allow_next_round(monkey
                 return next(clock)
             if expression == "globalThis.__voiceE2E.status()":
                 return state
+            if expression == "globalThis.__voiceE2E.finishMeasurement()":
+                return {"verified": True}
             return None
 
     clicks: list[list[str]] = []

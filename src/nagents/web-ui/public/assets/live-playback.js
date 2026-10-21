@@ -29,6 +29,7 @@ class RenderTrace {
     this.pending = -1;
     this.omittedIntervals = 0;
     this.nextAt = 0;
+    this.forceQueued = false;
   }
 
   configure(enabled) {
@@ -40,6 +41,7 @@ class RenderTrace {
     this.intervals = [];
     this.pending = -1;
     this.nextAt = 0;
+    this.forceQueued = false;
   }
 
   acknowledge(sequence) {
@@ -55,13 +57,24 @@ class RenderTrace {
     this.flush();
   }
 
+  forceDrain() {
+    if (!this.enabled) return;
+    this.forceQueued = true;
+    this.flush();
+  }
+
   flush() {
-    if (!this.enabled || this.pending >= 0 || !this.intervals.length ||
-        (this.intervals.length < 10 && currentTime < this.nextAt)) return;
+    if (!this.enabled || this.pending >= 0) return;
+    if (!this.intervals.length) {
+      this.forceQueued = false;
+      return;
+    }
+    if (this.intervals.length < 10 && currentTime < this.nextAt && !this.forceQueued) return;
     this.pending = this.sequence++;
     this.nextAt = currentTime + .2;
     this.port.postMessage({ type: "trace", epoch: this.epoch, sequence: this.pending,
       intervals: this.intervals.splice(0, 10), omittedIntervals: this.omittedIntervals });
+    if (!this.intervals.length) this.forceQueued = false;
   }
 }
 
@@ -69,6 +82,7 @@ class LivePlayback extends AudioWorkletProcessor {
   constructor() {
     super();
     this.trace = new RenderTrace(this.port);
+    this.pendingTraceCheckpoint = null;
     this.samples = new Int16Array(CAPACITY);
     // Only downsampling needs an anti-alias filter. Keep its delay line across
     // packets; a packet-local filter would itself create periodic transients.
@@ -130,7 +144,12 @@ class LivePlayback extends AudioWorkletProcessor {
       if (data?.type === "reset") { this.reset(data.epoch); return; }
       if (data?.type === "barrier") { this.fenceReports(data.epoch); return; }
       if (data?.type === "trace" && data.epoch === this.epoch && typeof data.enabled === "boolean") {
+        if (!data.enabled) this.interruptTraceCheckpoint();
         this.trace.configure(data.enabled); return;
+      }
+      if (data?.type === "trace-checkpoint" && data.epoch === this.epoch &&
+          Number.isSafeInteger(data.requestId) && data.requestId >= 0) {
+        this.requestTraceCheckpoint(data.requestId); return;
       }
       if (data?.type === "trace-ack" && data.epoch === this.epoch && Number.isSafeInteger(data.sequence) && data.sequence >= 0) {
         this.trace.acknowledge(data.sequence); return;
@@ -152,6 +171,7 @@ class LivePlayback extends AudioWorkletProcessor {
 
   reset(epoch) {
     if (!Number.isSafeInteger(epoch)) return;
+    this.interruptTraceCheckpoint();
     this.interruptedSamples += this.count;
     this.epoch = epoch;
     this.trace.reset(epoch);
@@ -175,11 +195,51 @@ class LivePlayback extends AudioWorkletProcessor {
 
   fenceReports(epoch) {
     if (!Number.isSafeInteger(epoch)) return;
+    this.interruptTraceCheckpoint();
     this.epoch = epoch;
     this.trace.reset(epoch);
     this.reportSize = 0;
     this.healthPending = this.playedPending = false;
     this.health();
+  }
+
+  renderedSampleEnd() {
+    return this.playedSamples + this.droppedSamples + this.interruptedSamples;
+  }
+
+  postTraceCheckpoint(checkpoint, status, renderedAt) {
+    this.port.postMessage({ type: "trace-checkpoint", epoch: checkpoint.epoch,
+      requestId: checkpoint.requestId, status, acceptedEnd: checkpoint.acceptedEnd,
+      renderedEnd: this.renderedSampleEnd(), receivedEnd: this.receivedSamples, renderedAt,
+      omittedIntervals: this.trace.omittedIntervals });
+  }
+
+  interruptTraceCheckpoint() {
+    if (!this.pendingTraceCheckpoint) return;
+    const checkpoint = this.pendingTraceCheckpoint;
+    this.pendingTraceCheckpoint = null;
+    this.postTraceCheckpoint(checkpoint, "interrupted", currentTime);
+  }
+
+  finishTraceCheckpoint(renderedAt) {
+    const checkpoint = this.pendingTraceCheckpoint;
+    if (!checkpoint) return;
+    this.flushReport();
+    this.trace.forceDrain();
+    this.pendingTraceCheckpoint = null;
+    this.postTraceCheckpoint(checkpoint, "completed", renderedAt);
+  }
+
+  requestTraceCheckpoint(requestId) {
+    if (!this.trace.enabled) return;
+    if (this.pendingTraceCheckpoint) {
+      this.port.postMessage({ type: "trace-checkpoint", epoch: this.epoch, requestId,
+        status: "busy", acceptedEnd: this.receivedSamples, renderedEnd: this.renderedSampleEnd(),
+        receivedEnd: this.receivedSamples, renderedAt: currentTime, omittedIntervals: this.trace.omittedIntervals });
+      return;
+    }
+    this.pendingTraceCheckpoint = { epoch: this.epoch, requestId, acceptedEnd: this.receivedSamples };
+    if (this.renderedSampleEnd() >= this.receivedSamples) this.finishTraceCheckpoint(currentTime);
   }
 
   append(buffer) {
@@ -220,6 +280,7 @@ class LivePlayback extends AudioWorkletProcessor {
     const excess = Math.max(0, this.count + incoming - limit);
     let incomingOffset = 0;
     if (excess) {
+      this.interruptTraceCheckpoint();
       const queued = Math.min(this.count, excess);
       this.read = (this.read + queued) % CAPACITY;
       this.count -= queued;
@@ -371,6 +432,9 @@ class LivePlayback extends AudioWorkletProcessor {
     }
     // The node is mono. Extra requested channels receive the same playout.
     for (let channel = 1; channel < outputs[0].length; channel++) outputs[0][channel].set(output);
+    if (this.pendingTraceCheckpoint && this.renderedSampleEnd() >= this.pendingTraceCheckpoint.acceptedEnd) {
+      this.finishTraceCheckpoint(currentTime + output.length / sampleRate);
+    }
     if (currentTime >= this.nextHealth) this.health();
     if (this.trace.enabled) this.trace.flush();
     return true;

@@ -145,8 +145,16 @@ gates on `graphRenderedSpeechAge` per minute. The isolated E2E playback node opt
 into a bounded numeric worklet trace: every flushed source-coordinate interval is
 batched and acknowledged independently of the visual played reports. The trace
 contains no PCM. The checker validates batch sequence, omissions, source
-coordinates, and final played counters, then correlates voiced received PCM with
-actual post-volume recorder PCM within one output quantum. It reports packet
+coordinates, then correlates voiced received PCM with actual post-volume
+recorder PCM within one output quantum. Before the first fixture, the runner
+checkpoints the graph after it drains preloaded warmup audio. This gives the
+measured window an exact source-sample boundary even when the first packet is
+not quantum-aligned. Before normal UI End, it requests a second checkpoint that
+snapshots accepted source samples and drains the trace through the matching
+rendered coordinate. The graph gate uses only this complete atomic prefix;
+capture continues through normal close/finalization, and later received or
+rendered PCM remains visible as post-measurement tail data. Stale periodic health
+samples cannot substitute for either checkpoint. It reports packet
 arrival-to-software-render-graph age and detects added gaps between voiced source
 samples. Missing intervals, incomplete receive/output PCM, silent or unrelated
 output, dropped samples, and added gaps over 40 ms during short source pauses

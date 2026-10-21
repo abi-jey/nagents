@@ -398,6 +398,10 @@ def scenario_capture(
         else:
             raise TimeoutError(f"Round {index} did not produce the expected transcript/delegation/audio")
 
+    checkpoint = cdp.evaluate("globalThis.__voiceE2E.finishMeasurement()", session=session)
+    if not isinstance(checkpoint, dict) or checkpoint.get("verified") is not True:
+        raise RuntimeError("Audio measurement did not reach a complete source-to-render checkpoint")
+
     try:
         click_button(cdp, session, ["End voice"], timeout=1)
     except TimeoutError:

@@ -6,16 +6,18 @@ import { runInNewContext } from "node:vm";
 type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number; interruptedSamples: number; silenceRefills: number };
 type Played = { type: "played"; epoch: number; at: number; until: number; sourceStart: number; buffer: ArrayBuffer };
 type Trace = { type: "trace"; epoch: number; sequence: number; omittedIntervals: number; intervals: { sourceStart: number; samples: number; at: number; until: number }[] };
+type TraceCheckpoint = { type: "trace-checkpoint"; epoch: number; requestId: number; status: "completed" | "interrupted" | "busy"; acceptedEnd: number; renderedEnd: number; receivedEnd: number; renderedAt: number; omittedIntervals: number };
 function fixture(rate = 48000) {
   let Processor!: new () => { port: { onmessage(event: { data: object }): void }; process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean };
-  const health: Health[] = [], played: Played[] = [], traces: Trace[] = [];
+  const health: Health[] = [], played: Played[] = [], traces: Trace[] = [], checkpoints: TraceCheckpoint[] = [];
   let acknowledge = true, acknowledgeTrace = true;
-  class Base { port = { onmessage: (_event: { data: object }) => {}, postMessage(data: Health | Played | Trace) {
+  class Base { port = { onmessage: (_event: { data: object }) => {}, postMessage(data: Health | Played | Trace | TraceCheckpoint) {
     if (data.type === "health") health.push(data);
     else if (data.type === "trace") {
       traces.push(data);
       if (acknowledgeTrace) processor.port.onmessage({ data: { type: "trace-ack", epoch: data.epoch, sequence: data.sequence } });
-    } else {
+    } else if (data.type === "trace-checkpoint") checkpoints.push(data);
+    else {
       played.push(data);
       if (acknowledge) processor.port.onmessage({ data: { type: "played-ack", epoch: data.epoch } });
     }
@@ -31,10 +33,11 @@ function fixture(rate = 48000) {
     processor.process([], [[output]]); position += output.length;
     return output;
   };
-  return { health, played, traces, render, acknowledge: (value: boolean) => { acknowledge = value; },
+  return { health, played, traces, checkpoints, render, acknowledge: (value: boolean) => { acknowledge = value; },
     acknowledgeTrace(value: boolean) { acknowledgeTrace = value; },
     trace(enabled = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace", enabled, epoch: suppliedEpoch } }); },
     traceAck(sequence: number, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace-ack", sequence, epoch: suppliedEpoch } }); },
+    traceCheckpoint(requestId: number, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace-checkpoint", requestId, epoch: suppliedEpoch } }); },
     realtime(value = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "mode", epoch: suppliedEpoch, realtime: value } }); },
     barrier() { epoch++; processor.port.onmessage({ data: { type: "barrier", epoch } }); },
     get time() { return position / rate; },
@@ -527,4 +530,75 @@ test("same-epoch trace disable and re-enable cannot accept an old acknowledgemen
   assert.equal(f.traces.length, 3, "the matching acknowledgement releases newly queued intervals");
   assert.equal(f.traces[2].sequence, 2);
   assert.equal(f.stats().droppedSamples, 0);
+});
+
+
+test("trace checkpoints snapshot accepted PCM while production continues and drain exact prefix timing", () => {
+  const plain = fixture(), traced = fixture(); traced.trace();
+  plain.push(pcm(2400)); traced.push(pcm(2400));
+  traced.traceCheckpoint(17);
+  traced.traceCheckpoint(18);
+  assert.equal(traced.checkpoints.length, 1);
+  assert.equal(traced.checkpoints[0].status, "busy");
+  assert.equal(traced.checkpoints[0].requestId, 18);
+  let futurePacket = false;
+  while (!traced.checkpoints.some(item => item.requestId === 17)) {
+    if (!futurePacket && traced.time >= .05) {
+      plain.push(pcm(480)); traced.push(pcm(480)); futurePacket = true;
+    }
+    assert.deepEqual(traced.render(), plain.render(), "checkpoints and trace metadata must not change PCM");
+  }
+  const checkpoint = traced.checkpoints.find(item => item.requestId === 17)!;
+  assert.equal(checkpoint.status, "completed");
+  assert.equal(checkpoint.acceptedEnd, 2400);
+  assert(checkpoint.receivedEnd > checkpoint.acceptedEnd, "the producer continues after the accepted snapshot");
+  assert(checkpoint.renderedEnd >= checkpoint.acceptedEnd);
+  assert(checkpoint.renderedEnd - checkpoint.acceptedEnd <= 128, "completion may overshoot by at most one output quantum");
+  assert.equal(checkpoint.renderedAt, traced.time);
+  const intervals = traced.traces.flatMap(batch => batch.intervals);
+  let end = 0;
+  for (const interval of intervals) {
+    assert.equal(interval.sourceStart, end);
+    end += interval.samples;
+  }
+  assert(end >= checkpoint.renderedEnd, "the completed checkpoint flushes its partial timing interval");
+  assert.equal(checkpoint.omittedIntervals, 0);
+});
+
+test("an empty trace checkpoint completes immediately and tracing remains opt-in", () => {
+  const disabled = fixture(); disabled.traceCheckpoint(1);
+  assert.equal(disabled.checkpoints.length, 0, "normal playback ignores checkpoint requests unless tracing is enabled");
+  const f = fixture(); f.trace(); f.traceCheckpoint(2);
+  assert.equal(JSON.stringify(f.checkpoints), JSON.stringify([{ type: "trace-checkpoint", epoch: 0, requestId: 2, status: "completed",
+    acceptedEnd: 0, renderedEnd: 0, receivedEnd: 0, renderedAt: 0, omittedIntervals: 0 }]));
+});
+
+test("a completed checkpoint force-drains small queued batches after the matching trace acknowledgement", () => {
+  const f = fixture(); f.trace(); f.acknowledgeTrace(false); f.push(pcm(4800));
+  while (f.time < .24) f.render();
+  assert.equal(f.traces.length, 1);
+  f.traceCheckpoint(23);
+  while (!f.checkpoints.length && f.time < .45) f.render();
+  assert.equal(f.checkpoints[0]?.status, "completed");
+  assert.equal(f.traces.length, 1, "the in-flight batch still requires its acknowledgement");
+  f.traceAck(0);
+  assert.equal(f.traces.length, 2, "force-drain sends the queued partial batch immediately");
+  assert(f.traces[1].intervals.length < 10);
+  assert.equal(f.traces[1].sequence, 1);
+  assert.equal(f.stats().droppedSamples, 0);
+});
+
+test("reset, barrier, and overflow interrupt pending trace checkpoints without false completion", () => {
+  for (const boundary of ["reset", "barrier"] as const) {
+    const f = fixture(); f.trace(); f.push(pcm(4800)); f.traceCheckpoint(31);
+    if (boundary === "reset") f.reset(); else f.barrier();
+    assert.equal(f.checkpoints[0]?.status, "interrupted", `${boundary} must interrupt the snapshot`);
+    assert.equal(f.checkpoints[0]?.epoch, 0);
+    assert.equal(f.checkpoints.length, 1);
+  }
+  const overflow = fixture(); overflow.realtime(); overflow.trace(); overflow.push(pcm(6000));
+  overflow.traceCheckpoint(32); overflow.push(pcm(24000));
+  assert.equal(overflow.checkpoints[0]?.status, "interrupted", "a dropped prefix cannot be called rendered");
+  assert(overflow.stats().droppedSamples > 0);
+  assert(overflow.checkpoints[0]!.renderedEnd < overflow.checkpoints[0]!.acceptedEnd);
 });

@@ -265,18 +265,182 @@ def _source_offset_time(at: float, until: float, offset: int, samples: int) -> f
     return at + (until - at) * offset / max(1, samples - 1)
 
 
+def _normalized_pcm_correlation(
+    source: array.array[int],
+    rendered: array.array[int],
+    offsets: list[int],
+    at: float,
+    until: float,
+    samples: int,
+    output_rate: float,
+    output_origin: int,
+    shift: int,
+) -> float:
+    pairs: list[tuple[float, float]] = []
+    for offset in offsets:
+        source_value = float(source[offset])
+        output_frame = round(_source_offset_time(at, until, offset, samples) * output_rate) + shift - output_origin
+        if 0 <= output_frame < len(rendered):
+            pairs.append((source_value, float(rendered[output_frame])))
+    minimum_pairs = min(8, max(2, len(offsets) // 4))
+    if len(pairs) < minimum_pairs:
+        return -1.0
+    source_mean = sum(left for left, _ in pairs) / len(pairs)
+    rendered_mean = sum(right for _, right in pairs) / len(pairs)
+    source_energy = sum((left - source_mean) ** 2 for left, _ in pairs)
+    rendered_energy = sum((right - rendered_mean) ** 2 for _, right in pairs)
+    if source_energy <= 0 or rendered_energy <= 0:
+        return -1.0
+    covariance = sum((left - source_mean) * (right - rendered_mean) for left, right in pairs)
+    return covariance / math.sqrt(source_energy * rendered_energy)
+
+
 def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
     """Validate traced source PCM against the software-sink post-volume graph."""
     events = objects(report.get("events"))
-    trace = [event for event in events if event.get("type") == "playback.trace"]
+    all_trace = [event for event in events if event.get("type") == "playback.trace"]
+    starts = [event for event in events if event.get("type") == "measurement.start"]
+    requests = [event for event in events if event.get("type") == "measurement.checkpoint-request"]
+    checkpoints = [event for event in events if event.get("type") == "playback.trace-checkpoint"]
+    ends = [event for event in events if event.get("type") == "measurement.end"]
+    measurement_start = starts[0] if len(starts) == 1 else {}
+    begin_requests = [event for event in requests if event.get("phase") == "begin"]
+    end_requests = [event for event in requests if event.get("phase") == "end"]
+    begin_request = begin_requests[0] if len(begin_requests) == 1 else {}
+    request = end_requests[0] if len(end_requests) == 1 else {}
+    begin_request_id = begin_request.get("requestId")
+    end_request_id = request.get("requestId")
+    begin_replies = [event for event in checkpoints if event.get("requestId") == begin_request_id]
+    end_replies = [event for event in checkpoints if event.get("requestId") == end_request_id]
+    begin_checkpoint = begin_replies[0] if len(begin_replies) == 1 else {}
+    checkpoint = end_replies[0] if len(end_replies) == 1 else {}
+    end = ends[0] if len(ends) == 1 else {}
+    received_summary = report.get("receivedPcm")
+    context_rate = number(
+        next(
+            (
+                item.get("sampleRate")
+                for item in objects(report.get("contexts"))
+                if item.get("id") == measurement_start.get("contextId") and type(item.get("sampleRate")) is int
+            ),
+            0,
+        )
+    )
+    max_checkpoint_overshoot = math.ceil(128 * 24000 / context_rate) if context_rate > 0 else -1
+    begin_accepted = begin_checkpoint.get("acceptedEnd")
+    begin_received = begin_checkpoint.get("receivedEnd")
+    begin_rendered = begin_checkpoint.get("renderedEnd")
+    summary_samples = received_summary.get("samples") if isinstance(received_summary, dict) else None
+    start_received = measurement_start.get("transportReceivedSamplesAtStart")
+    accepted = checkpoint.get("acceptedEnd")
+    received_at_checkpoint = checkpoint.get("receivedEnd")
+    rendered = checkpoint.get("renderedEnd")
+    end_received = end.get("transportReceivedSamples")
+    checkpoint_valid = (
+        bool(measurement_start)
+        and bool(begin_request)
+        and bool(begin_checkpoint)
+        and bool(request)
+        and bool(checkpoint)
+        and bool(end)
+        and begin_request.get("requestId") == measurement_start.get("beginRequestId")
+        and begin_request.get("contextId") == measurement_start.get("contextId")
+        and begin_request.get("epoch") == measurement_start.get("epoch")
+        and type(begin_request.get("submittedEnd")) is int
+        and type(begin_request.get("transportReceivedSamples")) is int
+        and type(begin_request_id) is int
+        and begin_request_id >= 0
+        and begin_request.get("submittedEnd") == begin_request.get("transportReceivedSamples")
+        and begin_checkpoint.get("status") == "completed"
+        and begin_checkpoint.get("contextId") == begin_request.get("contextId")
+        and begin_checkpoint.get("epoch") == begin_request.get("epoch")
+        and begin_checkpoint.get("requestId") == begin_request.get("requestId")
+        and type(begin_accepted) is int
+        and type(begin_checkpoint.get("omittedIntervals")) is int
+        and begin_accepted == begin_request.get("submittedEnd")
+        and type(begin_received) is int
+        and type(begin_rendered) is int
+        and begin_received >= begin_accepted
+        and isinstance(received_summary, dict)
+        and type(summary_samples) is int
+        and begin_received <= summary_samples
+        and begin_rendered <= begin_received
+        and begin_rendered >= begin_accepted
+        and begin_rendered - begin_accepted <= max_checkpoint_overshoot
+        and begin_rendered == measurement_start.get("sourceStart")
+        and begin_checkpoint.get("omittedIntervals") == 0
+        and measurement_start.get("beginAcceptedEnd") == begin_accepted
+        and type(start_received) is int
+        and start_received >= begin_received
+        and type(end_request_id) is int
+        and end_request_id >= 0
+        and end_request_id == checkpoint.get("requestId") == end.get("requestId")
+        and measurement_start.get("contextId")
+        == request.get("contextId")
+        == checkpoint.get("contextId")
+        == end.get("contextId")
+        and measurement_start.get("epoch") == request.get("epoch") == checkpoint.get("epoch") == end.get("epoch")
+        and checkpoint.get("status") == "completed"
+        and type(measurement_start.get("sourceStart")) is int
+        and type(accepted) is int
+        and type(rendered) is int
+        and type(received_at_checkpoint) is int
+        and type(request.get("submittedEnd")) is int
+        and type(request.get("transportReceivedSamples")) is int
+        and accepted == request.get("submittedEnd")
+        and request.get("submittedEnd") == request.get("transportReceivedSamples")
+        and received_at_checkpoint >= accepted
+        and isinstance(received_summary, dict)
+        and type(summary_samples) is int
+        and received_at_checkpoint <= summary_samples
+        and rendered <= received_at_checkpoint
+        and rendered >= accepted
+        and rendered - accepted <= max_checkpoint_overshoot
+        and type(checkpoint.get("omittedIntervals")) is int
+        and checkpoint.get("omittedIntervals") == 0
+        and end.get("renderedEnd") == rendered
+        and end.get("acceptedEnd") == accepted
+        and type(end_received) is int
+        and end_received >= received_at_checkpoint
+    )
+    trace = []
+    boundary_coordinate_errors = 0
+    if checkpoint_valid:
+        measured_prefix_start = cast("int", measurement_start["sourceStart"])
+        measured_prefix_end = cast("int", rendered)
+        target_context, target_epoch = measurement_start.get("contextId"), measurement_start.get("epoch")
+        for item in all_trace:
+            source_start, count = item.get("sourceStart"), item.get("samples")
+            if (
+                item.get("contextId") != target_context
+                or item.get("epoch") != target_epoch
+                or type(source_start) is not int
+                or type(count) is not int
+                or count <= 0
+            ):
+                continue
+            left, right = max(measured_prefix_start, source_start), min(measured_prefix_end, source_start + count)
+            if right <= left:
+                continue
+            if source_start < measured_prefix_start < source_start + count:
+                boundary_coordinate_errors += 1
+            if source_start < measured_prefix_end < source_start + count:
+                boundary_coordinate_errors += 1
+            clipped = dict(item)
+            if left != source_start or right != source_start + count:
+                at, until = number(item.get("at"), float("nan")), number(item.get("until"), float("nan"))
+                clipped["at"] = at + (until - at) * (left - source_start) / max(1, count - 1)
+                clipped["until"] = at + (until - at) * (right - 1 - source_start) / max(1, count - 1)
+                clipped["sourceStart"], clipped["samples"] = left, right - left
+            trace.append(clipped)
     output_blocks = objects(report.get("output"))
     output_complete = complete_pcm(output_blocks, output=True) and recorder_counters_continuous(output_blocks)
     received_complete = received_pcm_ledger_complete(report)
     packets_by_transport: dict[int, tuple[array.array[int], int, float, object, object]] = {}
+    receive_capture_orders: dict[int, int] = {}
+    receive_transport_ends: dict[int, int] = {}
     duplicate_received_sequences = 0
-    beginning = min(
-        (number(item.get("monotonicMs")) for item in events if item.get("type") == "measurement.start"), default=0
-    )
+    beginning = number(measurement_start.get("monotonicMs"))
     for packet in objects(report.get("received")):
         transport = packet.get("transportSequence")
         raw = pcm_bytes(packet)
@@ -298,6 +462,10 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
             packet.get("contextId"),
             packet.get("epoch"),
         )
+        if type(packet.get("captureOrder")) is int:
+            receive_capture_orders[transport] = cast("int", packet["captureOrder"])
+        if type(packet.get("receivedSamples")) is int:
+            receive_transport_ends[transport] = cast("int", packet["receivedSamples"])
 
     submissions: list[dict[str, object]] = []
     invalid_submissions = 0
@@ -305,18 +473,16 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
     for event in events:
         if event.get("type") != "playback.submit":
             continue
-        count, end, received_sequence = (
+        count, submitted_end, received_sequence = (
             event.get("samples"),
             event.get("submittedSamples"),
             event.get("receivedSequence"),
         )
-        if number(event.get("receiveMonotonicMs"), float("inf")) < beginning:
-            continue
         if (
             type(count) is not int
             or count <= 0
-            or type(end) is not int
-            or end < count
+            or type(submitted_end) is not int
+            or submitted_end < count
             or type(received_sequence) is not int
             or received_sequence not in packets_by_transport
             or event.get("bytes") != count * 2
@@ -340,15 +506,25 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
             {
                 "contextId": event.get("contextId"),
                 "epoch": event.get("epoch"),
-                "start": end - count,
-                "end": end,
+                "start": submitted_end - count,
+                "end": submitted_end,
                 "source": source,
                 "receivedOffset": receive_offset,
                 "receiveMs": receive_ms,
             }
         )
     submissions.sort(key=lambda item: (number(item.get("contextId")), number(item.get("start"))))
-    unsubmitted_received_packets = len(set(packets_by_transport) - submitted_transports)
+    checkpoint_order = request.get("captureOrder") if checkpoint_valid else None
+    measured_transport_sequences = {
+        transport
+        for transport in packets_by_transport
+        if receive_transport_ends.get(transport, 0) > number(measurement_start.get("transportReceivedSamplesAtStart"))
+        and (
+            type(checkpoint_order) is not int
+            or receive_capture_orders.get(transport, checkpoint_order + 1) <= checkpoint_order
+        )
+    }
+    unsubmitted_received_packets = len(measured_transport_sequences - submitted_transports)
     source_starts: dict[int, list[int]] = {}
     source_ranges: dict[int, list[dict[str, object]]] = {}
     for submission in submissions:
@@ -400,7 +576,7 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
     batch_omissions: dict[tuple[object, object, object], int] = {}
     sequence_errors = 0
     omitted_intervals = 0
-    for event in trace:
+    for event in all_trace:
         key = (event.get("contextId"), event.get("epoch"), event.get("sequence"))
         expected_count = event.get("batchIntervals")
         if (
@@ -516,34 +692,22 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
         if output_context != context_id or output_rate <= 0:
             output_unconfirmed += 1
             continue
-        offsets = list(range(0, count, max(1, count // 120)))
-        if offsets[-1] != count - 1:
-            offsets.append(count - 1)
-        best_correlation = -1.0
-        for shift in range(-128, 129, 8):
-            pairs: list[tuple[float, float]] = []
-            for offset in offsets:
-                source_value = float(source_values[offset])
-                if source_value == 0:
-                    continue
-                source_time = _source_offset_time(at, until, offset, count)
-                sample_index = round(source_time * output_rate) + shift - output_origin
-                if 0 <= sample_index < len(output_samples):
-                    pairs.append((source_value, float(output_samples[sample_index])))
-            minimum_pairs = min(8, max(2, len(offsets) // 4))
-            if len(pairs) < minimum_pairs:
-                continue
-            source_mean = sum(pair[0] for pair in pairs) / len(pairs)
-            output_mean = sum(pair[1] for pair in pairs) / len(pairs)
-            source_energy = sum((left - source_mean) ** 2 for left, _ in pairs)
-            output_energy = sum((right - output_mean) ** 2 for _, right in pairs)
-            if source_energy <= 0 or output_energy <= 0:
-                continue
-            correlation = sum((left - source_mean) * (right - output_mean) for left, right in pairs) / math.sqrt(
-                source_energy * output_energy
+        # Retain zero samples: they provide useful context for short, isolated
+        # transients and prevent a few loud points from defining a whole span.
+        offsets = list(range(count))
+        best_correlation = max(
+            _normalized_pcm_correlation(
+                source_values, output_samples, offsets, at, until, count, output_rate, output_origin, shift
             )
-            if correlation > best_correlation:
-                best_correlation = correlation
+            for shift in range(-2, 3)
+        )
+        if best_correlation < 0.9:
+            best_correlation = max(
+                _normalized_pcm_correlation(
+                    source_values, output_samples, offsets, at, until, count, output_rate, output_origin, shift
+                )
+                for shift in range(-128, 129)
+            )
         if best_correlation < 0.65:
             output_unconfirmed += 1
             continue
@@ -585,29 +749,21 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
                     gated_gap_excesses.append(excess)
             previous_voiced[context_id] = (coordinate, render_context_time, arrival_ms)
 
-    final_counters = objects(report.get("health"))
-    final_coordinates: dict[int, int] = {}
-    for item in final_counters:
-        context_id = item.get("contextId")
-        if type(context_id) is int:
-            final_coordinates[context_id] = max(
-                final_coordinates.get(context_id, 0),
-                int(
-                    number(item.get("playedSamples"))
-                    + number(item.get("droppedSamples"))
-                    + number(item.get("interruptedSamples"))
-                ),
-            )
-    last_trace_end: dict[int, int] = {}
-    for (context_id, _epoch), end in trace_ends.items():
-        if type(context_id) is int:
-            last_trace_end[context_id] = max(last_trace_end.get(context_id, 0), end)
-    tail_errors = sum(
-        1
-        for context_id, end in last_trace_end.items()
-        if context_id not in final_coordinates or end != final_coordinates[context_id]
-    )
-    tail_errors += sum(1 for context_id in final_coordinates if context_id not in last_trace_end)
+    prefix_context = measurement_start.get("contextId")
+    prefix_epoch = measurement_start.get("epoch")
+    result_prefix_start = measurement_start.get("sourceStart")
+    result_prefix_end = checkpoint.get("renderedEnd")
+    prefix_coordinate_errors = 0
+    if checkpoint_valid:
+        prefix_key = (prefix_context, prefix_epoch)
+        prefix_coordinate_errors = int(
+            prefix_key not in trace_ends
+            or trace_ends.get(prefix_key) != result_prefix_end
+            or not trace
+            or min(int(number(item.get("sourceStart"))) for item in trace) != result_prefix_start
+        )
+    else:
+        prefix_coordinate_errors = 1
     omitted_events = number(report.get("omitted"))
     available = (
         bool(ages)
@@ -625,7 +781,8 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
                 coverage_errors,
                 source_unmapped,
                 output_unconfirmed,
-                tail_errors,
+                prefix_coordinate_errors,
+                boundary_coordinate_errors,
             )
         )
     )
@@ -633,6 +790,23 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
         {"minute": minute, "observations": len(values), "p95Ms": percentile(values), "maxMs": max(values)}
         for minute, values in sorted(age_minutes.items())
     ]
+    post_checkpoint_received_samples = (
+        max(0, int(number(received_summary.get("samples")) - number(checkpoint.get("receivedEnd"))))
+        if isinstance(received_summary, dict) and checkpoint_valid
+        else None
+    )
+    accepted_during_checkpoint_samples = (
+        max(0, int(number(checkpoint.get("receivedEnd")) - number(checkpoint.get("acceptedEnd"))))
+        if checkpoint_valid
+        else None
+    )
+    post_prefix_trace_intervals = max(0, len(all_trace) - len(trace)) if checkpoint_valid else None
+    checkpoint_output_frame = round(number(checkpoint.get("renderedAt")) * output_rate) if checkpoint_valid else 0
+    post_checkpoint_output_samples = (
+        max(0, output_origin + len(output_samples) - checkpoint_output_frame)
+        if checkpoint_valid and output_rate > 0
+        else None
+    )
     return {
         "available": available,
         "clock": "software_output_graph",
@@ -649,7 +823,17 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
         "invalidSubmissions": invalid_submissions,
         "unmappedSourceIntervals": source_unmapped,
         "uncorrelatedOutputIntervals": output_unconfirmed,
-        "tailCoordinateErrors": tail_errors,
+        "tailCoordinateErrors": prefix_coordinate_errors,
+        "checkpointBoundaryCoordinateErrors": boundary_coordinate_errors,
+        "checkpointValid": checkpoint_valid,
+        "checkpointContextId": prefix_context,
+        "checkpointEpoch": prefix_epoch,
+        "checkpointSourceStart": result_prefix_start,
+        "checkpointRenderedEnd": result_prefix_end,
+        "postCheckpointReceivedSamples": post_checkpoint_received_samples,
+        "receivedSamplesAcceptedDuringCheckpoint": accepted_during_checkpoint_samples,
+        "traceIntervalsOutsideMeasuredPrefix": post_prefix_trace_intervals,
+        "approxPostCheckpointOutputSamples": post_checkpoint_output_samples,
         "maximumAddedVoicedGapMs": max(gap_excesses, default=0),
         "maximumClassifiableAddedGapMs": max(gated_gap_excesses, default=0),
         "longSourcePauseGaps": long_source_gaps,
