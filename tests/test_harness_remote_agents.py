@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from copy import deepcopy
@@ -13,6 +14,7 @@ from nagents.events import Event
 from nagents.events import TextDoneEvent
 from nagents.harness.agent_definitions import discover_agents
 from nagents.harness.config import AgentProfile
+from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.remote_profiles import RemoteProfile
 from nagents.harness.remote_store import RemoteAgentStore
 from tests.support.providers import FakeProvider
@@ -99,6 +101,39 @@ def test_remote_tool_trust_is_connection_bound_and_preserved_only_for_same_bindi
     revoked_by_binding_change = store.save({"peer-review": changed_binding}, expected=preserved.revision)
     assert revoked_by_binding_change.trusted_connections == frozenset()
     assert json.loads(store.path.read_text(encoding="utf-8"))["agents"]["peer-review"]["trust_remote_tools"] is False
+
+
+def test_oauth_credentials_are_shared_but_tool_trust_stays_in_each_workspace(tmp_path: Path) -> None:
+    connection = RemoteProfile(
+        url="https://peer.example",
+        issuer="https://issuer.example",
+        client_id="public-client",
+        scopes=("openid", "ngn:invoke"),
+        timeout=45,
+    )
+    workspace_a = RemoteAgentStore(tmp_path / "workspace-a" / "settings" / "connections" / "a2a.json")
+    workspace_b = RemoteAgentStore(tmp_path / "workspace-b" / "settings" / "connections" / "a2a.json")
+    first_agent = AgentProfile(description="Workspace A name", a2a=connection)
+    second_agent = AgentProfile(description="A different workspace name", a2a=connection)
+    revision_a = workspace_a.load().revision
+    trusted_a = workspace_a.save({"review": first_agent}, expected=revision_a, trust_updates=(("review", True),))
+    revision_b = workspace_b.load().revision
+    workspace_b.save({"audit": second_agent}, expected=revision_b)
+
+    grant_a = RemoteCredentials(connection)
+    grant_a.save(
+        "cross-workspace-access",
+        4102444800.0,
+        refresh_token="cross-workspace-refresh",
+        token_endpoint="https://issuer.example/token",
+    )
+    grant_b_after_restart = RemoteCredentials(connection)
+
+    assert grant_a.path == grant_b_after_restart.path
+    assert asyncio.run(grant_b_after_restart.token()) == "cross-workspace-access"
+    assert trusted_a.trusted_connections == frozenset({connection.fingerprint})
+    assert workspace_b.load().trusted_connections == frozenset()
+    assert json.loads(workspace_b.path.read_text(encoding="utf-8"))["agents"]["audit"]["trust_remote_tools"] is False
 
 
 def test_remote_tool_trust_updates_use_revision_cas_and_strict_booleans(tmp_path: Path) -> None:

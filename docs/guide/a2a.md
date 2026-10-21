@@ -213,7 +213,18 @@ callback without returning to ngn; the same registration guidance is shown
 beside sign-in. The UI shows credential status and expiry from the protected
 local record; checking it does not contact the remote host. When the issuer
 returns a refresh token, ngn stores the access and rotating refresh credentials
-in protected workspace data and refreshes them on use. If the issuer does not
+in the user's protected credential store and refreshes them on use. The default
+location is `~/.local/share/ngn/auth/a2a/<connection-fingerprint>.json`, or
+`$XDG_DATA_HOME/ngn/auth/a2a/` when `XDG_DATA_HOME` is set. Sign-in survives
+stopping and restarting `ngn serve`; workspaces using the exact same connection
+share that user's grant and refresh lock. Connection definitions and remote
+tool trust remain workspace settings. Files are plaintext protected by private
+filesystem ownership and permissions (directories `0700`, files `0600`), not
+application-level encryption. Containers must persist the user data directory.
+After upgrading from workspace credential storage, sign in once in the new
+store. An operator preserving an existing grant must stop the old ngn process
+before moving it; do not keep independently refreshable copies in both stores.
+If the issuer does not
 provide a refresh token, ngn asks for sign-in again after access-token expiry.
 An uncertain refresh is never replayed with the old refresh token; sign in again
 before sending another task.

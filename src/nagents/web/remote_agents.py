@@ -121,7 +121,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
         catalog = harness._agent_catalog.remote_store.load()
         agents = []
         for name, profile in catalog.agents.items():
-            authentication = await RemoteCredentials(harness.agent.session.db_path.parent, profile.a2a).status()
+            authentication = await RemoteCredentials(profile.a2a).status()
             signed_in = authentication["state"] in {"signed_in", "token_ready", "not_required"}
             agents.append(
                 {
@@ -226,7 +226,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
                 "The remote host has not advertised a public sign-in client. Ask its administrator to configure a public PKCE client and register this ngn server's callback URL with the identity provider: "
                 + callback_url(request),
             )
-        credentials = RemoteCredentials(get().harness.agent.session.db_path.parent, profile)
+        credentials = RemoteCredentials(profile)
         try:
             async with httpx.AsyncClient(
                 verify=credentials.tls(), trust_env=False, follow_redirects=False, timeout=10
@@ -301,7 +301,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
         try:
             from nagents.a2a.client import RemoteAgent
 
-            credentials = RemoteCredentials(get().harness.agent.session.db_path.parent, profile)
+            credentials = RemoteCredentials(profile)
             async with RemoteAgent.from_config(
                 profile, credentials.token if profile.issuer or profile.token_env else None
             ) as remote:
@@ -347,7 +347,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
             raise HTTPException(422, message)
         if configured(flow.agent) != flow.profile:
             raise HTTPException(409, "The remote connection changed during sign-in. Start again.")
-        credentials = RemoteCredentials(get().harness.agent.session.db_path.parent, flow.profile)
+        credentials = RemoteCredentials(flow.profile)
         try:
             async with httpx.AsyncClient(
                 verify=credentials.tls(), trust_env=False, follow_redirects=False, timeout=10

@@ -281,7 +281,7 @@ def test_oauth_pkce_cookie_wrong_browser_replay_and_private_token_storage(
 ) -> None:
     async def scenario() -> None:
         mock_calls: list[httpx.Request] = []
-        async with client_app(tmp_path, config=config(tmp_path)) as (app, client, headers, harnesses):
+        async with client_app(tmp_path, config=config(tmp_path)) as (app, client, headers, _harnesses):
             mock_issuer(monkeypatch, calls=mock_calls)
             initial = (await client.get("/api/remote-agents", headers=headers)).json()
             saved = await client.put(
@@ -353,7 +353,7 @@ def test_oauth_pkce_cookie_wrong_browser_replay_and_private_token_storage(
             assert replay.status_code == 403
 
             profile = RemoteProfile.parse(connection())
-            credential = RemoteCredentials(harnesses[0].agent.session.db_path.parent, profile)
+            credential = RemoteCredentials(profile)
             assert credential.path.is_file()
             assert credential.path.stat().st_mode & 0o777 == 0o600
             assert credential.path.parent.stat().st_mode & 0o777 == 0o700

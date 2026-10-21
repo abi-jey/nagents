@@ -76,7 +76,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
         if (abort.signal.aborted || epoch !== statusEpoch.current) return;
         const remote = reply.agents.find(item => item.name === agent);
         setAuthentication(remote?.authentication);
-        if (remote?.signed_in) { setSignedIn(true); setSignInPending(""); setMessage("Signed in. All chats in this workspace can use this connection."); }
+        if (remote?.signed_in) { setSignedIn(true); setSignInPending(""); setMessage("Signed in. Saved for this user across chats and workspaces using the same connection."); }
         else if (remote?.login_error) { setError(remote.login_error); setSignInPending(""); }
       } catch { /* The next bounded poll can recover a transient status read. */ }
       finally { reading = false; }
@@ -160,7 +160,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
     <label>Server URL<input type="url" required value={connection.url} onChange={event => update("url", event.target.value)} placeholder="https://agent.example.test:8443" /></label>
     {agent && <section className="an-remote-auth" aria-label="Remote authentication"><div className="an-remote-login"><RemoteStatus authentication={authentication} />{connection.issuer && <button type="button" className="primary" disabled={busy || dirty || hostSetupMissing} onClick={() => void login()}>{signedIn ? "Sign in again" : "Sign in"}</button>}</div>
       {!!authentication?.expires_at && <p>Access token expires <time dateTime={new Date(authentication.expires_at * 1000).toISOString()}>{new Date(authentication.expires_at * 1000).toLocaleString()}</time>.{authentication.refreshable ? " Refreshes automatically when used." : " Sign in again after expiry."}</p>}
-      <p>One sign-in is shared by all chats using this connection in this workspace.</p>
+      <p>Sign-in is saved for this user across chats, workspaces, and ngn restarts using the same connection.</p>
     </section>}
     {agent && <section className="an-remote-trust" aria-label="Remote tool permissions"><div><strong>Remote tool permissions</strong><span>{trusted ? "Trusted connection" : "Review each operation"}</span></div>
       <p>{trusted ? "Tool approval requests from this connection are accepted automatically in all chats in this workspace. The remote harness still applies its own execution rules." : "Review the exact remote tool inputs before they run."}</p>
