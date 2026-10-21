@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from nagents.events import ErrorEvent
 from nagents.events import Event
 from nagents.events import TextDoneEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote_profiles import RemoteProfile
+from nagents.web.provider_setup import provider_error
 from nagents.web.provider_setup import provider_setup
 from tests.support.providers import FakeProvider
 from tests.support.providers import setup_harness
@@ -59,3 +61,51 @@ async def test_remote_profile_is_ready_without_local_openai_api_key(
         assert provider_setup(harness) == {"configured": True, "message": ""}
     finally:
         await harness.close()
+
+
+@pytest.mark.parametrize(
+    ("code", "guidance"),
+    [
+        ("A2A_CONNECTION", "remote agent could not be reached or needs sign-in"),
+        ("A2A_UNAVAILABLE", "Remote agents require nagents[a2a]"),
+        ("A2A_HOST_SETUP", "has not advertised a public sign-in client"),
+        ("A2A_PERMISSION", "read-only or offline demo mode"),
+        ("A2A_BINDING_CHANGED", "different remote connection"),
+        ("A2A_OUTCOME_UNKNOWN", "uncertain outcome"),
+        ("A2A_TASK_FAILED", "did not complete this request"),
+    ],
+)
+def test_known_a2a_errors_show_remote_guidance_without_provider_payload(code: str, guidance: str) -> None:
+    event = ErrorEvent(
+        message="PRIVATE_UPSTREAM_MESSAGE_MARKER",
+        code=code,
+        extra={
+            "transport": {"reason": "PRIVATE_EXTRA_MARKER"},
+            "provider": {"error": "PRIVATE_PROVIDER_MARKER"},
+        },
+    )
+
+    category, message = provider_error(event)
+
+    assert category == code.lower()
+    assert guidance in message
+    assert "PRIVATE_UPSTREAM_MESSAGE_MARKER" not in message
+    assert "PRIVATE_EXTRA_MARKER" not in message
+    assert "PRIVATE_PROVIDER_MARKER" not in message
+
+
+def test_unknown_a2a_error_uses_generic_safe_fallback() -> None:
+    event = ErrorEvent(
+        message="PRIVATE_UPSTREAM_MESSAGE_MARKER",
+        code="A2A_FUTURE_PRIVATE_CODE",
+        extra={"details": "PRIVATE_EXTRA_MARKER"},
+    )
+
+    category, message = provider_error(event)
+
+    assert category == "provider_failure"
+    assert "Provider request failed." in message
+    assert "Remote agent" not in message
+    assert "A2A_FUTURE_PRIVATE_CODE" not in message
+    assert "PRIVATE_UPSTREAM_MESSAGE_MARKER" not in message
+    assert "PRIVATE_EXTRA_MARKER" not in message
