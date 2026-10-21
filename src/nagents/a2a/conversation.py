@@ -144,17 +144,28 @@ class RemoteConversation:
         Never replay an uncertain send. Input-required completes this exchange;
         the next answer goes to the same task rather than starting it again.
         """
-        settled = TERMINAL_STATES | {TaskState.TASK_STATE_INPUT_REQUIRED}
+        settled = TERMINAL_STATES | {TaskState.TASK_STATE_INPUT_REQUIRED, TaskState.TASK_STATE_AUTH_REQUIRED}
         try:
             async with aclosing(self.send(text, message_id=message_id)) as updates:
                 async for update in updates:
                     yield update
-        except RemoteAgentError:
-            if not self.task_id:
+        except RemoteAgentError as error:
+            # A rejected new message must not reuse a previous task's answer.
+            if not self.task_id or error.code in {
+                "A2A_AUTH_REQUIRED",
+                "A2A_AUTH_REJECTED",
+                "A2A_AUTH_STORAGE",
+                "A2A_TOKEN_MISSING",
+                "A2A_FORBIDDEN",
+                "A2A_RATE_LIMIT",
+            }:
                 raise
         if self.state not in settled:
             async with aclosing(self.resume()) as updates:
                 async for update in updates:
                     yield update
         if self.state not in settled:
-            raise RemoteAgentError("The remote task is still pending; inspect its state before sending another request")
+            raise RemoteAgentError(
+                "The remote task is still pending; inspect its state before sending another request",
+                code="A2A_OUTCOME_UNKNOWN",
+            )

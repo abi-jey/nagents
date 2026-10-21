@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from .application import create_app as create_app
     from .application import create_harness_app as create_harness_app
     from .client import RemoteAgent as RemoteAgent
-    from .client import RemoteAgentError as RemoteAgentError
     from .config import A2AConfig as A2AConfig
     from .config import IssuerConfig as IssuerConfig
     from .config import ServiceConfig as ServiceConfig
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
     from .conversation import RemoteUpdate as RemoteUpdate
     from .discovery import RemoteDiscovery as RemoteDiscovery
     from .discovery import discover_remote as discover_remote
+    from .errors import RemoteAgentError as RemoteAgentError
     from .executor import request_input as request_input
     from .oauth import AccessGrant as AccessGrant
     from .oauth import request_credentials as request_credentials
@@ -54,7 +54,7 @@ _MODULES = {
     "RemoteConversation": "conversation",
     "RemoteUpdate": "conversation",
     "RemoteAgent": "client",
-    "RemoteAgentError": "client",
+    "RemoteAgentError": "errors",
     "A2AConfig": "config",
     "IssuerConfig": "config",
     "ServiceConfig": "config",
