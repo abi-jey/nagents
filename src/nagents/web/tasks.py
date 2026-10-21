@@ -23,8 +23,10 @@ from pydantic import Field
 from pydantic import field_validator
 
 from nagents.harness.followups import RunInput
+from nagents.harness.private_store import ProtectedStoreError
 from nagents.harness.reasoning import ReasoningPreference
 from nagents.harness.reasoning import resolve_effort
+from nagents.harness.remote_credentials import RemoteCredentials
 from nagents.harness.runtime import _HarnessSession
 from nagents.harness.task_activity import TaskOptions
 from nagents.session import response_metadata
@@ -147,8 +149,26 @@ class Tasks:
         async with self.state.session_agents.view(root) as profile_owner:
             used = {task.get("profile") for task in saved.values()} | {profile_owner.config.agent}
             profiles: list[dict[str, object]] = []
+            try:
+                remote_catalog = profile_owner._agent_catalog.remote_store.load()
+            except (ProtectedStoreError, ValueError):
+                remote_catalog = None
             for name in profile_owner.config.profile_names:
                 profile = profile_owner.config.profile(name)
+                remote = profile.a2a.configured
+                authentication = (
+                    await RemoteCredentials(profile_owner.agent.session.db_path.parent, profile.a2a).status()
+                    if remote
+                    else {"state": "not_required", "expires_at": 0.0, "error_code": "", "refreshable": False}
+                )
+                saved_remote = remote_catalog.agents.get(name) if remote_catalog is not None else None
+                trust_remote_tools = bool(
+                    remote
+                    and saved_remote is not None
+                    and saved_remote.a2a.fingerprint == profile.a2a.fingerprint
+                    and remote_catalog is not None
+                    and profile.a2a.fingerprint in remote_catalog.trusted_connections
+                )
                 unavailable = ""
                 try:
                     binding = profile_owner.resolved_model_binding(name).binding
@@ -178,6 +198,8 @@ class Tasks:
                         "transport": "a2a" if profile.a2a.configured else "local",
                         "reasoning_effort": resolve_effort(profile.reasoning_effort, profile_owner.reasoning_effort()),
                         "source": profile.source,
+                        "authentication": authentication,
+                        "trust_remote_tools": trust_remote_tools,
                         "used": name in used,
                         "available": available,
                         "can_start": available,

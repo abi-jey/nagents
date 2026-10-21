@@ -128,6 +128,55 @@ test("remote trust can be saved and revoked, and focus polling refreshes authent
   assert.equal(trustButton().getAttribute("aria-pressed"), "false");
 });
 
+test("a stale focus poll cannot overwrite a newer saved trust decision", async t => {
+  let trusted = false;
+  let deferNextStatus = false;
+  let resolveStale!: (response: Response) => void;
+  const trustBodies: { revision: string; trusted: boolean }[] = [];
+  const ui = await renderEditor("peer", async (path, init) => {
+    if (path === "/api/remote-agents" && deferNextStatus) {
+      deferNextStatus = false;
+      return await new Promise<Response>(resolve => { resolveStale = resolve; });
+    }
+    if (path === "/api/remote-agents") {
+      const response = catalog(); response.agents[0].trust_remote_tools = trusted;
+      return Response.json(response);
+    }
+    if (path === "/api/remote-agents/peer/trust" && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as { revision: string; trusted: boolean };
+      trustBodies.push(body); trusted = body.trusted;
+      const response = catalog(); response.agents[0].trust_remote_tools = trusted;
+      return Response.json(response);
+    }
+    throw new Error(`Unexpected request ${path}`);
+  });
+  t.after(async () => ui.restore());
+  const document = ui.dom.window.document;
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  deferNextStatus = true;
+  await act(async () => {
+    ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus"));
+    await Promise.resolve(); await Promise.resolve();
+  });
+  assert.equal(typeof resolveStale, "function", "focus starts a deferred status read");
+
+  const trustButton = [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent?.includes("Trust all remote tools"))!;
+  await act(async () => { trustButton.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.deepEqual(trustBodies, [{ revision: "revision-1", trusted: true }]);
+  assert.equal(trustButton.getAttribute("aria-pressed"), "true");
+
+  await act(async () => {
+    const stale = catalog(); stale.agents[0].trust_remote_tools = false;
+    resolveStale(Response.json(stale));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  const currentButton = [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent?.includes("Require tool review"));
+  assert.ok(currentButton, "the resolved stale response cannot undo the newer saved trust state");
+  assert.equal(currentButton.getAttribute("aria-pressed"), "true");
+});
+
 test("a rejected remote trust update leaves the connection untrusted and shows the server error", async t => {
   const ui = await renderEditor("peer", async path => {
     if (path === "/api/remote-agents") return Response.json(catalog());

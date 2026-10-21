@@ -80,6 +80,46 @@ def test_remote_store_round_trips_json_and_rejects_stale_revision(tmp_path: Path
     assert store.load() == saved
 
 
+def test_remote_tool_trust_is_connection_bound_and_preserved_only_for_same_binding(tmp_path: Path) -> None:
+    store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
+    profile = remote_profile()
+    initial = store.load()
+    trusted = store.save({"peer-review": profile}, expected=initial.revision, trust_updates=(("peer-review", True),))
+    fingerprint = profile.a2a.fingerprint
+    assert trusted.trusted_connections == frozenset({fingerprint})
+    assert json.loads(store.path.read_text(encoding="utf-8"))["agents"]["peer-review"]["trust_remote_tools"] is True
+    isolated_workspace = RemoteAgentStore(tmp_path / "other-workspace" / "connections" / "a2a.json")
+    assert isolated_workspace.load().trusted_connections == frozenset()
+
+    edited_description = AgentProfile(description="Updated description", a2a=profile.a2a)
+    preserved = store.save({"peer-review": edited_description}, expected=trusted.revision)
+    assert preserved.trusted_connections == frozenset({fingerprint})
+
+    changed_binding = AgentProfile(description="Updated endpoint", a2a=RemoteProfile(url="https://other.example"))
+    revoked_by_binding_change = store.save({"peer-review": changed_binding}, expected=preserved.revision)
+    assert revoked_by_binding_change.trusted_connections == frozenset()
+    assert json.loads(store.path.read_text(encoding="utf-8"))["agents"]["peer-review"]["trust_remote_tools"] is False
+
+
+def test_remote_tool_trust_updates_use_revision_cas_and_strict_booleans(tmp_path: Path) -> None:
+    store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
+    profile = remote_profile()
+    initial = store.save({"peer-review": profile}, expected=store.load().revision)
+    with pytest.raises(ValueError, match="boolean"):
+        store.save(
+            {"peer-review": profile},
+            expected=initial.revision,
+            trust_updates=(("peer-review", 1),),  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="changed"):
+        store.save(
+            {"peer-review": profile},
+            expected="0" * 64,
+            trust_updates=(("peer-review", True),),
+        )
+    assert store.load() == initial
+
+
 @pytest.mark.parametrize(
     "document",
     [
@@ -89,6 +129,12 @@ def test_remote_store_round_trips_json_and_rejects_stale_revision(tmp_path: Path
         json.dumps({"version": 1, "agents": {"assistant": {"connection": {"url": "https://peer.example"}}}}),
         json.dumps(
             {"version": 1, "agents": {"peer": {"connection": {"url": "https://peer.example", "token": "ignored"}}}}
+        ),
+        json.dumps(
+            {
+                "version": 1,
+                "agents": {"peer": {"connection": {"url": "https://peer.example"}, "trust_remote_tools": 1}},
+            }
         ),
         json.dumps({"version": 1, "agents": {"peer": {"connection": {"token_env": "NGN_PEER_TOKEN"}}}}),
         json.dumps({"version": 1, "agents": {"peer": {"connection": {"url": "https://peer.example/path"}}}}),

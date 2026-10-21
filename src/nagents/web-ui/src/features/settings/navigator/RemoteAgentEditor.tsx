@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { request } from "../../../api/client.js";
 import { Icon } from "../../../components/Icon.js";
@@ -26,6 +26,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
   const [authentication, setAuthentication] = useState<RemoteAuthentication>();
   const [trusted, setTrusted] = useState(false);
   const [signInPending, setSignInPending] = useState("");
+  const statusEpoch = useRef(0);
   const current = catalog?.agents.find(item => item.name === agent);
   const dirty = !!current && (current.connection.url !== connection.url || current.connection.ca_file !== connection.ca_file || current.description !== description);
   const callback = `${window.location.origin}/remote-agent-login/callback`;
@@ -43,13 +44,21 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
   useEffect(() => {
     if (!agent || !active) return;
     const abort = new AbortController();
-    const check = () => void request("remote-agents", token, undefined, abort.signal).then(reply => reply.json() as Promise<Catalog>).then(reply => {
-      if (abort.signal.aborted) return;
-      const remote = reply.agents.find(item => item.name === agent);
-      setSignedIn(remote?.signed_in || false);
-      setAuthentication(remote?.authentication); setTrusted(remote?.trust_remote_tools || false);
-      if (remote?.login_error) setError(remote.login_error);
-    }).catch(() => { /* Preserve the form if a status read fails. */ });
+    let reading = false;
+    const check = async () => {
+      if (reading) return;
+      reading = true;
+      const epoch = statusEpoch.current;
+      try {
+        const reply = await (await request("remote-agents", token, undefined, abort.signal)).json() as Catalog;
+        if (abort.signal.aborted || epoch !== statusEpoch.current) return;
+        const remote = reply.agents.find(item => item.name === agent);
+        setSignedIn(remote?.signed_in || false);
+        setAuthentication(remote?.authentication); setTrusted(remote?.trust_remote_tools || false);
+        if (remote?.login_error) setError(remote.login_error);
+      } catch { /* Preserve the form if a status read fails. */ }
+      finally { reading = false; }
+    };
     window.addEventListener("focus", check);
     const timer = window.setInterval(check, 5000);
     return () => { abort.abort(); window.clearInterval(timer); window.removeEventListener("focus", check); };
@@ -61,9 +70,10 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
     const check = async () => {
       if (reading) return;
       reading = true;
+      const epoch = statusEpoch.current;
       try {
         const reply = await (await request("remote-agents", token, undefined, abort.signal)).json() as Catalog;
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted || epoch !== statusEpoch.current) return;
         const remote = reply.agents.find(item => item.name === agent);
         setAuthentication(remote?.authentication);
         if (remote?.signed_in) { setSignedIn(true); setSignInPending(""); setMessage("Signed in. All chats in this workspace can use this connection."); }
@@ -81,6 +91,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
     const popup = !agent ? window.open("about:blank", "_blank") : null;
     if (popup) popup.opener = null;
     let launched = false;
+    statusEpoch.current++;
     setBusy(true); setError(""); setMessage("");
     try {
       const discovered = await (await request("remote-agents/discover", token, { ...initial, url: connection.url, ca_file: connection.ca_file, timeout: connection.timeout })).json() as Discovery;
@@ -101,11 +112,12 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
         else window.location.assign(auth.authorization_url);
       } else popup?.close();
     } catch (cause) { if (!launched) popup?.close(); setError(cause instanceof Error ? cause.message : "Could not connect the remote agent."); }
-    finally { setBusy(false); }
+    finally { statusEpoch.current++; setBusy(false); }
   }
   async function login() {
     const popup = window.open("about:blank", "_blank");
     if (popup) popup.opener = null;
+    statusEpoch.current++;
     setBusy(true); setError("");
     try {
       const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/login`, token, {})).json() as { authorization_url: string };
@@ -114,16 +126,23 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
       setSignInPending(agent);
       setMessage("Complete sign-in, then return here. If the provider rejects the callback, register the URL shown below in the provider.");
     } catch (cause) { popup?.close(); setError(cause instanceof Error ? cause.message : "Could not start sign-in."); }
-    finally { setBusy(false); }
+    finally { statusEpoch.current++; setBusy(false); }
   }
   async function probe() {
+    statusEpoch.current++;
     setBusy(true); setError(""); setMessage("");
-    try { const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/probe`, token, {})).json() as { message: string; name: string }; setMessage(`${reply.message} ${reply.name}`); setSignedIn(true); }
+    try {
+      const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/probe`, token, {})).json() as { message: string; name: string };
+      const status = await (await request("remote-agents", token)).json() as Catalog;
+      const remote = status.agents.find(item => item.name === agent);
+      setMessage(`${reply.message} ${reply.name}`); setSignedIn(remote?.signed_in || false); setAuthentication(remote?.authentication);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not check the connection."); }
-    finally { setBusy(false); }
+    finally { statusEpoch.current++; setBusy(false); }
   }
   async function trust() {
     if (!catalog || busy || dirty) return;
+    statusEpoch.current++;
     setBusy(true); setError(""); setMessage("");
     try {
       const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/trust`, token,
@@ -133,7 +152,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
       setMessage(remote?.trust_remote_tools ? "Remote tools are trusted for this connection in all chats in this workspace." : "Remote tool operations will ask for review.");
       announceSettingsSaved();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save connection trust."); }
-    finally { setBusy(false); }
+    finally { statusEpoch.current++; setBusy(false); }
   }
   const hostSetupMissing = !!connection.issuer && !connection.client_id;
   return <div className="an-scroll"><form className="an-remote-editor" onSubmit={event => void connect(event)}>

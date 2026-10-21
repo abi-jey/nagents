@@ -67,6 +67,7 @@ async def test_remote_profile_is_ready_without_local_openai_api_key(
     ("code", "guidance"),
     [
         ("A2A_AUTH_REQUIRED", "sign-in is missing or expired"),
+        ("A2A_AUTH_REFRESH_UNCERTAIN", "previous refresh token will not be reused"),
         ("A2A_AUTH_REJECTED", "rejected the access token"),
         ("A2A_AUTH_STORAGE", "credential storage permissions"),
         ("A2A_TOKEN_MISSING", "configured server token is missing"),

@@ -84,6 +84,12 @@ class RemoteInput(BaseModel):
     connection: ConnectionInput
 
 
+class TrustInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    trusted: bool
+
+
 @dataclass(frozen=True)
 class LoginFlow:
     agent: str
@@ -115,19 +121,16 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
         catalog = harness._agent_catalog.remote_store.load()
         agents = []
         for name, profile in catalog.agents.items():
-            signed_in = not (profile.a2a.issuer or profile.a2a.token_env)
-            try:
-                if not signed_in:
-                    await RemoteCredentials(harness.agent.session.db_path.parent, profile.a2a).token()
-                    signed_in = True
-            except Exception:
-                pass
+            authentication = await RemoteCredentials(harness.agent.session.db_path.parent, profile.a2a).status()
+            signed_in = authentication["state"] in {"signed_in", "token_ready", "not_required"}
             agents.append(
                 {
                     "name": name,
                     "description": profile.description,
                     "connection": profile.a2a.as_dict(),
                     "signed_in": signed_in,
+                    "authentication": authentication,
+                    "trust_remote_tools": profile.a2a.fingerprint in catalog.trusted_connections,
                     "login_error": login_errors.get(name, ""),
                     "user_invocable": profile.user_invocable,
                     "subagent_available": profile.subagent_available,
@@ -182,6 +185,28 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
                     subagent_available=body.subagent_available,
                 )
                 store.save({**current.agents, name: profile}, expected=body.revision)
+            except ValueError as error:
+                raise HTTPException(409 if "changed" in str(error) else 422, str(error)) from None
+            state.harness.refresh_agent_definitions()
+            state.changed()
+        return await snapshot()
+
+    @app.put("/api/remote-agents/{name}/trust")
+    async def set_tool_trust(name: str, body: TrustInput) -> dict[str, object]:
+        state = get()
+        async with state.queued_mutation():
+            if state.harness.config.demo or state.harness.mode != "build":
+                raise HTTPException(403, "Remote tool trust requires build mode")
+            store = state.harness._agent_catalog.remote_store
+            current = store.load()
+            if name not in current.agents:
+                raise HTTPException(404, "Remote agent not found")
+            try:
+                store.save(
+                    current.agents,
+                    expected=body.revision,
+                    trust_updates=((name, body.trusted),),
+                )
             except ValueError as error:
                 raise HTTPException(409 if "changed" in str(error) else 422, str(error)) from None
             state.harness.refresh_agent_definitions()
@@ -357,7 +382,20 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
                 not isinstance(granted_scopes, str) or not set(flow.profile.scopes) <= set(granted_scopes.split())
             ):
                 raise ValueError
-            credentials.save(tokens.get("access_token", ""), time.time() + expires)
+            refresh_token = tokens.get("refresh_token", "")
+            if refresh_token is None:
+                refresh_token = ""
+            if not isinstance(refresh_token, str) or (
+                refresh_token
+                and (len(refresh_token) > 16384 or any(ord(char) < 33 or ord(char) > 126 for char in refresh_token))
+            ):
+                raise ValueError
+            await credentials.save_login(
+                tokens.get("access_token", ""),
+                time.time() + expires,
+                refresh_token=refresh_token,
+                token_endpoint=flow.token_endpoint if refresh_token else "",
+            )
         except Exception as error:
             logger.warning("A2A sign-in exchange failed agent=%s error_type=%s", flow.agent, type(error).__name__)
             message = (
