@@ -205,7 +205,7 @@ class RemoteAgentStore(ProtectedFileStore):
                     trusted_connections.add(profile.a2a.fingerprint)
             try:
                 metadata = self.metadata_store.load()
-            except ProtectedStoreError:
+            except (OSError, ProtectedStoreError):
                 # Presentation metadata is disposable; unsafe/corrupt cache data
                 # must not make the configured connection unavailable.
                 metadata = RemoteMetadataCatalog({}, "0" * 64)

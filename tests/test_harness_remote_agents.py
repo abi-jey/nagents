@@ -59,6 +59,27 @@ def remote_profile(*, description: str = "Remote review") -> AgentProfile:
     )
 
 
+@pytest.mark.parametrize("unsafe_cache", ["symlink", "invalid_json"])
+def test_unavailable_presentation_cache_preserves_remote_connections(tmp_path: Path, unsafe_cache: str) -> None:
+    store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
+    profile = remote_profile()
+    initial = store.save({"peer": profile}, expected=store.load().revision)
+    cache = store.metadata_store.path
+    if unsafe_cache == "symlink":
+        outside = tmp_path / "untrusted-metadata"
+        outside.write_text("must never be read")
+        cache.symlink_to(outside)
+    else:
+        cache.write_text("invalid metadata")
+        cache.chmod(0o600)
+
+    loaded = store.load()
+    assert loaded.revision == initial.revision
+    assert loaded.agents["peer"].a2a.fingerprint == profile.a2a.fingerprint
+    assert loaded.agents["peer"].description == profile.description
+    assert loaded.advertised == {}
+
+
 def test_remote_store_round_trips_json_and_rejects_stale_revision(tmp_path: Path) -> None:
     store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
     initial = store.load()
