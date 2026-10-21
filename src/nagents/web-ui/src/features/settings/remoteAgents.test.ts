@@ -239,7 +239,7 @@ test("sign-in opens the advertised URL and status polling reflects the saved gra
   assert.ok(intervals.length);
   signedIn = true;
   await act(async () => { intervals.forEach(callback => callback()); await new Promise(resolve => setTimeout(resolve, 0)); });
-  assert.match(ui.dom.window.document.body.textContent || "", /Signed in\. All chats in this workspace can use this connection\./);
+  assert.match(ui.dom.window.document.body.textContent || "", /Signed in\. Saved for this user across chats and workspaces using the same connection\./);
   assert.equal([...ui.dom.window.document.querySelectorAll("button")].some(element => element.textContent?.trim() === "Sign in again"), true);
 });
 
@@ -323,6 +323,6 @@ test("URL-only connect keeps popup sign-in pending when saved selection changes 
   assert.ok(callbacks.length, "the pending status poll survives changing the selected agent prop");
   signedIn = true;
   await act(async () => { callbacks.forEach(callback => callback()); await new Promise(resolve => setTimeout(resolve, 50)); });
-  assert.match(document.body.textContent || "", /Signed in\. All chats in this workspace can use this connection\./, requests.join("\n"));
+  assert.match(document.body.textContent || "", /Signed in\. Saved for this user across chats and workspaces using the same connection\./, requests.join("\n"));
   assert.equal([...document.querySelectorAll("button")].some(button => button.textContent?.trim() === "Sign in again"), true);
 });

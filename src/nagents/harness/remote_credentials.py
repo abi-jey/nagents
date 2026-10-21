@@ -1,4 +1,4 @@
-"""Private outbound credentials bound to one workspace and immutable A2A route."""
+"""Private user credentials bound to an immutable A2A connection across workspaces."""
 
 from __future__ import annotations
 
@@ -58,11 +58,11 @@ class RemoteCredentialError(RemoteAgentError, ProtectedStoreError):
 
 
 class RemoteCredentials(ProtectedFileStore):
-    def __init__(self, directory: Path, profile: RemoteProfile) -> None:
+    def __init__(self, profile: RemoteProfile, path: Path | None = None) -> None:
         self.profile = profile
         super().__init__(
-            directory / "remote-auth" / f"{profile.fingerprint}.json",
-            filename="remote.json",
+            path,
+            filename=f"a2a/{profile.fingerprint}.json",
             subject="Remote agent",
             error=ProtectedStoreError,
             malformed="Remote agent credentials are unavailable.",

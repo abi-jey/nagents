@@ -165,7 +165,7 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
     if harness.config.demo or harness.mode == "reviewer":
         yield failure_event(harness, "A2A_PERMISSION", phase="permission")
         return
-    credentials = RemoteCredentials(harness.agent.session.db_path.parent, profile)
+    credentials = RemoteCredentials(profile)
     message_id = str(uuid.uuid4())
     response_id = f"a2a-{message_id}"
     context_id, task_id = "", ""
