@@ -90,12 +90,18 @@ class MediaClock:
         self.offset = 0.0
         self.last_media = 0.0
         self.last_arrival = 0.0
+        self.last_duration = 0.0
+        self.arrival_interval_ms = 0.0
+        self.source_interval_ms = 0.0
+        self.source_gap_ms = 0.0
+        self.transport_late_ms = 0.0
         self.offset_lag_ms = 0.0
         self.offset_lag_peak_ms = 0.0
         self.resets = 0
         self.missing = 0
 
-    def observe(self, now: float, media: float, *, valid: bool = True) -> float:
+    def observe(self, now: float, media: float, *, valid: bool = True, duration: float = 0.0) -> float:
+        self.arrival_interval_ms = self.source_interval_ms = self.source_gap_ms = self.transport_late_ms = 0.0
         if not valid:
             self.missing += 1
             self.initialized = False
@@ -107,11 +113,18 @@ class MediaClock:
             self.offset = offset
             self.initialized = True
         else:
+            arrival_interval = max(0.0, now - self.last_arrival)
+            source_interval = media - self.last_media
+            self.arrival_interval_ms = arrival_interval * 1000
+            self.source_interval_ms = source_interval * 1000
+            self.source_gap_ms = max(0.0, source_interval - self.last_duration) * 1000
+            self.transport_late_ms = max(0.0, arrival_interval - source_interval) * 1000
             # A diagnostic baseline, not a bound on all valid provider clocks.
             # Forward timestamp gaps naturally account for DTX.
             elapsed = max(0.0, now - self.last_arrival)
             self.offset = min(offset, self.offset + elapsed * 0.001)
         self.last_media, self.last_arrival = media, now
+        self.last_duration = max(0.0, duration)
         lag = max(0.0, offset - self.offset)
         self.offset_lag_ms = lag * 1000
         self.offset_lag_peak_ms = max(self.offset_lag_peak_ms, self.offset_lag_ms)
