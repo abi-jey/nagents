@@ -672,14 +672,18 @@ def test_task_catalog_poll_refreshes_stale_agent_card_metadata_without_touching_
             harness = harnesses[0]
             store = harness._agent_catalog.remote_store
             profile = AgentProfile(description="Local editorial description", a2a=RemoteProfile(url=AGENT_URL))
+            second_profile = AgentProfile(description="Second local note", a2a=profile.a2a)
             initial = store.save(
-                {"peer-alias": profile},
+                {"peer-alias": profile, "peer-alias-2": second_profile},
                 expected=store.load().revision,
                 trust_updates=(("peer-alias", True),),
             )
             metadata = store.metadata_store.load()
             store.metadata_store.save(
-                {"peer-alias": RemoteAgentMetadata(profile.a2a.fingerprint, "Old card name", "Old card text", 0)},
+                {
+                    "peer-alias": RemoteAgentMetadata(profile.a2a.fingerprint, "Old card name", "Old card text", 0),
+                    "peer-alias-2": RemoteAgentMetadata(profile.a2a.fingerprint, "Old card name", "Old card text", 0),
+                },
                 expected=metadata.revision,
             )
 
@@ -703,10 +707,82 @@ def test_task_catalog_poll_refreshes_stale_agent_card_metadata_without_touching_
             assert second_profile["remote_name"] == "Updated remote display name"
             assert second_profile["remote_description"] == "Updated remote card purpose"
             assert second_profile["description"] == "Local editorial description"
+            assert second["profile_revision"] == first["profile_revision"]
+            assert refreshed.advertised["peer-alias-2"].name == "Updated remote display name"
+            assert refreshed.advertised["peer-alias-2"].description == "Updated remote card purpose"
             assert refreshed.revision == initial.revision
             assert refreshed.trusted_connections == initial.trusted_connections
             assert refreshed.agents["peer-alias"].a2a.fingerprint == profile.a2a.fingerprint
             assert requests == ["/.well-known/agent-card.json"]
+
+    asyncio.run(scenario())
+
+
+def test_card_refresh_has_total_deadline_independent_of_profile_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        pytest.importorskip("a2a")
+        from nagents.a2a.client import RemoteAgent
+        from nagents.harness.remote_store import RemoteAgentStore
+        from nagents.web.remote_metadata import RemoteMetadataRefresh
+
+        class HangingTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                del request
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        original_factory = RemoteAgent.from_config
+
+        def with_hanging_transport(
+            cls: type[RemoteAgent], profile: RemoteProfile, tokens: AccessTokenProvider | None = None
+        ) -> RemoteAgent:
+            del cls
+            return original_factory(profile, tokens, transport=HangingTransport())
+
+        monkeypatch.setattr(RemoteAgent, "from_config", classmethod(with_hanging_transport))
+        monkeypatch.setattr("nagents.web.remote_metadata.REMOTE_CARD_TIMEOUT_SECONDS", 0.01)
+        profile = AgentProfile(a2a=RemoteProfile(url=AGENT_URL, timeout=3600))
+        store = RemoteAgentStore(tmp_path / "settings" / "connections" / "a2a.json")
+        manager = RemoteMetadataRefresh()
+        with pytest.raises(TimeoutError):
+            await manager._refresh(store, "peer-alias", profile)
+        assert not store.path.exists()
+        await manager.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("restricted_mode", ["demo", "reviewer"])
+def test_restricted_metadata_schedule_never_connects_to_remote_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restricted_mode: str
+) -> None:
+    async def scenario() -> None:
+        from nagents.web.remote_metadata import RemoteMetadataRefresh
+
+        called: list[str] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            called.append(request.url.path)
+            return httpx.Response(500, request=request)
+
+        install_sdk_transport(monkeypatch, handle)
+        async with client_app(tmp_path, config=config(tmp_path)) as (_, _, _, harnesses):
+            harness = harnesses[0]
+            if restricted_mode == "demo":
+                harness.config.demo = True
+            else:
+                harness.config.read_only = True
+            store = harness._agent_catalog.remote_store
+            profile = AgentProfile(a2a=RemoteProfile(url=AGENT_URL))
+            store.save({"peer-alias": profile}, expected=store.load().revision)
+            manager = RemoteMetadataRefresh()
+            manager.schedule(harness)
+            await asyncio.sleep(0)
+            assert not manager._tasks
+            assert not called
+            await manager.close()
 
     asyncio.run(scenario())
 

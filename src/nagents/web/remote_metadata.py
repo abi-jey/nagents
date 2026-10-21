@@ -7,6 +7,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from nagents._async import finish_on_cancel
 from nagents.harness.remote_credentials import RemoteCredentials
 
 if TYPE_CHECKING:
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 METADATA_TTL_SECONDS = 60
 FAILURE_BACKOFF_SECONDS = 60
 MAX_REFRESHES = 4
+REMOTE_CARD_TIMEOUT_SECONDS = 12
 
 
 class RemoteMetadataRefresh:
@@ -38,7 +40,7 @@ class RemoteMetadataRefresh:
         return "stale"
 
     def schedule(self, harness: Harness) -> None:
-        if self._closed:
+        if self._closed or harness.config.demo or harness.mode == "reviewer":
             return
         try:
             catalog = harness._agent_catalog.remote_store.load()
@@ -88,14 +90,16 @@ class RemoteMetadataRefresh:
 
         credentials = RemoteCredentials(profile.a2a)
         token_provider = credentials.token if profile.a2a.issuer or profile.a2a.token_env else None
-        async with RemoteAgent.from_config(profile.a2a, token_provider) as remote:
-            await asyncio.to_thread(
-                store.update_metadata,
-                alias,
-                profile.a2a.fingerprint,
-                remote.card.name[:200],
-                remote.card.description[:2000],
-            )
+        async with asyncio.timeout(REMOTE_CARD_TIMEOUT_SECONDS):
+            async with RemoteAgent.from_config(profile.a2a, token_provider) as remote:
+                await finish_on_cancel(
+                    asyncio.to_thread(
+                        store.update_metadata,
+                        profile.a2a.fingerprint,
+                        remote.card.name[:200],
+                        remote.card.description[:2000],
+                    )
+                )
 
     async def close(self) -> None:
         self._closed = True

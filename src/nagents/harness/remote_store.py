@@ -271,16 +271,16 @@ class RemoteAgentStore(ProtectedFileStore):
                 self._write_bytes(raw, prefix=".a2a-")
         return self.load()
 
-    def update_metadata(self, name: str, fingerprint: str, remote_name: str, description: str) -> bool:
-        """Store card labels only while the configured alias still has this binding."""
+    def update_metadata(self, fingerprint: str, remote_name: str, description: str) -> bool:
+        """Store card labels for every currently configured alias with this binding."""
         if len(remote_name) > 200 or len(description) > 2000:
             raise ValueError("Remote AgentCard metadata exceeds supported limits")
         with self._directory(create=True) as directory:
             descriptor = os.open(".a2a.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
             with os.fdopen(descriptor, "a+b") as stream, _exclusive_lock(stream):
                 catalog = self.load()
-                profile = catalog.agents.get(name)
-                if profile is None or profile.a2a.fingerprint != fingerprint:
+                aliases = [alias for alias, item in catalog.agents.items() if item.a2a.fingerprint == fingerprint]
+                if not aliases:
                     return False
                 current = self.metadata_store.load()
                 entries = {
@@ -288,6 +288,8 @@ class RemoteAgentStore(ProtectedFileStore):
                     for alias, item in current.entries.items()
                     if alias in catalog.agents and item.fingerprint == catalog.agents[alias].a2a.fingerprint
                 }
-                entries[name] = RemoteAgentMetadata(fingerprint, remote_name, description, time.time())
+                observed = RemoteAgentMetadata(fingerprint, remote_name, description, time.time())
+                for alias in aliases:
+                    entries[alias] = observed
                 self.metadata_store.save(entries, expected=current.revision)
         return True

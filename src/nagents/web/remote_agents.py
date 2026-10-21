@@ -317,7 +317,6 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
             ) as remote:
                 await asyncio.to_thread(
                     get().harness._agent_catalog.remote_store.update_metadata,
-                    name,
                     profile.fingerprint,
                     remote.card.name[:200],
                     remote.card.description[:2000],

@@ -192,7 +192,6 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
             try:
                 await asyncio.to_thread(
                     harness._agent_catalog.remote_store.update_metadata,
-                    harness.config.agent,
                     profile.fingerprint,
                     remote.card.name[:200],
                     remote.card.description[:2000],

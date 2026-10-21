@@ -83,9 +83,7 @@ class RemoteAgentTools:
             {**current.agents, name: AgentProfile(description=description, a2a=profile)}, expected=current.revision
         )
         if not issuer and not token_env:
-            await asyncio.to_thread(
-                store.update_metadata, name, profile.fingerprint, discovered_name, discovered_description
-            )
+            await asyncio.to_thread(store.update_metadata, profile.fingerprint, discovered_name, discovered_description)
         self.harness.refresh_agent_definitions()
         return {
             "agent": name,

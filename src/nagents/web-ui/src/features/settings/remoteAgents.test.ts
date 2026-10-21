@@ -76,8 +76,10 @@ test("remote editor exposes discovered metadata read-only without manual OAuth f
   assert.equal(document.querySelector('input[aria-label="Issuer"]'), null);
   assert.equal(document.querySelector('input[aria-label="Client ID"]'), null);
   assert.equal(document.querySelector('input[aria-label="Scopes"]'), null);
-  assert.match(document.querySelector('[aria-label="Remote advertised metadata"]')?.textContent || "", /Advertised remote name/);
-  assert.match(document.querySelector('[aria-label="Remote advertised metadata"]')?.textContent || "", /Remote card purpose/);
+  assert.match(document.querySelector('[aria-label="Remote agent"]')?.textContent || "", /Advertised remote name/);
+  assert.match(document.querySelector('[aria-label="Remote agent"]')?.textContent || "", /Remote card purpose/);
+  assert.match(document.querySelector('[aria-label="Remote agent"]')?.textContent || "", /From remote server/);
+  assert.equal((document.querySelector('input[placeholder="Optional description for this workspace"]') as HTMLInputElement | null)?.placeholder, "Optional description for this workspace");
   assert.equal((document.querySelector('input[value="Remote review"]') as HTMLInputElement | null)?.value, "Remote review");
 });
 
@@ -90,9 +92,9 @@ test("Team definition row keeps local alias and description beside refreshed rem
   }));
   assert.match(html, /peer-alias/);
   assert.match(html, /Local note/);
-  assert.match(html, /Remote name: Advertised name/);
-  assert.match(html, /Remote description: Advertised purpose/);
-  assert.match(html, /Remote card refresh failed; showing last known metadata/);
+  assert.match(html, /Advertised name · Advertised purpose · Refresh failed/);
+  assert.match(html, />Auth status unavailable<\/span>/);
+  assert.equal((html.match(/<small/g) || []).length, 2);
 });
 
 test("remote auth states explain server credential availability without exposing credential values", () => {

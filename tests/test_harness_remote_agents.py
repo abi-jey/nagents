@@ -89,7 +89,7 @@ def test_agent_card_metadata_is_separate_from_local_alias_description_and_trust(
         {"stable-alias": profile}, expected=store.load().revision, trust_updates=(("stable-alias", True),)
     )
 
-    assert store.update_metadata("stable-alias", profile.a2a.fingerprint, "Advertised display name", "Card description")
+    assert store.update_metadata(profile.a2a.fingerprint, "Advertised display name", "Card description")
     observed = store.load()
 
     assert observed.revision == saved.revision
@@ -100,12 +100,28 @@ def test_agent_card_metadata_is_separate_from_local_alias_description_and_trust(
     assert observed.advertised["stable-alias"].name == "Advertised display name"
     assert observed.advertised["stable-alias"].description == "Card description"
 
+    shared = remote_profile(description="Shared endpoint")
+    before_aliases = store.load()
+    store.save({"stable-alias": profile, "second-alias": shared}, expected=before_aliases.revision)
+    assert store.update_metadata(profile.a2a.fingerprint, "Shared card", "Shared description")
+    shared_metadata = store.load().advertised
+    assert shared_metadata["stable-alias"].name == "Shared card"
+    assert shared_metadata["second-alias"].name == "Shared card"
+
     changed = AgentProfile(description="Local editorial description", a2a=RemoteProfile(url="https://other.example"))
-    store.save({"stable-alias": changed}, expected=observed.revision)
+    store.save({"stable-alias": changed, "second-alias": shared}, expected=store.load().revision)
+    assert store.update_metadata(profile.a2a.fingerprint, "Fresh card", "Fresh description")
     after_binding_change = store.load()
-    assert tuple(after_binding_change.agents) == ("stable-alias",)
-    assert not after_binding_change.advertised
-    assert not after_binding_change.trusted_connections
+    assert "stable-alias" not in after_binding_change.advertised
+    assert after_binding_change.advertised["second-alias"].name == "Fresh card"
+    assert changed.a2a.fingerprint not in after_binding_change.trusted_connections
+
+    store.save({"stable-alias": changed}, expected=after_binding_change.revision)
+    no_matching_alias = store.load()
+    assert tuple(no_matching_alias.agents) == ("stable-alias",)
+    assert not no_matching_alias.advertised
+    assert not no_matching_alias.trusted_connections
+    assert not store.update_metadata(profile.a2a.fingerprint, "Stale card", "Stale description")
 
 
 @pytest.mark.asyncio
@@ -120,7 +136,7 @@ async def test_delegate_catalog_uses_card_labels_without_replacing_local_descrip
     store = harness._agent_catalog.remote_store
     profile = remote_profile(description="Local team note")
     store.save({"peer-alias": profile}, expected=store.load().revision)
-    store.update_metadata("peer-alias", profile.a2a.fingerprint, "Published Agent Card", "Card purpose")
+    store.update_metadata(profile.a2a.fingerprint, "Published Agent Card", "Card purpose")
     assert harness.refresh_agent_definitions()
     try:
         catalog = harness.delegation_catalog()
