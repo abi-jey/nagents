@@ -28,17 +28,19 @@ function fixture(rate = 48000) {
   const processor = new Processor();
   let position = 0, epoch = 0;
   const output = new Float32Array(128);
-  const render = () => {
-    globals.currentTime = position / rate;
+  const renderAt = (currentTime: number) => {
+    globals.currentTime = currentTime;
     processor.process([], [[output]]); position += output.length;
     return output;
   };
+  const render = () => renderAt(position / rate);
   return { health, played, traces, checkpoints, render, acknowledge: (value: boolean) => { acknowledge = value; },
     acknowledgeTrace(value: boolean) { acknowledgeTrace = value; },
     trace(enabled = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace", enabled, epoch: suppliedEpoch } }); },
     traceAck(sequence: number, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace-ack", sequence, epoch: suppliedEpoch } }); },
     traceCheckpoint(requestId: number, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "trace-checkpoint", requestId, epoch: suppliedEpoch } }); },
     realtime(value = true, suppliedEpoch = epoch) { processor.port.onmessage({ data: { type: "mode", epoch: suppliedEpoch, realtime: value } }); },
+    renderAt,
     barrier() { epoch++; processor.port.onmessage({ data: { type: "barrier", epoch } }); },
     get time() { return position / rate; },
     push(buffer: ArrayBuffer, suppliedEpoch = epoch) { globals.currentTime = position / rate; processor.port.onmessage({ data: { type: "pcm", buffer, epoch: suppliedEpoch } }); },
@@ -469,6 +471,53 @@ test("numeric timing trace is opt-in and preserves output when visual reports ar
   assert.equal(traced.stats().playedSamples, end);
   assert.equal(traced.stats().droppedSamples, 0);
   assert(traced.traces.length < 20, "small numeric intervals are batched rather than sent for every packet");
+});
+
+test("trace intervals flush at repeated and caught-up render-clock quanta without changing PCM", () => {
+  const plain = fixture(), discontinuous = fixture(), ordinaryTrace = fixture();
+  discontinuous.trace(); ordinaryTrace.trace();
+  const source = voicedPcm(0, 4800);
+  plain.push(source.slice(0)); discontinuous.push(source.slice(0)); ordinaryTrace.push(source.slice(0));
+  let quantum = 0;
+  while (plain.stats().playedSamples < 4800 && quantum < 100) {
+    const expected = plain.render();
+    const irregular = quantum === 1
+      ? discontinuous.renderAt(0) // Repeated currentTime: this quantum should start a new report.
+      : quantum === 2
+        ? discontinuous.renderAt(2 * 128 / 48000) // Caught-up clock: flush before consuming this quantum too.
+        : discontinuous.render();
+    const regular = ordinaryTrace.render();
+    assert.deepEqual(irregular, expected, "clock telemetry cannot change rendered float PCM");
+    assert.deepEqual(regular, expected, "ordinary trace timing cannot change rendered float PCM");
+    quantum++;
+  }
+  assert(quantum < 100);
+  discontinuous.traceCheckpoint(41); ordinaryTrace.traceCheckpoint(42);
+  assert.equal(discontinuous.checkpoints[0]?.status, "completed");
+  assert.equal(ordinaryTrace.checkpoints[0]?.status, "completed");
+
+  const collect = (f: ReturnType<typeof fixture>) => Int16Array.from(
+    f.played.flatMap(report => Array.from(new Int16Array(report.buffer))),
+  );
+  const expectedPcm = collect(plain);
+  assert.deepEqual(collect(discontinuous), expectedPcm, "clock discontinuities must not alter captured output samples");
+  assert.deepEqual(collect(ordinaryTrace), expectedPcm, "ordinary tracing must retain byte-identical played PCM");
+
+  const intervals = discontinuous.traces.flatMap(batch => batch.intervals);
+  let sourceEnd = 0;
+  for (const interval of intervals) {
+    assert.equal(interval.sourceStart, sourceEnd, "flushes preserve exact source coverage without overlaps");
+    const expectedSpan = (interval.samples - 1) / 24000;
+    assert(Math.abs(interval.until - interval.at - expectedSpan) <= expectedSpan * .001 + 1 / 48000,
+      "no trace interval may stretch across a repeated/caught-up render-clock boundary");
+    sourceEnd += interval.samples;
+  }
+  assert.equal(sourceEnd, 4800);
+
+  const ordinaryIntervals = ordinaryTrace.traces.flatMap(batch => batch.intervals);
+  assert(ordinaryIntervals.length > 0);
+  assert(ordinaryIntervals.every(interval => interval.samples === 480),
+    "a stable render clock keeps its ordinary full-size interval batching");
 });
 
 test("a stalled timing observer has one in-flight batch and bounded explicitly incomplete evidence", () => {

@@ -185,8 +185,9 @@ effect on subsequent requests. Global and workspace connection scope works as
 for its other fields. Model catalogs retain their separate cap of
 `min(request_timeout, 30)` seconds.
 
-This field does not change shell limits, whole-run or child deadlines, Live
-session duration, Live backend waiting limits, or authentication SDK deadlines.
+This field does not change shell limits, Live session duration, Live backend
+waiting limits, or authentication SDK deadlines. Subagents have no overall
+execution timeout.
 Existing retries remain unchanged; retries and backoff can make a generation
 last longer than one request deadline. There is no top-level Harness JSON field
 or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's JSON,

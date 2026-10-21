@@ -123,6 +123,7 @@ class LivePlayback extends AudioWorkletProcessor {
     this.reportAt = 0;
     this.reportUntil = 0;
     this.reportSourceStart = 0;
+    this.expectedReportTime = undefined;
     this.nextHealth = 0;
     this.healthPending = false;
     this.playedPending = false;
@@ -354,6 +355,13 @@ class LivePlayback extends AudioWorkletProcessor {
   process(_inputs, outputs) {
     const output = outputs[0]?.[0];
     if (!output) return true;
+    // Chrome can repeat or jump a raw render-clock label while the graph keeps
+    // processing contiguous PCM. Keep those observations intact, but never
+    // interpolate a trace interval across the discontinuity. This is test-only
+    // metadata: playback samples, queueing and the clock itself are untouched.
+    if (this.trace.enabled && this.expectedReportTime !== undefined &&
+        Math.abs(currentTime - this.expectedReportTime) > 1e-9) this.flushReport();
+    this.expectedReportTime = currentTime + output.length / sampleRate;
     // A learned target does not refill a stream whose producer runs slightly
     // behind the speaker. Rebuild only after sustained digital silence; keep
     // every queued sample, and bound the pause by the ordinary prime timeout.

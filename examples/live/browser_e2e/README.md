@@ -144,7 +144,9 @@ The report keeps the existing all-queued packet-age metric as a diagnostic and
 gates on `graphRenderedSpeechAge` per minute. The isolated E2E playback node opts
 into a bounded numeric worklet trace: every flushed source-coordinate interval is
 batched and acknowledged independently of the visual played reports. The trace
-contains no PCM. The checker validates batch sequence, omissions, source
+contains no PCM. Trace intervals split at discontinuous raw browser render-clock
+labels, preserving those observations without stretching the PCM timeline across
+them. The checker validates batch sequence, omissions, source
 coordinates, then correlates voiced received PCM with actual post-volume
 recorder PCM within one output quantum. Before the first fixture, the runner
 checkpoints the graph after it drains preloaded warmup audio. This gives the
