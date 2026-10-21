@@ -91,7 +91,8 @@ class RemoteMetadataRefresh:
         credentials = RemoteCredentials(profile.a2a)
         token_provider = credentials.token if profile.a2a.issuer or profile.a2a.token_env else None
         async with asyncio.timeout(REMOTE_CARD_TIMEOUT_SECONDS):
-            async with RemoteAgent.from_config(profile.a2a, token_provider) as remote:
+            remote = await finish_on_cancel(asyncio.to_thread(RemoteAgent.from_config, profile.a2a, token_provider))
+            async with remote:
                 await finish_on_cancel(
                     asyncio.to_thread(
                         store.update_metadata,

@@ -754,6 +754,64 @@ def test_card_refresh_has_total_deadline_independent_of_profile_timeout(
     asyncio.run(scenario())
 
 
+def test_metadata_constructor_runs_off_loop_and_is_joined_on_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        import threading
+
+        pytest.importorskip("a2a")
+        from nagents.a2a.client import RemoteAgent
+        from nagents.harness.remote_store import RemoteAgentStore
+        from nagents.web.remote_metadata import RemoteMetadataRefresh
+
+        started = threading.Event()
+        release = threading.Event()
+        fallback_released = threading.Event()
+        original_factory = RemoteAgent.from_config
+
+        class HangingTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                del request
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        def slow_factory(
+            cls: type[RemoteAgent], profile: RemoteProfile, tokens: AccessTokenProvider | None = None
+        ) -> RemoteAgent:
+            del cls
+            started.set()
+            release.wait()
+            return original_factory(profile, tokens, transport=HangingTransport())
+
+        monkeypatch.setattr(RemoteAgent, "from_config", classmethod(slow_factory))
+        profile = AgentProfile(a2a=RemoteProfile(url=AGENT_URL))
+        manager = RemoteMetadataRefresh()
+        task = asyncio.create_task(manager._refresh(RemoteAgentStore(tmp_path / "a2a.json"), "peer", profile))
+        manager._tasks[profile.a2a.fingerprint] = task
+
+        def force_release() -> None:
+            fallback_released.set()
+            release.set()
+
+        safety_release = threading.Timer(2, force_release)
+        safety_release.start()
+        closing: asyncio.Task[None] | None = None
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            assert not fallback_released.is_set(), "constructor blocked the event loop until the safety release"
+            closing = asyncio.create_task(manager.close())
+            await asyncio.sleep(0)
+            assert not closing.done(), "shutdown returned while the owned constructor thread was still running"
+        finally:
+            release.set()
+            safety_release.cancel()
+            if closing is None:
+                await manager.close()
+            else:
+                await closing
+
+
 @pytest.mark.parametrize("restricted_mode", ["demo", "reviewer"])
 def test_restricted_metadata_schedule_never_connects_to_remote_agent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restricted_mode: str
