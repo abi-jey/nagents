@@ -42,7 +42,7 @@ async def owned_remote_task(
     """A harness Stop cancels its owned remote task before closing transport."""
     try:
         yield
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, GeneratorExit):
         from nagents.a2a.conversation import TERMINAL_STATES
 
         if conversation.task_id and conversation.state not in TERMINAL_STATES:

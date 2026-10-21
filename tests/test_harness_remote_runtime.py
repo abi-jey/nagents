@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from typing import cast
 
+import aiosqlite
 import httpx
 import pytest
+from a2a.types import Task
+from a2a.types import TaskState
+from a2a.types import TaskStatus
 
 from nagents.a2a import client as a2a_client
 from nagents.a2a.application import create_app
 from nagents.a2a.config import A2AConfig
 from nagents.a2a.config import IssuerConfig
+from nagents.a2a.conversation import RemoteConversation
 from nagents.agent import Agent
 from nagents.events import DoneEvent
 from nagents.events import Event
@@ -22,6 +29,7 @@ from nagents.events import TextDoneEvent
 from nagents.events import ToolCallEvent
 from nagents.harness.config import AgentProfile
 from nagents.harness.remote_profiles import RemoteProfile
+from nagents.harness.remote_runtime import owned_remote_task
 from nagents.provider import Provider
 from nagents.provider import ProviderType
 from nagents.session import SessionManager
@@ -36,10 +44,12 @@ from tests.test_a2a_auth import make_token
 from tests.test_a2a_auth import signing_key
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from collections.abc import AsyncIterator
     from pathlib import Path
 
     from nagents.a2a.agent import AgentContext
+    from nagents.a2a.client import RemoteAgent
     from nagents.types import GenerationConfig
     from nagents.types import Message
     from nagents.types import ToolDefinition
@@ -207,6 +217,113 @@ async def test_configure_then_delegate_uses_remote_sdk_and_preserves_remote_hist
             assert sum(len(provider.requests) for provider in providers) == round_number
         finally:
             await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_mode", ["aclose", "cancelled"])
+async def test_owned_remote_task_cancels_on_generator_close_and_not_after_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_mode: str
+) -> None:
+    async def script(provider: FakeProvider, messages: list[Message]) -> AsyncIterator[Event]:
+        del provider, messages
+        yield TextDoneEvent(text="unused")
+
+    harness, _ = setup_harness(tmp_path, monkeypatch, script)
+    task_id = "remote-running-task"
+    message_id = "accepted-message"
+
+    class CancellationPeer:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def cancel(self, identifier: str) -> Task:
+            self.calls.append(identifier)
+            return Task(
+                id=identifier,
+                context_id="remote-context",
+                status=TaskStatus(state=TaskState.TASK_STATE_CANCELED),
+            )
+
+    remote_impl = CancellationPeer()
+    remote = cast("RemoteAgent", remote_impl)
+    conversation = RemoteConversation(remote, task_id=task_id, context_id="remote-context")
+    conversation.state = TaskState.TASK_STATE_WORKING
+    database = harness.agent.session.db_path
+    try:
+        await asyncio.wait_for(harness.initialize(), 10)
+        async with aiosqlite.connect(database) as db:
+            await db.execute(
+                "CREATE TABLE ngn_remote_sessions (session_id TEXT PRIMARY KEY, binding TEXT NOT NULL, "
+                "context_id TEXT NOT NULL, task_id TEXT NOT NULL, message_id TEXT NOT NULL, "
+                "state INTEGER NOT NULL, pending INTEGER NOT NULL)"
+            )
+            await db.execute(
+                "INSERT INTO ngn_remote_sessions VALUES(?,?,?,?,?,?,1)",
+                (
+                    harness.session_id,
+                    "peer-binding",
+                    "remote-context",
+                    task_id,
+                    message_id,
+                    TaskState.TASK_STATE_WORKING,
+                ),
+            )
+            await db.commit()
+
+        async def chunk_stream() -> AsyncGenerator[str, None]:
+            async with owned_remote_task(remote, conversation, harness, message_id):
+                yield "accepted remote chunk"
+
+        if close_mode == "aclose":
+            stream = chunk_stream()
+            assert await asyncio.wait_for(anext(stream), 5) == "accepted remote chunk"
+            await asyncio.wait_for(stream.aclose(), 12)
+        else:
+            started = asyncio.Event()
+
+            async def block_in_owned_task() -> None:
+                async with owned_remote_task(remote, conversation, harness, message_id):
+                    started.set()
+                    await asyncio.wait_for(asyncio.Event().wait(), 10)
+
+            running = asyncio.create_task(block_in_owned_task())
+            await asyncio.wait_for(started.wait(), 5)
+            running.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(running, 12)
+
+        assert remote_impl.calls == [task_id]
+        async with (
+            aiosqlite.connect(database) as db,
+            db.execute(
+                "SELECT task_id,state,pending FROM ngn_remote_sessions WHERE session_id=?",
+                (harness.session_id,),
+            ) as cursor,
+        ):
+            active_row = await cursor.fetchone()
+        assert active_row == (task_id, TaskState.TASK_STATE_CANCELED, 0)
+
+        conversation.state = TaskState.TASK_STATE_CANCELED
+
+        async def terminal_stream() -> AsyncGenerator[str, None]:
+            async with owned_remote_task(remote, conversation, harness, message_id):
+                yield "already terminal"
+
+        stream = terminal_stream()
+        assert await asyncio.wait_for(anext(stream), 5) == "already terminal"
+        await asyncio.wait_for(stream.aclose(), 5)
+        assert remote_impl.calls == [task_id]
+        async with (
+            aiosqlite.connect(database) as db,
+            db.execute(
+                "SELECT task_id,state,pending FROM ngn_remote_sessions WHERE session_id=?",
+                (harness.session_id,),
+            ) as cursor,
+        ):
+            terminal_row = await cursor.fetchone()
+        assert terminal_row == (task_id, TaskState.TASK_STATE_CANCELED, 0)
+    finally:
+        await harness.close()
 
 
 @pytest.mark.asyncio
