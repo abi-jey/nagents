@@ -4,6 +4,7 @@ import type { SessionAgentSelection } from "../sessions/sessionAgent.js";
 
 export const MAIN_AGENT = "";
 export function providerLabel(agent: Pick<TeamAgent, "provider" | "providerKind">): string {
+  if (agent.providerKind === "a2a") return "Remote A2A";
   return agent.provider || agent.providerKind;
 }
 export type AgentPhase = "running" | "waiting" | "done" | "failed" | "cancelled" | "ready";

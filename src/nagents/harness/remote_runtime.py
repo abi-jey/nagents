@@ -72,8 +72,13 @@ async def owned_remote_task(
 
 async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEvent, None]:
     """Admit a stable message once; retain identity on failure instead of replaying."""
+    from .runtime import _HarnessSession
+
     session_id = harness.session_id
-    await harness.agent.session.add_message(session_id, Message(role="user", content=prompt))
+    message = Message(role="user", content=prompt)
+    if isinstance(harness.agent.session, _HarnessSession):
+        harness.agent.session.prepare_input(session_id, message)
+    await harness.agent.session.add_message(session_id, message)
     from .task_activity import ChildActivity
 
     for plugin in harness.agent.plugins:
@@ -141,7 +146,7 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
     state: int = TaskState.TASK_STATE_UNSPECIFIED
     identity: dict[str, object] = {"response_id": response_id, "response_session_id": session_id}
     try:
-        # Credential/TLS validation happens before committing input or dispatching.
+        # Credential/TLS validation happens before dispatching to the remote host.
         if profile.issuer or profile.token_env:
             await credentials.token()
         tls = credentials.tls()

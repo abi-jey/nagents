@@ -102,6 +102,34 @@ async def test_discovery_uses_oidc_url_and_public_pkce_hint_without_sending_cred
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("required_scopes", [("files:read", "files:write"), ()])
+async def test_plain_oauth2_discovery_preserves_required_scopes_without_openid(
+    tmp_path: Path, required_scopes: tuple[str, ...]
+) -> None:
+    metadata_url = "https://id.example/custom/oauth-metadata"
+    card = agent_card(card_config(tmp_path, public_client=False))
+    del card.security_schemes["oidc"]
+    requirement = card.security_requirements[0]
+    del requirement.schemes["oidc"]
+    card.security_schemes["oauth2"].oauth2_security_scheme.oauth2_metadata_url = metadata_url
+    requirement.schemes["oauth2"].list.extend(required_scopes)
+    card.capabilities.extensions.clear()
+    transport, seen = responses_for_card(card, metadata_url=metadata_url)
+
+    result = await discovery.discover_remote(RemoteAgentConfig(url="https://peer.example"), transport=transport)
+
+    assert result.authentication == "oauth"
+    assert result.connection.metadata_url == metadata_url
+    assert result.connection.issuer == "https://id.example/realms/agents"
+    assert result.connection.scopes == required_scopes
+    assert not result.client_id_advertised
+    assert [request.url for request in seen] == [
+        httpx.URL("https://peer.example/.well-known/agent-card.json"),
+        httpx.URL(metadata_url),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_discovery_retains_host_setup_required_when_no_public_client_is_advertised(tmp_path: Path) -> None:
     metadata_url = "https://id.example/realms/agents/.well-known/openid-configuration"
     card = agent_card(card_config(tmp_path, public_client=False))

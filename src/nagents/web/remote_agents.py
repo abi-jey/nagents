@@ -99,6 +99,10 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
     flows: dict[str, LoginFlow] = {}
     login_errors: dict[str, str] = {}
 
+    def require_network() -> None:
+        if get().harness.config.demo:
+            raise HTTPException(403, "Remote connections are unavailable in offline demo mode")
+
     def configured(name: str) -> RemoteProfile:
         harness = get().harness
         harness.refresh_agent_definitions()
@@ -142,6 +146,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
 
     @app.post("/api/remote-agents/discover")
     async def discover(body: ConnectionInput) -> dict[str, object]:
+        require_network()
         try:
             from nagents.a2a.discovery import discover_remote
 
@@ -185,6 +190,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
 
     @app.post("/api/remote-agents/{name}/login")
     async def login(name: str, request: Request) -> JSONResponse:
+        require_network()
         profile = configured(name)
         login_errors.pop(name, None)
         if not profile.issuer:
@@ -265,6 +271,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
 
     @app.post("/api/remote-agents/{name}/probe")
     async def probe(name: str) -> dict[str, object]:
+        require_network()
         profile = configured(name)
         try:
             from nagents.a2a.client import RemoteAgent
@@ -287,6 +294,7 @@ def register(app: FastAPI, get: Callable[[], WebState]) -> None:
 
     @app.get(CALLBACK)
     async def callback(request: Request) -> RedirectResponse:
+        require_network()
         # Middleware extracts and removes the query before access logging.
         query = request.scope.get("ngn.remote_callback", {})
         key, code = query.get("state", ""), query.get("code", "")

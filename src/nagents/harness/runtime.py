@@ -133,6 +133,9 @@ class _HarnessSession(SessionManager):
     async def session_exists(self, session_id: str) -> bool:
         return await _await_cleanup(asyncio.create_task(super().session_exists(session_id)))
 
+    def prepare_input(self, session_id: str, message: "Message") -> None:
+        """Bind a host receipt before either local or remote input persistence."""
+
     async def add_message(self, session_id: str, message: "Message") -> int:
         reservation = capture_write(self, session_id, message)
         row_id = await _await_cleanup(asyncio.create_task(super().add_message(session_id, message)))

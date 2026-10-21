@@ -22,6 +22,7 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [signInPending, setSignInPending] = useState("");
   const current = catalog?.agents.find(item => item.name === agent);
   const dirty = !!current && (current.connection.url !== connection.url || current.connection.ca_file !== connection.ca_file || current.description !== description);
   const callback = `${window.location.origin}/remote-agent-login/callback`;
@@ -48,9 +49,32 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
     window.addEventListener("focus", check);
     return () => { abort.abort(); window.removeEventListener("focus", check); };
   }, [agent, token, active]);
+  useEffect(() => {
+    if (signInPending !== agent || !agent || !active) return;
+    const abort = new AbortController();
+    let reading = false;
+    const check = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        const reply = await (await request("remote-agents", token, undefined, abort.signal)).json() as Catalog;
+        if (abort.signal.aborted) return;
+        const remote = reply.agents.find(item => item.name === agent);
+        if (remote?.signed_in) { setSignedIn(true); setSignInPending(""); setMessage("Signed in. You can now use this remote agent."); }
+        else if (remote?.login_error) { setError(remote.login_error); setSignInPending(""); }
+      } catch { /* The next bounded poll can recover a transient status read. */ }
+      finally { reading = false; }
+    };
+    const interval = window.setInterval(() => void check(), 2500);
+    const timeout = window.setTimeout(() => { setSignInPending(""); setError(`Sign-in did not complete. If the provider rejected the callback, register ${callback} in the provider and try again.`); }, 300000);
+    return () => { abort.abort(); window.clearInterval(interval); window.clearTimeout(timeout); };
+  }, [signInPending, agent, token, active, callback]);
   const update = <K extends keyof Connection>(key: K, value: Connection[K]) => setConnection(current => ({ ...current, [key]: value }));
   async function connect(event: FormEvent) {
     event.preventDefault(); if (!catalog) return;
+    const popup = !agent ? window.open("about:blank", "_blank") : null;
+    if (popup) popup.opener = null;
+    let launched = false;
     setBusy(true); setError(""); setMessage("");
     try {
       const discovered = await (await request("remote-agents/discover", token, { ...initial, url: connection.url, ca_file: connection.ca_file, timeout: connection.timeout })).json() as Discovery;
@@ -58,10 +82,17 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
       const identifier = agent || name || discovered.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
       if (!identifier) throw new Error("Enter a name for this remote agent.");
       const reply = await request(`remote-agents/${encodeURIComponent(identifier)}`, token, { revision: catalog.revision, description: description || discovered.description, connection: discovered.connection, user_invocable: current?.user_invocable ?? true, subagent_available: current?.subagent_available ?? true }, undefined, "PUT");
-      setCatalog(await reply.json() as Catalog); setConnection(discovered.connection); setName(identifier);
+      const stored = await reply.json() as Catalog;
+      setCatalog(stored); setConnection(discovered.connection); setName(identifier);
       setMessage("Connected. Available to the next assistant round without restarting.");
       announceSettingsSaved(); saved(identifier);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not connect the remote agent."); }
+      if (!agent && discovered.connection.issuer && discovered.connection.client_id && !stored.agents.find(item => item.name === identifier)?.signed_in) {
+        const auth = await (await request(`remote-agents/${encodeURIComponent(identifier)}/login`, token, {})).json() as { authorization_url: string };
+        setSignInPending(identifier); launched = true;
+        if (popup) popup.location.href = auth.authorization_url;
+        else window.location.assign(auth.authorization_url);
+      } else popup?.close();
+    } catch (cause) { if (!launched) popup?.close(); setError(cause instanceof Error ? cause.message : "Could not connect the remote agent."); }
     finally { setBusy(false); }
   }
   async function login() {
@@ -72,13 +103,14 @@ export function RemoteAgentEditor({ agent, token, saved, active = true }: { agen
       const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/login`, token, {})).json() as { authorization_url: string };
       if (popup) popup.location.href = reply.authorization_url;
       else window.location.assign(reply.authorization_url);
+      setSignInPending(agent);
       setMessage("Complete sign-in, then return here. If the provider rejects the callback, register the URL shown below in the provider.");
     } catch (cause) { popup?.close(); setError(cause instanceof Error ? cause.message : "Could not start sign-in."); }
     finally { setBusy(false); }
   }
   async function probe() {
     setBusy(true); setError(""); setMessage("");
-    try { const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/probe`, token, {})).json() as { message: string; name: string }; setMessage(`${reply.message} ${reply.name}`); }
+    try { const reply = await (await request(`remote-agents/${encodeURIComponent(agent)}/probe`, token, {})).json() as { message: string; name: string }; setMessage(`${reply.message} ${reply.name}`); setSignedIn(true); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not check the connection."); }
     finally { setBusy(false); }
   }

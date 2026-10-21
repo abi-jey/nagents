@@ -29,7 +29,7 @@ class ProviderSetup(TypedDict):
 def provider_setup(harness: Harness) -> ProviderSetup:
     """Never contact a provider or return credential values to the browser."""
     config = harness.config
-    if config.demo:
+    if config.demo or harness._remote_profile.configured:
         return {"configured": True, "message": ""}
     if not config.provider:
         return {"configured": False, "message": "Select or add a named provider connection in Provider connections."}

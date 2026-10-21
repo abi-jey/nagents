@@ -75,14 +75,18 @@ def private_xdg_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def config(
-    tmp_path: Path, *, profiles: dict[str, AgentProfile] | None = None, agent: str = "assistant"
+    tmp_path: Path,
+    *,
+    profiles: dict[str, AgentProfile] | None = None,
+    agent: str = "assistant",
+    demo: bool = False,
 ) -> HarnessConfig:
     return HarnessConfig(
         workspace=tmp_path,
         data_dir=tmp_path / "data",
         profiles=profiles or {},
         agent=agent,
-        demo=False,
+        demo=demo,
     )
 
 
@@ -726,5 +730,39 @@ def test_root_remote_prompt_is_persisted_when_credentials_are_missing(tmp_path: 
             assert len(history) == 1
             assert history[0]["role"] == "user"
             assert history[0]["content"] == prompt
+            assert history[0]["message_id"] == stream.message_id
+            assert history[0]["ingress_id"].startswith("inbox-")
+            assert history[0]["source_verified"] is True
+
+    asyncio.run(scenario())
+
+
+def test_demo_remote_endpoints_fail_closed_without_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        profile = RemoteProfile(url=AGENT_URL, issuer=ISSUER, client_id=CLIENT_ID)
+        configuration = config(
+            tmp_path,
+            profiles={"peer-review": AgentProfile(description="Remote peer", a2a=profile)},
+            demo=True,
+        )
+        async with client_app(tmp_path, config=configuration) as (_, client, headers, _):
+
+            def forbidden_network(*args: object, **kwargs: object) -> None:
+                raise AssertionError("demo remote endpoint attempted network access")
+
+            monkeypatch.setattr("httpx.AsyncClient", forbidden_network)
+            responses = [
+                await client.post("/api/remote-agents/discover", headers=headers, json=connection()),
+                await client.post("/api/remote-agents/peer-review/login", headers=headers, json={}),
+                await client.post("/api/remote-agents/peer-review/probe", headers=headers, json={}),
+                await client.get(
+                    remote_agents.CALLBACK,
+                    headers=headers,
+                    params={"state": "s" * 43, "code": "demo-code"},
+                ),
+            ]
+
+            assert [response.status_code for response in responses] == [403, 403, 403, 403]
+            assert all("offline demo mode" in response.json()["detail"] for response in responses)
 
     asyncio.run(scenario())

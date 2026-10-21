@@ -101,7 +101,13 @@ async def discover_remote(
             remote_endpoint(issuer, loopback_http=connection.loopback_http)
             # A public client's advertised scopes may differ from API permission
             # claims when the server maps roles to permissions itself.
-            scopes = tuple(dict.fromkeys(("openid", *required.list)))
+            scopes = tuple(
+                dict.fromkeys(
+                    ("openid", *required.list)
+                    if scheme.WhichOneof("scheme") == "open_id_connect_security_scheme"
+                    else required.list
+                )
+            )
             client_id, resource, advertised = "", "", False
             for extension in card.capabilities.extensions:
                 if extension.uri == PUBLIC_CLIENT_EXTENSION:

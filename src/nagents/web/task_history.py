@@ -27,9 +27,7 @@ class TaskInputIdentity(AgentPlugin):
         self.adapter = adapter
 
     async def before_run(self, context: RunContext, message: Message) -> Message:
-        if context.session_id == self.adapter.child and not self.adapter.consumed:
-            self.adapter.owner = asyncio.current_task()
-            self.adapter.expected = self.adapter._message_values(context.session_id, message)
+        self.adapter.prepare_input(context.session_id, message)
         return message
 
 
@@ -43,6 +41,11 @@ class TaskHistory(_HarnessSession):
         self.expected: tuple[str | None, ...] = ()
         self.consumed = False
         self.identity = TaskInputIdentity(self)
+
+    def prepare_input(self, session_id: str, message: Message) -> None:
+        if session_id == self.child and not self.consumed:
+            self.owner = asyncio.current_task()
+            self.expected = self._message_values(session_id, message)
 
     async def add_message(self, session_id: str, message: Message) -> int:
         values = self._message_values(session_id, message)
