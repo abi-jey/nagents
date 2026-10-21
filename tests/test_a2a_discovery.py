@@ -259,7 +259,10 @@ async def test_url_only_configure_tool_discovers_and_saves_host_authentication(
         assert profile.a2a.client_id == "ngn-public-cli"
         assert profile.a2a.metadata_url == metadata_url
         assert profile.a2a.scopes == ("openid", "profile", "email")
-        assert profile.description == "An authenticated ngn agent."
+        assert profile.description == ""
+        advertised = harness._agent_catalog.remote_store.load().advertised["peer"]
+        assert advertised.name == card.name
+        assert advertised.description == "An authenticated ngn agent."
         assert len(seen) == 2
         result = next(event.result for event in events if isinstance(event, ToolResultEvent))
         assert isinstance(result, dict)
