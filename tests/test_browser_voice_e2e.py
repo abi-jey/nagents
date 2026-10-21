@@ -3,6 +3,7 @@
 import base64
 import copy
 import json
+import os
 import struct
 import wave
 from collections.abc import Callable
@@ -123,7 +124,8 @@ def test_unpack_writes_complete_received_network_pcm_and_strips_all_bulk_audio(t
         assert recording.getframerate() == 24000
         assert recording.getnchannels() == 1
         assert recording.readframes(8) == struct.pack("<8h", 11, 12, 13, 14, 21, 22, 23, 24)
-    assert received_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert received_path.stat().st_mode & 0o777 == 0o600
     metrics = json.loads((destination / "metrics.json").read_text())
     assert metrics["receivedPcm"] == {
         "status": "complete",
