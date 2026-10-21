@@ -6,7 +6,7 @@ import { compactionMarker, compactionWarning } from "./context.js";
 import { agentAncestors, definitionUsage, orderedTeam, phaseLabel, providerLabel, type TeamAgent, type TeamProfile } from "./model.js";
 import { profileTarget } from "./useTeam.js";
 import { scrollWithin } from "../../components/scrollWithin.js";
-import { RemoteStatus } from "./RemoteStatus.js";
+import { remoteAuthLabel, RemoteStatus } from "./RemoteStatus.js";
 
 export type ArrivalTimes = Readonly<Record<string, number>>;
 export function useArrivalStyle(at = 0): CSSProperties {
@@ -31,7 +31,7 @@ export function AgentRow({ agent, selected, inspect, settings, arrivalAt = 0 }: 
   const motion = useArrivalStyle(arrivalAt);
   const hasDefinition = !!agent.id && !!agent.profile;
   return <article className={`team-agent-row${selected ? " is-selected" : ""}${arrivalAt ? " is-arriving" : ""}`} style={motion} data-agent-id={agent.id || "main"}>
-    <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={marker?.description}
+    <button type="button" className="team-agent-open" onClick={inspect} aria-current={selected ? "page" : undefined} aria-description={[marker?.description, agent.providerKind === "a2a" && remoteAuthLabel(agent.authentication)].filter(Boolean).join(". ") || undefined}
       aria-label={`Open ${agent.name} conversation. ${phaseLabel(agent)}${agent.profile ? `. Definition ${agent.profile}` : ""}${provider ? `. ${provider} ${agent.model}` : ""}`}>
       <span className="team-agent-heading"><span className="team-agent-identity"><strong className={hasDefinition ? "team-agent-definition" : undefined} title={hasDefinition ? `Agent definition: ${agent.profile}` : undefined}>{hasDefinition ? agent.profile : agent.name}</strong>{hasDefinition && <span className="team-agent-instance" title={`Conversation: ${agent.name}`}>{agent.name}</span>}</span><AgentState agent={agent} /></span>
       <span className="team-agent-model">{provider && <ProviderLogo provider={agent.providerKind} />}<span>{[provider, agent.model].filter(Boolean).join(" · ") || "Configuration unavailable"}</span></span>

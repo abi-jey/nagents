@@ -12,7 +12,7 @@ import { TeamTree } from "../team/TeamTree.js";
 import { TaskConversation, TaskTranscript, taskEntries } from "../team/TaskConversation.js";
 import { profileTarget, useTeam, type TeamController } from "../team/useTeam.js";
 import { TaskDrafts, agentAncestors, mergeTaskActivity, orderedTeam, providerLabel, taskAgent, type TaskActivity, type TeamAgent, type TaskDetail, type TeamProfile } from "../team/model.js";
-import type { RetainedTask } from "../../types.js";
+import type { ContextStats, RetainedTask } from "../../types.js";
 
 const task = (id: string, parent = "", updated = 1): RetainedTask => ({ id, name: id, parent_task_id: parent,
   status: "running", result: "", error: "", prompt: `${id} task`, session_id: "root", child_session_id: `child-${id}`,
@@ -124,6 +124,25 @@ test("tree shows root and two delegation levels, retains deeper branches behind 
   assert.match(markup, /data-agent-id="main"/); assert.match(markup, /data-agent-id="b"/);
   assert.doesNotMatch(markup, /data-agent-id="c"/); assert.match(markup, /1 nested agent/);
   assert.doesNotMatch(markup, /Earlier work|row-live-detail|New<\/|origin-link/);
+});
+
+test("remote authentication status is included in team row accessible descriptions", () => {
+  const signInRequired = taskAgent({ ...task("remote-required"), provider_kind: "a2a" });
+  signInRequired.authentication = { state: "sign_in_required", expires_at: 0, error_code: "" };
+  const autoRefresh = taskAgent({ ...task("remote-refresh"), provider_kind: "a2a" });
+  autoRefresh.authentication = { state: "signed_in", expires_at: 0, error_code: "", refreshable: true };
+  const localContext: ContextStats = { components: [], total_tokens: 60000, context_window: 100000, context_window_source: "provider",
+    remaining_tokens: 40000, observed_prompt_tokens: null, observed_completion_tokens: null, observed_reasoning_tokens: null,
+    observed_reasoning_in_output: "unknown", observed_context_tokens: null, pending_context_tokens: 0, context_tokens: 60000,
+    context_tokens_source: "provider", provider: "openai", model: "model", estimate_method: "provider" };
+  const local = taskAgent({ ...task("local"), context: localContext,
+    compaction: { trigger: "tokens", token_threshold: 80000 } });
+  const markup = renderToStaticMarkup(createElement(TeamTree, { agents: [root, signInRequired, autoRefresh, local], profiles: [],
+    selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {} }));
+  const document = new JSDOM(markup).window.document;
+  assert.match(document.querySelector('[data-agent-id="remote-required"] .team-agent-open')?.getAttribute("aria-description") || "", /Sign-in required/);
+  assert.match(document.querySelector('[data-agent-id="remote-refresh"] .team-agent-open')?.getAttribute("aria-description") || "", /Signed in · auto refresh/);
+  assert.match(document.querySelector('[data-agent-id="local"] .team-agent-open')?.getAttribute("aria-description") || "", /Compaction at 80,000 tokens/);
 });
 
 test("timeline renders nested task branches with compact terminal rows and readable results", () => {

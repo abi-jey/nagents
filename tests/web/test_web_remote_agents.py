@@ -734,6 +734,7 @@ def test_root_remote_prompt_is_persisted_when_credentials_are_missing(tmp_path: 
             errors = [event for event in events if event.get("event") == "error"]
             assert len(errors) == 1
             assert errors[0].get("recoverable") is False
+            assert "sign-in is missing or expired" in str(errors[0].get("message", ""))
             response = await client.get(f"/api/sessions/{harness.session_id}", headers=headers)
             assert response.status_code == 200
             history = response.json()["history"]
