@@ -189,6 +189,15 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
             timeout=profile.timeout,
             verify=tls,
         ) as remote:
+            try:
+                await asyncio.to_thread(
+                    harness._agent_catalog.remote_store.update_metadata,
+                    profile.fingerprint,
+                    remote.card.name[:200],
+                    remote.card.description[:2000],
+                )
+            except Exception as error:
+                logger.warning("A2A metadata update skipped error_type=%s", type(error).__name__)
             conversation = RemoteConversation(remote, task_id=task_id, context_id=context_id)
             async with aiosqlite.connect(harness.agent.session.db_path) as db:
                 await db.execute(

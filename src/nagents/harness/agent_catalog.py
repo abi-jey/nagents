@@ -18,6 +18,7 @@ from .config import _install_profile
 from .config import _json_profile
 from .private_store import ProtectedStoreError
 from .providers import ScopedProviderRegistryStore
+from .remote_store import RemoteAgentMetadata
 from .remote_store import RemoteAgentStore
 
 
@@ -58,6 +59,7 @@ class AgentCatalog:
         }
         self._published = {name: replace(profile) for name, profile in config.profiles.items()}
         self._removed: set[str] = set()
+        self.remote_metadata: dict[str, RemoteAgentMetadata] = {}
         self.revision = self._revision(config.profiles, config.agent_diagnostics)
 
     @staticmethod
@@ -134,8 +136,10 @@ class AgentCatalog:
                 candidate.profiles = before
                 del diagnostics[notes_before:]
                 diagnostics.append(f"{source.path}: agent definitions could not be loaded ({type(error).__name__})")
+        remote_metadata: dict[str, RemoteAgentMetadata] = {}
         try:
             remotes = self.remote_store.load()
+            remote_metadata = dict(remotes.advertised)
             for name, profile in remotes.agents.items():
                 if name in candidate.profiles or name in self.overrides:
                     raise ValueError("A remote agent name conflicts with a local definition")
@@ -154,7 +158,7 @@ class AgentCatalog:
             candidate.profiles.pop(name, None)
         notes = tuple(diagnostics)
         revision = self._revision(candidate.profiles, notes)
-        changed = revision != self.revision
+        changed = revision != self.revision or remote_metadata != self.remote_metadata
         config.profiles = candidate.profiles
         config.agent_source_profiles = source_profiles
         config.agent_authored_profiles = {**authored, **self.overrides}
@@ -162,5 +166,6 @@ class AgentCatalog:
         # Source selection itself is immutable and inherited by child runtimes.
         config.agent_sources = self.sources
         self.revision = revision
+        self.remote_metadata = remote_metadata
         self._published = {name: replace(profile) for name, profile in config.profiles.items()}
         return changed

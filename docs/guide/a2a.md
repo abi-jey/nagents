@@ -195,6 +195,17 @@ agents appear alongside local definitions in Team and in the conversation
 picker. The next model round can delegate to a newly added agent without a
 restart. Updates affect new work; active and retained work keeps its accepted
 connection. Remote definitions are JSON, separate from local agent Markdown.
+The configured name is a stable local routing alias. Team and connection
+settings show the remote Agent Card's advertised name and description separately;
+those labels refresh on a successful probe or outbound connection, or on the
+next Team/task refresh when the last check is older than 60 seconds. One card
+fetch updates every current local alias for that same connection. Each metadata
+fetch has a 12-second total deadline; demo and reviewer contexts never schedule
+it. While a fetch is pending the UI reports “Checking”; after a failure it keeps
+the last known labels, reports “Refresh failed”, and retries on a later poll
+(after a 60-second backoff). A saved local description remains an override, and
+card metadata never changes the endpoint, authentication binding or tool trust.
+The remote labels are untrusted descriptive data, not instructions.
 
 Issuer and requested scopes come from the host's advertised authentication
 metadata. A public PKCE client ID can be advertised using the optional

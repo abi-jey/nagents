@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import { AgentConfiguration } from "../team/TeamPane.js";
+import { TeamTree } from "../team/TeamTree.js";
 import { providerLabel, type TeamAgent } from "../team/model.js";
 import { ContextIndicator } from "../context/ContextIndicator.js";
 import type { ContextStats } from "../../types.js";
@@ -22,7 +23,8 @@ const connection: RemoteConnection = {
 };
 function catalog(signedIn = false, clientId = connection.client_id) {
   return { revision: "revision-1", source_path: "/workspace/connections/a2a.json", agents: [{
-    name: "peer", description: "Remote review", connection: { ...connection, client_id: clientId },
+    name: "peer", description: "Remote review", remote_name: "Advertised remote name", remote_description: "Remote card purpose", metadata_observed_at: 1, metadata_status: "current",
+    connection: { ...connection, client_id: clientId },
     signed_in: signedIn, authentication: { state: signedIn ? "signed_in" : clientId ? "sign_in_required" : "host_setup_required", expires_at: 0, error_code: "" },
     trust_remote_tools: false, user_invocable: true, subagent_available: true,
   }] };
@@ -74,6 +76,25 @@ test("remote editor exposes discovered metadata read-only without manual OAuth f
   assert.equal(document.querySelector('input[aria-label="Issuer"]'), null);
   assert.equal(document.querySelector('input[aria-label="Client ID"]'), null);
   assert.equal(document.querySelector('input[aria-label="Scopes"]'), null);
+  assert.match(document.querySelector('[aria-label="Remote agent"]')?.textContent || "", /Advertised remote name/);
+  assert.match(document.querySelector('[aria-label="Remote agent"]')?.textContent || "", /Remote card purpose/);
+  assert.match(document.querySelector('[aria-label="Remote agent"]')?.textContent || "", /From remote server/);
+  assert.equal((document.querySelector('input[placeholder="Optional description for this workspace"]') as HTMLInputElement | null)?.placeholder, "Optional description for this workspace");
+  assert.equal((document.querySelector('input[value="Remote review"]') as HTMLInputElement | null)?.value, "Remote review");
+});
+
+test("Team definition row keeps local alias and description beside refreshed remote card labels", () => {
+  const html = renderToStaticMarkup(createElement(TeamTree, {
+    agents: [],
+    profiles: [{ id: "peer", name: "peer-alias", description: "Local note", remote_name: "Advertised name",
+      remote_description: "Advertised purpose", metadata_status: "refresh_failed", provider: "a2a", model: "", used: false, available: true }],
+    selected: "", inspect() {}, configure() {}, arrivals: {}, error: "", refresh() {},
+  }));
+  assert.match(html, /peer-alias/);
+  assert.match(html, /Local note/);
+  assert.match(html, /Advertised name · Advertised purpose · Refresh failed/);
+  assert.match(html, />Auth status unavailable<\/span>/);
+  assert.equal((html.match(/<small/g) || []).length, 2);
 });
 
 test("remote auth states explain server credential availability without exposing credential values", () => {

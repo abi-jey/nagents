@@ -371,18 +371,21 @@ def create_app(
 
             async def close_resources() -> None:
                 try:
-                    await provider_login.close()
+                    await state.remote_metadata_refresh.close()
                 finally:
                     try:
-                        await live_settings.shutdown()
+                        await provider_login.close()
                     finally:
                         try:
-                            await live.shutdown()
+                            await live_settings.shutdown()
                         finally:
                             try:
-                                await state.trash.close()
+                                await live.shutdown()
                             finally:
-                                await close_host()
+                                try:
+                                    await state.trash.close()
+                                finally:
+                                    await close_host()
 
             cleanup = asyncio.create_task(close_resources())
             try:
