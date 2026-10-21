@@ -16,12 +16,15 @@ import httpx
 from a2a.client import A2ACardResolver
 from a2a.client import ClientConfig
 from a2a.client import ClientFactory
+from a2a.client.errors import A2AClientTimeoutError
+from a2a.client.errors import AgentCardResolutionError
 from a2a.types import CancelTaskRequest
 from a2a.types import GetTaskRequest
 from a2a.types import ListTasksRequest
 from a2a.types import SubscribeToTaskRequest
 
 from .config import endpoint
+from .errors import RemoteAgentError as RemoteAgentError
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -38,8 +41,44 @@ if TYPE_CHECKING:
 AccessTokenProvider = Callable[[], Awaitable[str]]
 
 
-class RemoteAgentError(RuntimeError):
-    """Remote operation failed; no token, response body or tool data is logged."""
+def remote_failure_code(error: BaseException) -> str:
+    """Inspect typed causes/statuses; never classify or expose exception text."""
+    causes: list[BaseException] = []
+    seen: set[int] = set()
+    current = error
+    while id(current) not in seen and len(causes) < 16:
+        seen.add(id(current))
+        causes.append(current)
+        if isinstance(current, RemoteAgentError):
+            return current.code
+        status = (
+            current.response.status_code
+            if isinstance(current, httpx.HTTPStatusError)
+            else current.status_code
+            if isinstance(current, AgentCardResolutionError)
+            else 0
+        )
+        if status == 401:
+            return "A2A_AUTH_REJECTED"
+        if status == 403:
+            return "A2A_FORBIDDEN"
+        if status == 429:
+            return "A2A_RATE_LIMIT"
+        if isinstance(status, int) and status >= 500:
+            return "A2A_SERVER_ERROR"
+        cause = current.__cause__ or current.__context__
+        if cause is None:
+            break
+        current = cause
+    if any(isinstance(cause, ssl.SSLError) for cause in causes):
+        return "A2A_TLS"
+    if any(isinstance(cause, httpx.TimeoutException | A2AClientTimeoutError) for cause in causes):
+        return "A2A_TIMEOUT"
+    if any(isinstance(cause, httpx.ProtocolError | httpx.DecodingError) for cause in causes):
+        return "A2A_PROTOCOL"
+    if any(isinstance(cause, httpx.RequestError | ConnectionError) for cause in causes):
+        return "A2A_CONNECTION"
+    return "A2A_PROTOCOL"
 
 
 class ResourceBearer(httpx.Auth):
@@ -54,10 +93,13 @@ class ResourceBearer(httpx.Auth):
             raise RemoteAgentError("Remote credentials cannot be sent to another origin")
         try:
             token = await self.tokens()
-        except Exception:
-            raise RemoteAgentError("Remote access credentials are unavailable") from None
+        except Exception as error:
+            raise RemoteAgentError(
+                "Remote access credentials are unavailable",
+                code=error.code if isinstance(error, RemoteAgentError) else "A2A_AUTH_REQUIRED",
+            ) from None
         if not isinstance(token, str) or not re.fullmatch(r"[\x21-\x7e]{1,16384}", token):
-            raise RemoteAgentError("Remote access credentials are unavailable")
+            raise RemoteAgentError("Remote access credentials are unavailable", code="A2A_AUTH_REQUIRED")
         request.headers["Authorization"] = f"Bearer {token}"
         yield request
 
@@ -148,7 +190,8 @@ class RemoteAgent:
             await self.http.aclose()
             if isinstance(exc, Exception):
                 raise RemoteAgentError(
-                    "Remote discovery failed; check the configured server and access token"
+                    "Remote discovery failed; check the configured server and access token",
+                    code=remote_failure_code(exc),
                 ) from None
             raise
 
@@ -190,9 +233,10 @@ class RemoteAgent:
             async with aclosing(events):
                 async for event in events:
                     yield event
-        except Exception:
+        except Exception as error:
             raise RemoteAgentError(
-                "Remote send failed; retain this message ID and inspect the task before retrying"
+                "Remote send failed; retain this message ID and inspect the task before retrying",
+                code=remote_failure_code(error),
             ) from None
 
     async def subscribe(self, task_id: str) -> AsyncGenerator[StreamResponse, None]:
@@ -203,26 +247,30 @@ class RemoteAgent:
             async with aclosing(events):
                 async for event in events:
                     yield event
-        except Exception:
-            raise RemoteAgentError("Remote subscription ended; inspect the task before reconnecting") from None
+        except Exception as error:
+            raise RemoteAgentError(
+                "Remote subscription ended; inspect the task before reconnecting", code=remote_failure_code(error)
+            ) from None
 
     async def get_task(self, task_id: str) -> Task:
         try:
             return await self._ready().get_task(GetTaskRequest(id=task_id))
-        except Exception:
-            raise RemoteAgentError("Remote task read failed") from None
+        except Exception as error:
+            raise RemoteAgentError("Remote task read failed", code=remote_failure_code(error)) from None
 
     async def list_tasks(self, request: ListTasksRequest) -> ListTasksResponse:
         try:
             return await self._ready().list_tasks(request)
-        except Exception:
-            raise RemoteAgentError("Remote task listing failed") from None
+        except Exception as error:
+            raise RemoteAgentError("Remote task listing failed", code=remote_failure_code(error)) from None
 
     async def cancel(self, task_id: str) -> Task:
         try:
             return await self._ready().cancel_task(CancelTaskRequest(id=task_id))
-        except Exception:
-            raise RemoteAgentError("Remote task cancellation failed; inspect its state") from None
+        except Exception as error:
+            raise RemoteAgentError(
+                "Remote task cancellation failed; inspect its state", code=remote_failure_code(error)
+            ) from None
 
     async def close(self) -> None:
         if self._connected:

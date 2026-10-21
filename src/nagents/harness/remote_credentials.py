@@ -9,6 +9,8 @@ import ssl
 import time
 from typing import TYPE_CHECKING
 
+from nagents.a2a.errors import RemoteAgentError
+
 from .private_store import ProtectedFileStore
 from .private_store import ProtectedStoreError
 
@@ -16,6 +18,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from .remote_profiles import RemoteProfile
+
+
+class RemoteCredentialError(RemoteAgentError, ProtectedStoreError):
+    """A safe credential preflight failure, before any remote dispatch."""
 
 
 class RemoteCredentials(ProtectedFileStore):
@@ -39,18 +45,31 @@ class RemoteCredentials(ProtectedFileStore):
     async def token(self) -> str:
         if self.profile.token_env:
             result = os.environ.get(self.profile.token_env, "")
-            if not result:
-                raise ProtectedStoreError(
-                    "Remote agent token is missing from its configured server environment variable"
+            if not result or len(result) > 16384 or any(ord(c) < 33 or ord(c) > 126 for c in result):
+                raise RemoteCredentialError(
+                    "Remote agent token is missing or invalid in its configured server environment variable",
+                    code="A2A_TOKEN_MISSING",
                 )
             return result
         try:
             with self._directory() as directory:
                 raw = self._read_bytes(directory)
+        except FileNotFoundError:
+            raise RemoteCredentialError(
+                "Remote agent sign-in is required. Open its Connection settings.", code="A2A_AUTH_REQUIRED"
+            ) from None
+        except (OSError, ProtectedStoreError):
+            raise RemoteCredentialError(
+                "Remote agent credentials could not be loaded safely", code="A2A_AUTH_STORAGE"
+            ) from None
+        try:
             data = json.loads(raw or b"{}")
             token, expires = data.get("access_token"), data.get("expires_at")
             if (
                 not isinstance(token, str)
+                or not token
+                or len(token) > 16384
+                or any(ord(c) < 33 or ord(c) > 126 for c in token)
                 or isinstance(expires, bool)
                 or not isinstance(expires, int | float)
                 or not math.isfinite(expires)
@@ -58,8 +77,10 @@ class RemoteCredentials(ProtectedFileStore):
             ):
                 raise ValueError
             return token
-        except (OSError, ValueError, AttributeError, ProtectedStoreError):
-            raise ProtectedStoreError("Remote agent sign-in is required. Open its Connection settings.") from None
+        except (ValueError, AttributeError):
+            raise RemoteCredentialError(
+                "Remote agent sign-in is required. Open its Connection settings.", code="A2A_AUTH_REQUIRED"
+            ) from None
 
     def tls(self) -> ssl.SSLContext:
         context = ssl.create_default_context()

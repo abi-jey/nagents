@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 import uuid
 from contextlib import aclosing
 from contextlib import asynccontextmanager
@@ -12,6 +13,8 @@ from typing import TYPE_CHECKING
 import aiosqlite
 
 from nagents._async import finish_on_cancel
+from nagents.a2a.errors import RemoteAgentError
+from nagents.error_presentation import remote_error_message
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import ResponseMetadataEvent
@@ -33,6 +36,36 @@ if TYPE_CHECKING:
     from .types import HarnessEvent
 
 logger = logging.getLogger(__name__)
+
+
+def failure_event(
+    harness: Harness,
+    code: str,
+    *,
+    phase: str,
+    outcome: str = "not_sent",
+    message_id: str = "",
+    task_received: bool = False,
+    error_type: str = "",
+) -> ErrorEvent:
+    """Keep one safe reason in events, parent notifications and correlated logs."""
+    event = ErrorEvent(message="", code=code, extra={"remote_phase": phase, "remote_outcome": outcome})
+    event.message = remote_error_message(event)
+    if not event.message:
+        event.code = "A2A_RUNTIME"
+        event.message = remote_error_message(event)
+    logger.warning(
+        "A2A request failed: agent=%s session=%s message=%s code=%s phase=%s outcome=%s task_received=%s error_type=%s",
+        harness.config.agent,
+        harness.session_id,
+        message_id,
+        event.code,
+        phase,
+        outcome,
+        task_received,
+        error_type,
+    )
+    return event
 
 
 @asynccontextmanager
@@ -91,22 +124,14 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
         from nagents.a2a.conversation import TERMINAL_STATES
         from nagents.a2a.conversation import RemoteConversation
     except ModuleNotFoundError:
-        yield ErrorEvent(
-            message="Install nagents[a2a] on the ngn server to connect remote agents", code="A2A_UNAVAILABLE"
-        )
+        yield failure_event(harness, "A2A_UNAVAILABLE", phase="dependency")
         return
     profile = harness._remote_profile
     if profile.issuer and not profile.client_id:
-        yield ErrorEvent(
-            message="The remote host has not advertised a public sign-in client. Its administrator must configure that client and register ngn's callback URL in the identity provider.",
-            code="A2A_HOST_SETUP",
-        )
+        yield failure_event(harness, "A2A_HOST_SETUP", phase="configuration")
         return
     if harness.config.demo or harness.mode == "reviewer":
-        yield ErrorEvent(
-            message="Remote execution is unavailable under this runtime's read-only or demo ceiling",
-            code="A2A_PERMISSION",
-        )
+        yield failure_event(harness, "A2A_PERMISSION", phase="permission")
         return
     credentials = RemoteCredentials(harness.agent.session.db_path.parent, profile)
     message_id = str(uuid.uuid4())
@@ -129,33 +154,33 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
             row = await cursor.fetchone()
         if row:
             if row[0] != profile.fingerprint:
-                yield ErrorEvent(
-                    message="This conversation belongs to a different remote connection. Start a new chat to use the changed connection.",
-                    code="A2A_BINDING_CHANGED",
-                )
+                yield failure_event(harness, "A2A_BINDING_CHANGED", phase="state")
                 return
             if row[4]:
-                yield ErrorEvent(
-                    message="The previous remote request has an uncertain outcome. It was not sent again. Inspect the remote task before starting another request.",
-                    code="A2A_OUTCOME_UNKNOWN",
-                )
+                yield failure_event(harness, "A2A_OUTCOME_UNKNOWN", phase="state", outcome="unknown")
                 return
             context_id = str(row[1])
             task_id = "" if row[3] in TERMINAL_STATES else str(row[2])
     text = ""
     state: int = TaskState.TASK_STATE_UNSPECIFIED
     identity: dict[str, object] = {"response_id": response_id, "response_session_id": session_id}
+    phase = "credentials"
+    dispatched = False
+    accepted_update = False
     try:
         # Credential/TLS validation happens before dispatching to the remote host.
         if profile.issuer or profile.token_env:
             await credentials.token()
+        phase = "tls"
         tls = credentials.tls()
         if harness._is_subagent:
+            phase = "approval"
             await harness.approve(
                 "delegate",
                 {"agent": harness.config.agent, "url": profile.url, "prompt": prompt},
                 f"Send this task to remote agent {harness.config.agent} at {profile.url}",
             )
+        phase = "discovery"
         async with RemoteAgent(
             profile.url,
             credentials.token if profile.issuer or profile.token_env else None,
@@ -175,12 +200,16 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
             logger.info(
                 "A2A send admitted agent=%s session=%s message=%s", harness.config.agent, session_id, message_id
             )
+            phase = "send"
+            dispatched = True
             last_status = ""
             async with (
                 owned_remote_task(remote, conversation, harness, message_id),
                 aclosing(conversation.exchange(prompt, message_id=message_id)) as updates,
             ):
                 async for update in updates:
+                    phase = "response"
+                    accepted_update = True
                     state, context_id, task_id = update.state, update.context_id, update.task_id
                     async with aiosqlite.connect(harness.agent.session.db_path) as db:
                         await db.execute(
@@ -207,8 +236,11 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
                         state,
                         len(text.encode()),
                     )
-            if state not in TERMINAL_STATES and state != TaskState.TASK_STATE_INPUT_REQUIRED:
-                raise RuntimeError("Remote stream ended before a terminal state")
+            if state not in TERMINAL_STATES and state not in {
+                TaskState.TASK_STATE_INPUT_REQUIRED,
+                TaskState.TASK_STATE_AUTH_REQUIRED,
+            }:
+                raise RemoteAgentError("Remote stream ended before a terminal state", code="A2A_OUTCOME_UNKNOWN")
             async with aiosqlite.connect(harness.agent.session.db_path) as db:
                 await db.execute(
                     "UPDATE ngn_remote_sessions SET pending=0 WHERE session_id=? AND message_id=?",
@@ -216,9 +248,19 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
                 )
                 await db.commit()
             if state not in {TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_INPUT_REQUIRED}:
-                yield ErrorEvent(
-                    message="The remote agent did not complete this request. Check its task status.",
-                    code="A2A_TASK_FAILED",
+                state_codes: dict[int, str] = {
+                    TaskState.TASK_STATE_AUTH_REQUIRED: "A2A_AUTH_REQUIRED",
+                    TaskState.TASK_STATE_REJECTED: "A2A_TASK_REJECTED",
+                    TaskState.TASK_STATE_CANCELED: "A2A_TASK_CANCELLED",
+                }
+                code = state_codes.get(state, "A2A_TASK_FAILED")
+                yield failure_event(
+                    harness,
+                    code,
+                    phase="response",
+                    outcome="known",
+                    message_id=message_id,
+                    task_received=bool(task_id),
                 )
                 return
             if state == TaskState.TASK_STATE_INPUT_REQUIRED and not text:
@@ -238,15 +280,55 @@ async def run_remote(harness: Harness, prompt: str) -> AsyncGenerator[HarnessEve
         logger.info("A2A local stream cancelled session=%s message=%s task=%s", session_id, message_id, task_id)
         raise
     except Exception as error:
-        logger.warning(
-            "A2A execution failed agent=%s session=%s message=%s task=%s error_type=%s",
-            harness.config.agent,
-            session_id,
-            message_id,
-            task_id,
-            type(error).__name__,
+        code = (
+            error.code
+            if isinstance(error, RemoteAgentError)
+            else "A2A_TLS"
+            if phase == "tls" or isinstance(error, ssl.SSLError)
+            else "A2A_PERMISSION"
+            if phase == "approval" and isinstance(error, PermissionError)
+            else "A2A_RUNTIME"
         )
-        yield ErrorEvent(
-            message="Remote agent connection failed or needs sign-in. Open Connection settings. The request was not automatically retried.",
-            code="A2A_CONNECTION",
+        outcome = "unknown" if dispatched else "not_sent"
+        if (
+            dispatched
+            and not accepted_update
+            and code
+            in {
+                "A2A_AUTH_REQUIRED",
+                "A2A_AUTH_REJECTED",
+                "A2A_AUTH_STORAGE",
+                "A2A_TOKEN_MISSING",
+                "A2A_FORBIDDEN",
+                "A2A_RATE_LIMIT",
+            }
+        ):
+            try:
+                async with aiosqlite.connect(harness.agent.session.db_path) as db:
+                    cursor = await db.execute(
+                        "UPDATE ngn_remote_sessions SET pending=0 WHERE session_id=? AND message_id=?",
+                        (session_id, message_id),
+                    )
+                    await db.commit()
+                    if cursor.rowcount == 1:
+                        outcome = (
+                            "rejected"
+                            if code in {"A2A_AUTH_REJECTED", "A2A_FORBIDDEN", "A2A_RATE_LIMIT"}
+                            else "not_sent"
+                        )
+            except Exception as record_error:
+                logger.warning(
+                    "A2A rejection state was not saved: session=%s message=%s error_type=%s",
+                    session_id,
+                    message_id,
+                    type(record_error).__name__,
+                )
+        yield failure_event(
+            harness,
+            code,
+            phase=phase,
+            outcome=outcome,
+            message_id=message_id,
+            task_received=bool(task_id),
+            error_type=type(error).__name__,
         )

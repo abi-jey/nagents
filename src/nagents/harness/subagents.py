@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from typing import Literal
 
 from nagents._async import join_owned as _await_cleanup
+from nagents.error_presentation import remote_error_message
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
@@ -75,6 +76,7 @@ CHILD_TIMEOUT = 300.0
 _ADJECTIVES = ("quiet", "bright", "calm", "gentle", "swift", "clear", "small", "warm")
 _NOUNS = ("maple", "cedar", "willow", "birch", "fern", "brook", "finch", "otter")
 DEFAULT_TASK_OPTIONS = TaskOptions()
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -1038,16 +1040,26 @@ class SubagentManager:
                                     info, {"type": "status", "phase": "waiting", "detail": "Waiting for delegated work"}
                                 )
                             if isinstance(event, ErrorEvent) and not event.recoverable:
-                                info.error = (
+                                remote_error = remote_error_message(event) if child._remote_profile.configured else ""
+                                info.error = remote_error or (
                                     "Subagent reached its tool-round limit; its response is not a successful result."
                                     if event.code == "MAX_TOOL_ROUNDS"
                                     else "Subagent reported a provider or tool-loop error; its response is not a successful result."
                                 )
+                                if remote_error and event.code == "A2A_TASK_CANCELLED":
+                                    info.status = "cancelled"
+                                logger.warning(
+                                    "Subagent failed: task=%s profile=%s remote=%s code=%s",
+                                    info.id,
+                                    info.profile,
+                                    child._remote_profile.configured,
+                                    event.code if remote_error else "subagent_error",
+                                )
                             elif isinstance(event, DoneEvent):
                                 done = event
-                if done is None:
+                if done is None and not info.error:
                     info.error = "Subagent ended without a completed response."
-                elif not info.error:
+                elif done is not None and not info.error:
                     info.result = done.final_text[:MAX_RESULT]
                     if len(done.final_text) > MAX_RESULT:
                         info.result = info.result[: MAX_RESULT - 24] + "\n[Result truncated]"
@@ -1056,6 +1068,12 @@ class SubagentManager:
             info.error = "Subagent cancelled with its parent run; it will not be replayed."
             raise
         except Exception as error:
+            logger.warning(
+                "Subagent execution failed: task=%s profile=%s error_type=%s",
+                info.id,
+                info.profile,
+                type(error).__name__,
+            )
             # Provider/extension exceptions may contain credentials or raw HTTP bodies.
             # An owned operation can finish with an error while this worker is
             # already cancelling. Preserve the stop request at this boundary;
@@ -1081,14 +1099,24 @@ class SubagentManager:
                     info.status = "cancelled"
                     info.error = "Subagent cancelled with its parent run; it will not be replayed."
                 raise
-            except Exception:
+            except Exception as cleanup_error:
+                logger.warning(
+                    "Subagent cleanup failed: task=%s profile=%s error_type=%s",
+                    info.id,
+                    info.profile,
+                    type(cleanup_error).__name__,
+                )
                 task = asyncio.current_task()
                 if info.status == "cancelled" or (task is not None and task.cancelling()):
                     info.status = "cancelled"
                     info.error = "Subagent cancelled; it will not be replayed. Subagent resource cleanup failed."
                     raise asyncio.CancelledError from None
                 info.status = "failed"
-                info.error = "Subagent resource cleanup failed."
+                info.error = (
+                    info.error + " Subagent resource cleanup also failed."
+                    if info.error
+                    else "Subagent resource cleanup failed."
+                )
             finally:
                 if info.status == "running":
                     info.status = "failed" if info.error else "completed"

@@ -221,6 +221,19 @@ tasks. The remote server controls its model, instructions and tools, so local
 model/effort/compaction overrides do not apply. Remote context usage is shown
 as unavailable rather than estimated with the local model's window.
 
+Receiving a delegation handle confirms local acceptance, not a connection to
+the remote server. A failed remote child returns a safe, specific reason to
+its immediate parent and the UI, including missing/expired sign-in, rejected
+credentials, denied access, TLS/network failures, timeouts, and remote task
+failure/rejection/cancellation. Credential preflight failures explicitly say
+that no task was sent. An HTTP 401/403/429 before any task update is recorded
+as a rejected request, with no accepted task. Other failures after dispatch
+retain the message/task identity and warn about the uncertain outcome;
+ngn never automatically sends the request again. Backend diagnostics retain the failure
+code, phase, local correlation IDs, and outcome without tokens, upstream
+response bodies, or exception text. Framework callers can inspect
+`RemoteAgentError.code` instead of parsing an exception message.
+
 ### Use the library directly
 
 `RemoteAgentConfig` is a data-only JSON schema and can be imported without the

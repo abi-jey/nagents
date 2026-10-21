@@ -66,13 +66,26 @@ async def test_remote_profile_is_ready_without_local_openai_api_key(
 @pytest.mark.parametrize(
     ("code", "guidance"),
     [
-        ("A2A_CONNECTION", "remote agent could not be reached or needs sign-in"),
+        ("A2A_AUTH_REQUIRED", "sign-in is missing or expired"),
+        ("A2A_AUTH_REJECTED", "rejected the access token"),
+        ("A2A_AUTH_STORAGE", "credential storage permissions"),
+        ("A2A_TOKEN_MISSING", "configured server token is missing"),
+        ("A2A_FORBIDDEN", "denied access"),
+        ("A2A_RATE_LIMIT", "rate limited"),
+        ("A2A_SERVER_ERROR", "server returned an error"),
+        ("A2A_CONNECTION", "Check its server address and network connection"),
+        ("A2A_TIMEOUT", "request timed out"),
+        ("A2A_TLS", "TLS connection could not be verified"),
+        ("A2A_PROTOCOL", "invalid or unsupported response"),
         ("A2A_UNAVAILABLE", "Remote agents require nagents[a2a]"),
         ("A2A_HOST_SETUP", "has not advertised a public sign-in client"),
-        ("A2A_PERMISSION", "read-only or offline demo mode"),
+        ("A2A_PERMISSION", "read-only or demo restrictions"),
         ("A2A_BINDING_CHANGED", "different remote connection"),
         ("A2A_OUTCOME_UNKNOWN", "uncertain outcome"),
-        ("A2A_TASK_FAILED", "did not complete this request"),
+        ("A2A_TASK_FAILED", "reported that its task failed"),
+        ("A2A_TASK_REJECTED", "rejected this task"),
+        ("A2A_TASK_CANCELLED", "was cancelled"),
+        ("A2A_RUNTIME", "local remote-agent runtime failed"),
     ],
 )
 def test_known_a2a_errors_show_remote_guidance_without_provider_payload(code: str, guidance: str) -> None:
@@ -109,3 +122,33 @@ def test_unknown_a2a_error_uses_generic_safe_fallback() -> None:
     assert "A2A_FUTURE_PRIVATE_CODE" not in message
     assert "PRIVATE_UPSTREAM_MESSAGE_MARKER" not in message
     assert "PRIVATE_EXTRA_MARKER" not in message
+
+
+@pytest.mark.parametrize(
+    ("outcome", "guidance"),
+    [
+        ("not_sent", "No task was sent."),
+        (
+            "unknown",
+            "The request may have reached the remote agent. It was not automatically retried; inspect its task",
+        ),
+        (
+            "rejected",
+            "The remote server did not accept a task. This request was not automatically retried.",
+        ),
+        ("known", ""),
+    ],
+)
+def test_remote_error_explains_only_the_allowlisted_dispatch_outcome(outcome: str, guidance: str) -> None:
+    event = ErrorEvent(
+        message="PRIVATE_UPSTREAM_MESSAGE_MARKER",
+        code="A2A_CONNECTION",
+        extra={"remote_outcome": outcome, "exception": "PRIVATE_EXCEPTION_MARKER", "token": "PRIVATE_TOKEN_MARKER"},
+    )
+
+    category, message = provider_error(event)
+
+    assert category == "a2a_connection"
+    assert guidance in message
+    for marker in ("PRIVATE_UPSTREAM_MESSAGE_MARKER", "PRIVATE_EXCEPTION_MARKER", "PRIVATE_TOKEN_MARKER"):
+        assert marker not in message
