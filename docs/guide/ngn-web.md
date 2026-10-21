@@ -677,6 +677,10 @@ HTTP requests enforce the exact Host and Origin, reject cross-site fetches, and
 require a random per-process token on API reads and mutations (except the
 same-origin bootstrap). Mutations require an Origin header. Ordinary mutations
 require JSON and remain limited to 64 KiB; prompts are limited to 32,000 characters.
+External links and OAuth redirects may navigate to the static `GET /` document
+with `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`. That exception
+does not allow cross-site bootstrap/API requests, embedded documents, or
+WebSocket connections, and does not change the loopback Host check.
 The token is held in browser
 memory, never a URL or local storage. Responses are non-cacheable, frame embedding
 is blocked, and no third-party scripts/fonts are loaded. The browser's application
