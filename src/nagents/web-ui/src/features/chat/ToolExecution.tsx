@@ -17,7 +17,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
   const streamedInputs = useRef(false);
   const [chosen, choose] = useState("");
   const name = entry.title || "Tool call";
-  const presentation = toolPresentation(name);
+  const presentation = toolPresentation(name, entry.remoteReview);
   const target = executionTarget(entry);
   const status = executionStatus(entry);
   const busy = status.tone === "active" && entry.result === undefined;
@@ -57,6 +57,7 @@ export function ToolExecution({ entry, open, toggle, metadata, statusDescription
     {entry.delegatedTaskId && <p className="record-note">Delegated to <a href={`#${encodeURIComponent(`task-${entry.delegatedTaskId}`)}`}>{entry.delegatedTaskId}</a>. The task has its own execution state.</p>}
     {["schedule_wakeup", "wake_up_in"].includes(name) && <p className="record-note">This is the scheduling request, not evidence that a wake-up fired.</p>}
     {presentation.origin && <p className="record-note">MCP connection: {presentation.origin}. Method: {presentation.method}.</p>}
+    {entry.remoteReview && <p className="record-note">Review of {entry.remoteReview.tool} requested by {entry.remoteReview.agent}. This records the approval decision; the remote agent reports execution separately.</p>}
     {metadata}
   </div> });
   const selected = panels.some((panel) => panel.key === chosen) ? chosen

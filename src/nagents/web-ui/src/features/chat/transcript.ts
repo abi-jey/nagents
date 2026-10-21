@@ -78,6 +78,7 @@ export type Entry = {
   started?: boolean;
   approvalId?: string;
   approval?: string;
+  remoteReview?: { agent: string; tool: string };
   provisional?: boolean;
   delegatedTaskId?: string;
   notificationId?: string;
@@ -540,6 +541,15 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
       entry.streaming = false;
       entry.inputsTruncated = false;
       entry.approvalId = text(event, "approval_id");
+      if (entry.title === "delegate" && event.arguments && typeof event.arguments === "object" && !Array.isArray(event.arguments)) {
+        const args = event.arguments as Record<string, unknown>;
+        const operation = args.remote_operation;
+        if (operation && typeof operation === "object" && !Array.isArray(operation)) {
+          const tool = (operation as Record<string, unknown>).tool;
+          entry.remoteReview = { agent: typeof args.agent === "string" ? args.agent : "remote agent",
+            tool: typeof tool === "string" && /^[A-Za-z0-9_.-]{1,128}$/.test(tool) ? tool : "operation" };
+        }
+      }
       if (entry.result === undefined && (!previous?.approval || previous.approvalId !== entry.approvalId)) {
         entry.state = "Waiting for approval";
         entry.approval = undefined;
@@ -601,7 +611,7 @@ export function appendEvent(entries: Entry[], event: WireEvent): Entry[] {
           entry.result !== undefined
             ? entry.state
             : (event.decision === "allow" || event.decision === "allow_tool")
-              ? "Awaiting execution result"
+              ? entry.remoteReview ? "Review approved" : "Awaiting execution result"
               : "Approval denied",
         approval:
           event.decision === "allow_tool"
