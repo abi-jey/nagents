@@ -74,6 +74,20 @@ test("remote editor exposes discovered metadata read-only without manual OAuth f
   assert.equal(document.querySelector('input[aria-label="Scopes"]'), null);
 });
 
+test("new remote agent name pattern is valid under HTML v-mode rules", async t => {
+  const ui = await renderEditor("", async () => Response.json({ revision: "revision-1", source_path: "/workspace/connections/a2a.json", agents: [] }));
+  t.after(async () => ui.restore());
+  const document = ui.dom.window.document;
+  const details = document.querySelector("details")!;
+  details.open = true;
+  const input = document.querySelector<HTMLInputElement>('input[placeholder="Use the remote agent’s name"]')!;
+  const pattern = input.getAttribute("pattern");
+  assert.ok(pattern);
+  const validName = new RegExp(`^(?:${pattern})$`, "v");
+  for (const name of ["peer", "Mini-Agent_2", "A".repeat(128)]) assert.match(name, validName);
+  for (const name of ["has space", "slash/name", "[brackets]", "A".repeat(129)]) assert.doesNotMatch(name, validName);
+});
+
 test("missing public client shows the exact callback and host setup guidance", async t => {
   const ui = await renderEditor("peer", async () => Response.json(catalog(false, "")));
   t.after(async () => ui.restore());
