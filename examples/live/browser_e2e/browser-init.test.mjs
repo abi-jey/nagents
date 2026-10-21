@@ -42,6 +42,7 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
     constructor(context, name) {
       super(context);
       this.name = name;
+      const listeners = [];
       this.port = {
         onmessage: null,
         postMessage: message => {
@@ -51,7 +52,8 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
             finalFrame: 4096, observedFinalFrame: 4096, frameOrigin: 4096,
             samplesCaptured: 0, blocksCaptured: 0, sampleRate: 48000, armed: false } });
         },
-        addEventListener() {}, start() {},
+        addEventListener: (type, callback) => { if (type === "message") listeners.push(callback); },
+        emit: data => listeners.forEach(callback => callback({ data })), start() {},
       };
     }
   }
@@ -65,7 +67,7 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
   const globals = {
     __voiceE2EConfig: { mode: "offline", maxSeconds, wavPath: "/fixture.wav",
       fixtureSha256: createHash("sha256").update(wav).digest("hex") },
-    AudioContext: Context, AudioWorkletNode: Worklet, AudioNode, WebSocket: Socket,
+    AudioContext: Context, AudioWorkletNode: Worklet, AudioNode, WebSocket: Socket, DataView,
     fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => wav.buffer,
       clone: () => ({ json: async () => jsonResponses.shift() || {} }) }),
     navigator: { mediaDevices: {}, userAgent: "unit-test" }, ArrayBuffer, Uint8Array, btoa,
@@ -96,6 +98,39 @@ test("speaker and microphone use verified software clocks, never the system spea
   assert.deepEqual(Array.from(events, event => `${event.role}:${event.sinkType}`), ["speaker:none", "microphone:none"]);
   await assert.rejects(() => speaker.setSinkId(""), /software speaker sink/);
   assert.equal(speaker.sinkId.type, "none");
+});
+
+test("rendered PCM records bounded source and active-sample timing without retaining audio", async () => {
+  const { globals, created } = fixture();
+  new globals.AudioContext();
+  await globals.navigator.mediaDevices.getUserMedia({ audio: true });
+  const socket = new globals.WebSocket("ws://localhost/api/live/sessions/voice-owned/audio");
+  const packet = new globals.ArrayBuffer(8);
+  socket.emit("message", packet);
+  const playback = new globals.AudioWorkletNode(created[0], "ngn-live-playback");
+  playback.port.postMessage({ type: "pcm", epoch: 4, buffer: packet });
+  const rendered = new globals.ArrayBuffer(8);
+  const view = new DataView(rendered);
+  view.setInt16(0, 0, true);
+  view.setInt16(2, 1000, true);
+  view.setInt16(4, -1200, true);
+  view.setInt16(6, 0, true);
+  playback.port.emit({ type: "played", epoch: 4, sourceStart: 10, at: 1, until: 1 + 3 / 24000, buffer: rendered });
+
+  const events = globals.__voiceE2E.export().events;
+  const submit = events.find(event => event.type === "playback.submit");
+  const event = events.find(item => item.type === "playback.rendered");
+  assert.equal(submit.submittedSamples, 4);
+  assert.equal(event.epoch, 4);
+  assert.equal(event.sourceStart, 10);
+  assert.equal(event.samples, 4);
+  assert.equal(event.firstActiveSample, 1);
+  assert.equal(event.lastActiveSample, 2);
+  assert.equal(event.activeSamples, 2);
+  assert.deepEqual(Array.from(event.activeSpans, span => Array.from(span)), [[1, 3]]);
+  assert.equal(event.until, 1 + 3 / 24000);
+  assert.equal("buffer" in event, false);
+  assert.equal(JSON.stringify(event).includes("1000"), false);
 });
 
 test("unsupported software sink fails and closes context without a physical fallback", async () => {

@@ -1,10 +1,13 @@
 """Artifact validation must distinguish a real interruption from terminal EOF."""
 
+import ast
 import base64
 import copy
 import json
 import os
+import shutil
 import struct
+import subprocess
 import wave
 from collections.abc import Callable
 from functools import partial
@@ -256,6 +259,15 @@ def authenticated_scenario_capture() -> dict[str, object]:
         {"receivedSamples": 8, "playedSamples": 8, "underruns": 0, "droppedSamples": 0, "bufferedMs": 0},
     ]
     events = cast("list[dict[str, object]]", report["events"])
+    events[:] = [event for event in events if event.get("type") != "socket.receive"]
+    for event in events:
+        if event.get("type") == "recorder.capture-start":
+            event["frame"] = 48000
+            event["observedFrame"] = 48000
+        elif event.get("type") == "recorder.capture-stop":
+            event["finalFrame"] = 48008
+            event["samplesCaptured"] = 8
+            event["blocksCaptured"] = 2
     events.extend(
         [
             {"type": "measurement.start", "monotonicMs": 20},
@@ -393,6 +405,281 @@ def test_latency_mapping_ignores_connection_warmup_epoch_but_not_recording_reset
         {"epoch": 2, "contextId": 0, "monotonicMs": 60, "playedSamples": 100}
     )
     assert timing_metrics(report)["sampleAgeAvailable"] is False
+
+
+def rendered_speech_report(*, audible: bool = True, source_start: int = 0) -> dict[str, object]:
+    pcm = struct.pack("<4h", 0, 1000, -1200, 0)
+    output = struct.pack("<8h", *([1000] * 8)) if audible else struct.pack("<8h", *([0] * 8))
+    return {
+        "contexts": [{"id": 0, "sampleRate": 48000}],
+        "events": [
+            {
+                "type": "playback.submit",
+                "contextId": 0,
+                "epoch": 2,
+                "samples": 4,
+                "bytes": 8,
+                "submittedSamples": 4,
+                "receiveMonotonicMs": 100,
+            },
+            {
+                "type": "playback.rendered",
+                "contextId": 0,
+                "epoch": 2,
+                "sourceStart": source_start,
+                "samples": 4,
+                "sampleRate": 24000,
+                "firstActiveSample": 1,
+                "lastActiveSample": 2,
+                "activeSamples": 2,
+                "activeSpans": [[1, 3]],
+                "contextSampleRate": 48000,
+                "at": 1.0,
+                "until": 1 + 3 / 24000,
+                "contextTimeAtDelivery": 1.0,
+                "outputTimestamp": {"contextTime": 1.0, "performanceTime": 500},
+                "monotonicMs": 500,
+            },
+        ],
+        "output": [
+            {
+                "contextId": 0,
+                "frame": 48000,
+                "observedFrame": 48000,
+                "sampleOffset": 0,
+                "sequence": 0,
+                "samples": 8,
+                "sampleRate": 48000,
+                "contextTimeAtDelivery": 1.0,
+                "outputTimestamp": {"contextTime": 1.0, "performanceTime": 500},
+                "pcm16": base64.b64encode(output).decode(),
+            }
+        ],
+        "sourcePcm": base64.b64encode(pcm).decode(),
+    }
+
+
+def test_rendered_speech_age_fails_delayed_voiced_pcm_but_ignores_quiet_queue() -> None:
+    report = rendered_speech_report()
+    result = timing_metrics(report)
+    speech = cast("dict[str, object]", result["renderedSpeechAge"])
+    assert speech["available"] is True
+    assert speech["p95Within250Ms"] is False
+    assert speech["withinBounds"] is False
+    assert speech["p95Ms"] == pytest.approx(400.0833, abs=0.001)
+    assert speech["observations"] == 2
+
+    quiet = rendered_speech_report()
+    cast("list[dict[str, object]]", quiet["events"]).append(
+        {
+            "type": "playback.rendered",
+            "contextId": 0,
+            "epoch": 2,
+            "sourceStart": 4,
+            "samples": 4,
+            "firstActiveSample": -1,
+            "lastActiveSample": -1,
+            "activeSamples": 0,
+            "activeSpans": [],
+        }
+    )
+    quiet_result = cast("dict[str, object]", timing_metrics(quiet)["renderedSpeechAge"])
+    assert quiet_result["available"] is True
+    assert quiet_result["silentBlocks"] == 1
+
+
+@pytest.mark.parametrize(
+    ("report", "expected_key"),
+    [
+        (rendered_speech_report(source_start=8), "unmappedBlocks"),
+        (rendered_speech_report(audible=False), "unconfirmedPostVolumeBlocks"),
+    ],
+)
+def test_rendered_speech_age_fails_closed_without_source_or_post_volume_mapping(
+    report: dict[str, object], expected_key: str
+) -> None:
+    result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
+    assert result["available"] is False
+    assert result["withinBounds"] is False
+    assert result[expected_key] == 1
+
+
+def test_rendered_speech_age_fails_closed_on_invalid_source_coordinates() -> None:
+    report = rendered_speech_report()
+    rendered = cast("list[dict[str, object]]", report["events"])[1]
+    rendered.pop("sourceStart")
+    result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
+    assert result["available"] is False
+    assert result["invalidBlocks"] == 1
+    assert result["withinBounds"] is False
+
+
+def test_rendered_speech_age_rejects_missing_render_report_coverage() -> None:
+    report = rendered_speech_report()
+    events = cast("list[dict[str, object]]", report["events"])
+    second = events[-1].copy()
+    second["sourceStart"] = 8
+    cast("list[dict[str, object]]", report["events"]).append(second)
+    result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
+    assert result["available"] is False
+    assert result["coverageErrors"] == 1
+
+
+@pytest.mark.parametrize("bad_context", [[], True])
+def test_rendered_speech_age_fails_closed_on_invalid_submission_context(bad_context: object) -> None:
+    report = rendered_speech_report()
+    cast("list[dict[str, object]]", report["events"]).append(
+        {
+            "type": "playback.submit",
+            "contextId": bad_context,
+            "epoch": 2,
+            "samples": 1,
+            "bytes": 2,
+            "submittedSamples": 5,
+            "receiveMonotonicMs": 101,
+        }
+    )
+    result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
+    assert result["available"] is False
+    assert result["invalidSubmissionEvents"] == 1
+
+
+def test_rendered_speech_age_rejects_mismatched_output_sample_rate() -> None:
+    report = rendered_speech_report()
+    rendered = cast("list[dict[str, object]]", report["events"])[1]
+    rendered["contextSampleRate"] = 1
+    result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
+    assert result["available"] is False
+    assert result["invalidBlocks"] == 1
+
+
+def test_literal_cdp_evaluate_javascript_parses_without_execution() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to syntax-check the browser runner's CDP expressions")
+    runner_path = Path(__file__).parents[1] / "examples/live/browser_e2e/cdp_runner.py"
+    tree = ast.parse(runner_path.read_text())
+    expressions = [
+        [call.lineno, call.args[0].value]
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "evaluate"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    ]
+    assert expressions
+    checker = (
+        'const fs=require("fs"); for(const [line,code] of JSON.parse(fs.readFileSync(0,"utf8"))) '
+        '{ try { new Function("return (" + code + ")"); } '
+        "catch(error) { console.error(`line ${line}: ${error.message}`); process.exitCode=1; } }"
+    )
+    subprocess.run([node, "-e", checker], input=json.dumps(expressions), text=True, check=True, capture_output=True)
+
+
+def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
+    report = authenticated_scenario_capture()
+    report["contexts"] = [{"id": 0, "sampleRate": 48000}]
+    output = cast("list[dict[str, object]]", report["output"])
+    for index, block_item in enumerate(output):
+        block_item["sampleRate"] = 48000
+        block_item["frame"] = 48000 + index * 4
+        block_item["observedFrame"] = 48000 + index * 4
+        block_item["sampleOffset"] = index * 4
+        block_item["audioTime"] = (48000 + index * 4) / 48000
+        block_item["contextTimeAtDelivery"] = block_item["audioTime"]
+        block_item["outputTimestamp"] = {
+            "contextTime": block_item["audioTime"],
+            "performanceTime": 6000 if index == 1 else block_item["monotonicMs"],
+        }
+    events = cast("list[dict[str, object]]", report["events"])
+    events.extend(
+        [
+            {"type": "socket.receive", "path": "/audio", "receivedSamples": 4, "monotonicMs": 4500},
+            {
+                "type": "playback.submit",
+                "contextId": 0,
+                "epoch": 2,
+                "samples": 4,
+                "bytes": 8,
+                "submittedSamples": 4,
+                "receiveMonotonicMs": speech_received_ms,
+            },
+            {
+                "type": "playback.rendered",
+                "contextId": 0,
+                "epoch": 2,
+                "sourceStart": 0,
+                "samples": 4,
+                "firstActiveSample": 1,
+                "lastActiveSample": 2,
+                "activeSamples": 2,
+                "activeSpans": [[1, 3]],
+                "at": 48004 / 48000,
+                "until": 48004 / 48000 + 3 / 24000,
+                "contextSampleRate": 48000,
+                "contextTimeAtDelivery": 48004 / 48000,
+                "outputTimestamp": {"contextTime": 48004 / 48000, "performanceTime": 6000},
+                "monotonicMs": 6000,
+            },
+        ]
+    )
+    report["health"] = [
+        {
+            "epoch": 2,
+            "contextId": 0,
+            "monotonicMs": 6000,
+            "receivedSamples": 4,
+            "playedSamples": 4,
+            "droppedSamples": 0,
+            "bufferedMs": 20,
+            "audioTime": 48004 / 48000,
+            "renderedAt": 48004 / 48000,
+            "outputTimestamp": {"contextTime": 48004 / 48000, "performanceTime": 6000},
+        }
+    ]
+    return report
+
+
+def test_authenticated_scenario_gates_rendered_speech_not_old_quiet_queue_age() -> None:
+    scenario: list[dict[str, object]] = [
+        {"name": "greeting", "expect_text": "Hello there."},
+        {
+            "name": "tool-delegation",
+            "expect_text": "three hundred and ninety one",
+            "require_tool_call": True,
+            "require_delegation": True,
+        },
+    ]
+    timely = authenticated_age_report(speech_received_ms=5999)
+    passing = check_authenticated_scenario(
+        timely,
+        scenario,
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    assert passing["passed"] is True
+    checks = cast("dict[str, bool]", passing["checks"])
+    assert checks["renderedSpeechTelemetryAvailable"] is True
+    assert checks["renderedSpeechP95WithinBound"] is True
+    assert checks["renderedSpeechPeakWithinBound"] is True
+    timing = cast("dict[str, object]", cast("dict[str, object]", passing["details"])["timing"])
+    assert cast("dict[str, object]", cast("list[object]", timing["minuteWindows"])[0])["sampleAgeMs"] == {
+        "samples": 1,
+        "p95": 1500,
+        "max": 1500,
+    }
+
+    delayed = check_authenticated_scenario(
+        authenticated_age_report(speech_received_ms=5700),
+        scenario,
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    assert cast("dict[str, bool]", delayed["checks"])["renderedSpeechP95WithinBound"] is False
 
 
 def test_terminal_eof_is_not_an_in_speech_glitch() -> None:

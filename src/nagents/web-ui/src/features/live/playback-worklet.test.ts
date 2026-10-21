@@ -4,7 +4,7 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 
 type Health = { type: "health"; epoch: number; receivedSamples: number; playedSamples: number; underruns: number; droppedSamples: number; bufferedMs: number; peakBufferedMs: number; targetMs: number; sampleRate: number; correctionPpm: number; renderedAt: number; lastUnderrunAt: number; lastRecoveryAt: number; latencyRecoveries: number; interruptedSamples: number; silenceRefills: number };
-type Played = { type: "played"; epoch: number; at: number; buffer: ArrayBuffer };
+type Played = { type: "played"; epoch: number; at: number; until: number; sourceStart: number; buffer: ArrayBuffer };
 function fixture(rate = 48000) {
   let Processor!: new () => { port: { onmessage(event: { data: object }): void }; process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean };
   const health: Health[] = [], played: Played[] = [];
@@ -40,6 +40,36 @@ function voicedPcm(offset: number, size = 480) {
   }
   return samples.buffer;
 }
+
+test("played reports identify the original PCM samples and their render interval", () => {
+  const f = fixture(), source = new Int16Array(4800);
+  for (let i = 0; i < source.length; i++) source[i] = i - 2400;
+  f.push(source.buffer);
+  while (f.time < .25) f.render();
+  assert.equal(f.played.length, 10);
+  for (const [index, report] of f.played.entries()) {
+    assert.equal(report.sourceStart, index * 480);
+    assert.deepEqual(new Int16Array(report.buffer), source.slice(report.sourceStart, report.sourceStart + 480));
+    assert(Math.abs(report.until - report.at - 479 / 24000) < .0001);
+  }
+});
+
+test("source coordinates account for interrupted and overloaded input without treating it as rendered", () => {
+  const reset = fixture(); reset.push(pcm(2400));
+  while (reset.time < .03) reset.render();
+  reset.reset(); reset.push(pcm(2400, -8192));
+  while (reset.time < .2) reset.render();
+  const next = reset.played.find(report => report.epoch === 1)!;
+  assert.equal(next.sourceStart, 2400);
+  assert(new Int16Array(next.buffer).every(value => value === -8192));
+  assert(reset.stats().interruptedSamples > 0);
+
+  const overload = fixture(); overload.push(pcm(24000)); overload.push(pcm(24000, -8192));
+  while (overload.time < .05) overload.render();
+  assert.equal(overload.played[0].sourceStart, 24000);
+  assert.equal(overload.stats().droppedSamples, 24000);
+  assert(new Int16Array(overload.played[0].buffer).every(value => value === -8192));
+});
 
 for (const rate of [16000, 24000, 44100, 48000, 96000]) test(`continuous PCM playout resamples 24kHz at ${rate}Hz without packet-boundary gaps`, () => {
   const f = fixture(rate);
@@ -299,5 +329,7 @@ test("played PCM reports are credit-bounded and report barriers preserve audible
   while (f.time < .6) f.render();
   assert.equal(f.played.length, 2, "a barrier permits just one new-generation report");
   assert.equal(f.played.at(-1)?.epoch, 1);
+  assert(f.played[1].sourceStart > f.played[0].sourceStart + 480,
+    "skipped visual reports must retain their true position in the input stream");
   assert.equal(f.stats().droppedSamples, 0);
 });

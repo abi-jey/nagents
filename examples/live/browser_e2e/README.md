@@ -137,8 +137,15 @@ Underruns are not treated as proof of a glitch by themselves. The report
 correlates the audio-thread underrun timestamp with captured non-silent output
 PCM, while queue-empty periods remain explicitly ambiguous between provider
 DTX/natural pauses and starvation. A passing report confirms the configured
-PCM continuity, drop, response, and latency gates; it cannot prove what a
+PCM continuity, drop, response, and rendered-speech age gates; it cannot prove what a
 person would perceive through a physical speaker.
+
+The report keeps the existing all-queued packet-age metric as a diagnostic and
+gates on rendered-speech age per minute. It maps active source samples to their
+packet arrival and confirms nonzero post-volume output in the corresponding
+render window. Quiet queued audio is excluded; muted output, incomplete captures,
+and unmapped data fail closed. This measures browser packet-arrival-to-render time,
+not provider generation or acoustic latency.
 
 ### Manual Chrome DevTools MCP procedure
 

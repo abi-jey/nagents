@@ -447,16 +447,28 @@ def main() -> None:
     parser.add_argument("--expect-gap-ms", type=int, default=0, help="Offline-only asserted injected gap duration")
     parser.add_argument("--max-seconds", type=int, default=900)
     parser.add_argument("--minimum-active-span-seconds", type=float, default=300)
-    parser.add_argument("--sample-age-p95-ms", type=float, default=250)
-    parser.add_argument("--sample-age-peak-ms", type=float, default=1000)
+    parser.add_argument(
+        "--rendered-speech-p95-ms",
+        dest="rendered_speech_p95_ms",
+        type=float,
+        default=250,
+        help="Maximum per-minute p95 packet-arrival-to-render age for active speech samples (not acoustic latency)",
+    )
+    parser.add_argument(
+        "--rendered-speech-peak-ms",
+        dest="rendered_speech_peak_ms",
+        type=float,
+        default=1000,
+        help="Maximum packet-arrival-to-render age for active speech samples (not acoustic latency)",
+    )
     args = parser.parse_args()
     if (
         not 30 <= args.max_seconds <= 900
         or not 0 <= args.gap_ms <= 5000
         or not 0 <= args.expect_gap_ms <= 5000
         or args.minimum_active_span_seconds < 0
-        or args.sample_age_p95_ms <= 0
-        or args.sample_age_peak_ms <= 0
+        or args.rendered_speech_p95_ms <= 0
+        or args.rendered_speech_peak_ms <= 0
     ):
         parser.error("invalid duration, gap, or sample-age bounds")
     if args.mode == "authenticated" and (args.config is None or not args.config.is_file()):
@@ -629,10 +641,12 @@ def main() -> None:
             "dict[str, object]",
             cdp.evaluate(
                 """(async () => {
-                  const paths = [...document.querySelectorAll('script[src],link[rel="stylesheet"][href]')]
+                  const appPaths = [...document.querySelectorAll('script[src],link[rel="stylesheet"][href]')]
                     .map(item => item.src || item.href).filter(Boolean)
                     .map(src => new URL(src, location.href)).filter(url => url.origin === location.origin)
                     .map(url => url.pathname).slice(0, 16);
+                  const paths = [...new Set(appPaths.concat(['/assets/live-playback.js', '/assets/live-capture.js',
+                    '/assets/voice-e2e-capture.js']))];
                   const assets = {};
                   for (const path of paths) {
                     try {
@@ -655,9 +669,9 @@ def main() -> None:
                 capture,
                 rounds,
                 minimum_active_span_seconds=args.minimum_active_span_seconds,
-                max_sample_age_p95_ms=args.sample_age_p95_ms,
-                max_sample_age_peak_ms=args.sample_age_peak_ms,
-                require_sample_age_telemetry=True,
+                max_rendered_speech_p95_ms=args.rendered_speech_p95_ms,
+                max_rendered_speech_peak_ms=args.rendered_speech_peak_ms,
+                require_rendered_speech_telemetry=True,
             )
         else:
             with __import__("wave").open(str(fixtures / "reply.wav"), "rb") as wav:

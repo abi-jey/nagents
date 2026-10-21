@@ -15,6 +15,7 @@ import subprocess
 import sys
 import wave
 from bisect import bisect_left
+from bisect import bisect_right
 from itertools import pairwise
 from pathlib import Path
 from typing import cast
@@ -137,6 +138,310 @@ def render_monotonic_ms(block: dict[str, object], sample_offset: int = 0) -> flo
     if isinstance(timestamp, dict) and number(timestamp.get("performanceTime")) > 0:
         return number(timestamp.get("performanceTime")) + (audio_time - number(timestamp.get("contextTime"))) * 1000
     return number(block.get("monotonicMs")) + (audio_time - number(block.get("contextTimeAtDelivery"))) * 1000
+
+
+def _audio_time_monotonic_ms(context_time: float, stamp: dict[str, object], fallback_ms: float) -> float:
+    timestamp = stamp.get("outputTimestamp")
+    if isinstance(timestamp, dict) and number(timestamp.get("performanceTime")) > 0:
+        return number(timestamp.get("performanceTime")) + (context_time - number(timestamp.get("contextTime"))) * 1000
+    delivery_time = number(stamp.get("contextTimeAtDelivery"), float("nan"))
+    if not math.isfinite(delivery_time):
+        return float("nan")
+    return fallback_ms + (context_time - delivery_time) * 1000
+
+
+def _source_offset_time(at: float, until: float, offset: int, samples: int) -> float:
+    return at + (until - at) * offset / max(1, samples - 1)
+
+
+def rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
+    """Map active rendered PCM back to packet arrival, requiring audible output evidence."""
+    events = objects(report.get("events"))
+    submissions: dict[tuple[int, int], list[tuple[int, int, float]]] = {}
+    invalid_submissions: set[tuple[object, object]] = set()
+    submission_ends: dict[tuple[object, object], int] = {}
+    invalid_submission_events = 0
+    for event in events:
+        if event.get("type") != "playback.submit":
+            continue
+        key = (event.get("contextId"), event.get("epoch"))
+        if type(key[0]) is not int or key[0] < 0 or type(key[1]) is not int or key[1] < 0:
+            invalid_submission_events += 1
+            continue
+        samples = event.get("samples")
+        end = event.get("submittedSamples")
+        received = number(event.get("receiveMonotonicMs"), float("nan"))
+        start = end - samples if type(end) is int and type(samples) is int else -1
+        if (
+            type(samples) is not int
+            or samples <= 0
+            or type(end) is not int
+            or start < 0
+            or not math.isfinite(received)
+            or event.get("bytes") != samples * 2
+        ):
+            invalid_submissions.add(key)
+            continue
+        if key in submission_ends and start != submission_ends[key]:
+            invalid_submissions.add(key)
+        submission_ends[key] = end
+        typed_key = (key[0], key[1])
+        submissions.setdefault(typed_key, []).append((start, end, received))
+    submission_starts = {key: [low for low, _, _ in ranges] for key, ranges in submissions.items()}
+    output_runs: dict[int, list[tuple[float, float]]] = {}
+    invalid_output_contexts = 0
+    for block_item in objects(report.get("output")):
+        rate = number(block_item.get("sampleRate"))
+        frame = block_item.get("frame")
+        context_id = block_item.get("contextId")
+        if type(context_id) is not int or context_id < 0:
+            invalid_output_contexts += 1
+            continue
+        if rate <= 0 or type(frame) is not int:
+            continue
+        raw = pcm_bytes(block_item)
+        if len(raw) % 2:
+            continue
+        samples = array.array("h")
+        samples.frombytes(raw)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if len(samples) != block_item.get("samples"):
+            continue
+        run_start: int | None = None
+        for offset in range(len(samples) + 1):
+            active = offset < len(samples) and abs(samples[offset]) > 327
+            if active and run_start is None:
+                run_start = offset
+            elif not active and run_start is not None:
+                start_ms = render_monotonic_ms(block_item, run_start)
+                end_ms = render_monotonic_ms(block_item, offset - 1)
+                output_runs.setdefault(context_id, []).append((start_ms, end_ms))
+                run_start = None
+    for runs in output_runs.values():
+        runs.sort()
+    output_blocks = objects(report.get("output"))
+    output_complete = complete_pcm(output_blocks, output=True) and recorder_counters_continuous(output_blocks)
+    context_rates: dict[int, float] = {}
+    context_rate_valid = True
+    for context in objects(report.get("contexts")):
+        context_id = context.get("id")
+        sample_rate = number(context.get("sampleRate"), float("nan"))
+        if type(context_id) is not int or context_id < 0 or not 8000 <= sample_rate <= 192000:
+            context_rate_valid = False
+            continue
+        if context_id in context_rates:
+            context_rate_valid = False
+        context_rates[context_id] = sample_rate
+
+    def has_output(context_id: int, start: float, end: float, tolerance_ms: float) -> bool:
+        runs = output_runs.get(context_id, [])
+        start -= tolerance_ms
+        end += tolerance_ms
+        index = bisect_left(runs, (start, float("-inf")))
+        if index > 0 and runs[index - 1][1] >= start:
+            return True
+        return index < len(runs) and runs[index][0] <= end
+
+    ages: list[float] = []
+    beginning = min(
+        (number(event.get("monotonicMs")) for event in events if event.get("type") == "measurement.start"),
+        default=min(
+            (number(event.get("monotonicMs")) for event in events if event.get("type") == "fixture.start"),
+            default=0,
+        ),
+    )
+    minute_ages: dict[int, list[float]] = {}
+    active_blocks = silent_blocks = unmapped_blocks = unconfirmed_blocks = invalid_blocks = coverage_errors = 0
+    rendered_ends: dict[tuple[object, object], int] = {}
+    for event in events:
+        if event.get("type") != "playback.rendered":
+            continue
+        active_count = event.get("activeSamples")
+        context_id, epoch = event.get("contextId"), event.get("epoch")
+        source_start, samples = event.get("sourceStart"), event.get("samples")
+        if (
+            type(context_id) is not int
+            or type(epoch) is not int
+            or type(source_start) is not int
+            or type(samples) is not int
+            or not 0 < samples <= 480
+            or source_start < 0
+            or type(active_count) is not int
+            or not 0 <= active_count <= samples
+        ):
+            invalid_blocks += 1
+            continue
+        coverage_key = (context_id, epoch)
+        if coverage_key in rendered_ends and source_start != rendered_ends[coverage_key]:
+            coverage_errors += 1
+        rendered_ends[coverage_key] = source_start + samples
+        if active_count == 0:
+            if (
+                event.get("activeSpans") != []
+                or event.get("firstActiveSample") != -1
+                or event.get("lastActiveSample") != -1
+            ):
+                invalid_blocks += 1
+                continue
+            silent_blocks += 1
+            continue
+        active_blocks += 1
+        first, last = event.get("firstActiveSample"), event.get("lastActiveSample")
+        spans = event.get("activeSpans")
+        at, until = number(event.get("at"), float("nan")), number(event.get("until"), float("nan"))
+        if (
+            type(context_id) is not int
+            or type(epoch) is not int
+            or not all(type(item) is int for item in (source_start, samples, first, last, active_count))
+            or not isinstance(spans, list)
+            or not math.isfinite(at)
+            or not math.isfinite(until)
+            or until < at
+        ):
+            invalid_blocks += 1
+            continue
+        first = cast("int", first)
+        last = cast("int", last)
+        if (
+            samples <= 0
+            or samples > 480
+            or source_start < 0
+            or first < 0
+            or last < first
+            or last >= samples
+            or active_count <= 0
+            or active_count > last - first + 1
+        ):
+            invalid_blocks += 1
+            continue
+        active_offsets: list[int] = []
+        normalized_spans: list[tuple[int, int]] = []
+        valid_spans = True
+        previous_span_end = first
+        for span in spans:
+            if (
+                not isinstance(span, list)
+                or len(span) != 2
+                or not all(type(item) is int for item in span)
+                or span[0] < first
+                or span[0] < previous_span_end
+                or span[1] <= span[0]
+                or span[1] - 1 > last
+                or span[1] > samples
+            ):
+                valid_spans = False
+                break
+            span_start, span_end = cast("int", span[0]), cast("int", span[1])
+            normalized_spans.append((span_start, span_end))
+            active_offsets.extend(range(span_start, span_end))
+            previous_span_end = span_end
+        if not valid_spans or len(active_offsets) != active_count:
+            invalid_blocks += 1
+            continue
+        if not normalized_spans or normalized_spans[0][0] != first or normalized_spans[-1][1] - 1 != last:
+            invalid_blocks += 1
+            continue
+        delivery_ms = number(event.get("monotonicMs"), float("nan"))
+        context_rate = number(event.get("contextSampleRate"))
+        if not 8000 <= context_rate <= 192000 or context_rates.get(context_id) != context_rate:
+            invalid_blocks += 1
+            continue
+        clock_tolerance_ms = 128 / context_rate * 1000
+
+        active_windows = [
+            (
+                _audio_time_monotonic_ms(_source_offset_time(at, until, low, samples), event, delivery_ms),
+                _audio_time_monotonic_ms(_source_offset_time(at, until, high - 1, samples), event, delivery_ms),
+            )
+            for low, high in normalized_spans
+        ]
+        if not all(math.isfinite(left) and math.isfinite(right) for left, right in active_windows):
+            invalid_blocks += 1
+            continue
+        if not all(has_output(context_id, start, end, clock_tolerance_ms) for start, end in active_windows):
+            unconfirmed_blocks += 1
+            continue
+        submission_key = (context_id, epoch)
+        ranges = submissions.get(submission_key, [])
+        range_starts = submission_starts.get(submission_key, [])
+        if (context_id, epoch) in invalid_submissions:
+            invalid_blocks += 1
+            continue
+        # Sample the active waveform at 1 ms intervals. This preserves useful
+        # p95 resolution without retaining one Python float per PCM sample.
+        sampled_offsets = active_offsets[::24]
+        if active_offsets and sampled_offsets[-1] != active_offsets[-1]:
+            sampled_offsets.append(active_offsets[-1])
+        for offset in sampled_offsets:
+            coordinate = source_start + offset
+            index = bisect_right(range_starts, coordinate) - 1
+            if index < 0 or not ranges[index][0] <= coordinate < ranges[index][1]:
+                unmapped_blocks += 1
+                break
+            match = ranges[index][2]
+            render_ms = _audio_time_monotonic_ms(_source_offset_time(at, until, offset, samples), event, delivery_ms)
+            age = render_ms - match
+            if not math.isfinite(age) or age < -2:
+                invalid_blocks += 1
+                break
+            age = max(0, age)
+            ages.append(age)
+            minute = max(
+                0,
+                int(
+                    (
+                        _audio_time_monotonic_ms(_source_offset_time(at, until, offset, samples), event, delivery_ms)
+                        - beginning
+                    )
+                    // 60000
+                ),
+            )
+            minute_ages.setdefault(minute, []).append(age)
+
+    available = (
+        bool(ages)
+        and output_complete
+        and context_rate_valid
+        and invalid_submission_events == 0
+        and invalid_output_contexts == 0
+        and not any((unmapped_blocks, unconfirmed_blocks, invalid_blocks, coverage_errors))
+    )
+    omitted_events = number(report.get("omitted"))
+    if omitted_events > 0:
+        available = False
+    windows = [
+        {
+            "minute": minute,
+            "observations": len(values),
+            "p95Ms": percentile(values),
+            "maxMs": max(values),
+        }
+        for minute, values in sorted(minute_ages.items())
+    ]
+    return {
+        "available": available,
+        "outputPcmComplete": output_complete,
+        "contextSampleRatesValid": context_rate_valid,
+        "invalidSubmissionEvents": invalid_submission_events,
+        "invalidOutputContexts": invalid_output_contexts,
+        "observations": len(ages),
+        "observationIntervalMs": 1,
+        "p95Ms": percentile(ages) if available else None,
+        "maxMs": max(ages, default=0) if available else None,
+        "p95Within250Ms": available and percentile(ages) <= 250,
+        "peakWithin1000Ms": available and max(ages, default=0) <= 1000,
+        "withinBounds": available and percentile(ages) <= 250 and max(ages, default=0) <= 1000,
+        "activeBlocks": active_blocks,
+        "silentBlocks": silent_blocks,
+        "unmappedBlocks": unmapped_blocks,
+        "unconfirmedPostVolumeBlocks": unconfirmed_blocks,
+        "invalidBlocks": invalid_blocks,
+        "coverageErrors": coverage_errors,
+        "omittedEvents": omitted_events,
+        "minuteWindows": windows,
+        "meaning": "Arrival-to-render age for active source PCM only, confirmed by nonzero post-volume output in the same render window; not provider or acoustic latency.",
+    }
 
 
 def timing_metrics(report: dict[str, object]) -> dict[str, object]:
@@ -280,6 +585,7 @@ def timing_metrics(report: dict[str, object]) -> dict[str, object]:
         "minuteWindows": summaries,
         "sampleAgeAvailable": mapping_valid,
         "sampleAgeMeaning": "Received packet to audio-thread renderedAt (when present), otherwise health callback, while audio is queued. Callback fallback includes scheduling delay. Not provider or acoustic latency.",
+        "renderedSpeechAge": rendered_speech_age(report),
         "audioThreadHealthClockPresent": bool(health) and all("renderedAt" in item for item in health),
         "replyTimingMeaning": "First rendered non-silent sample after the known utterance ends; speech is observed, not causally assigned to a delegation.",
     }
@@ -906,9 +1212,9 @@ def check_authenticated_scenario(
     rounds: list[dict[str, object]],
     *,
     minimum_active_span_seconds: float = 0,
-    max_sample_age_p95_ms: float = 0,
-    max_sample_age_peak_ms: float = 0,
-    require_sample_age_telemetry: bool = False,
+    max_rendered_speech_p95_ms: float = 0,
+    max_rendered_speech_peak_ms: float = 0,
+    require_rendered_speech_telemetry: bool = False,
 ) -> dict[str, object]:
     """Require each real spoken prompt to receive its expected answer and work lifecycle."""
     base = check_capture(
@@ -1105,23 +1411,21 @@ def check_authenticated_scenario(
             previous_health_ms = current_ms
     checks["noClassifiedStarvationDuringSpeech"] = not starvation_during_audio
     checks["noUnclassifiedQueuedUnderruns"] = not unclassified_underruns
-    if require_sample_age_telemetry:
-        minute_windows = objects(timing.get("minuteWindows"))
-        p95_values = [
-            number(cast("dict[str, object]", window.get("sampleAgeMs", {})).get("p95")) for window in minute_windows
-        ]
-        peak_values = [
-            number(cast("dict[str, object]", window.get("sampleAgeMs", {})).get("max")) for window in minute_windows
-        ]
-        has_age_samples = any(
-            number(cast("dict[str, object]", window.get("sampleAgeMs", {})).get("samples")) > 0
-            for window in minute_windows
-        )
-        checks["sampleAgeTelemetryAvailable"] = timing.get("sampleAgeAvailable") is True and has_age_samples
-        if max_sample_age_p95_ms > 0:
-            checks["sampleAgeP95WithinBound"] = bool(p95_values) and max(p95_values) <= max_sample_age_p95_ms
-        if max_sample_age_peak_ms > 0:
-            checks["sampleAgePeakWithinBound"] = bool(peak_values) and max(peak_values) <= max_sample_age_peak_ms
+    if require_rendered_speech_telemetry:
+        speech_age = cast("dict[str, object]", timing.get("renderedSpeechAge", {}))
+        speech_windows = objects(speech_age.get("minuteWindows"))
+        has_speech_samples = any(number(window.get("observations")) > 0 for window in speech_windows)
+        checks["renderedSpeechTelemetryAvailable"] = speech_age.get("available") is True and has_speech_samples
+        if max_rendered_speech_p95_ms > 0:
+            p95_values = [number(window.get("p95Ms"), float("inf")) for window in speech_windows]
+            checks["renderedSpeechP95WithinBound"] = (
+                bool(p95_values) and has_speech_samples and max(p95_values) <= max_rendered_speech_p95_ms
+            )
+        if max_rendered_speech_peak_ms > 0:
+            peak_values = [number(window.get("maxMs"), float("inf")) for window in speech_windows]
+            checks["renderedSpeechPeakWithinBound"] = (
+                bool(peak_values) and has_speech_samples and max(peak_values) <= max_rendered_speech_peak_ms
+            )
     gaps = [number(event.get("gapMs")) for event in events if event.get("type") == "main-thread.gap"]
     details = cast("dict[str, object]", base["details"])
     details.update(

@@ -50,6 +50,8 @@ class LivePlayback extends AudioWorkletProcessor {
     this.report = new Int16Array(480);
     this.reportSize = 0;
     this.reportAt = 0;
+    this.reportUntil = 0;
+    this.reportSourceStart = 0;
     this.nextHealth = 0;
     this.healthPending = false;
     this.playedPending = false;
@@ -174,7 +176,13 @@ class LivePlayback extends AudioWorkletProcessor {
   }
 
   reportSample(value, at) {
-    if (!this.reportSize) this.reportAt = at;
+    if (!this.reportSize) {
+      this.reportAt = at;
+      // Absolute coordinates in the accepted PCM stream survive resets and
+      // skipped telemetry reports. Queue removals remain explicitly accounted.
+      this.reportSourceStart = this.playedSamples + this.droppedSamples + this.interruptedSamples;
+    }
+    this.reportUntil = at;
     this.report[this.reportSize++] = value;
     if (this.reportSize === this.report.length) this.flushReport();
   }
@@ -183,7 +191,8 @@ class LivePlayback extends AudioWorkletProcessor {
     if (this.reportSize && !this.playedPending) {
       const buffer = this.reportSize === this.report.length ? this.report.buffer : this.report.slice(0, this.reportSize).buffer;
       this.playedPending = true;
-      this.port.postMessage({ type: "played", epoch: this.epoch, at: this.reportAt, buffer }, [buffer]);
+      this.port.postMessage({ type: "played", epoch: this.epoch, at: this.reportAt,
+        until: this.reportUntil, sourceStart: this.reportSourceStart, buffer }, [buffer]);
       this.report = new Int16Array(480);
     }
     // One in-flight report plus the latest working frame bounds UI telemetry.

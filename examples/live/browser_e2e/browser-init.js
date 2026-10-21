@@ -236,9 +236,10 @@
               const samples = message.buffer.byteLength / 2;
               const submittedSamples = (submittedSamplesByContext.get(entry.id) || 0) + samples;
               submittedSamplesByContext.set(entry.id, submittedSamples);
+              const epoch = Number.isSafeInteger(message.epoch) ? message.epoch : entry.playbackEpoch;
               const receivedMeta = receivedByBuffer.get(message.buffer);
               record("playback.submit", {
-                contextId: entry.id, epoch: Number.isSafeInteger(message.epoch) ? message.epoch : entry.playbackEpoch,
+                contextId: entry.id, epoch,
                 samples, bytes: message.buffer.byteLength, submittedSamples, audioTime: context.currentTime,
                 captureOrder: captureOrder++, ...(receivedMeta || {}),
               });
@@ -256,6 +257,45 @@
           };
         }
         this.port.addEventListener("message", ({ data }) => {
+          if (!stopped && data?.type === "played" && data.buffer instanceof ArrayBuffer) {
+            const samples = data.buffer.byteLength / 2;
+            const view = new DataView(data.buffer);
+            let firstActiveSample = -1;
+            let lastActiveSample = -1;
+            let activeSamples = 0;
+            const activeSpans = [];
+            let spanStart = -1;
+            for (let offset = 0; offset < samples; offset++) {
+              const active = Math.abs(view.getInt16(offset * 2, true)) > 327;
+              if (active) {
+                if (firstActiveSample < 0) firstActiveSample = offset;
+                lastActiveSample = offset;
+                activeSamples++;
+                if (spanStart < 0) spanStart = offset;
+              } else if (spanStart >= 0) {
+                activeSpans.push([spanStart, offset]);
+                spanStart = -1;
+              }
+            }
+            if (spanStart >= 0) activeSpans.push([spanStart, samples]);
+            record("playback.rendered", {
+              contextId: contexts.find(item => item.context === context)?.id,
+              epoch: data.epoch,
+              sourceStart: data.sourceStart,
+              samples,
+              sampleRate: 24000,
+              contextSampleRate: context.sampleRate,
+              at: data.at,
+              until: data.until,
+              firstActiveSample,
+              lastActiveSample,
+              activeSamples,
+              activeSpans,
+              outputTimestamp: context.getOutputTimestamp?.(),
+              contextTimeAtDelivery: context.currentTime,
+              captureOrder: captureOrder++,
+            });
+          }
           if (!stopped && data?.type === "health" && health.length < limit * 4 + 1000) {
             const item = { ...stamp(), audioTime: context.currentTime,
               outputTimestamp: context.getOutputTimestamp?.(),
