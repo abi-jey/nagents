@@ -44,6 +44,23 @@
   let currentUIState = [];
   let selectedSessionId = "";
   const stamp = () => ({ monotonicMs: performance.now(), wallMs: Date.now() });
+  const sampleOutputTimestamp = (entry, context) => {
+    const timestamp = context.getOutputTimestamp?.();
+    if (timestamp && Number.isFinite(timestamp.contextTime) && Number.isFinite(timestamp.performanceTime) &&
+        timestamp.performanceTime > 0) {
+      entry.latestOutputTimestamp = { contextTime: timestamp.contextTime, performanceTime: timestamp.performanceTime };
+      entry.latestOutputTimestampAtMs = performance.now();
+      return entry.latestOutputTimestamp;
+    }
+    return undefined;
+  };
+  const freshOutputTimestamp = entry => {
+    const ageMs = entry.latestOutputTimestampAtMs === undefined
+      ? null : performance.now() - entry.latestOutputTimestampAtMs;
+    const fresh = ageMs !== null && ageMs >= 0 && ageMs <= 1000 && entry.latestOutputTimestamp;
+    return { timestamp: fresh ? entry.latestOutputTimestamp : undefined,
+      ageMs, source: fresh ? "cached_output_timestamp" : "context_time_fallback" };
+  };
   const record = (type, detail = {}) => {
     if (events.length < eventLimit) events.push({ type, ...stamp(), ...detail });
     else omitted++;
@@ -134,6 +151,7 @@
       verifySoftwareSink(context, "speaker");
       const entry = { context, id: contexts.length, recorder: undefined, ready: undefined, frameOrigin: undefined,
         samplesCaptured: 0, blocksCaptured: 0, schema: 2, playbackEpoch: 0, playbackRealtime: false,
+        latestOutputTimestamp: undefined, latestOutputTimestampAtMs: undefined,
         armed: false, armPromise: undefined,
         acknowledgeStart: undefined, stopPromise: undefined, acknowledgeStop: undefined };
       contexts.push(entry);
@@ -174,13 +192,14 @@
           }
           if (stopped) return;
           const bytes = pcm(data.samples);
+          const outputTimestamp = sampleOutputTimestamp(entry, context);
           entry.samplesCaptured = data.sampleOffset + data.samples.length;
           entry.blocksCaptured = data.sequence + 1;
           capture.push({ schema: data.schema, contextId: entry.id, frame: data.frame,
             frameOrigin: entry.frameOrigin, observedFrame: data.observedFrame,
             sampleOffset: data.sampleOffset, sequence: data.sequence,
             audioTime: data.frame / data.sampleRate, sampleRate: data.sampleRate,
-            contextTimeAtDelivery: context.currentTime, outputTimestamp: context.getOutputTimestamp?.(),
+            contextTimeAtDelivery: context.currentTime, outputTimestamp,
             ...stamp(), ...stats(bytes), pcm16: base64(bytes) });
         };
         record("speaker.ready", { contextId: entry.id, sampleRate: context.sampleRate, sinkType: context.sinkId.type });
@@ -257,6 +276,36 @@
           };
         }
         this.port.addEventListener("message", ({ data }) => {
+          if (!stopped && data?.type === "trace" && Array.isArray(data.intervals)) {
+            const contextId = entry.id;
+            const epoch = data.epoch;
+            const sequence = data.sequence;
+            if (data.intervals.length > 10) {
+              record("harness.error", { message: "Playback trace batch exceeded interval bound", contextId });
+            } else {
+              for (const interval of data.intervals) {
+                if (!interval || typeof interval !== "object") {
+                  record("playback.trace", { contextId, epoch, sequence, invalid: true });
+                  continue;
+                }
+                const outputClock = freshOutputTimestamp(entry);
+                record("playback.trace", {
+                  contextId, epoch, sequence,
+                  sourceStart: interval.sourceStart, samples: interval.samples,
+                  at: interval.at, until: interval.until,
+                  omittedIntervals: data.omittedIntervals, batchIntervals: data.intervals.length,
+                  outputTimestamp: outputClock.timestamp,
+                  outputTimestampAgeMs: outputClock.ageMs,
+                  outputClockSource: outputClock.source,
+                  contextTimeAtDelivery: context.currentTime,
+                  captureOrder: captureOrder++,
+                });
+              }
+            }
+            // This is a metadata-only ACK. PCM remains in the existing bounded
+            // received/output capture channels, never duplicated in trace data.
+            this.port.postMessage({ type: "trace-ack", epoch, sequence });
+          }
           if (!stopped && data?.type === "played" && data.buffer instanceof ArrayBuffer) {
             const samples = data.buffer.byteLength / 2;
             const view = new DataView(data.buffer);
@@ -278,6 +327,7 @@
               }
             }
             if (spanStart >= 0) activeSpans.push([spanStart, samples]);
+            const outputClock = freshOutputTimestamp(entry);
             record("playback.rendered", {
               contextId: contexts.find(item => item.context === context)?.id,
               epoch: data.epoch,
@@ -291,14 +341,17 @@
               lastActiveSample,
               activeSamples,
               activeSpans,
-              outputTimestamp: context.getOutputTimestamp?.(),
+              outputTimestamp: outputClock.timestamp,
+              outputTimestampAgeMs: outputClock.ageMs,
+              outputClockSource: outputClock.source,
               contextTimeAtDelivery: context.currentTime,
               captureOrder: captureOrder++,
             });
           }
           if (!stopped && data?.type === "health" && health.length < limit * 4 + 1000) {
+            const outputTimestamp = sampleOutputTimestamp(entry, context);
             const item = { ...stamp(), audioTime: context.currentTime,
-              outputTimestamp: context.getOutputTimestamp?.(),
+              outputTimestamp,
               contextId: contexts.find(entry => entry.context === context)?.id };
             for (const [key, value] of Object.entries(data))
               if (typeof value === "number" || key === "type") item[key] = value;
@@ -306,6 +359,9 @@
           }
         });
         this.port.start();
+        // Opt in only the isolated E2E-created playback node. Normal app
+        // playback nodes never enable or pay for this metadata trace.
+        this.port.postMessage({ type: "trace", enabled: true, epoch: entry.playbackEpoch });
       }
       this.addEventListener("processorerror", () => record("worklet.error", { name }));
     }

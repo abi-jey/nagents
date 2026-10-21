@@ -7,6 +7,7 @@ import { runInNewContext } from "node:vm";
 function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}) {
   const created = [];
   const sockets = [];
+  let now = 100;
   class AudioNode {
     constructor(context) { this.context = context; }
     connect(destination) { return destination; }
@@ -19,11 +20,16 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
       this.sampleRate = options.sampleRate || 48000;
       this.currentTime = 0;
       this.state = "running";
+      this.outputTimestampCalls = 0;
       this.destination = new AudioNode(this);
       this.audioWorklet = { addModule: async () => {} };
       created.push(this);
     }
     addEventListener() {}
+    getOutputTimestamp() {
+      this.outputTimestampCalls++;
+      return { contextTime: this.currentTime, performanceTime: 10_000 + this.currentTime * 1000 };
+    }
     async close() { this.state = "closed"; }
     async resume() {}
     async setSinkId(value) { this.sinkId = value; }
@@ -42,10 +48,12 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
     constructor(context, name) {
       super(context);
       this.name = name;
+      this.posted = [];
       const listeners = [];
       this.port = {
         onmessage: null,
         postMessage: message => {
+          this.posted.push(message);
           if (message === "arm") this.port.onmessage?.({ data: { type: "capture-start", schema: 2,
             frameOrigin: 4096, observedFrame: 4096, sampleOffset: 0, sequence: 0, sampleRate: 48000 } });
           if (message === "stop") this.port.onmessage?.({ data: { type: "capture-stop", schema: 2,
@@ -72,7 +80,7 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
       clone: () => ({ json: async () => jsonResponses.shift() || {} }) }),
     navigator: { mediaDevices: {}, userAgent: "unit-test" }, ArrayBuffer, Uint8Array, btoa,
     location: { href: "http://localhost/" },
-    performance: { now: () => 100, timeOrigin: 0 }, crypto: webcrypto,
+    performance: { now: () => now, timeOrigin: 0 }, crypto: webcrypto,
     document: { visibilityState: "visible", addEventListener() {}, removeEventListener() {}, scripts: [],
       querySelectorAll: () => [] },
     MutationObserver: class { observe() {} disconnect() {} },
@@ -82,7 +90,7 @@ function fixture({ honorSink = true, jsonResponses = [], maxSeconds = 660 } = {}
     URL, Uint8Array, Request,
   };
   runInNewContext(readFileSync(new URL("./browser-init.js", import.meta.url), "utf8"), globals);
-  return { globals, created, sockets };
+  return { globals, created, sockets, setNow: value => { now = value; } };
 }
 
 test("speaker and microphone use verified software clocks, never the system speaker", async () => {
@@ -131,6 +139,54 @@ test("rendered PCM records bounded source and active-sample timing without retai
   assert.equal(event.until, 1 + 3 / 24000);
   assert.equal("buffer" in event, false);
   assert.equal(JSON.stringify(event).includes("1000"), false);
+});
+
+test("isolated playback enables numeric trace and ACKs each metadata batch without PCM", () => {
+  const { globals, created } = fixture();
+  const context = new globals.AudioContext();
+  const playback = new globals.AudioWorkletNode(context, "ngn-live-playback");
+  assert.equal(playback.posted[0].type, "trace");
+  assert.equal(playback.posted[0].enabled, true);
+  assert.equal(playback.posted[0].epoch, 0);
+  playback.port.emit({ type: "trace", epoch: 0, sequence: 0, omittedIntervals: 0,
+    intervals: [{ sourceStart: 0, samples: 480, at: 1, until: 1 + 479 / 24000 }] });
+  assert.equal(created[0].outputTimestampCalls, 0);
+  const event = globals.__voiceE2E.export().events.find(item => item.type === "playback.trace");
+  assert.equal(event.contextId, 0);
+  assert.equal(event.sequence, 0);
+  assert.equal(event.sourceStart, 0);
+  assert.equal(event.samples, 480);
+  assert.equal("buffer" in event, false);
+  assert.equal(playback.posted.at(-1).type, "trace-ack");
+  assert.equal(playback.posted.at(-1).epoch, 0);
+  assert.equal(playback.posted.at(-1).sequence, 0);
+  assert.equal(created[0].outputTimestampCalls, 1); // Context export is a deliberate diagnostic sample.
+});
+
+test("rendered clock uses a fresh cached timestamp and falls back when it is older than one second", async () => {
+  const { globals, created, setNow } = fixture();
+  new globals.AudioContext();
+  await globals.navigator.mediaDevices.getUserMedia({ audio: true });
+  const playback = new globals.AudioWorkletNode(created[0], "ngn-live-playback");
+  playback.port.emit({ type: "health", epoch: 0, receivedSamples: 0, playedSamples: 0 });
+  assert.equal(created[0].outputTimestampCalls, 1);
+
+  const rendered = new globals.ArrayBuffer(4);
+  new DataView(rendered).setInt16(0, 1000, true);
+  setNow(200);
+  playback.port.emit({ type: "played", epoch: 0, sourceStart: 0, at: 1, until: 1 + 1 / 24000, buffer: rendered });
+  let event = globals.__voiceE2E.export().events.find(item => item.type === "playback.rendered");
+  assert.equal(event.outputClockSource, "cached_output_timestamp");
+  assert.equal(event.outputTimestampAgeMs, 100);
+  assert.equal(created[0].outputTimestampCalls, 2); // One call for health; one for export, none for this played report.
+
+  setNow(1200);
+  playback.port.emit({ type: "played", epoch: 0, sourceStart: 1, at: 1, until: 1 + 1 / 24000, buffer: rendered });
+  event = globals.__voiceE2E.export().events.filter(item => item.type === "playback.rendered")[1];
+  assert.equal(event.outputClockSource, "context_time_fallback");
+  assert.equal(event.outputTimestampAgeMs, 1100);
+  assert.equal(event.outputTimestamp, undefined);
+  assert.equal(created[0].outputTimestampCalls, 3); // Only the second export sampled the graph clock.
 });
 
 test("unsupported software sink fails and closes context without a physical fallback", async () => {

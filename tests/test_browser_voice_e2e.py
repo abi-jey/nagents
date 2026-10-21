@@ -1,5 +1,6 @@
 """Artifact validation must distinguish a real interruption from terminal EOF."""
 
+import array
 import ast
 import base64
 import copy
@@ -11,6 +12,7 @@ import subprocess
 import wave
 from collections.abc import Callable
 from functools import partial
+from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
@@ -477,6 +479,13 @@ def test_rendered_speech_age_fails_delayed_voiced_pcm_but_ignores_quiet_queue() 
             "epoch": 2,
             "sourceStart": 4,
             "samples": 4,
+            "sampleRate": 24000,
+            "contextSampleRate": 48000,
+            "at": 1 + 4 / 24000,
+            "until": 1 + 7 / 24000,
+            "contextTimeAtDelivery": 1 + 4 / 24000,
+            "outputTimestamp": {"contextTime": 1 + 4 / 24000, "performanceTime": 500},
+            "monotonicMs": 500,
             "firstActiveSample": -1,
             "lastActiveSample": -1,
             "activeSamples": 0,
@@ -553,6 +562,20 @@ def test_rendered_speech_age_rejects_mismatched_output_sample_rate() -> None:
     assert result["invalidBlocks"] == 1
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("sampleRate", 48000), ("at", -0.01), ("until", 2.0)],
+)
+def test_rendered_speech_age_rejects_wrong_pcm_rate_and_invalid_time_span(field: str, value: object) -> None:
+    report = rendered_speech_report()
+    rendered = cast("list[dict[str, object]]", report["events"])[1]
+    rendered[field] = value
+    result = cast("dict[str, object]", timing_metrics(report)["renderedSpeechAge"])
+    assert result["available"] is False
+    assert result["invalidBlocks"] == 1
+    assert result["withinBounds"] is False
+
+
 def test_literal_cdp_evaluate_javascript_parses_without_execution() -> None:
     node = shutil.which("node")
     if node is None:
@@ -581,19 +604,70 @@ def test_literal_cdp_evaluate_javascript_parses_without_execution() -> None:
 def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
     report = authenticated_scenario_capture()
     report["contexts"] = [{"id": 0, "sampleRate": 48000}]
-    output = cast("list[dict[str, object]]", report["output"])
-    for index, block_item in enumerate(output):
-        block_item["sampleRate"] = 48000
-        block_item["frame"] = 48000 + index * 4
-        block_item["observedFrame"] = 48000 + index * 4
-        block_item["sampleOffset"] = index * 4
-        block_item["audioTime"] = (48000 + index * 4) / 48000
-        block_item["contextTimeAtDelivery"] = block_item["audioTime"]
-        block_item["outputTimestamp"] = {
-            "contextTime": block_item["audioTime"],
-            "performanceTime": 6000 if index == 1 else block_item["monotonicMs"],
+    packet = struct.pack("<4h", 0, 1000, -1200, 0)
+    report["received"] = [
+        {
+            "sequence": 0,
+            "transportSequence": 0,
+            "captureOrder": 1,
+            "sampleOffset": 0,
+            "receivedSamples": 4,
+            "transportReceivedSamples": 4,
+            "samples": 4,
+            "bytes": len(packet),
+            "sampleRate": 24000,
+            "contextId": 0,
+            "epoch": 2,
+            "monotonicMs": speech_received_ms,
+            "pcm16": base64.b64encode(packet).decode(),
         }
+    ]
+    report["receivedPcm"] = {
+        "sampleFormat": "s16le",
+        "sampleRate": 24000,
+        "packetCount": 1,
+        "capturedPackets": 1,
+        "samples": 4,
+        "capturedSamples": 4,
+        "capturedBytes": 8,
+        "omittedPackets": 0,
+        "omittedBytes": 0,
+        "byteLimit": 30_000_000,
+    }
+    report["output"] = [
+        {
+            "contextId": 0,
+            "frame": 48004,
+            "observedFrame": 48004,
+            "sampleOffset": 0,
+            "sequence": 0,
+            "samples": 8,
+            "sampleRate": 48000,
+            "monotonicMs": 6000,
+            "contextTimeAtDelivery": 1 + 4 / 48000,
+            "outputTimestamp": {"contextTime": 1 + 4 / 48000, "performanceTime": 3000},
+            "pcm16": base64.b64encode(struct.pack("<8h", 0, 0, 1000, 1000, -1200, -1200, 0, 0)).decode(),
+        },
+        {
+            "contextId": 0,
+            "frame": 48012,
+            "observedFrame": 48012,
+            "sampleOffset": 8,
+            "sequence": 1,
+            "samples": 4,
+            "sampleRate": 48000,
+            "monotonicMs": 6400,
+            "contextTimeAtDelivery": 1 + 12 / 48000,
+            "outputTimestamp": {"contextTime": 1 + 12 / 48000, "performanceTime": 6400},
+            "pcm16": base64.b64encode(struct.pack("<4h", 1000, 1000, 1000, 1000)).decode(),
+        },
+    ]
     events = cast("list[dict[str, object]]", report["events"])
+    for event in events:
+        if event.get("type") == "recorder.capture-start":
+            event.update({"contextId": 0, "frame": 48004, "sampleOffset": 0, "sequence": 0})
+        elif event.get("type") == "recorder.capture-stop":
+            event.update({"contextId": 0, "finalFrame": 48016, "samplesCaptured": 12, "blocksCaptured": 2})
     events.extend(
         [
             {"type": "socket.receive", "path": "/audio", "receivedSamples": 4, "monotonicMs": 4500},
@@ -604,23 +678,23 @@ def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
                 "samples": 4,
                 "bytes": 8,
                 "submittedSamples": 4,
+                "receivedSequence": 0,
+                "receivedSamples": 4,
                 "receiveMonotonicMs": speech_received_ms,
             },
             {
-                "type": "playback.rendered",
+                "type": "playback.trace",
                 "contextId": 0,
                 "epoch": 2,
                 "sourceStart": 0,
                 "samples": 4,
-                "firstActiveSample": 1,
-                "lastActiveSample": 2,
-                "activeSamples": 2,
-                "activeSpans": [[1, 3]],
+                "sequence": 0,
+                "batchIntervals": 1,
+                "omittedIntervals": 0,
                 "at": 48004 / 48000,
                 "until": 48004 / 48000 + 3 / 24000,
-                "contextSampleRate": 48000,
                 "contextTimeAtDelivery": 48004 / 48000,
-                "outputTimestamp": {"contextTime": 48004 / 48000, "performanceTime": 6000},
+                "captureOrder": 100,
                 "monotonicMs": 6000,
             },
         ]
@@ -680,6 +754,542 @@ def test_authenticated_scenario_gates_rendered_speech_not_old_quiet_queue_age() 
         max_rendered_speech_peak_ms=1000,
     )
     assert cast("dict[str, bool]", delayed["checks"])["renderedSpeechP95WithinBound"] is False
+
+
+def traced_graph_report(*, delayed_gap: bool = False, output_silent: bool = False) -> dict[str, object]:
+    source = [((index * 73) % 1801) - 900 for index in range(480)]
+    spans = [(0, 480, 2.0)] if not delayed_gap else [(0, 240, 2.0), (240, 240, 2.2)]
+    delivery_context_time = max(at + (count - 1) / 24000 for _, count, at in spans) + 0.01
+    arrival_time = 1100 + (spans[0][2] - delivery_context_time) * 1000 - 100
+    output = [0] * 10_100
+    for source_start, count, at in spans:
+        if output_silent:
+            continue
+        target = round(at * 48000) - 96_000
+        for offset in range(count):
+            output[target + offset * 2] = source[source_start + offset]
+            output[target + offset * 2 + 1] = source[source_start + offset]
+    packet_bytes = struct.pack("<480h", *source)
+    output_bytes = struct.pack(f"<{len(output)}h", *output)
+    report = authenticated_scenario_capture()
+    report["contexts"] = [{"id": 0, "sampleRate": 48000}]
+    report["received"] = [
+        {
+            "sequence": 0,
+            "transportSequence": 0,
+            "captureOrder": 1,
+            "sampleOffset": 0,
+            "receivedSamples": 480,
+            "transportReceivedSamples": 480,
+            "samples": 480,
+            "bytes": len(packet_bytes),
+            "sampleRate": 24000,
+            "contextId": 0,
+            "epoch": 0,
+            "monotonicMs": arrival_time,
+            "pcm16": base64.b64encode(packet_bytes).decode(),
+        }
+    ]
+    report["receivedPcm"] = {
+        "sampleFormat": "s16le",
+        "sampleRate": 24000,
+        "packetCount": 1,
+        "capturedPackets": 1,
+        "samples": 480,
+        "capturedSamples": 480,
+        "capturedBytes": len(packet_bytes),
+        "omittedPackets": 0,
+        "omittedBytes": 0,
+        "byteLimit": 30_000_000,
+    }
+    events = cast("list[dict[str, object]]", report["events"])
+    events.extend(
+        [
+            {
+                "type": "playback.submit",
+                "contextId": 0,
+                "epoch": 0,
+                "samples": 480,
+                "bytes": 960,
+                "submittedSamples": 480,
+                "receivedSequence": 0,
+                "receivedSamples": 480,
+                "receiveMonotonicMs": arrival_time,
+            },
+        ]
+    )
+    for index, (source_start, count, at) in enumerate(spans):
+        events.append(
+            {
+                "type": "playback.trace",
+                "contextId": 0,
+                "epoch": 0,
+                "sequence": 0,
+                "batchIntervals": len(spans),
+                "omittedIntervals": 0,
+                "sourceStart": source_start,
+                "samples": count,
+                "at": at,
+                "until": at + (count - 1) / 24000,
+                "contextTimeAtDelivery": delivery_context_time,
+                "monotonicMs": 1100,
+                "captureOrder": index + 100,
+            }
+        )
+    report["output"] = [
+        {
+            "contextId": 0,
+            "frame": 96_000,
+            "observedFrame": 96_000,
+            "sampleOffset": 0,
+            "sequence": 0,
+            "samples": len(output),
+            "sampleRate": 48000,
+            "monotonicMs": 1100,
+            "contextTimeAtDelivery": 2.0,
+            "pcm16": base64.b64encode(output_bytes).decode(),
+        }
+    ]
+    report["health"] = [
+        {
+            "type": "health",
+            "contextId": 0,
+            "epoch": 0,
+            "receivedSamples": 480,
+            "playedSamples": 480,
+            "droppedSamples": 0,
+            "interruptedSamples": 0,
+            "underruns": 0,
+        }
+    ]
+    return report
+
+
+def test_graph_render_age_uses_trace_and_correlates_attenuated_output_pcm() -> None:
+    report = traced_graph_report()
+    result = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert result["available"] is True
+    assert result["clock"] == "software_output_graph"
+    assert cast("int", result["observations"]) > 0
+    assert result["p95Ms"] == pytest.approx(119, abs=1)
+    assert result["withinBounds"] is True
+
+    # The graph check is scale-independent; real app volume attenuation must
+    # not turn present matching PCM into an unconfirmed interval.
+    quiet = traced_graph_report()
+    quiet_output = cast("list[dict[str, object]]", quiet["output"])[0]
+    samples = array.array("h", struct.unpack("<10100h", base64.b64decode(cast("str", quiet_output["pcm16"]))))
+    for index, value in enumerate(samples):
+        samples[index] = round(value * 0.04)
+    quiet_output["pcm16"] = base64.b64encode(samples.tobytes()).decode()
+    attenuated = cast("dict[str, object]", timing_metrics(quiet)["graphRenderedSpeechAge"])
+    assert attenuated["available"] is True
+
+
+def test_graph_render_age_rejects_missing_trace_tail_and_silent_output() -> None:
+    report = traced_graph_report()
+    events = cast("list[dict[str, object]]", report["events"])
+    events[0:0] = []
+    events[:] = [event for event in events if event.get("type") != "playback.trace"]
+    missing = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert missing["available"] is False
+    assert missing["observations"] == 0
+
+    partial = traced_graph_report()
+    cast("list[dict[str, object]]", partial["health"])[0]["playedSamples"] = 960
+    tail = cast("dict[str, object]", timing_metrics(partial)["graphRenderedSpeechAge"])
+    assert tail["available"] is False
+    assert tail["tailCoordinateErrors"] == 1
+
+    omitted = traced_graph_report()
+    cast("list[dict[str, object]]", omitted["events"])[-1]["omittedIntervals"] = 1
+    missing_interval = cast("dict[str, object]", timing_metrics(omitted)["graphRenderedSpeechAge"])
+    assert missing_interval["available"] is False
+    assert missing_interval["omittedIntervals"] == 1
+
+    silent = cast(
+        "dict[str, object]", timing_metrics(traced_graph_report(output_silent=True))["graphRenderedSpeechAge"]
+    )
+    assert silent["available"] is False
+    assert silent["uncorrelatedOutputIntervals"] == 1
+
+
+def test_graph_render_age_requires_complete_received_ledger_including_quiet_packets() -> None:
+    missing_quiet_packet = traced_graph_report()
+    object_record(missing_quiet_packet, "receivedPcm").update(
+        packetCount=2, capturedPackets=2, samples=960, capturedSamples=960, capturedBytes=1920
+    )
+    incomplete = cast("dict[str, object]", timing_metrics(missing_quiet_packet)["graphRenderedSpeechAge"])
+    assert incomplete["available"] is False
+    assert incomplete["receivedPcmComplete"] is False
+
+    duplicate = traced_graph_report()
+    packets = cast("list[dict[str, object]]", duplicate["received"])
+    duplicate_packet = packets[0].copy()
+    duplicate_packet.update(
+        sequence=1,
+        sampleOffset=480,
+        receivedSamples=960,
+        transportReceivedSamples=960,
+        transportSequence=0,
+        pcm16=base64.b64encode(bytes(960)).decode(),
+    )
+    packets.append(duplicate_packet)
+    object_record(duplicate, "receivedPcm").update(
+        packetCount=2, capturedPackets=2, samples=960, capturedSamples=960, capturedBytes=1920
+    )
+    repeated = cast("dict[str, object]", timing_metrics(duplicate)["graphRenderedSpeechAge"])
+    assert repeated["available"] is False
+    assert repeated["duplicateReceivedSequences"] == 1
+
+    lying_summary = traced_graph_report()
+    object_record(lying_summary, "receivedPcm")["capturedBytes"] = 962
+    invalid = cast("dict[str, object]", timing_metrics(lying_summary)["graphRenderedSpeechAge"])
+    assert invalid["available"] is False
+    assert invalid["receivedPcmComplete"] is False
+
+
+def test_graph_render_age_fails_when_source_voice_gap_is_extended() -> None:
+    result = cast("dict[str, object]", timing_metrics(traced_graph_report(delayed_gap=True))["graphRenderedSpeechAge"])
+    assert result["available"] is True
+    assert cast("float", result["maximumAddedVoicedGapMs"]) > 40
+    assert result["voicedGapOver40Ms"] is True
+    assert result["withinBounds"] is False
+
+
+def test_configured_rendered_speech_limit_is_independent_of_default_report_bounds() -> None:
+    report = traced_graph_report()
+    events = cast("list[dict[str, object]]", report["events"])
+    packet = cast("list[dict[str, object]]", report["received"])[0]
+    packet["monotonicMs"] = cast("float", packet["monotonicMs"]) - 140
+    submit = next(event for event in events if event.get("type") == "playback.submit")
+    submit["receiveMonotonicMs"] = cast("float", submit["receiveMonotonicMs"]) - 140
+    metric = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert metric["voiceContinuityVerified"] is True
+    assert cast("float", metric["p95Ms"]) > 250
+    assert metric["withinBounds"] is False
+
+    custom = check_authenticated_scenario(
+        report,
+        [],
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=300,
+        max_rendered_speech_peak_ms=1000,
+    )
+    custom_checks = cast("dict[str, bool]", custom["checks"])
+    assert custom_checks["renderedSpeechGapWithinBound"] is True
+    assert custom_checks["renderedSpeechP95WithinBound"] is True
+
+    default = check_authenticated_scenario(
+        report,
+        [],
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    default_checks = cast("dict[str, bool]", default["checks"])
+    assert default_checks["renderedSpeechGapWithinBound"] is True
+    assert default_checks["renderedSpeechP95WithinBound"] is False
+
+
+def traced_pause_report(*, pause_samples: int, extra_ms: float) -> dict[str, object]:
+    first_voice = [((index * 73) % 1801) - 900 for index in range(480)]
+    second_voice = [((index * 101) % 1701) - 850 for index in range(480)]
+    source = first_voice + [0] * pause_samples + second_voice
+    pause_end = 480 + pause_samples
+    boundaries = [0, 480]
+    cursor = 480
+    while cursor < pause_end:
+        cursor = min(pause_end, cursor + 480)
+        boundaries.append(cursor)
+    boundaries.append(len(source))
+    intervals: list[tuple[int, int, float]] = []
+    for low, high in pairwise(boundaries):
+        at = 2 + low / 24000 + (extra_ms / 1000 if low >= pause_end else 0)
+        intervals.append((low, high - low, at))
+    origin = 96_000
+    final_time = intervals[-1][2] + (intervals[-1][1] - 1) / 24000
+    delivery_context_time = final_time + 0.01
+    delivery_monotonic_ms = 1100 + (delivery_context_time - 2) * 1000
+    output = [0] * (round((final_time - 2) * 48000) + 4)
+    for low, count, at in intervals:
+        if low >= 480 and low < pause_end:
+            continue
+        for offset in range(count):
+            target = round((at + offset / 24000) * 48000) - origin
+            value = source[low + offset]
+            output[target] = output[target + 1] = value
+    source_bytes = struct.pack(f"<{len(source)}h", *source)
+    report = authenticated_scenario_capture()
+    report["contexts"] = [{"id": 0, "sampleRate": 48000}]
+    report["received"] = [
+        {
+            "sequence": 0,
+            "transportSequence": 0,
+            "captureOrder": 1,
+            "sampleOffset": 0,
+            "receivedSamples": len(source),
+            "transportReceivedSamples": len(source),
+            "samples": len(source),
+            "bytes": len(source_bytes),
+            "sampleRate": 24000,
+            "contextId": 0,
+            "epoch": 0,
+            "monotonicMs": 1000,
+            "pcm16": base64.b64encode(source_bytes).decode(),
+        }
+    ]
+    report["receivedPcm"] = {
+        "sampleFormat": "s16le",
+        "sampleRate": 24000,
+        "packetCount": 1,
+        "capturedPackets": 1,
+        "samples": len(source),
+        "capturedSamples": len(source),
+        "capturedBytes": len(source_bytes),
+        "omittedPackets": 0,
+        "omittedBytes": 0,
+        "byteLimit": 30_000_000,
+    }
+    events = cast("list[dict[str, object]]", report["events"])
+    events.extend(
+        [
+            {
+                "type": "playback.submit",
+                "contextId": 0,
+                "epoch": 0,
+                "samples": len(source),
+                "bytes": len(source_bytes),
+                "submittedSamples": len(source),
+                "receivedSequence": 0,
+                "receivedSamples": len(source),
+                "receiveMonotonicMs": 1000,
+            }
+        ]
+    )
+    for index, (low, count, at) in enumerate(intervals):
+        sequence = index // 10
+        sequence_start = sequence * 10
+        batch_count = min(10, len(intervals) - sequence_start)
+        events.append(
+            {
+                "type": "playback.trace",
+                "contextId": 0,
+                "epoch": 0,
+                "sequence": sequence,
+                "batchIntervals": batch_count,
+                "omittedIntervals": 0,
+                "sourceStart": low,
+                "samples": count,
+                "at": at,
+                "until": at + (count - 1) / 24000,
+                "contextTimeAtDelivery": delivery_context_time,
+                "monotonicMs": delivery_monotonic_ms,
+                "captureOrder": 100 + index,
+            }
+        )
+    output_bytes = struct.pack(f"<{len(output)}h", *output)
+    report["output"] = [
+        {
+            "contextId": 0,
+            "frame": origin,
+            "observedFrame": origin,
+            "sampleOffset": 0,
+            "sequence": 0,
+            "samples": len(output),
+            "sampleRate": 48000,
+            "monotonicMs": delivery_monotonic_ms,
+            "contextTimeAtDelivery": delivery_context_time,
+            "pcm16": base64.b64encode(output_bytes).decode(),
+        }
+    ]
+    report["health"] = [
+        {
+            "contextId": 0,
+            "epoch": 0,
+            "playedSamples": len(source),
+            "droppedSamples": 0,
+            "interruptedSamples": 0,
+            "underruns": 1,
+        }
+    ]
+    return report
+
+
+def test_short_source_pause_gates_only_excess_render_delay_and_long_pause_is_reported() -> None:
+    # 61 ms of silence inside one source stream rendered as 78 ms is 17 ms
+    # excess; a 209 ms rendering of that same source pause adds 148 ms.
+    source_pause = traced_pause_report(pause_samples=1464, extra_ms=17)
+    candidate = cast("dict[str, object]", timing_metrics(source_pause)["graphRenderedSpeechAge"])
+    assert candidate["available"] is True
+    assert cast("float", candidate["maximumClassifiableAddedGapMs"]) < 40
+    assert candidate["voicedGapOver40Ms"] is False
+
+    delayed = cast(
+        "dict[str, object]",
+        timing_metrics(traced_pause_report(pause_samples=1464, extra_ms=148))["graphRenderedSpeechAge"],
+    )
+    assert cast("float", delayed["maximumClassifiableAddedGapMs"]) > 40
+    assert delayed["voicedGapOver40Ms"] is True
+    delayed_gate = check_authenticated_scenario(
+        traced_pause_report(pause_samples=1464, extra_ms=148),
+        [],
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    assert cast("dict[str, bool]", delayed_gate["checks"])["renderedSpeechGapWithinBound"] is False
+
+    long_pause = cast(
+        "dict[str, object]",
+        timing_metrics(traced_pause_report(pause_samples=6000, extra_ms=300))["graphRenderedSpeechAge"],
+    )
+    assert cast("int", long_pause["longSourcePauseGaps"]) > 0
+    assert cast("float", long_pause["maximumAddedVoicedGapMs"]) > 40
+    assert long_pause["voicedGapOver40Ms"] is False
+
+
+def with_near_voice_unclassified_underrun(report: dict[str, object]) -> dict[str, object]:
+    sample_count = cast("int", object_record(report, "receivedPcm")["samples"])
+    report["health"] = [
+        {
+            "contextId": 0,
+            "epoch": 0,
+            "monotonicMs": 1000,
+            "receivedSamples": sample_count,
+            "playedSamples": 0,
+            "droppedSamples": 0,
+            "interruptedSamples": 0,
+            "underruns": 0,
+            "bufferedMs": 20,
+            "lastUnderrunAt": -1,
+        },
+        {
+            "contextId": 0,
+            "epoch": 0,
+            "monotonicMs": 1050,
+            "receivedSamples": sample_count + 10,
+            "playedSamples": sample_count,
+            "droppedSamples": 0,
+            "interruptedSamples": 0,
+            "underruns": 1,
+            "bufferedMs": 1,
+            "lastUnderrunAt": -1,
+        },
+    ]
+    return report
+
+
+def test_complete_graph_trace_overrides_only_counter_only_starvation_classification() -> None:
+    result = check_authenticated_scenario(
+        with_near_voice_unclassified_underrun(traced_pause_report(pause_samples=1464, extra_ms=17)),
+        [],
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    checks = cast("dict[str, bool]", result["checks"])
+    details = cast("dict[str, object]", result["details"])
+    assert len(cast("list[dict[str, object]]", details["unclassifiedUnderruns"])) == 1
+    assert details["counterClassificationsOverriddenByCompleteGraphTrace"] is True
+    assert checks["noUnclassifiedQueuedUnderruns"] is True
+    assert checks["renderedSpeechGapWithinBound"] is True
+
+    delayed = check_authenticated_scenario(
+        with_near_voice_unclassified_underrun(traced_pause_report(pause_samples=1464, extra_ms=148)),
+        [],
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    delayed_checks = cast("dict[str, bool]", delayed["checks"])
+    assert delayed_checks["noUnclassifiedQueuedUnderruns"] is False
+    assert delayed_checks["renderedSpeechGapWithinBound"] is False
+
+    no_trace = with_near_voice_unclassified_underrun(traced_pause_report(pause_samples=1464, extra_ms=17))
+    no_trace_events = cast("list[dict[str, object]]", no_trace["events"])
+    no_trace_events[:] = [event for event in no_trace_events if event.get("type") != "playback.trace"]
+    missing_trace = check_authenticated_scenario(
+        no_trace,
+        [],
+        require_rendered_speech_telemetry=True,
+        max_rendered_speech_p95_ms=250,
+        max_rendered_speech_peak_ms=1000,
+    )
+    missing_checks = cast("dict[str, bool]", missing_trace["checks"])
+    assert missing_checks["noUnclassifiedQueuedUnderruns"] is False
+    assert missing_checks["renderedSpeechTelemetryAvailable"] is False
+
+
+def test_long_packet_gap_without_source_silence_is_not_claimed_as_verified_smoothness() -> None:
+    report = traced_graph_report(delayed_gap=True)
+    source_values = [((index * 73) % 1801) - 900 for index in range(480)]
+    chunks = [source_values[:240], source_values[240:]]
+    packets: list[dict[str, object]] = []
+    for index, chunk in enumerate(chunks):
+        raw = struct.pack("<240h", *chunk)
+        packets.append(
+            {
+                "sequence": index,
+                "transportSequence": index,
+                "captureOrder": index + 1,
+                "sampleOffset": index * 240,
+                "receivedSamples": (index + 1) * 240,
+                "transportReceivedSamples": (index + 1) * 240,
+                "samples": 240,
+                "bytes": len(raw),
+                "sampleRate": 24000,
+                "contextId": 0,
+                "epoch": 0,
+                "monotonicMs": 1000 + index * 301,
+                "pcm16": base64.b64encode(raw).decode(),
+            }
+        )
+    report["received"] = packets
+    object_record(report, "receivedPcm").update(
+        packetCount=2,
+        capturedPackets=2,
+        samples=480,
+        capturedSamples=480,
+        capturedBytes=960,
+        omittedPackets=0,
+        omittedBytes=0,
+    )
+    events = cast("list[dict[str, object]]", report["events"])
+    events[:] = [event for event in events if event.get("type") != "playback.submit"]
+    for event in events:
+        if event.get("type") == "playback.trace":
+            event["monotonicMs"] = 1400
+    events.extend(
+        [
+            {
+                "type": "playback.submit",
+                "contextId": 0,
+                "epoch": 0,
+                "samples": 240,
+                "bytes": 480,
+                "submittedSamples": 240,
+                "receivedSequence": 0,
+                "receivedSamples": 240,
+                "receiveMonotonicMs": 1000,
+            },
+            {
+                "type": "playback.submit",
+                "contextId": 0,
+                "epoch": 0,
+                "samples": 240,
+                "bytes": 480,
+                "submittedSamples": 480,
+                "receivedSequence": 1,
+                "receivedSamples": 480,
+                "receiveMonotonicMs": 1301,
+            },
+        ]
+    )
+    metric = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
+    assert metric["available"] is True
+    assert metric["unclassifiableInputPauses"] == 1
+    assert metric["withinBounds"] is False
 
 
 def test_terminal_eof_is_not_an_in_speech_glitch() -> None:
@@ -841,7 +1451,7 @@ def test_authenticated_empty_queue_underrun_is_reported_as_ambiguous() -> None:
     assert result["passed"] is True
     details = cast("dict[str, object]", result["details"])
     assert len(cast("list[object]", details["ambiguousQueueEmptyUnderruns"])) == 1
-    assert "does not prove all perceived audio smoothness" in str(details["smoothnessConclusion"])
+    assert "voice continuity was not verified" in str(details["smoothnessConclusion"])
 
 
 def test_known_response_gap_fails_baseline_and_passes_negative_control() -> None:

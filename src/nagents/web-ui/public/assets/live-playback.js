@@ -230,6 +230,7 @@ class LivePlayback extends AudioWorkletProcessor {
       this.quietFrames = 0;
       this.clearQuietRecoveryState();
       this.history.fill(0); this.filterIndex = 0;
+      this.flushReport();
       this.reportSize = 0;
       this.fadeFrom = this.lastValue; this.fade = 1;
     }
@@ -298,6 +299,7 @@ class LivePlayback extends AudioWorkletProcessor {
     // This leaves voiced PCM and its playback rate untouched.
     if (this.realtime && this.playing && this.count > 0 &&
         this.quietFrames >= sampleRate * .06 && this.target * PCM_RATE - this.count > PCM_RATE * .02) {
+      this.flushReport();
       this.playing = false;
       this.clearQuietRecoveryState();
       this.firstArrival = currentTime;

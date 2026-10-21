@@ -141,11 +141,38 @@ PCM continuity, drop, response, and rendered-speech age gates; it cannot prove w
 person would perceive through a physical speaker.
 
 The report keeps the existing all-queued packet-age metric as a diagnostic and
-gates on rendered-speech age per minute. It maps active source samples to their
-packet arrival and confirms nonzero post-volume output in the corresponding
-render window. Quiet queued audio is excluded; muted output, incomplete captures,
-and unmapped data fail closed. This measures browser packet-arrival-to-render time,
-not provider generation or acoustic latency.
+gates on `graphRenderedSpeechAge` per minute. The isolated E2E playback node opts
+into a bounded numeric worklet trace: every flushed source-coordinate interval is
+batched and acknowledged independently of the visual played reports. The trace
+contains no PCM. The checker validates batch sequence, omissions, source
+coordinates, and final played counters, then correlates voiced received PCM with
+actual post-volume recorder PCM within one output quantum. It reports packet
+arrival-to-software-render-graph age and detects added gaps between voiced source
+samples. Missing intervals, incomplete receive/output PCM, silent or unrelated
+output, dropped samples, and added gaps over 40 ms during short source pauses
+fail closed. It does not require a
+fixed amplitude threshold on each short span, so valid low-level tails remain
+verifiable without hiding coordinate holes. A gap is compared against source
+sample time: a 61 ms source pause rendered as 78 ms adds 17 ms and passes, while
+the same pause stretched to 209 ms fails. Source pauses over 200 ms and packet
+gaps without corresponding source silence remain visible as long-pause or
+unclassifiable-input-pause diagnostics; they are not silently discarded or
+claimed as measured smoothness.
+
+Raw underrun-near-speech classifications remain in the report. The complete
+trace can override those proximity-only checks only when received PCM, trace
+coordinates, final counters, and post-volume waveform matching all validate and
+the source-aware gap/latency bounds pass. Missing trace data cannot override a
+counter failure. A long packet gap without source-silence samples is
+unclassifiable and fails the smoothness gate.
+
+The separately reported cached `getOutputTimestamp()` estimate maps context time
+to output-device presentation time. It is diagnostic only: in one measured
+Chrome/software-sink run it differed from software-graph render time by about
+27 ms. That offset is not acoustic latency, and the
+required `sinkId: none` has no physical speaker presentation to measure. The
+default gate therefore uses graph time. Neither metric measures provider
+generation time or what a person hears through physical hardware.
 
 ### Manual Chrome DevTools MCP procedure
 

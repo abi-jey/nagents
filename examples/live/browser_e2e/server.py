@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import copy
 import hashlib
 import importlib.metadata
 import json
@@ -14,7 +13,6 @@ import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
-from typing import cast
 
 import uvicorn
 from fastapi import APIRouter
@@ -22,13 +20,12 @@ from fastapi import HTTPException
 from fastapi import WebSocket
 from starlette.responses import FileResponse
 from starlette.websockets import WebSocketDisconnect
-from uvicorn.logging import AccessFormatter
-from uvicorn.logging import DefaultFormatter
 
 import nagents.web.app as web_app
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.web.app import create_app
+from nagents.web.runtime import server_logging_config
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -37,29 +34,9 @@ SESSION = "voice-e2e-offline"
 REVISION = "e" * 64
 
 
-class UTCDefaultFormatter(DefaultFormatter):
-    @staticmethod
-    def converter(timestamp: float | None = None) -> time.struct_time:
-        return time.gmtime(timestamp)
-
-
-class UTCAccessFormatter(AccessFormatter):
-    @staticmethod
-    def converter(timestamp: float | None = None) -> time.struct_time:
-        return time.gmtime(timestamp)
-
-
 def log_configuration() -> dict[str, object]:
-    """Add UTC milliseconds to ordinary server logs; do not log payloads."""
-    configuration: dict[str, object] = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
-    formatters = cast("dict[str, dict[str, object]]", configuration["formatters"])
-    for name, formatter_type in (("default", UTCDefaultFormatter), ("access", UTCAccessFormatter)):
-        formatter = formatters[name]
-        formatter["()"] = formatter_type
-        formatter["fmt"] = "%(asctime)s.%(msecs)03dZ " + str(formatter["fmt"])
-        formatter["datefmt"] = "%Y-%m-%dT%H:%M:%S"
-        formatter["use_colors"] = False
-    return configuration
+    """Use the application logging allowlist with UTC millisecond timestamps."""
+    return server_logging_config()
 
 
 class ScriptedVoice:

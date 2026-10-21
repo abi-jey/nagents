@@ -150,8 +150,525 @@ def _audio_time_monotonic_ms(context_time: float, stamp: dict[str, object], fall
     return fallback_ms + (context_time - delivery_time) * 1000
 
 
+def _graph_time_monotonic_ms(context_time: float, stamp: dict[str, object]) -> float:
+    """Map a context frame to its graph clock, excluding device presentation offset."""
+    delivery_time = number(stamp.get("contextTimeAtDelivery"), float("nan"))
+    delivery_ms = number(stamp.get("monotonicMs"), float("nan"))
+    if not math.isfinite(delivery_time) or not math.isfinite(delivery_ms):
+        return float("nan")
+    return delivery_ms + (context_time - delivery_time) * 1000
+
+
+def received_pcm_ledger_complete(report: dict[str, object]) -> bool:
+    """Validate the complete received-PCM ledger without writing an artifact."""
+    packets_value, summary_value = report.get("received"), report.get("receivedPcm")
+    if not isinstance(packets_value, list) or not isinstance(summary_value, dict):
+        return False
+    integer_fields = (
+        "packetCount",
+        "capturedPackets",
+        "sampleRate",
+        "samples",
+        "capturedSamples",
+        "capturedBytes",
+        "omittedPackets",
+        "omittedBytes",
+        "byteLimit",
+    )
+    if (
+        summary_value.get("sampleFormat") != "s16le"
+        or any(type(summary_value.get(key)) is not int for key in integer_fields)
+        or summary_value.get("sampleRate") != 24000
+        or summary_value.get("omittedPackets") != 0
+        or summary_value.get("omittedBytes") != 0
+        or not 0 < summary_value["byteLimit"] <= 30_000_000
+        or type(report.get("omitted")) is not int
+        or report.get("omitted") != 0
+        or not 0 < len(packets_value) <= 100_000
+    ):
+        return False
+    summary = cast("dict[str, int]", summary_value)
+    samples_total = bytes_total = previous_transport = 0
+    previous_transport_samples: int | None = None
+    previous_capture_order = -1
+    context_id: int | None = None
+    transports: set[int] = set()
+    for index, packet in enumerate(packets_value):
+        if not isinstance(packet, dict):
+            return False
+        encoded = packet.get("pcm16")
+        if not isinstance(encoded, str) or len(encoded) > 64_000:
+            return False
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            return False
+        count = packet.get("samples")
+        transport = packet.get("transportSequence")
+        transport_received = packet.get("transportReceivedSamples")
+        current_context, epoch = packet.get("contextId"), packet.get("epoch")
+        capture_order, sequence = packet.get("captureOrder"), packet.get("sequence")
+        if (
+            type(count) is not int
+            or count <= 0
+            or count > 24_000
+            or len(raw) > 48_000
+            or len(raw) != count * 2
+            or type(packet.get("sampleRate")) is not int
+            or packet.get("sampleRate") != 24000
+            or type(packet.get("sampleOffset")) is not int
+            or packet.get("sampleOffset") != samples_total
+            or type(packet.get("receivedSamples")) is not int
+            or packet.get("receivedSamples") != samples_total + count
+            or type(packet.get("bytes")) is not int
+            or packet.get("bytes") != len(raw)
+            or type(sequence) is not int
+            or sequence != index
+            or type(transport) is not int
+            or transport < 0
+            or transport in transports
+            or (index and transport != previous_transport + 1)
+            or type(transport_received) is not int
+            or transport_received < count
+            or (previous_transport_samples is not None and transport_received != previous_transport_samples + count)
+            or type(current_context) is not int
+            or current_context < 0
+            or type(epoch) is not int
+            or epoch < 0
+            or type(capture_order) is not int
+            or capture_order <= previous_capture_order
+            or not math.isfinite(number(packet.get("monotonicMs"), float("nan")))
+        ):
+            return False
+        if context_id is None:
+            context_id = current_context
+        elif current_context != context_id:
+            return False
+        transports.add(transport)
+        previous_transport = transport
+        previous_transport_samples = transport_received
+        previous_capture_order = capture_order
+        samples_total += count
+        bytes_total += len(raw)
+        if bytes_total > min(30_000_000, summary["byteLimit"]):
+            return False
+    return (
+        summary["packetCount"] == len(packets_value)
+        and summary["capturedPackets"] == len(packets_value)
+        and summary["samples"] == samples_total
+        and summary["capturedSamples"] == samples_total
+        and summary["capturedBytes"] == bytes_total
+    )
+
+
 def _source_offset_time(at: float, until: float, offset: int, samples: int) -> float:
     return at + (until - at) * offset / max(1, samples - 1)
+
+
+def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
+    """Validate traced source PCM against the software-sink post-volume graph."""
+    events = objects(report.get("events"))
+    trace = [event for event in events if event.get("type") == "playback.trace"]
+    output_blocks = objects(report.get("output"))
+    output_complete = complete_pcm(output_blocks, output=True) and recorder_counters_continuous(output_blocks)
+    received_complete = received_pcm_ledger_complete(report)
+    packets_by_transport: dict[int, tuple[array.array[int], int, float, object, object]] = {}
+    duplicate_received_sequences = 0
+    beginning = min(
+        (number(item.get("monotonicMs")) for item in events if item.get("type") == "measurement.start"), default=0
+    )
+    for packet in objects(report.get("received")):
+        transport = packet.get("transportSequence")
+        raw = pcm_bytes(packet)
+        if type(transport) is not int or not raw or len(raw) % 2:
+            continue
+        samples = array.array("h")
+        samples.frombytes(raw)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if type(packet.get("sampleOffset")) is not int:
+            continue
+        if transport in packets_by_transport:
+            duplicate_received_sequences += 1
+            continue
+        packets_by_transport[transport] = (
+            samples,
+            int(number(packet.get("sampleOffset"))),
+            number(packet.get("monotonicMs"), float("nan")),
+            packet.get("contextId"),
+            packet.get("epoch"),
+        )
+
+    submissions: list[dict[str, object]] = []
+    invalid_submissions = 0
+    submitted_transports: set[int] = set()
+    for event in events:
+        if event.get("type") != "playback.submit":
+            continue
+        count, end, received_sequence = (
+            event.get("samples"),
+            event.get("submittedSamples"),
+            event.get("receivedSequence"),
+        )
+        if number(event.get("receiveMonotonicMs"), float("inf")) < beginning:
+            continue
+        if (
+            type(count) is not int
+            or count <= 0
+            or type(end) is not int
+            or end < count
+            or type(received_sequence) is not int
+            or received_sequence not in packets_by_transport
+            or event.get("bytes") != count * 2
+        ):
+            invalid_submissions += 1
+            continue
+        source, receive_offset, receive_ms, receive_context, receive_epoch = packets_by_transport[received_sequence]
+        if (
+            len(source) != count
+            or not math.isfinite(receive_ms)
+            or receive_context != event.get("contextId")
+            or receive_epoch != event.get("epoch")
+        ):
+            invalid_submissions += 1
+            continue
+        if received_sequence in submitted_transports:
+            invalid_submissions += 1
+            continue
+        submitted_transports.add(received_sequence)
+        submissions.append(
+            {
+                "contextId": event.get("contextId"),
+                "epoch": event.get("epoch"),
+                "start": end - count,
+                "end": end,
+                "source": source,
+                "receivedOffset": receive_offset,
+                "receiveMs": receive_ms,
+            }
+        )
+    submissions.sort(key=lambda item: (number(item.get("contextId")), number(item.get("start"))))
+    unsubmitted_received_packets = len(set(packets_by_transport) - submitted_transports)
+    source_starts: dict[int, list[int]] = {}
+    source_ranges: dict[int, list[dict[str, object]]] = {}
+    for submission in submissions:
+        context_id = submission.get("contextId")
+        if type(context_id) is int:
+            source_starts.setdefault(context_id, []).append(int(number(submission.get("start"))))
+            source_ranges.setdefault(context_id, []).append(submission)
+
+    # Decode the single software-sink stream once; samples are retained in an
+    # array rather than Python integers to bound memory for long captures.
+    output_contexts = {block.get("contextId") for block in output_blocks}
+    candidate_context = next(iter(output_contexts)) if len(output_contexts) == 1 else None
+    output_context: int | None = candidate_context if type(candidate_context) is int else None
+    output_rate_value = output_blocks[0].get("sampleRate") if output_blocks else None
+    output_rate = number(output_blocks[0].get("sampleRate")) if output_blocks else 0
+    rates_valid = output_context is not None and type(output_rate_value) is int and output_rate >= 8000
+    context_rates: dict[int, int] = {}
+    for context in objects(report.get("contexts")):
+        context_id, rate = context.get("id"), context.get("sampleRate")
+        if (
+            type(context_id) is not int
+            or type(rate) is not int
+            or context_id in context_rates
+            or not 8000 <= rate <= 192000
+        ):
+            rates_valid = False
+            continue
+        context_rates[context_id] = rate
+    if output_context is None or context_rates.get(output_context) != output_rate_value:
+        rates_valid = False
+    output_complete = output_complete and rates_valid
+    output_samples = array.array("h")
+    output_origin = 0
+    if output_blocks and output_context is not None:
+        output_origin = int(number(output_blocks[0].get("frame")))
+        for block in output_blocks:
+            raw = pcm_bytes(block)
+            if not raw or len(raw) % 2:
+                output_complete = False
+                continue
+            values = array.array("h")
+            values.frombytes(raw)
+            if sys.byteorder != "little":
+                values.byteswap()
+            output_samples.extend(values)
+
+    batch_intervals: dict[tuple[object, object, object], int] = {}
+    observed_batch_counts: dict[tuple[object, object, object], int] = {}
+    batch_omissions: dict[tuple[object, object, object], int] = {}
+    sequence_errors = 0
+    omitted_intervals = 0
+    for event in trace:
+        key = (event.get("contextId"), event.get("epoch"), event.get("sequence"))
+        expected_count = event.get("batchIntervals")
+        if (
+            type(expected_count) is not int
+            or not 1 <= expected_count <= 10
+            or (key in batch_intervals and batch_intervals[key] != expected_count)
+        ):
+            sequence_errors += 1
+        else:
+            batch_intervals[key] = expected_count
+        observed_batch_counts[key] = observed_batch_counts.get(key, 0) + 1
+        omitted = event.get("omittedIntervals")
+        if type(omitted) is not int or omitted < 0:
+            sequence_errors += 1
+        else:
+            if key in batch_omissions and batch_omissions[key] != omitted:
+                sequence_errors += 1
+            batch_omissions[key] = omitted
+            omitted_intervals = max(omitted_intervals, omitted)
+    sequence_by_epoch: dict[tuple[object, object], list[int]] = {}
+    for context_id, epoch, sequence in batch_intervals:
+        if type(context_id) is not int or type(epoch) is not int or type(sequence) is not int or sequence < 0:
+            sequence_errors += 1
+            continue
+        if observed_batch_counts[(context_id, epoch, sequence)] != batch_intervals[(context_id, epoch, sequence)]:
+            sequence_errors += 1
+        sequence_by_epoch.setdefault((context_id, epoch), []).append(sequence)
+    for sequences in sequence_by_epoch.values():
+        ordered = sorted(set(sequences))
+        if ordered != list(range(len(ordered))):
+            sequence_errors += 1
+
+    ordered_trace = sorted(trace, key=lambda item: number(item.get("captureOrder"), float("inf")))
+    trace_ends: dict[tuple[object, object], int] = {}
+    invalid_intervals = coverage_errors = source_unmapped = output_unconfirmed = 0
+    ages: list[float] = []
+    age_minutes: dict[int, list[float]] = {}
+    gap_excesses: list[float] = []
+    gated_gap_excesses: list[float] = []
+    long_source_gaps = 0
+    unclassifiable_input_pauses = 0
+    previous_voiced: dict[int, tuple[int, float, float]] = {}
+    contexts = {item.get("id"): number(item.get("sampleRate")) for item in objects(report.get("contexts"))}
+    for event in ordered_trace:
+        context_id, epoch = event.get("contextId"), event.get("epoch")
+        start, count = event.get("sourceStart"), event.get("samples")
+        at_value, until_value = event.get("at"), event.get("until")
+        at, until = number(at_value, float("nan")), number(until_value, float("nan"))
+        context_rate = contexts.get(context_id, 0)
+        if (
+            type(context_id) is not int
+            or type(epoch) is not int
+            or type(start) is not int
+            or type(count) is not int
+            or not 0 < count <= 480
+            or start < 0
+            or type(at_value) not in {int, float}
+            or type(until_value) not in {int, float}
+            or not math.isfinite(at)
+            or not math.isfinite(until)
+            or at < 0
+            or until < at
+            or context_rate <= 0
+            or abs((until - at) - (count - 1) / 24000) > (128 / context_rate + (count - 1) / 24000 * 0.001)
+        ):
+            invalid_intervals += 1
+            continue
+        trace_key = (context_id, epoch)
+        if trace_key in trace_ends and start != trace_ends[trace_key]:
+            coverage_errors += 1
+        trace_ends[trace_key] = start + count
+        render_start_ms = _graph_time_monotonic_ms(at, event)
+        if not math.isfinite(render_start_ms):
+            invalid_intervals += 1
+            continue
+        if render_start_ms < beginning:
+            continue
+        starts_for_context = source_starts.get(context_id, [])
+        ranges_for_context = source_ranges.get(context_id, [])
+        source_values = array.array("h")
+        arrival_for_offset: dict[int, float] = {}
+        cursor = start
+        while cursor < start + count:
+            range_index = bisect_right(starts_for_context, cursor) - 1
+            if range_index < 0:
+                break
+            submission = ranges_for_context[range_index]
+            range_start = int(number(submission.get("start")))
+            range_end = int(number(submission.get("end")))
+            if cursor >= range_end:
+                break
+            source_packet = cast("array.array[int]", submission["source"])
+            take = min(start + count, range_end) - cursor
+            packet_offset = cursor - range_start
+            source_values.extend(source_packet[packet_offset : packet_offset + take])
+            for offset in range(cursor - start, cursor - start + take):
+                arrival_for_offset[offset] = number(submission.get("receiveMs"), float("nan"))
+            cursor += take
+        if cursor != start + count or len(source_values) != count:
+            if number(event.get("monotonicMs")) >= min(
+                (number(item.get("monotonicMs")) for item in events if item.get("type") == "measurement.start"),
+                default=0,
+            ):
+                source_unmapped += 1
+            continue
+        active_offsets = [offset for offset in range(count) if abs(source_values[offset]) > 327]
+        if not active_offsets:
+            continue
+
+        # Confirm the source waveform exists in the actual post-volume graph.
+        # Sparse signed samples make this gain/attenuation tolerant without an
+        # external DSP dependency; search only within one output quantum.
+        if output_context != context_id or output_rate <= 0:
+            output_unconfirmed += 1
+            continue
+        offsets = list(range(0, count, max(1, count // 120)))
+        if offsets[-1] != count - 1:
+            offsets.append(count - 1)
+        best_correlation = -1.0
+        for shift in range(-128, 129, 8):
+            pairs: list[tuple[float, float]] = []
+            for offset in offsets:
+                source_value = float(source_values[offset])
+                if source_value == 0:
+                    continue
+                source_time = _source_offset_time(at, until, offset, count)
+                sample_index = round(source_time * output_rate) + shift - output_origin
+                if 0 <= sample_index < len(output_samples):
+                    pairs.append((source_value, float(output_samples[sample_index])))
+            minimum_pairs = min(8, max(2, len(offsets) // 4))
+            if len(pairs) < minimum_pairs:
+                continue
+            source_mean = sum(pair[0] for pair in pairs) / len(pairs)
+            output_mean = sum(pair[1] for pair in pairs) / len(pairs)
+            source_energy = sum((left - source_mean) ** 2 for left, _ in pairs)
+            output_energy = sum((right - output_mean) ** 2 for _, right in pairs)
+            if source_energy <= 0 or output_energy <= 0:
+                continue
+            correlation = sum((left - source_mean) * (right - output_mean) for left, right in pairs) / math.sqrt(
+                source_energy * output_energy
+            )
+            if correlation > best_correlation:
+                best_correlation = correlation
+        if best_correlation < 0.65:
+            output_unconfirmed += 1
+            continue
+
+        for offset in active_offsets[::24]:
+            coordinate = start + offset
+            arrival_ms = arrival_for_offset.get(offset, float("nan"))
+            render_context_time = _source_offset_time(at, until, offset, count)
+            render_ms = _graph_time_monotonic_ms(render_context_time, event)
+            if not math.isfinite(render_ms) or not math.isfinite(arrival_ms):
+                invalid_intervals += 1
+                break
+            age = render_ms - arrival_ms
+            if age < -2 or not math.isfinite(age):
+                invalid_intervals += 1
+                break
+            age = max(0, age)
+            ages.append(age)
+            minute = max(0, int((render_ms - beginning) // 60000))
+            age_minutes.setdefault(minute, []).append(age)
+            prior = previous_voiced.get(context_id)
+            if prior is not None and coordinate > prior[0]:
+                source_gap_ms = (coordinate - prior[0]) / 24
+                # Compare in the worklet's context clock; performance callback
+                # jitter between batches must not appear as an audio gap.
+                render_gap_ms = (render_context_time - prior[1]) * 1000
+                excess = render_gap_ms - source_gap_ms
+                gap_excesses.append(excess)
+                receive_gap_ms = arrival_ms - prior[2]
+                if source_gap_ms > 200:
+                    # Retain long phrase/turn pauses as diagnostics; their
+                    # silence is expected source content, not starvation.
+                    long_source_gaps += 1
+                elif source_gap_ms < 40 and receive_gap_ms > 200:
+                    # With no silent source samples, a long packet gap cannot
+                    # distinguish provider DTX from a transport interruption.
+                    unclassifiable_input_pauses += 1
+                else:
+                    gated_gap_excesses.append(excess)
+            previous_voiced[context_id] = (coordinate, render_context_time, arrival_ms)
+
+    final_counters = objects(report.get("health"))
+    final_coordinates: dict[int, int] = {}
+    for item in final_counters:
+        context_id = item.get("contextId")
+        if type(context_id) is int:
+            final_coordinates[context_id] = max(
+                final_coordinates.get(context_id, 0),
+                int(
+                    number(item.get("playedSamples"))
+                    + number(item.get("droppedSamples"))
+                    + number(item.get("interruptedSamples"))
+                ),
+            )
+    last_trace_end: dict[int, int] = {}
+    for (context_id, _epoch), end in trace_ends.items():
+        if type(context_id) is int:
+            last_trace_end[context_id] = max(last_trace_end.get(context_id, 0), end)
+    tail_errors = sum(
+        1
+        for context_id, end in last_trace_end.items()
+        if context_id not in final_coordinates or end != final_coordinates[context_id]
+    )
+    tail_errors += sum(1 for context_id in final_coordinates if context_id not in last_trace_end)
+    omitted_events = number(report.get("omitted"))
+    available = (
+        bool(ages)
+        and received_complete
+        and output_complete
+        and omitted_events == 0
+        and not any(
+            (
+                invalid_submissions,
+                duplicate_received_sequences,
+                unsubmitted_received_packets,
+                sequence_errors,
+                omitted_intervals,
+                invalid_intervals,
+                coverage_errors,
+                source_unmapped,
+                output_unconfirmed,
+                tail_errors,
+            )
+        )
+    )
+    minute_windows = [
+        {"minute": minute, "observations": len(values), "p95Ms": percentile(values), "maxMs": max(values)}
+        for minute, values in sorted(age_minutes.items())
+    ]
+    return {
+        "available": available,
+        "clock": "software_output_graph",
+        "receivedPcmComplete": received_complete,
+        "duplicateReceivedSequences": duplicate_received_sequences,
+        "unsubmittedReceivedPackets": unsubmitted_received_packets,
+        "outputPcmComplete": output_complete,
+        "traceBatches": len(batch_intervals),
+        "traceIntervals": len(trace),
+        "traceSequenceErrors": sequence_errors,
+        "omittedIntervals": omitted_intervals,
+        "invalidIntervals": invalid_intervals,
+        "coverageErrors": coverage_errors,
+        "invalidSubmissions": invalid_submissions,
+        "unmappedSourceIntervals": source_unmapped,
+        "uncorrelatedOutputIntervals": output_unconfirmed,
+        "tailCoordinateErrors": tail_errors,
+        "maximumAddedVoicedGapMs": max(gap_excesses, default=0),
+        "maximumClassifiableAddedGapMs": max(gated_gap_excesses, default=0),
+        "longSourcePauseGaps": long_source_gaps,
+        "unclassifiableInputPauses": unclassifiable_input_pauses,
+        "voicedGapOver40Ms": any(gap > 40 for gap in gated_gap_excesses),
+        "observations": len(ages),
+        "p95Ms": percentile(ages) if available else None,
+        "maxMs": max(ages, default=0) if available else None,
+        "minuteWindows": minute_windows,
+        "withinBounds": available
+        and percentile(ages) <= 250
+        and max(ages, default=0) <= 1000
+        and not any(gap > 40 for gap in gated_gap_excesses)
+        and unclassifiable_input_pauses == 0,
+        "voiceContinuityVerified": available
+        and not any(gap > 40 for gap in gated_gap_excesses)
+        and unclassifiable_input_pauses == 0,
+        "meaning": "Received source PCM to matching post-volume software-sink graph render; not acoustic or device presentation latency.",
+    }
 
 
 def rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
@@ -227,7 +744,12 @@ def rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
     for context in objects(report.get("contexts")):
         context_id = context.get("id")
         sample_rate = number(context.get("sampleRate"), float("nan"))
-        if type(context_id) is not int or context_id < 0 or not 8000 <= sample_rate <= 192000:
+        if (
+            type(context_id) is not int
+            or context_id < 0
+            or type(context.get("sampleRate")) is not int
+            or not 8000 <= sample_rate <= 192000
+        ):
             context_rate_valid = False
             continue
         if context_id in context_rates:
@@ -276,6 +798,30 @@ def rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
         if coverage_key in rendered_ends and source_start != rendered_ends[coverage_key]:
             coverage_errors += 1
         rendered_ends[coverage_key] = source_start + samples
+        delivery_ms = number(event.get("monotonicMs"), float("nan"))
+        context_rate = number(event.get("contextSampleRate"))
+        at_value, until_value = event.get("at"), event.get("until")
+        at = number(at_value, float("nan"))
+        until = number(until_value, float("nan"))
+        expected_span = (samples - 1) / 24000
+        time_tolerance = 128 / context_rate + expected_span * 0.001 if context_rate > 0 else 0
+        if (
+            type(event.get("sampleRate")) is not int
+            or event.get("sampleRate") != 24000
+            or type(event.get("contextSampleRate")) is not int
+            or context_rates.get(context_id) != context_rate
+            or not isinstance(at_value, (int, float))
+            or isinstance(at_value, bool)
+            or not isinstance(until_value, (int, float))
+            or isinstance(until_value, bool)
+            or not math.isfinite(at)
+            or not math.isfinite(until)
+            or at < 0
+            or until < at
+            or abs((until - at) - expected_span) > time_tolerance
+        ):
+            invalid_blocks += 1
+            continue
         if active_count == 0:
             if (
                 event.get("activeSpans") != []
@@ -289,15 +835,11 @@ def rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
         active_blocks += 1
         first, last = event.get("firstActiveSample"), event.get("lastActiveSample")
         spans = event.get("activeSpans")
-        at, until = number(event.get("at"), float("nan")), number(event.get("until"), float("nan"))
         if (
             type(context_id) is not int
             or type(epoch) is not int
             or not all(type(item) is int for item in (source_start, samples, first, last, active_count))
             or not isinstance(spans, list)
-            or not math.isfinite(at)
-            or not math.isfinite(until)
-            or until < at
         ):
             invalid_blocks += 1
             continue
@@ -340,11 +882,6 @@ def rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
             invalid_blocks += 1
             continue
         if not normalized_spans or normalized_spans[0][0] != first or normalized_spans[-1][1] - 1 != last:
-            invalid_blocks += 1
-            continue
-        delivery_ms = number(event.get("monotonicMs"), float("nan"))
-        context_rate = number(event.get("contextSampleRate"))
-        if not 8000 <= context_rate <= 192000 or context_rates.get(context_id) != context_rate:
             invalid_blocks += 1
             continue
         clock_tolerance_ms = 128 / context_rate * 1000
@@ -586,6 +1123,7 @@ def timing_metrics(report: dict[str, object]) -> dict[str, object]:
         "sampleAgeAvailable": mapping_valid,
         "sampleAgeMeaning": "Received packet to audio-thread renderedAt (when present), otherwise health callback, while audio is queued. Callback fallback includes scheduling delay. Not provider or acoustic latency.",
         "renderedSpeechAge": rendered_speech_age(report),
+        "graphRenderedSpeechAge": graph_rendered_speech_age(report),
         "audioThreadHealthClockPresent": bool(health) and all("renderedAt" in item for item in health),
         "replyTimingMeaning": "First rendered non-silent sample after the known utterance ends; speech is observed, not causally assigned to a delegation.",
     }
@@ -1409,13 +1947,19 @@ def check_authenticated_scenario(
         previous_underruns = max(previous_underruns, underruns)
         if current_ms >= 0:
             previous_health_ms = current_ms
-    checks["noClassifiedStarvationDuringSpeech"] = not starvation_during_audio
-    checks["noUnclassifiedQueuedUnderruns"] = not unclassified_underruns
+    speech_age = cast("dict[str, object]", timing.get("graphRenderedSpeechAge", {}))
+    trace_verifies_voice_continuity = (
+        require_rendered_speech_telemetry
+        and speech_age.get("available") is True
+        and speech_age.get("voiceContinuityVerified") is True
+    )
+    checks["noClassifiedStarvationDuringSpeech"] = not starvation_during_audio or trace_verifies_voice_continuity
+    checks["noUnclassifiedQueuedUnderruns"] = not unclassified_underruns or trace_verifies_voice_continuity
     if require_rendered_speech_telemetry:
-        speech_age = cast("dict[str, object]", timing.get("renderedSpeechAge", {}))
         speech_windows = objects(speech_age.get("minuteWindows"))
         has_speech_samples = any(number(window.get("observations")) > 0 for window in speech_windows)
         checks["renderedSpeechTelemetryAvailable"] = speech_age.get("available") is True and has_speech_samples
+        checks["renderedSpeechGapWithinBound"] = speech_age.get("voiceContinuityVerified") is True
         if max_rendered_speech_p95_ms > 0:
             p95_values = [number(window.get("p95Ms"), float("inf")) for window in speech_windows]
             checks["renderedSpeechP95WithinBound"] = (
@@ -1426,6 +1970,11 @@ def check_authenticated_scenario(
             checks["renderedSpeechPeakWithinBound"] = (
                 bool(peak_values) and has_speech_samples and max(peak_values) <= max_rendered_speech_peak_ms
             )
+    trace_gates_passed = (
+        trace_verifies_voice_continuity
+        and checks.get("renderedSpeechP95WithinBound", True)
+        and checks.get("renderedSpeechPeakWithinBound", True)
+    )
     gaps = [number(event.get("gapMs")) for event in events if event.get("type") == "main-thread.gap"]
     details = cast("dict[str, object]", base["details"])
     details.update(
@@ -1444,9 +1993,17 @@ def check_authenticated_scenario(
             "classifiedQueueEmptyUnderruns": classified_underruns,
             "unclassifiedUnderruns": unclassified_underruns,
             "starvationDuringRenderedSpeech": starvation_during_audio,
+            "counterClassificationsOverriddenByCompleteGraphTrace": trace_verifies_voice_continuity,
             "smoothnessConclusion": (
-                "No classified starvation overlapped captured non-silent PCM. Queue-empty underruns remain ambiguous "
-                "between provider DTX/natural pauses and starvation, so this run does not prove all perceived audio smoothness."
+                "A complete source-to-output trace verified short-pause voice continuity within the configured "
+                "latency bounds; counter-only starvation classifications were retained as diagnostics. Long input "
+                "gaps without source-silence samples remain unclassifiable."
+                if trace_gates_passed
+                else "A complete source-to-output trace was available, but its configured continuity or latency "
+                "bounds did not pass."
+                if speech_age.get("available") is True
+                else "Source-to-output voice continuity was not verified; counter-only starvation classifications "
+                "remain gating and queue-empty underruns can be ambiguous between provider DTX and starvation."
             ),
             "receiveIntervalMeaning": "Network intervals include provider pacing and natural pauses; they are reported, not treated as jitter by themselves.",
         }

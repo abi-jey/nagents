@@ -230,7 +230,7 @@ test("real-time playback bounds age through six minutes of repeated delivery sta
 });
 
 test("real-time silence replenishes a learned reserve before speech without discarding or stretching it", () => {
-  const f = fixture(); f.realtime();
+  const f = fixture(); f.realtime(); f.trace();
   const rendered: number[] = [];
   let packet = 0;
   // A 1% delivery shortfall and two permanent transport delays: learn the
@@ -252,6 +252,17 @@ test("real-time silence replenishes a learned reserve before speech without disc
   assert.equal(stats.droppedSamples, 0); assert.equal(stats.latencyRecoveries, 0);
   assert(stats.peakBufferedMs <= 320);
   assert.equal(stats.receivedSamples, stats.playedSamples + Math.round(stats.bufferedMs * 24));
+  const intervals = f.traces.flatMap(batch => batch.intervals);
+  let end = 0, sawPartialReport = false;
+  for (const interval of intervals) {
+    assert.equal(interval.sourceStart, end, "refill flushes must preserve contiguous source coordinates");
+    const nominalSpan = (interval.samples - 1) / 24000;
+    assert(Math.abs(interval.until - interval.at - nominalSpan) <= nominalSpan * .001 + 128 / 48000,
+      "render timing must not bridge a silence refill or overload discard");
+    if (interval.samples < 480) sawPartialReport = true;
+    end += interval.samples;
+  }
+  assert(sawPartialReport, "the silence refill should flush a partial played interval");
 });
 
 function learnedReserveBeforeUnderflow(quietTail: boolean) {
@@ -494,5 +505,26 @@ test("timing epochs reject stale acknowledgements without resetting playback or 
   f.traceAck(0); f.acknowledgeTrace(true);
   while (f.time < 1.1) f.render();
   assert(f.traces.length > 2, "the matching acknowledgement releases queued evidence");
+  assert.equal(f.stats().droppedSamples, 0);
+});
+
+
+test("same-epoch trace disable and re-enable cannot accept an old acknowledgement", () => {
+  const f = fixture(); f.trace(); f.acknowledgeTrace(false); f.push(pcm(4800));
+  while (f.time < .3) f.render();
+  assert.equal(f.traces.length, 1);
+  assert.equal(f.traces[0].sequence, 0);
+
+  f.trace(false); f.trace(true); f.push(pcm(4800));
+  while (f.time < .6 && f.traces.length < 2) f.render();
+  assert.equal(f.traces.length, 2);
+  assert.equal(f.traces[1].sequence, 1, "same-epoch sequence numbers remain unique across toggles");
+  f.traceAck(0);
+  while (f.time < .8) f.render();
+  assert.equal(f.traces.length, 2, "a late pre-disable acknowledgement cannot release the new batch");
+  f.traceAck(1);
+  while (f.time < 1) f.render();
+  assert.equal(f.traces.length, 3, "the matching acknowledgement releases newly queued intervals");
+  assert.equal(f.traces[2].sequence, 2);
   assert.equal(f.stats().droppedSamples, 0);
 });
