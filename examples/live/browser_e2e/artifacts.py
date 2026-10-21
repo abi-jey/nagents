@@ -320,7 +320,7 @@ def extract_report(value: object, depth: int = 0) -> dict[str, object]:
         return {}
     if isinstance(value, dict):
         record = cast("dict[str, object]", value)
-        if record.get("schema") == "ngn-browser-voice-e2e/v1":
+        if record.get("schema") == "ngn-browser-voice-e2e/v2":
             return record
         candidates = list(record.values())
     elif isinstance(value, list):
@@ -381,7 +381,7 @@ def unpack(source: Path, directory: Path) -> None:
             and event.get("phase") == "recording"
             and number(event.get("contextId")) == context_id
         ]
-        continuous = complete_pcm(blocks, output=True) and not context_gaps and not jumps
+        continuous = complete_pcm(blocks, output=True) and recorder_counters_continuous(blocks) and not context_gaps
         filename = f"speaker-rendered-{context_id}.wav" if continuous else ""
         if filename:
             write_wave(directory / filename, result, rate)
@@ -505,6 +505,35 @@ def complete_pcm(blocks: list[dict[str, object]], *, output: bool = False) -> bo
             rate = block.get("sampleRate")
             if type(rate) not in {int, float} or not math.isfinite(number(rate)) or number(rate) <= 0:
                 return False
+            for key in ("contextId", "frame", "observedFrame", "sampleOffset", "sequence"):
+                value = block.get(key)
+                if (
+                    type(value) not in {int, float}
+                    or not math.isfinite(number(value))
+                    or number(value) < 0
+                    or not number(value).is_integer()
+                ):
+                    return False
+    return True
+
+
+def recorder_counters_continuous(blocks: list[dict[str, object]]) -> bool:
+    """Check message order and every processed sample independently of raw clock labels."""
+    if not complete_pcm(blocks, output=True):
+        return False
+    for context_id in {number(block.get("contextId")) for block in blocks}:
+        ordered = [block for block in blocks if number(block.get("contextId")) == context_id]
+        origin, rate = number(ordered[0].get("frame")), number(ordered[0].get("sampleRate"))
+        offset = 0.0
+        for sequence, block in enumerate(ordered):
+            if (
+                number(block.get("sequence")) != sequence
+                or number(block.get("sampleOffset")) != offset
+                or number(block.get("frame")) != origin + offset
+                or number(block.get("sampleRate")) != rate
+            ):
+                return False
+            offset += number(block.get("samples"))
     return True
 
 
@@ -565,10 +594,16 @@ def check_capture(
     outputs = objects(report.get("output"))
     first_frames: dict[float, float] = {}
     final_frames: dict[float, float] = {}
+    context_samples: dict[float, float] = {}
+    context_blocks: dict[float, int] = {}
     for block in outputs:
-        first_frames.setdefault(number(block.get("contextId")), number(block.get("frame")))
-        final_frames[number(block.get("contextId"))] = number(block.get("frame")) + number(block.get("samples"))
+        context_id = number(block.get("contextId"))
+        first_frames.setdefault(context_id, number(block.get("frame")))
+        final_frames[context_id] = number(block.get("frame")) + number(block.get("samples"))
+        context_samples[context_id] = context_samples.get(context_id, 0) + number(block.get("samples"))
+        context_blocks[context_id] = context_blocks.get(context_id, 0) + 1
     checks = {
+        "expectedSchema": report.get("schema") == "ngn-browser-voice-e2e/v2",
         "expectedMode": report.get("mode") == mode,
         "captureStopped": report.get("stopped") is True,
         "transmittedSpeech": captured_signal(objects(report.get("input"))),
@@ -580,19 +615,26 @@ def check_capture(
         "measurementWindowStarted": bool(first_frames)
         and all(
             any(
-                number(start.get("contextId")) == context_id and number(start.get("frame")) == frame for start in starts
+                number(start.get("contextId")) == context_id
+                and number(start.get("frame")) == frame
+                and start.get("sampleOffset") == 0
+                and start.get("sequence") == 0
+                for start in starts
             )
             for context_id, frame in first_frames.items()
         ),
         "measurementWindowStopped": bool(final_frames)
         and all(
             any(
-                number(stop.get("contextId")) == context_id and number(stop.get("finalFrame")) == frame
+                number(stop.get("contextId")) == context_id
+                and number(stop.get("finalFrame")) == frame
+                and stop.get("samplesCaptured") == context_samples[context_id]
+                and stop.get("blocksCaptured") == context_blocks[context_id]
                 for stop in stops
             )
             for context_id, frame in final_frames.items()
         ),
-        "recorderContinuity": bool(outputs) and not gaps and not recording_jumps,
+        "recorderContinuity": recorder_counters_continuous(outputs) and not gaps,
         "playbackHealthPresent": bool(health),
         "noDroppedSamples": all(number(item.get("droppedSamples")) == 0 for item in health),
         "voiceClosed": any(event.get("type") == "live.status" and event.get("status") == "closed" for event in events),
@@ -609,6 +651,8 @@ def check_capture(
             if event.get("type") == "recorder.clock-discontinuity" and event.get("phase") == "warmup"
         ],
         "recordingClockDiscontinuities": recording_jumps,
+        "renderClockConsistent": not recording_jumps,
+        "clockMeaning": "frame follows actual processed sample counts; observedFrame retains the browser's raw currentFrame label. Raw clock anomalies are diagnostics, not evidence of missing PCM. Physical device timing is not measured.",
     }
     timing = timing_metrics(report)
     details["timing"] = timing

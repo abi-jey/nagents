@@ -115,9 +115,9 @@
       super({ ...options, sinkId: { type: "none" } });
       const context = this;
       verifySoftwareSink(context, "speaker");
-      const entry = { context, id: contexts.length, recorder: undefined, ready: undefined,
-        armed: false, armPromise: undefined, acknowledgeStart: undefined,
-        stopPromise: undefined, acknowledgeStop: undefined };
+      const entry = { context, id: contexts.length, recorder: undefined, ready: undefined, frameOrigin: undefined,
+        samplesCaptured: 0, blocksCaptured: 0, schema: 2, armed: false, armPromise: undefined,
+        acknowledgeStart: undefined, stopPromise: undefined, acknowledgeStop: undefined };
       contexts.push(entry);
       const addModule = context.audioWorklet.addModule.bind(context.audioWorklet);
       entry.ready = addModule("/assets/voice-e2e-capture.js").then(() => {
@@ -128,29 +128,42 @@
         nativeConnect.call(node, context.destination);
         node.port.onmessage = ({ data }) => {
           if (data.type === "capture-stop") {
-            const end = { contextId: entry.id, finalFrame: data.finalFrame, sampleRate: data.sampleRate, armed: data.armed };
+            const end = { contextId: entry.id, schema: data.schema, finalFrame: data.finalFrame,
+              observedFinalFrame: data.observedFinalFrame, frameOrigin: data.frameOrigin,
+              samplesCaptured: data.samplesCaptured, blocksCaptured: data.blocksCaptured,
+              sampleRate: data.sampleRate, armed: data.armed };
             record("recorder.capture-stop", end);
             entry.acknowledgeStop?.(end);
             return;
           }
           if (data.type === "capture-start") {
             entry.armed = true;
-            const start = { contextId: entry.id, frame: data.frame, sampleRate: data.sampleRate };
+            entry.frameOrigin = data.frameOrigin;
+            const start = { contextId: entry.id, schema: data.schema, frame: data.frame,
+              frameOrigin: data.frameOrigin, observedFrame: data.observedFrame,
+              sampleOffset: data.sampleOffset, sequence: data.sequence, sampleRate: data.sampleRate };
             record("recorder.capture-start", start);
             entry.acknowledgeStart?.(start);
             return;
           }
           if (data.type === "clock-discontinuity") {
-            record("recorder.clock-discontinuity", { contextId: entry.id, fromFrame: data.fromFrame,
-              toFrame: data.toFrame, sampleRate: data.sampleRate, phase: data.phase,
+            record("recorder.clock-discontinuity", { contextId: entry.id, schema: data.schema,
+              fromFrame: data.fromFrame, toFrame: data.toFrame, observedFrame: data.observedFrame,
+              capturedSamples: data.capturedSamples, sampleOffset: data.sampleOffset,
+              sequence: data.sequence, sampleRate: data.sampleRate, phase: data.phase,
               contextTimeAtDelivery: context.currentTime });
             return;
           }
           if (stopped) return;
           const bytes = pcm(data.samples);
-          capture.push({ contextId: entry.id, frame: data.frame, audioTime: data.frame / data.sampleRate,
-            sampleRate: data.sampleRate, contextTimeAtDelivery: context.currentTime,
-            outputTimestamp: context.getOutputTimestamp?.(), ...stamp(), ...stats(bytes), pcm16: base64(bytes) });
+          entry.samplesCaptured = data.sampleOffset + data.samples.length;
+          entry.blocksCaptured = data.sequence + 1;
+          capture.push({ schema: data.schema, contextId: entry.id, frame: data.frame,
+            frameOrigin: entry.frameOrigin, observedFrame: data.observedFrame,
+            sampleOffset: data.sampleOffset, sequence: data.sequence,
+            audioTime: data.frame / data.sampleRate, sampleRate: data.sampleRate,
+            contextTimeAtDelivery: context.currentTime, outputTimestamp: context.getOutputTimestamp?.(),
+            ...stamp(), ...stats(bytes), pcm16: base64(bytes) });
         };
         record("speaker.ready", { contextId: entry.id, sampleRate: context.sampleRate, sinkType: context.sinkId.type });
       }).catch(error => { record("harness.error", { message: String(error) }); throw error; });
@@ -418,7 +431,7 @@
         ui: currentUIState, lastAudibleOutputMs: audible?.monotonicMs || 0 };
     },
     export() {
-      return { schema: "ngn-browser-voice-e2e/v1", mode: config.mode,
+      return { schema: "ngn-browser-voice-e2e/v2", mode: config.mode,
         environment: { userAgent: navigator.userAgent.slice(0, 512), visibilityState: document.visibilityState,
           viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
           appRevision: "Not exposed by the public bootstrap or DOM; retain server revision separately.",
@@ -429,7 +442,9 @@
         clock: { performanceTimeOriginMs: origin, installedMonotonicMs: installed,
           measurementStartedMonotonicMs: measurementStarted,
           note: "Audio frames are context-relative; callback wall/monotonic timestamps record delivery, not acoustic time." },
-        contexts: contexts.map(({ context, id }) => ({ id, sampleRate: context.sampleRate, sinkType: context.sinkId?.type,
+        contexts: contexts.map(({ context, id, frameOrigin, samplesCaptured, blocksCaptured, schema }) => ({
+          id, schema, frameOrigin, samplesCaptured, blocksCaptured,
+          sampleRate: context.sampleRate, sinkType: context.sinkId?.type,
           state: context.state, currentTime: context.currentTime, outputTimestamp: context.getOutputTimestamp?.() })),
         stopped, omitted, events, health, input, output: capture };
     },

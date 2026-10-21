@@ -3,7 +3,7 @@
 This harness sends known spoken audio through the real browser microphone
 capture worklet and ngn WebSocket, then records the real rendered speaker graph
 after the playback worklet and volume control. It runs only when explicitly
-installed into an isolated Chrome DevTools MCP tab; the production app imports
+installed into an isolated Chrome CDP context; the production app imports
 none of these files.
 
 Two modes serve different evidence:
@@ -244,8 +244,9 @@ poetry run python examples/live/browser_e2e/artifacts.py unpack \
 The unpacker always preserves received PCM in `speaker-callback-order-*.wav`,
 including failed captures. Those files use message delivery order, without
 sorting samples or inserting silence; they do not establish timing continuity.
-It writes `speaker-rendered-*.wav` only when the recorder clock and blocks are
-continuous. Invalid clock observations stay in `trace.json` and fail validation.
+It writes `speaker-rendered-*.wav` only when processed sample counters, block
+sequence, and actual PCM are continuous. Raw browser clock observations stay in
+`trace.json`, separately from sample continuity.
 
 Validate the original capture with a command that exits nonzero on failure:
 
@@ -269,12 +270,24 @@ poetry run python examples/live/browser_e2e/artifacts.py check \
 
 All checks require actual PCM in both directions, stopped capture, closed voice,
 playback health, no runtime errors/dropped samples, and recorder continuity.
-The first output frame must match the recorder's start acknowledgement. Warmup
-clock anomalies remain visible separately. Every measured gap, overlapping
-block, or post-arm clock jump fails continuity, including jumps inside a partially
-accumulated block. No missing samples are silently removed or declared continuous.
-Older captures without an explicit measurement-start acknowledgement do not pass
-the current measurement contract; retain them as historical evidence.
+The v2 recorder numbers every delivered block and every captured sample from
+zero, independently of the browser's `currentFrame` labels. Start/stop
+acknowledgments must match the first frame, total samples, and total block count.
+Missing, duplicate, reordered, truncated, or overlapping data fails validation;
+no missing samples are silently repaired. Older captures without these independent
+counters cannot pass the current contract; retain them as historical evidence.
+
+`frame` follows processed samples anchored at recording start; `sampleOffset`
+and `sequence` establish data continuity. `observedFrame` preserves the raw
+browser frame label, and every raw clock jump remains in the trace and
+`renderClockConsistent` diagnostic. A raw clock jump alone does not establish
+PCM loss: Chromium's [worklet clock update](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/modules/webaudio/base_audio_context.cc)
+can skip updating the global frame when the graph lock is unavailable. An
+independent known-ramp calibration reproduced paired label jumps with no lost or
+reordered source samples. The recorder therefore does not sort or repair PCM
+using those labels. Playback starvation, dropped samples, network gaps, and
+context timing remain separate observations; this does not measure the physical
+speaker clock or guarantee perceptual smoothness.
 
 The offline checker uses the known response sample count, packet intervals,
 and playback-health counters. One queue exhaustion after the complete response
@@ -397,7 +410,8 @@ Artifacts contain:
   speech. Offline `server-events.jsonl` adds server monotonic/wall timestamps,
   microphone RMS, and each planned/sent response frame.
 
-Audio-thread frame positions are authoritative for waveform continuity.
+Processed-sample offsets and block sequences establish recorder data continuity.
+Raw `observedFrame` labels remain clock diagnostics, not proof of PCM loss.
 Callback timestamps describe main-thread delivery and may lag rendering.
 Browser and server monotonic clocks have different origins; correlate with
 wall time and corresponding socket events, not by subtracting them directly.

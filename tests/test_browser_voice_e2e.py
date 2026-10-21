@@ -20,6 +20,9 @@ def block(frame: int = 0, *, silent: bool = False) -> dict[str, object]:
     return {
         "contextId": 0,
         "frame": frame,
+        "observedFrame": frame,
+        "sampleOffset": frame,
+        "sequence": frame // 4,
         "samples": 4,
         "sampleRate": 48000,
         "peak": 0 if silent else 0.05,
@@ -29,7 +32,7 @@ def block(frame: int = 0, *, silent: bool = False) -> dict[str, object]:
 
 def baseline() -> dict[str, object]:
     return {
-        "schema": "ngn-browser-voice-e2e/v1",
+        "schema": "ngn-browser-voice-e2e/v2",
         "mode": "offline",
         "stopped": True,
         "omitted": 0,
@@ -44,8 +47,23 @@ def baseline() -> dict[str, object]:
                 "type": "ui.voice",
                 "state": [{"selector": ".voice-controls", "phase": "connected", "text": "LiveLiveStop"}],
             },
-            {"type": "recorder.capture-start", "contextId": 0, "frame": 0, "monotonicMs": 20},
-            {"type": "recorder.capture-stop", "contextId": 0, "finalFrame": 4, "armed": True, "monotonicMs": 200},
+            {
+                "type": "recorder.capture-start",
+                "contextId": 0,
+                "frame": 0,
+                "sampleOffset": 0,
+                "sequence": 0,
+                "monotonicMs": 20,
+            },
+            {
+                "type": "recorder.capture-stop",
+                "contextId": 0,
+                "finalFrame": 4,
+                "samplesCaptured": 4,
+                "blocksCaptured": 1,
+                "armed": True,
+                "monotonicMs": 200,
+            },
         ],
     }
 
@@ -100,7 +118,14 @@ def authenticated_scenario_capture() -> dict[str, object]:
     events.extend(
         [
             {"type": "measurement.start", "monotonicMs": 20},
-            {"type": "recorder.capture-start", "contextId": 0, "frame": 0, "monotonicMs": 20},
+            {
+                "type": "recorder.capture-start",
+                "contextId": 0,
+                "frame": 0,
+                "sampleOffset": 0,
+                "sequence": 0,
+                "monotonicMs": 20,
+            },
             {"type": "fixture.start", "round": 1, "monotonicMs": 1000, "duration": 0.1, "delayMs": 0},
             {
                 "type": "live.event",
@@ -185,7 +210,15 @@ def authenticated_scenario_capture() -> dict[str, object]:
                 "state": [{"selector": ".voice-controls", "phase": "connected", "text": "LiveLiveStop"}],
                 "monotonicMs": 1000,
             },
-            {"type": "recorder.capture-stop", "contextId": 0, "finalFrame": 8, "armed": True, "monotonicMs": 9100},
+            {
+                "type": "recorder.capture-stop",
+                "contextId": 0,
+                "finalFrame": 8,
+                "samplesCaptured": 8,
+                "blocksCaptured": 2,
+                "armed": True,
+                "monotonicMs": 9100,
+            },
         ]
     )
     return report
@@ -396,7 +429,7 @@ def test_known_response_gap_fails_baseline_and_passes_negative_control() -> None
     assert check_capture(baseline(), mode="offline", reply_samples=4, expect_gap_ms=200)["passed"] is False
 
 
-def test_warmup_clock_jumps_remain_visible_and_post_arm_jumps_fail() -> None:
+def test_raw_clock_jumps_remain_visible_without_claiming_pcm_loss() -> None:
     report = baseline()
     events = cast("list[dict[str, object]]", report["events"])
     events.append(
@@ -416,7 +449,9 @@ def test_warmup_clock_jumps_remain_visible_and_post_arm_jumps_fail() -> None:
     assert len(cast("list[object]", details["warmupClockDiscontinuities"])) == 1
     events[-1]["phase"] = "recording"
     events[-1]["monotonicMs"] = 30
-    assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
+    result = check_capture(report, mode="offline", reply_samples=4)
+    assert result["passed"] is True
+    assert cast("dict[str, object]", result["details"])["renderClockConsistent"] is False
     events.pop()
     report["output"] = [block(), block(8)]
     assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
@@ -444,6 +479,41 @@ def test_positive_metrics_without_pcm_do_not_pass() -> None:
     assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
 
 
+def test_missing_duplicate_reordered_and_miscounted_recorder_blocks_fail() -> None:
+    original = baseline()
+    original["output"] = [block(), block(4), block(8)]
+    cast("list[dict[str, object]]", original["events"])[-1].update(
+        {"finalFrame": 12, "samplesCaptured": 12, "blocksCaptured": 3}
+    )
+    assert check_capture(original, mode="offline", reply_samples=4)["passed"] is True
+    for index in (0, 1, 2):
+        report = copy.deepcopy(original)
+        cast("list[dict[str, object]]", report["output"]).pop(index)
+        assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
+    for key, value in (("sequence", 0), ("sampleOffset", 0), ("frame", 128), ("sequence", 1.5)):
+        report = copy.deepcopy(original)
+        cast("list[dict[str, object]]", report["output"])[1][key] = value
+        assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
+    report = copy.deepcopy(original)
+    cast("list[dict[str, object]]", report["output"]).reverse()
+    assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
+    for key in ("samplesCaptured", "blocksCaptured"):
+        report = copy.deepcopy(original)
+        cast("list[dict[str, object]]", report["events"])[-1][key] = 0
+        assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
+
+
+def test_old_capture_without_independent_counters_cannot_pass() -> None:
+    report = baseline()
+    report["schema"] = "ngn-browser-voice-e2e/v1"
+    assert check_capture(report, mode="offline", reply_samples=4)["passed"] is False
+    report["schema"] = "ngn-browser-voice-e2e/v2"
+    for key in ("sequence", "sampleOffset", "observedFrame"):
+        incomplete = copy.deepcopy(report)
+        cast("list[dict[str, object]]", incomplete["output"])[0].pop(key)
+        assert check_capture(incomplete, mode="offline", reply_samples=4)["passed"] is False
+
+
 def test_missing_stop_ack_or_missing_partial_tail_fails() -> None:
     report = baseline()
     events = cast("list[dict[str, object]]", report["events"])
@@ -458,7 +528,9 @@ def test_every_pcm_block_is_required_even_after_a_valid_nonzero_block() -> None:
     report = baseline()
     second = block(4)
     report["output"] = [block(), second]
-    cast("list[dict[str, object]]", report["events"])[-1]["finalFrame"] = 8
+    cast("list[dict[str, object]]", report["events"])[-1].update(
+        {"finalFrame": 8, "samplesCaptured": 8, "blocksCaptured": 2}
+    )
     assert check_capture(report, mode="offline", reply_samples=4)["passed"] is True
     for invalid in (None, "", "%%%", base64.b64encode(b"\x01\x02").decode(), base64.b64encode(b"\x01").decode()):
         second["pcm16"] = invalid
@@ -529,7 +601,7 @@ def test_long_run_contract_rejects_only_early_speech_and_detects_queue_growth() 
     report["output"] = outputs
     report["input"] = [{**block(), "monotonicMs": 0}, {**block(), "monotonicMs": 300000}]
     events = cast("list[dict[str, object]]", report["events"])
-    events[-1]["finalFrame"] = 306 * 4
+    events[-1].update({"finalFrame": 306 * 4, "samplesCaptured": 306 * 4, "blocksCaptured": 306})
     events.extend(
         [
             {"type": "measurement.start", "monotonicMs": 0},
