@@ -375,9 +375,10 @@ credentials.
 | `demo` | boolean | `false` | Offline scripted provider, no workspace mutations or shell execution, and no plugin imports. Local demo conversations are still saved. |
 
 Integer fields reject floats and booleans even if numerically equivalent.
-Subagent concurrency, per-run job counts, timeouts, and result-size budgets are
+Subagent concurrency, per-run job counts, and result-size budgets are
 additional safeguards, not extra JSON fields. See
-[subagents](ngn.md#native-background-subagents).
+[subagents](ngn.md#native-background-subagents). Subagent runs have no overall
+execution timeout; individual tools and network operations retain their deadlines.
 
 The model receives the active shell timeout, output cap, and whole-file read
 limit in the native tool descriptions. These descriptions refresh when settings

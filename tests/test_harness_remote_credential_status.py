@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import subprocess
@@ -357,7 +358,11 @@ def test_global_refresh_lock_rotates_once_across_workspace_processes(
     home = tmp_path / "shared-home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    seed_grant(RemoteCredentials(profile), expires_at=1.0, token_endpoint=f"{issuer}/token")
+    credentials = RemoteCredentials(profile)
+    # Establish the shared path through the same protected API used in production,
+    # before changing only the fixture expiry to trigger concurrent rotation.
+    credentials.save("initial-access", time.time() + 3600)
+    seed_grant(credentials, expires_at=1.0, token_endpoint=f"{issuer}/token")
 
     source = str(Path(__file__).resolve().parents[1] / "src")
     env = os.environ.copy()
@@ -563,3 +568,40 @@ def test_refresh_lock_rejects_hardlinks_before_contacting_token_endpoint(tmp_pat
         assert error.value.code == "A2A_AUTH_STORAGE"
 
     asyncio.run(scenario())
+
+
+def test_refresh_lock_reports_safe_operation_and_errno(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import fcntl
+
+    credentials = isolated_credentials(tmp_path, oauth_profile(), "private-account")
+    seed_grant(credentials, expires_at=1.0)
+
+    def unavailable(descriptor: int, operation: int) -> None:
+        del descriptor, operation
+        raise OSError(errno.EIO, "sensitive-token-and-private-path")
+
+    monkeypatch.setattr(fcntl, "flock", unavailable)
+    with pytest.raises(RemoteCredentialError) as error:
+        asyncio.run(credentials.token())
+    assert error.value.code == "A2A_AUTH_STORAGE"
+    assert "phase=acquire_lock error_type=OSError errno=5" in caplog.text
+    for private in ("sensitive-token", "private-account", credentials.profile.fingerprint, "access-before-refresh"):
+        assert private not in caplog.text
+
+
+def test_refresh_lock_reports_unsafe_file_without_private_details(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    credentials = isolated_credentials(tmp_path, oauth_profile(), "private-account")
+    seed_grant(credentials, expires_at=1.0)
+    lock = credentials.path.parent / f".{credentials.profile.fingerprint}.refresh.lock"
+    lock.write_text("private-lock-content")
+    lock.chmod(0o644)
+    with pytest.raises(RemoteCredentialError) as error:
+        asyncio.run(credentials.token())
+    assert error.value.code == "A2A_AUTH_STORAGE"
+    assert "phase=validate_lock error_type=ProtectedStoreError errno=unavailable" in caplog.text
+    for private in ("private-account", "private-lock-content", credentials.profile.fingerprint):
+        assert private not in caplog.text
