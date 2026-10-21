@@ -274,14 +274,20 @@ def _normalized_pcm_correlation(
     samples: int,
     output_rate: float,
     output_origin: int,
-    shift: int,
+    shift: float,
 ) -> float:
     pairs: list[tuple[float, float]] = []
     for offset in offsets:
         source_value = float(source[offset])
-        output_frame = round(_source_offset_time(at, until, offset, samples) * output_rate) + shift - output_origin
-        if 0 <= output_frame < len(rendered):
-            pairs.append((source_value, float(rendered[output_frame])))
+        output_position = _source_offset_time(at, until, offset, samples) * output_rate + shift - output_origin
+        if not 0 <= output_position <= len(rendered) - 1:
+            return -1.0
+        output_frame = math.floor(output_position)
+        fraction = output_position - output_frame
+        rendered_value = float(rendered[output_frame])
+        if fraction:
+            rendered_value += (rendered[output_frame + 1] - rendered_value) * fraction
+        pairs.append((source_value, rendered_value))
     minimum_pairs = min(8, max(2, len(offsets) // 4))
     if len(pairs) < minimum_pairs:
         return -1.0
@@ -720,6 +726,30 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
                 ),
                 key=lambda candidate: candidate[0],
             )
+        # Source consumption and the output resampler need not share an integer
+        # frame phase. Refine one common alignment, rather than permitting each
+        # sub-window to move independently or widening the clock search range.
+        best_correlation, aligned_shift = max(
+            (
+                (
+                    _normalized_pcm_correlation(
+                        source_values,
+                        output_samples,
+                        offsets,
+                        at,
+                        until,
+                        count,
+                        output_rate,
+                        output_origin,
+                        best_shift + eighth / 8,
+                    ),
+                    best_shift + eighth / 8,
+                )
+                for eighth in range(-8, 9)
+                if -128 <= best_shift + eighth / 8 <= 128
+            ),
+            key=lambda candidate: candidate[0],
+        )
         if best_correlation < 0.65:
             output_unconfirmed += 1
             continue
@@ -742,7 +772,7 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
                     count,
                     output_rate,
                     output_origin,
-                    best_shift,
+                    aligned_shift,
                 )
                 < 0.65
             ):

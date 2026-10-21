@@ -974,12 +974,21 @@ def traced_graph_report(*, delayed_gap: bool = False, output_silent: bool = Fals
     return report
 
 
-def fractional_phase_report(*, isolated_transient: bool = False, unrelated_output: bool = False) -> dict[str, object]:
+def fractional_phase_report(
+    *,
+    phase_frames: float = 1.8,
+    high_frequency_signal: bool = False,
+    isolated_transient: bool = False,
+    unrelated_output: bool = False,
+) -> dict[str, object]:
     state = 0x12345678
     source = []
-    for _ in range(480):
-        state = (1664525 * state + 1013904223) & 0xFFFFFFFF
-        source.append(((state >> 8) & 0xFFFF) - 32768)
+    for index in range(480):
+        if high_frequency_signal:
+            source.append(round(22_000 * math.sin(2 * math.pi * 0.4 * index + 0.31)))
+        else:
+            state = (1664525 * state + 1013904223) & 0xFFFFFFFF
+            source.append(((state >> 8) & 0xFFFF) - 32768)
     if isolated_transient:
         source = [0] * 480
         source[240] = 12000
@@ -994,7 +1003,6 @@ def fractional_phase_report(*, isolated_transient: bool = False, unrelated_outpu
             state = (1664525 * state + 1013904223) & 0xFFFFFFFF
             source_output.append(((state >> 8) & 0xFFFF) - 32768)
     output = [0] * 10_100
-    phase_frames = 1.8
     for frame in range(2 * len(source) + 6):
         source_position = (frame - phase_frames) / 2
         left = math.floor(source_position)
@@ -1029,8 +1037,9 @@ def test_graph_render_age_uses_trace_and_correlates_attenuated_output_pcm() -> N
     assert attenuated["available"] is True
 
 
-def _muted_graph_report(first_source_sample: int, last_source_sample: int) -> dict[str, object]:
-    report = traced_graph_report()
+def _muted_graph_report(
+    report: dict[str, object], first_source_sample: int, last_source_sample: int
+) -> dict[str, object]:
     block = cast("list[dict[str, object]]", report["output"])[0]
     rendered = array.array("h", struct.unpack("<10100h", base64.b64decode(cast("str", block["pcm16"]))))
     interval = next(
@@ -1047,7 +1056,7 @@ def _muted_graph_report(first_source_sample: int, last_source_sample: int) -> di
 def test_graph_render_correlation_checks_both_halves_at_the_same_alignment() -> None:
     # A half-block mute can leave enough matching material for the previous
     # whole-interval gate, but the 10ms source half containing the mute must fail.
-    muted_half = _muted_graph_report(240, 480)
+    muted_half = _muted_graph_report(traced_graph_report(), 240, 480)
     source = array.array(
         "h",
         struct.unpack(
@@ -1081,10 +1090,10 @@ def test_graph_render_correlation_checks_both_halves_at_the_same_alignment() -> 
 
     # An overlapping middle window catches a centered 10ms dropout that can
     # leave each non-overlapping half correlated well enough on its own.
-    muted_center = _muted_graph_report(120, 360)
+    muted_center = _muted_graph_report(traced_graph_report(), 120, 360)
     assert cast("dict[str, object]", timing_metrics(muted_center)["graphRenderedSpeechAge"])["available"] is False
 
-    muted_three_quarters = _muted_graph_report(120, 480)
+    muted_three_quarters = _muted_graph_report(traced_graph_report(), 120, 480)
     assert (
         cast("dict[str, object]", timing_metrics(muted_three_quarters)["graphRenderedSpeechAge"])["available"] is False
     )
@@ -1249,7 +1258,7 @@ def test_graph_checkpoint_rejects_an_interval_that_crosses_the_start_boundary() 
 
 
 def test_graph_render_correlation_handles_fractional_phase_and_quiet_context() -> None:
-    report = fractional_phase_report()
+    report = fractional_phase_report(phase_frames=2.5, high_frequency_signal=True)
     source = array.array(
         "h",
         struct.unpack(
@@ -1266,11 +1275,24 @@ def test_graph_render_correlation_handles_fractional_phase_and_quiet_context() -
         event for event in cast("list[dict[str, object]]", report["events"]) if event.get("type") == "playback.trace"
     )
     offsets = list(range(480))
-    coarse = max(
-        _normalized_pcm_correlation(source, output, offsets, 2, 2 + 479 / 24000, 480, 48000, 96_000, shift)
-        for shift in range(-128, 129, 8)
+    best_integer = max(
+        (
+            _normalized_pcm_correlation(
+                source,
+                output,
+                offsets,
+                cast("float", interval["at"]),
+                cast("float", interval["until"]),
+                480,
+                48000,
+                96_000,
+                shift,
+            ),
+            shift,
+        )
+        for shift in range(-128, 129)
     )
-    fine = max(
+    fractional = max(
         _normalized_pcm_correlation(
             source,
             output,
@@ -1282,12 +1304,20 @@ def test_graph_render_correlation_handles_fractional_phase_and_quiet_context() -
             96_000,
             shift,
         )
-        for shift in range(-2, 3)
+        for eighth in range(-8, 9)
+        for shift in [best_integer[1] + eighth / 8]
     )
-    assert coarse < 0.65
-    assert fine > 0.9
+    assert best_integer[0] > 0.65  # The former integer whole-block gate accepted this.
+    assert fractional > 0.97
+    assert fractional - best_integer[0] > 0.02
     result = cast("dict[str, object]", timing_metrics(report)["graphRenderedSpeechAge"])
     assert result["available"] is True
+
+    fractional_center_mute = _muted_graph_report(report, 120, 360)
+    assert (
+        cast("dict[str, object]", timing_metrics(fractional_center_mute)["graphRenderedSpeechAge"])["available"]
+        is False
+    )
 
     transient = cast(
         "dict[str, object]",
@@ -1316,6 +1346,16 @@ def test_graph_render_age_rejects_missing_trace_tail_and_silent_output() -> None
     tail = cast("dict[str, object]", timing_metrics(partial)["graphRenderedSpeechAge"])
     assert tail["available"] is True  # Atomic checkpoint is authoritative; final health can be stale.
     assert tail["checkpointValid"] is True
+
+    truncated = traced_graph_report()
+    output_block = cast("list[dict[str, object]]", truncated["output"])[0]
+    pcm = array.array("h", base64.b64decode(cast("str", output_block["pcm16"])))
+    del pcm[500:]
+    output_block["pcm16"] = base64.b64encode(pcm.tobytes()).decode()
+    output_block["samples"] = len(pcm)
+    no_partial_match = cast("dict[str, object]", timing_metrics(truncated)["graphRenderedSpeechAge"])
+    assert no_partial_match["available"] is False
+    assert no_partial_match["uncorrelatedOutputIntervals"] == 1
 
     missing_checkpoint = traced_graph_report()
     cast("list[dict[str, object]]", missing_checkpoint["events"]).__delitem__(slice(None))

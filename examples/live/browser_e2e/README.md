@@ -162,7 +162,10 @@ samples. Missing intervals, incomplete receive/output PCM, silent or unrelated
 output, dropped samples, and added gaps over 40 ms during short source pauses
 fail closed. Overlapping half-interval windows must also match at the same alignment,
 reducing the chance that a loud section hides a muted or reordered segment. These
-checks do not certify arbitrary sub-window glitches or perceptual smoothness. It does not require a
+checks do not certify arbitrary sub-window glitches or perceptual smoothness.
+Output PCM is linearly interpolated at a shared fractional frame alignment to
+account for the playback resampler's phase, with the same bounded clock search
+and correlation threshold. It does not require a
 fixed amplitude threshold on each short span, so valid low-level tails remain
 verifiable without hiding coordinate holes. A gap is compared against source
 sample time: a 61 ms source pause rendered as 78 ms adds 17 ms and passes, while
