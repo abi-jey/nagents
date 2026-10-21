@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import ssl
 from collections.abc import AsyncGenerator
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -72,11 +73,13 @@ class RemoteAgent:
     def __init__(
         self,
         url: str,
-        tokens: AccessTokenProvider,
+        tokens: AccessTokenProvider | None = None,
         *,
         rpc_url: str = "",
         loopback_http: bool = False,
         timeout: float = 120.0,
+        verify: ssl.SSLContext | bool = True,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.url = endpoint(url, loopback_http=loopback_http).rstrip("/")
         parsed = urlsplit(self.url)
@@ -88,8 +91,12 @@ class RemoteAgent:
             raise ValueError("Remote A2A RPC endpoint must use the configured origin")
         if not 1 <= timeout <= 3600:
             raise ValueError("Remote request timeout must be from 1 to 3600 seconds")
+        if verify is not True and not isinstance(verify, ssl.SSLContext):
+            raise ValueError("Remote A2A TLS verification cannot be disabled")
         self.tokens = tokens
         self.timeout = timeout
+        self.verify = verify
+        self.transport = transport
         self._connected = False
         self.http: httpx.AsyncClient
         self.client: Client
@@ -99,7 +106,9 @@ class RemoteAgent:
         if self._connected:
             raise RemoteAgentError("Remote agent is already connected")
         self.http = httpx.AsyncClient(
-            auth=ResourceBearer(self.tokens, self.url),
+            auth=ResourceBearer(self.tokens, self.url) if self.tokens is not None else None,
+            verify=self.verify,
+            transport=self.transport,
             trust_env=False,
             follow_redirects=False,
             timeout=httpx.Timeout(self.timeout),
