@@ -160,7 +160,9 @@ samples cannot substitute for either checkpoint. It reports packet
 arrival-to-software-render-graph age and detects added gaps between voiced source
 samples. Missing intervals, incomplete receive/output PCM, silent or unrelated
 output, dropped samples, and added gaps over 40 ms during short source pauses
-fail closed. It does not require a
+fail closed. Overlapping half-interval windows must also match at the same alignment,
+reducing the chance that a loud section hides a muted or reordered segment. These
+checks do not certify arbitrary sub-window glitches or perceptual smoothness. It does not require a
 fixed amplitude threshold on each short span, so valid low-level tails remain
 verifiable without hiding coordinate holes. A gap is compared against source
 sample time: a 61 ms source pause rendered as 78 ms adds 17 ms and passes, while
@@ -266,7 +268,8 @@ with the actual starting audio frame. Only then does it schedule the known
 utterance 250 ms later. The PCM measurement window therefore begins before the
 test utterance, rather than at connection creation. Pre-arm render-clock changes
 remain in the trace as `phase: "warmup"` events; they are not misrepresented as
-recorded speech. Every discontinuity after arming remains a validation failure.
+recorded speech. Raw clock changes after arming remain explicit diagnostics;
+missing or reordered PCM fails the independent sample-counter checks.
 
 Observe real captions and, in authenticated mode, the delegation status via
 snapshots. Open Request & events through normal clicks if inspecting a failure.

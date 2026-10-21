@@ -703,16 +703,18 @@ def test_literal_cdp_evaluate_javascript_parses_without_execution() -> None:
 def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
     report = authenticated_scenario_capture()
     report["contexts"] = [{"id": 0, "sampleRate": 48000}]
-    packet = struct.pack("<4h", 0, 1000, -1200, 0)
+    motif = (0, 1000, -1200, 0)
+    source = motif * 8
+    packet = struct.pack("<32h", *source)
     report["received"] = [
         {
             "sequence": 0,
             "transportSequence": 0,
             "captureOrder": 1,
             "sampleOffset": 0,
-            "receivedSamples": 4,
-            "transportReceivedSamples": 4,
-            "samples": 4,
+            "receivedSamples": 32,
+            "transportReceivedSamples": 32,
+            "samples": 32,
             "bytes": len(packet),
             "sampleRate": 24000,
             "contextId": 0,
@@ -726,59 +728,65 @@ def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
         "sampleRate": 24000,
         "packetCount": 1,
         "capturedPackets": 1,
-        "samples": 4,
-        "capturedSamples": 4,
-        "capturedBytes": 8,
+        "samples": 32,
+        "capturedSamples": 32,
+        "capturedBytes": len(packet),
         "omittedPackets": 0,
         "omittedBytes": 0,
         "byteLimit": 30_000_000,
     }
+    rendered = tuple(value for sample in source for value in (sample, sample))
+    rendered += (1000, 1000, 1000, 1000)
+    first_frame = 48004
+    second_frame = first_frame + 64
+    first_context_time = first_frame / 48000
+    second_context_time = second_frame / 48000
     report["output"] = [
         {
             "contextId": 0,
-            "frame": 48004,
-            "observedFrame": 48004,
+            "frame": first_frame,
+            "observedFrame": first_frame,
             "sampleOffset": 0,
             "sequence": 0,
-            "samples": 8,
+            "samples": 64,
             "sampleRate": 48000,
             "monotonicMs": 6000,
-            "contextTimeAtDelivery": 1 + 4 / 48000,
-            "outputTimestamp": {"contextTime": 1 + 4 / 48000, "performanceTime": 3000},
-            "pcm16": base64.b64encode(struct.pack("<8h", 0, 0, 1000, 1000, -1200, -1200, 0, 0)).decode(),
+            "contextTimeAtDelivery": first_context_time,
+            "outputTimestamp": {"contextTime": first_context_time, "performanceTime": 3000},
+            "pcm16": base64.b64encode(struct.pack("<64h", *rendered[:64])).decode(),
         },
         {
             "contextId": 0,
-            "frame": 48012,
-            "observedFrame": 48012,
-            "sampleOffset": 8,
+            "frame": second_frame,
+            "observedFrame": second_frame,
+            "sampleOffset": 64,
             "sequence": 1,
             "samples": 4,
             "sampleRate": 48000,
             "monotonicMs": 6400,
-            "contextTimeAtDelivery": 1 + 12 / 48000,
-            "outputTimestamp": {"contextTime": 1 + 12 / 48000, "performanceTime": 6400},
-            "pcm16": base64.b64encode(struct.pack("<4h", 1000, 1000, 1000, 1000)).decode(),
+            "contextTimeAtDelivery": second_context_time,
+            "outputTimestamp": {"contextTime": second_context_time, "performanceTime": 6400},
+            "pcm16": base64.b64encode(struct.pack("<4h", *rendered[64:])).decode(),
         },
     ]
     events = cast("list[dict[str, object]]", report["events"])
     for event in events:
         if event.get("type") == "recorder.capture-start":
-            event.update({"contextId": 0, "frame": 48004, "sampleOffset": 0, "sequence": 0})
+            event.update({"contextId": 0, "frame": first_frame, "sampleOffset": 0, "sequence": 0})
         elif event.get("type") == "recorder.capture-stop":
-            event.update({"contextId": 0, "finalFrame": 48016, "samplesCaptured": 12, "blocksCaptured": 2})
+            event.update({"contextId": 0, "finalFrame": second_frame + 4, "samplesCaptured": 68, "blocksCaptured": 2})
     events.extend(
         [
-            {"type": "socket.receive", "path": "/audio", "receivedSamples": 4, "monotonicMs": 4500},
+            {"type": "socket.receive", "path": "/audio", "receivedSamples": 32, "monotonicMs": 4500},
             {
                 "type": "playback.submit",
                 "contextId": 0,
                 "epoch": 2,
-                "samples": 4,
-                "bytes": 8,
-                "submittedSamples": 4,
+                "samples": 32,
+                "bytes": len(packet),
+                "submittedSamples": 32,
                 "receivedSequence": 0,
-                "receivedSamples": 4,
+                "receivedSamples": 32,
                 "receiveMonotonicMs": speech_received_ms,
             },
             {
@@ -786,13 +794,13 @@ def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
                 "contextId": 0,
                 "epoch": 2,
                 "sourceStart": 0,
-                "samples": 4,
+                "samples": 32,
                 "sequence": 0,
                 "batchIntervals": 1,
                 "omittedIntervals": 0,
-                "at": 48004 / 48000,
-                "until": 48004 / 48000 + 3 / 24000,
-                "contextTimeAtDelivery": 48004 / 48000,
+                "at": first_context_time,
+                "until": first_context_time + 31 / 24000,
+                "contextTimeAtDelivery": first_context_time,
                 "captureOrder": 100,
                 "monotonicMs": 6000,
             },
@@ -803,16 +811,16 @@ def authenticated_age_report(*, speech_received_ms: float) -> dict[str, object]:
             "epoch": 2,
             "contextId": 0,
             "monotonicMs": 6000,
-            "receivedSamples": 4,
-            "playedSamples": 4,
+            "receivedSamples": 32,
+            "playedSamples": 32,
             "droppedSamples": 0,
             "bufferedMs": 20,
-            "audioTime": 48004 / 48000,
-            "renderedAt": 48004 / 48000,
-            "outputTimestamp": {"contextTime": 48004 / 48000, "performanceTime": 6000},
+            "audioTime": first_context_time,
+            "renderedAt": first_context_time,
+            "outputTimestamp": {"contextTime": first_context_time, "performanceTime": 6000},
         }
     ]
-    add_measurement_checkpoint(report, 4)
+    add_measurement_checkpoint(report, 32)
     return report
 
 
@@ -1019,6 +1027,100 @@ def test_graph_render_age_uses_trace_and_correlates_attenuated_output_pcm() -> N
     quiet_output["pcm16"] = base64.b64encode(samples.tobytes()).decode()
     attenuated = cast("dict[str, object]", timing_metrics(quiet)["graphRenderedSpeechAge"])
     assert attenuated["available"] is True
+
+
+def _muted_graph_report(first_source_sample: int, last_source_sample: int) -> dict[str, object]:
+    report = traced_graph_report()
+    block = cast("list[dict[str, object]]", report["output"])[0]
+    rendered = array.array("h", struct.unpack("<10100h", base64.b64decode(cast("str", block["pcm16"]))))
+    interval = next(
+        event for event in cast("list[dict[str, object]]", report["events"]) if event.get("type") == "playback.trace"
+    )
+    origin = cast("int", block["frame"])
+    for offset in range(first_source_sample, last_source_sample):
+        frame = round((cast("float", interval["at"]) + offset / 24000) * 48000) - origin
+        rendered[frame : frame + 2] = array.array("h", (0, 0))
+    block["pcm16"] = base64.b64encode(rendered.tobytes()).decode()
+    return report
+
+
+def test_graph_render_correlation_checks_both_halves_at_the_same_alignment() -> None:
+    # A half-block mute can leave enough matching material for the previous
+    # whole-interval gate, but the 10ms source half containing the mute must fail.
+    muted_half = _muted_graph_report(240, 480)
+    source = array.array(
+        "h",
+        struct.unpack(
+            "<480h", base64.b64decode(cast("str", cast("list[dict[str, object]]", muted_half["received"])[0]["pcm16"]))
+        ),
+    )
+    output_block = cast("list[dict[str, object]]", muted_half["output"])[0]
+    rendered = array.array("h", struct.unpack("<10100h", base64.b64decode(cast("str", output_block["pcm16"]))))
+    interval = next(
+        event
+        for event in cast("list[dict[str, object]]", muted_half["events"])
+        if event.get("type") == "playback.trace"
+    )
+    offsets = list(range(480))
+    whole = max(
+        _normalized_pcm_correlation(
+            source,
+            rendered,
+            offsets,
+            cast("float", interval["at"]),
+            cast("float", interval["until"]),
+            480,
+            48000,
+            96_000,
+            shift,
+        )
+        for shift in range(-128, 129)
+    )
+    assert whole > 0.65, "the whole-window check alone would accept this partial mute"
+    assert cast("dict[str, object]", timing_metrics(muted_half)["graphRenderedSpeechAge"])["available"] is False
+
+    # An overlapping middle window catches a centered 10ms dropout that can
+    # leave each non-overlapping half correlated well enough on its own.
+    muted_center = _muted_graph_report(120, 360)
+    assert cast("dict[str, object]", timing_metrics(muted_center)["graphRenderedSpeechAge"])["available"] is False
+
+    muted_three_quarters = _muted_graph_report(120, 480)
+    assert (
+        cast("dict[str, object]", timing_metrics(muted_three_quarters)["graphRenderedSpeechAge"])["available"] is False
+    )
+
+    reordered = traced_graph_report()
+    block = cast("list[dict[str, object]]", reordered["output"])[0]
+    rendered = array.array("h", struct.unpack("<10100h", base64.b64decode(cast("str", block["pcm16"]))))
+    interval = next(
+        event for event in cast("list[dict[str, object]]", reordered["events"]) if event.get("type") == "playback.trace"
+    )
+    origin = cast("int", block["frame"])
+    trace_frame = round(cast("float", interval["at"]) * 48000)
+    first_pair = trace_frame - origin
+    pairs = [rendered[first_pair + i * 2 : first_pair + (i + 1) * 2] for i in range(480)]
+    assert len(pairs) == 480 and all(len(pair) == 2 for pair in pairs), (
+        "the voice window must be in the captured output"
+    )
+    for index, pair in enumerate(pairs[240:] + pairs[:240]):
+        frame = round((cast("float", interval["at"]) + index / 24000) * 48000) - origin
+        rendered[frame : frame + 2] = pair
+    block["pcm16"] = base64.b64encode(rendered.tobytes()).decode()
+    assert cast("dict[str, object]", timing_metrics(reordered)["graphRenderedSpeechAge"])["available"] is False
+
+    attenuated = traced_graph_report()
+    block = cast("list[dict[str, object]]", attenuated["output"])[0]
+    rendered = array.array("h", struct.unpack("<10100h", base64.b64decode(cast("str", block["pcm16"]))))
+    for index, value in enumerate(rendered):
+        rendered[index] = round(value * 0.04)
+    block["pcm16"] = base64.b64encode(rendered.tobytes()).decode()
+    assert cast("dict[str, object]", timing_metrics(attenuated)["graphRenderedSpeechAge"])["available"] is True
+
+    quiet_half = cast(
+        "dict[str, object]",
+        timing_metrics(fractional_phase_report(isolated_transient=True))["graphRenderedSpeechAge"],
+    )
+    assert quiet_half["available"] is True, "an exactly silent source half needs no output match"
 
 
 def test_graph_checkpoint_excludes_preloaded_unaligned_warmup_from_measured_prefix() -> None:

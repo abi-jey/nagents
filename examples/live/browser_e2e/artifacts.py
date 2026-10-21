@@ -695,20 +695,60 @@ def graph_rendered_speech_age(report: dict[str, object]) -> dict[str, object]:
         # Retain zero samples: they provide useful context for short, isolated
         # transients and prevent a few loud points from defining a whole span.
         offsets = list(range(count))
-        best_correlation = max(
-            _normalized_pcm_correlation(
-                source_values, output_samples, offsets, at, until, count, output_rate, output_origin, shift
-            )
-            for shift in range(-2, 3)
+        best_correlation, best_shift = max(
+            (
+                (
+                    _normalized_pcm_correlation(
+                        source_values, output_samples, offsets, at, until, count, output_rate, output_origin, shift
+                    ),
+                    shift,
+                )
+                for shift in range(-2, 3)
+            ),
+            key=lambda candidate: candidate[0],
         )
         if best_correlation < 0.9:
-            best_correlation = max(
-                _normalized_pcm_correlation(
-                    source_values, output_samples, offsets, at, until, count, output_rate, output_origin, shift
-                )
-                for shift in range(-128, 129)
+            best_correlation, best_shift = max(
+                (
+                    (
+                        _normalized_pcm_correlation(
+                            source_values, output_samples, offsets, at, until, count, output_rate, output_origin, shift
+                        ),
+                        shift,
+                    )
+                    for shift in range(-128, 129)
+                ),
+                key=lambda candidate: candidate[0],
             )
         if best_correlation < 0.65:
+            output_unconfirmed += 1
+            continue
+
+        # A matching loud section must not hide a brief muted or reordered tail.
+        # Overlapping half-windows share the whole interval's alignment and
+        # retain its gain independence; source silence needs no audible match.
+        half_unconfirmed = False
+        for left, right in ((0, count // 2), (count // 4, count * 3 // 4), (count // 2, count)):
+            if not any(abs(source_values[index]) > 327 for index in range(left, right)):
+                continue
+            if (
+                right - left < 8
+                or _normalized_pcm_correlation(
+                    source_values,
+                    output_samples,
+                    list(range(left, right)),
+                    at,
+                    until,
+                    count,
+                    output_rate,
+                    output_origin,
+                    best_shift,
+                )
+                < 0.65
+            ):
+                half_unconfirmed = True
+                break
+        if half_unconfirmed:
             output_unconfirmed += 1
             continue
 
