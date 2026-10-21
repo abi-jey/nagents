@@ -362,6 +362,8 @@ def unpack(source: Path, directory: Path) -> None:
         "outputs": [],
         "omittedEvents": report.get("omitted", 0),
     }
+    _, received_metrics = unpack_received_pcm(report, directory)
+    metrics["receivedPcm"] = received_metrics
     outputs: list[dict[str, object]] = []
     gaps = recorder_gaps(report)
     events = objects(report.get("events"))
@@ -426,12 +428,167 @@ def unpack(source: Path, directory: Path) -> None:
         "noObservedErrors": not errors,
     }
     # Keep timestamps and block statistics, remove bulk audio from readable trace.
-    for channel in ("input", "output"):
+    for channel in ("input", "output", "received"):
         for block in objects(report.get(channel)):
             block.pop("pcm16", None)
     (directory / "trace.json").write_text(json.dumps(report, indent=2) + "\n")
     (directory / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
     print(json.dumps(metrics, indent=2))
+
+
+def unpack_received_pcm(report: dict[str, object], directory: Path) -> tuple[bytes, dict[str, object]]:
+    """Write received network PCM only when its complete packet ledger validates.
+
+    Older v2 captures did not collect this channel. They are explicitly marked
+    not-captured; partial or inconsistent new captures never produce a WAV.
+    """
+    filename = directory / "speaker-received.wav"
+    if filename.is_symlink() or (filename.exists() and not filename.is_file()):
+        raise SystemExit("speaker-received.wav must be a regular generated artifact")
+    packets_value = report.get("received")
+    summary_value = report.get("receivedPcm")
+    if packets_value is None and summary_value is None:
+        filename.unlink(missing_ok=True)
+        return b"", {"status": "not-captured", "complete": False, "file": ""}
+
+    summary = summary_value if isinstance(summary_value, dict) else {}
+    packets = objects(packets_value)
+    expected_keys = (
+        "sampleFormat",
+        "sampleRate",
+        "packetCount",
+        "capturedPackets",
+        "samples",
+        "capturedSamples",
+        "capturedBytes",
+        "omittedPackets",
+        "omittedBytes",
+    )
+    integer_summary_keys = (
+        "sampleRate",
+        "packetCount",
+        "capturedPackets",
+        "samples",
+        "capturedSamples",
+        "capturedBytes",
+        "omittedPackets",
+        "omittedBytes",
+    )
+    valid = (
+        isinstance(packets_value, list)
+        and summary.get("sampleFormat") == "s16le"
+        and all(type(summary.get(key)) is int for key in integer_summary_keys)
+        and summary.get("sampleRate") == 24000
+        and all(key in summary for key in expected_keys)
+        and number(summary.get("omittedPackets")) == 0
+        and number(summary.get("omittedBytes")) == 0
+        and type(report.get("omitted")) is int
+        and report.get("omitted") == 0
+        and 0 < len(packets) <= 100_000
+    )
+    decoded: list[bytes] = []
+    total_samples = 0
+    total_bytes = 0
+    context_id: int | None = None
+    previous_order = -1
+    for index, packet in enumerate(packets):
+        try:
+            encoded = packet.get("pcm16")
+            if not isinstance(encoded, str):
+                raise ValueError("missing pcm16")
+            if len(encoded) > 64_000:
+                raise ValueError("encoded packet exceeds bound")
+            data = base64.b64decode(encoded, validate=True)
+            samples = number(packet.get("samples"))
+            context_value = packet.get("contextId")
+            capture_order = packet.get("captureOrder")
+            epoch_value = packet.get("epoch")
+            audio_time = packet.get("audioTime")
+            if not isinstance(context_value, int) or isinstance(context_value, bool):
+                raise ValueError("invalid context ID")
+            if not isinstance(capture_order, int) or isinstance(capture_order, bool):
+                raise ValueError("invalid capture order")
+            if not isinstance(epoch_value, int) or isinstance(epoch_value, bool):
+                raise ValueError("invalid epoch")
+            if (
+                isinstance(audio_time, bool)
+                or not isinstance(audio_time, (int, float))
+                or not math.isfinite(audio_time)
+            ):
+                raise ValueError("invalid audio time")
+            if (
+                len(data) == 0
+                or len(data) > 48_000
+                or len(data) % 2
+                or samples <= 0
+                or samples % 1
+                or any(
+                    type(packet.get(key)) is not int
+                    for key in ("sequence", "sampleOffset", "samples", "bytes", "contextId", "captureOrder", "epoch")
+                )
+                or packet.get("sequence") != index
+                or type(packet.get("receivedSamples")) is not int
+                or packet.get("receivedSamples") != total_samples + samples
+                or len(data) != samples * 2
+                or number(packet.get("bytes")) != len(data)
+                or number(packet.get("sampleRate")) != 24000
+                or number(packet.get("sequence")) != index
+                or number(packet.get("sequence")) % 1
+                or number(packet.get("sampleOffset")) != total_samples
+                or number(packet.get("sampleOffset")) % 1
+                or context_value < 0
+                or capture_order <= previous_order
+                or not isinstance(packet.get("pcm16"), str)
+            ):
+                raise ValueError("invalid packet ledger")
+            if context_id is None:
+                context_id = context_value
+            elif context_value != context_id:
+                raise ValueError("mixed playback contexts")
+        except (ValueError, TypeError):
+            valid = False
+            break
+        previous_order = capture_order
+        total_samples += len(data) // 2
+        total_bytes += len(data)
+        if total_bytes > 30_000_000:
+            valid = False
+            break
+        decoded.append(data)
+
+    valid = valid and (
+        len(decoded) == len(packets)
+        and number(summary.get("packetCount")) == len(packets)
+        and number(summary.get("capturedPackets")) == len(packets)
+        and number(summary.get("samples")) == total_samples
+        and number(summary.get("capturedSamples")) == total_samples
+        and number(summary.get("capturedBytes")) == total_bytes
+    )
+    if not valid:
+        filename.unlink(missing_ok=True)
+        return b"", {
+            "status": "incomplete",
+            "complete": False,
+            "file": "",
+            "capturedPackets": len(decoded),
+            "reportedPackets": number(summary.get("capturedPackets")),
+            "omittedPackets": number(summary.get("omittedPackets")),
+            "omittedBytes": number(summary.get("omittedBytes")),
+        }
+
+    audio = b"".join(decoded)
+    filename_name = filename.name
+    write_wave(filename, audio, 24000)
+    filename.chmod(0o600)
+    return audio, {
+        "status": "complete",
+        "complete": True,
+        "file": filename_name,
+        "sampleRate": 24000,
+        "packets": len(packets),
+        "samples": total_samples,
+        "bytes": total_bytes,
+    }
 
 
 def recorder_gaps(report: dict[str, object]) -> list[dict[str, object]]:

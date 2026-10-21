@@ -11,18 +11,35 @@
   const contexts = [];
   const capture = [];
   const input = [];
+  const received = [];
   const events = [];
   const health = [];
   const seenLiveEvents = new Set();
   const limit = Math.max(30, Math.min(config.maxSeconds || 120, 900));
-  const eventLimit = Math.ceil(limit * 160 + 6000);
+  const PCM_RATE = 24000;
+  // Raw network PCM is private user audio. Cap this new copy separately and
+  // preserve the existing 256 MB exported-JSON bound in cdp_runner.py.
+  const receivedPcmByteLimit = Math.min(30_000_000, PCM_RATE * 2 * limit);
+  const eventLimit = Math.ceil(limit * 240 + 6000);
   const origin = performance.timeOrigin;
   const installed = performance.now();
   let microphone;
   let stopped = false;
   let stopPromise;
   let measurementStarted;
+  let measurementStartedAudioTime;
   let receivedSamples = 0;
+  let transportReceivedPackets = 0;
+  let measurementReceivedSamples = 0;
+  let receivedSamplesCaptured = 0;
+  let receivedBytesCaptured = 0;
+  let receivedPacketCount = 0;
+  let receivedOmittedBytes = 0;
+  let receivedOmittedPackets = 0;
+  let receivedLimitReported = false;
+  let captureOrder = 0;
+  const receivedByBuffer = new WeakMap();
+  const submittedSamplesByContext = new Map();
   let omitted = 0;
   let currentUIState = [];
   let selectedSessionId = "";
@@ -116,7 +133,8 @@
       const context = this;
       verifySoftwareSink(context, "speaker");
       const entry = { context, id: contexts.length, recorder: undefined, ready: undefined, frameOrigin: undefined,
-        samplesCaptured: 0, blocksCaptured: 0, schema: 2, armed: false, armPromise: undefined,
+        samplesCaptured: 0, blocksCaptured: 0, schema: 2, playbackEpoch: 0, playbackRealtime: false,
+        armed: false, armPromise: undefined,
         acknowledgeStart: undefined, stopPromise: undefined, acknowledgeStop: undefined };
       contexts.push(entry);
       const addModule = context.audioWorklet.addModule.bind(context.audioWorklet);
@@ -210,6 +228,33 @@
       super(context, name, options);
       record("worklet.created", { name, sampleRate: context.sampleRate });
       if (name === "ngn-live-playback") {
+        const entry = contexts.find(item => item.context === context);
+        if (entry) {
+          const postMessage = this.port.postMessage.bind(this.port);
+          this.port.postMessage = (message, transfer) => {
+            if (message?.type === "pcm" && message.buffer instanceof ArrayBuffer) {
+              const samples = message.buffer.byteLength / 2;
+              const submittedSamples = (submittedSamplesByContext.get(entry.id) || 0) + samples;
+              submittedSamplesByContext.set(entry.id, submittedSamples);
+              const receivedMeta = receivedByBuffer.get(message.buffer);
+              record("playback.submit", {
+                contextId: entry.id, epoch: Number.isSafeInteger(message.epoch) ? message.epoch : entry.playbackEpoch,
+                samples, bytes: message.buffer.byteLength, submittedSamples, audioTime: context.currentTime,
+                captureOrder: captureOrder++, ...(receivedMeta || {}),
+              });
+            }
+            if (message && typeof message === "object" && ["reset", "barrier", "mode"].includes(message.type)) {
+              if ((message.type === "reset" || message.type === "barrier") && Number.isSafeInteger(message.epoch))
+                entry.playbackEpoch = message.epoch;
+              if (message.type === "mode" && typeof message.realtime === "boolean")
+                entry.playbackRealtime = message.realtime;
+              record("playback.control", { contextId: entry.id, controlType: message.type,
+                epoch: Number.isSafeInteger(message.epoch) ? message.epoch : entry.playbackEpoch,
+                realtime: entry.playbackRealtime, audioTime: context.currentTime, captureOrder: captureOrder++ });
+            }
+            return postMessage(message, transfer);
+          };
+        }
         this.port.addEventListener("message", ({ data }) => {
           if (!stopped && data?.type === "health" && health.length < limit * 4 + 1000) {
             const item = { ...stamp(), audioTime: context.currentTime,
@@ -267,8 +312,53 @@
       this.addEventListener("error", () => record("socket.error", { path }));
       this.addEventListener("message", ({ data }) => {
         if (liveSocket && data instanceof ArrayBuffer) {
+          const bytes = new Uint8Array(data);
           receivedSamples += data.byteLength / 2;
-          record("socket.receive", { path, bytes: data.byteLength, receivedSamples, ...stats(new Uint8Array(data)) });
+          const transportSequence = transportReceivedPackets++;
+          const arrival = stamp();
+          const captureOrderAtArrival = captureOrder++;
+          receivedByBuffer.set(data, {
+            receivedSequence: transportSequence, transportReceivedSamples: receivedSamples,
+            receiveMonotonicMs: arrival.monotonicMs, receiveWallMs: arrival.wallMs,
+          });
+          const source = contexts.find(entry => entry.context.state === "running") || contexts.at(-1);
+          record("socket.receive", { path, bytes: data.byteLength, receivedSamples, ...stats(bytes),
+            ...arrival, captureOrder: captureOrderAtArrival });
+          if (measurementStarted !== undefined && !stopped) {
+            const samples = Math.floor(data.byteLength / 2);
+            const sequence = receivedPacketCount++;
+            const sampleOffset = measurementReceivedSamples;
+            measurementReceivedSamples += samples;
+            receivedByBuffer.set(data, { ...receivedByBuffer.get(data), receivedSamples: measurementReceivedSamples });
+            const validPcm = data.byteLength > 0 && data.byteLength <= 48000 && !(data.byteLength % 2);
+            const overLimit = receivedBytesCaptured + data.byteLength > receivedPcmByteLimit;
+            if (!validPcm || overLimit) {
+              receivedOmittedPackets++;
+              receivedOmittedBytes += data.byteLength;
+              omitted++;
+              if (!receivedLimitReported) {
+                record("harness.received-pcm-omitted", {
+                  reason: validPcm ? "capture_limit" : "invalid_pcm_frame",
+                  byteLimit: receivedPcmByteLimit,
+                });
+                receivedLimitReported = true;
+              }
+            } else {
+              // WebSocket ArrayBuffers are transferred to the playback worklet
+              // by the application listener. Snapshot before that transfer, but
+              // defer base64 encoding until export so capture adds little work
+              // on the UI thread during playback.
+              received.push({ schema: 1, sequence, transportSequence, captureOrder: captureOrderAtArrival,
+                sampleOffset, receivedSamples: measurementReceivedSamples,
+                transportReceivedSamples: receivedSamples,
+                samples, bytes: data.byteLength, sampleRate: PCM_RATE,
+                contextId: source?.id ?? null, epoch: source?.playbackEpoch ?? 0,
+                realtime: source?.playbackRealtime ?? false, audioTime: source?.context.currentTime ?? null,
+                ...arrival, pcm: data.slice(0) });
+              receivedBytesCaptured += data.byteLength;
+              receivedSamplesCaptured += samples;
+            }
+          }
         }
         else if (liveSocket && typeof data === "string") record("socket.control", { path, text: data.slice(0, 256) });
         else if (eventSocket && typeof data === "string") {
@@ -376,7 +466,10 @@
       }));
       if (measurementStarted === undefined) {
         measurementStarted = performance.now();
-        record("measurement.start", { maxSeconds: limit });
+        const source = contexts.find(entry => entry.context.state === "running") || contexts.at(-1);
+        measurementStartedAudioTime = source?.context.currentTime ?? null;
+        record("measurement.start", { maxSeconds: limit, contextId: source?.id ?? null,
+          audioTime: measurementStartedAudioTime });
       }
       const source = microphone.context.createBufferSource();
       source.buffer = microphone.buffers[roundNumber - 1];
@@ -427,6 +520,8 @@
         providerFinalized: events.some(event => `${event.text || ""}${event.message || ""}`.includes("Finalization confirmed.")),
         outputArmed: contexts.length > 0 && contexts.every(entry => entry.armed), outputBlocks: capture.length,
         inputFrames: input.length, events: events.length, health: health.at(-1), omitted,
+        receivedPacketCount, receivedSamples: measurementReceivedSamples,
+        receivedSamplesCaptured, receivedBytesCaptured, receivedOmittedBytes, receivedOmittedPackets,
         transcripts, delegations, toolCalls, subscribedSessionId: selectedSessionId,
         ui: currentUIState, lastAudibleOutputMs: audible?.monotonicMs || 0 };
     },
@@ -441,12 +536,19 @@
         fixture: { text: config.fixtureText, sha256: config.fixtureSha256 },
         clock: { performanceTimeOriginMs: origin, installedMonotonicMs: installed,
           measurementStartedMonotonicMs: measurementStarted,
+          measurementStartedAudioTime, receivePcmRate: PCM_RATE, receivePcmByteLimit: receivedPcmByteLimit,
           note: "Audio frames are context-relative; callback wall/monotonic timestamps record delivery, not acoustic time." },
         contexts: contexts.map(({ context, id, frameOrigin, samplesCaptured, blocksCaptured, schema }) => ({
           id, schema, frameOrigin, samplesCaptured, blocksCaptured,
           sampleRate: context.sampleRate, sinkType: context.sinkId?.type,
           state: context.state, currentTime: context.currentTime, outputTimestamp: context.getOutputTimestamp?.() })),
-        stopped, omitted, events, health, input, output: capture };
+        stopped, omitted, events, health, input,
+        received: received.map(({ pcm: bytes, ...packet }) => ({ ...packet, pcm16: base64(new Uint8Array(bytes)) })),
+        receivedPcm: { sampleRate: PCM_RATE, sampleFormat: "s16le", packetCount: receivedPacketCount,
+          capturedPackets: received.length, samples: measurementReceivedSamples, capturedSamples: receivedSamplesCaptured,
+          capturedBytes: receivedBytesCaptured, omittedBytes: receivedOmittedBytes,
+          omittedPackets: receivedOmittedPackets, byteLimit: receivedPcmByteLimit },
+        output: capture };
     },
   };
   globalThis.__voiceE2E = api;

@@ -106,6 +106,16 @@ timestamped server logs, cleanup/finalization status, and a screenshot.
 Re-run the same command after each relevant source change; use a fresh
 workspace/artifact path to avoid reusing stale fixture state.
 
+When the capture includes the complete received-PCM ledger, `artifacts.py
+unpack` also writes `speaker-received.wav` at mono 24 kHz. This is the exact
+network PCM presented to the playback worklet, before playback DSP. The
+unpacker validates packet sequence, offsets, byte/sample totals, omissions, and
+the byte bound before exporting it. Incomplete captures produce no received
+WAV and are marked `receivedPcm.status: incomplete`; older v2 captures that
+predate this channel are marked `not-captured` and are not replayable. The
+human-readable `trace.json` keeps packet metadata but strips `pcm16` from
+input, output, and received channels, avoiding a second copy of the audio.
+
 The runner requires authenticated scenario rounds to include expected spoken
 text and actual call progress. `require_delegation` means the voice handoff
 reported `queued`, `working`, and `completed`; `require_subagent` separately
@@ -439,3 +449,19 @@ poetry run pytest tests/test_browser_voice_e2e.py
 node --test examples/live/browser_e2e/capture-worklet.test.mjs
 node --test examples/live/browser_e2e/browser-init.test.mjs
 ```
+
+## Private received-PCM replay proposal
+
+The review-only received-PCM prototype captures each accepted binary packet from the live audio WebSocket before the app transfers its original `ArrayBuffer` to the playback worklet. It copies the bytes immediately, but defers base64 encoding until export to keep the message callback lightweight. Captured blocks retain packet order, measurement-relative and transport-global sample counts, 24 kHz PCM16 format, the active playback epoch/realtime mode, output-context time, and monotonic/wall receipt clocks. `playback.submit` records numeric metadata when that same buffer reaches the worklet port; a received packet without a matching submission is not treated as played or replayable. `playback.control` records only reset/barrier/mode metadata so offline replay can reproduce epoch changes.
+
+This is decrypted user/provider audio. Treat it like the existing microphone and rendered-speaker PCM: artifact directory mode `0700`, JSON/audio files mode `0600`, isolated disposable browser context, and software sinks only. The packet payload is stored only under the new `received` array; no tokens, socket protocols, transcripts, or payloads enter logs or browser storage. The copy is limited to `min(30,000,000 bytes, 24,000 samples/s × 2 × maxSeconds)`; invalid frames and data beyond the limit increment omission counters and make exact replay fail closed. The runner retains its 256 MB export bound.
+
+A private trace can be replayed through the production playback worklet without a provider call:
+
+```bash
+umask 077
+node examples/live/browser_e2e/replay-received.mjs /private/path/capture.json > /private/path/replay-summary.json
+chmod 600 /private/path/replay-summary.json
+```
+
+The offline Node VM uses the recorded 48 kHz capture origin, port-submission audio times, 128-frame quanta, captured playback controls, and health/played acknowledgements. It emits a bounded numeric health series alongside counters, underruns, drops, queue/target maxima, and output signal statistics; it writes no audio. Replay models when the app submitted PCM, but excludes MessagePort scheduling delay and pre-capture buffered playback state. It isolates playback DSP from browser/network scheduling and physical output, so it cannot establish whether a captured packet gap was intentional provider DTX or a transport stall.

@@ -5,10 +5,12 @@ import copy
 import json
 import struct
 import wave
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import cast
 
+import pytest
 from examples.live.browser_e2e.artifacts import check_authenticated_scenario
 from examples.live.browser_e2e.artifacts import check_capture
 from examples.live.browser_e2e.artifacts import extract_report
@@ -66,6 +68,143 @@ def baseline() -> dict[str, object]:
             },
         ],
     }
+
+
+def received_packet(sequence: int, samples: tuple[int, ...], *, offset: int | None = None) -> dict[str, object]:
+    data = struct.pack(f"<{len(samples)}h", *samples)
+    return {
+        "sequence": sequence,
+        "captureOrder": sequence + 10,
+        "sampleOffset": sequence * 4 if offset is None else offset,
+        "receivedSamples": (sequence + 1) * 4,
+        "samples": len(samples),
+        "bytes": len(data),
+        "sampleRate": 24000,
+        "contextId": 0,
+        "epoch": 1,
+        "audioTime": sequence / 300,
+        "pcm16": base64.b64encode(data).decode(),
+    }
+
+
+def with_received(report: dict[str, object]) -> dict[str, object]:
+    packets = [received_packet(0, (11, 12, 13, 14)), received_packet(1, (21, 22, 23, 24))]
+    report["received"] = packets
+    report["receivedPcm"] = {
+        "sampleFormat": "s16le",
+        "sampleRate": 24000,
+        "packetCount": 2,
+        "capturedPackets": 2,
+        "samples": 8,
+        "capturedSamples": 8,
+        "capturedBytes": 16,
+        "omittedPackets": 0,
+        "omittedBytes": 0,
+    }
+    return report
+
+
+def object_record(report: dict[str, object], key: str, index: int | None = None) -> dict[str, object]:
+    value = report[key]
+    if index is not None:
+        assert isinstance(value, list)
+        value = value[index]
+    assert isinstance(value, dict)
+    return cast("dict[str, object]", value)
+
+
+def test_unpack_writes_complete_received_network_pcm_and_strips_all_bulk_audio(tmp_path: Path) -> None:
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(with_received(baseline())))
+    destination = tmp_path / "unpacked"
+    unpack(source, destination)
+    received_path = destination / "speaker-received.wav"
+    with wave.open(str(received_path), "rb") as recording:
+        assert recording.getframerate() == 24000
+        assert recording.getnchannels() == 1
+        assert recording.readframes(8) == struct.pack("<8h", 11, 12, 13, 14, 21, 22, 23, 24)
+    assert received_path.stat().st_mode & 0o777 == 0o600
+    metrics = json.loads((destination / "metrics.json").read_text())
+    assert metrics["receivedPcm"] == {
+        "status": "complete",
+        "complete": True,
+        "file": "speaker-received.wav",
+        "sampleRate": 24000,
+        "packets": 2,
+        "samples": 8,
+        "bytes": 16,
+    }
+    trace = json.loads((destination / "trace.json").read_text())
+    for channel in ("input", "output", "received"):
+        assert all("pcm16" not in item for item in trace[channel])
+    assert trace["received"][0]["sequence"] == 0
+
+
+def test_unpack_marks_legacy_capture_as_not_captured_without_received_wav(tmp_path: Path) -> None:
+    source = tmp_path / "legacy.json"
+    source.write_text(json.dumps(baseline()))
+    destination = tmp_path / "unpacked"
+    destination.mkdir()
+    (destination / "speaker-received.wav").write_bytes(b"stale artifact")
+    unpack(source, destination)
+    assert not (destination / "speaker-received.wav").exists()
+    metrics = json.loads((destination / "metrics.json").read_text())
+    assert metrics["receivedPcm"] == {"status": "not-captured", "complete": False, "file": ""}
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda packet: packet.update(contextId=None),
+        lambda packet: packet.update(contextId=1),
+        lambda packet: packet.update(captureOrder=None),
+        lambda packet: packet.update(captureOrder=0),
+    ],
+)
+def test_unpack_rejects_unknown_mixed_or_invalid_receive_context_and_order(
+    tmp_path: Path, mutate: Callable[[dict[str, object]], None]
+) -> None:
+    report = with_received(baseline())
+    mutate(object_record(report, "received", 1))
+    destination = tmp_path / "unpacked"
+    destination.mkdir()
+    stale = destination / "speaker-received.wav"
+    stale.write_bytes(b"stale artifact")
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(report))
+    unpack(source, destination)
+    assert not stale.exists()
+    metrics = json.loads((destination / "metrics.json").read_text())
+    assert metrics["receivedPcm"]["complete"] is False
+    assert metrics["receivedPcm"]["status"] == "incomplete"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda report: object_record(report, "receivedPcm").update(omittedPackets=1),
+        lambda report: object_record(report, "received", 1).update(sequence=3),
+        lambda report: object_record(report, "received", 0).update(bytes=99),
+        lambda report: object_record(report, "receivedPcm").update(capturedBytes=14),
+        lambda report: object_record(report, "received", 0).update(pcm16="%%%"),
+        lambda report: object_record(report, "receivedPcm").update(capturedPackets=1),
+    ],
+)
+def test_unpack_never_exports_incomplete_or_invalid_received_pcm(
+    tmp_path: Path, mutate: Callable[[dict[str, object]], None]
+) -> None:
+    report = with_received(baseline())
+    mutate(report)
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(report))
+    destination = tmp_path / "unpacked"
+    unpack(source, destination)
+    assert not (destination / "speaker-received.wav").exists()
+    metrics = json.loads((destination / "metrics.json").read_text())
+    assert metrics["receivedPcm"]["status"] == "incomplete"
+    assert metrics["receivedPcm"]["complete"] is False
+    trace = json.loads((destination / "trace.json").read_text())
+    assert all("pcm16" not in item for item in trace["received"])
 
 
 def test_unpack_keeps_callback_order_audio_when_clock_overlaps(tmp_path: Path) -> None:
