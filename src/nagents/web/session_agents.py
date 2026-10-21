@@ -411,8 +411,11 @@ class SessionAgents:
             self.state.publish(run, record)
 
     @asynccontextmanager
-    async def view(self, session_id: str, *, next_run: bool = False) -> AsyncIterator[Harness]:
-        self.state.harness.refresh_agent_definitions()
+    async def view(
+        self, session_id: str, *, next_run: bool = False, refresh_catalog: bool = True
+    ) -> AsyncIterator[Harness]:
+        if refresh_catalog:
+            self.state.harness.refresh_agent_definitions()
         choice = await self.ensure(session_id)
         current = self.state.harness_for(session_id)
         if current is not self.state.harness:
