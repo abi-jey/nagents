@@ -50,6 +50,7 @@ from .provider_setup import provider_error_diagnostic
 from .provider_setup import provider_setup
 from .queued_inputs import QueuedInputs
 from .queued_inputs import SkillInvocationError
+from .remote_metadata import RemoteMetadataRefresh
 from .replay import RunReplay
 from .response_metadata import Responses
 from .session_agents import SessionAgents
@@ -261,6 +262,7 @@ class WebState:
 
     def __init__(self, harness: Harness, factory: Callable[[HarnessConfig], Harness] | None = None) -> None:
         self.harness = harness
+        self.remote_metadata_refresh = RemoteMetadataRefresh()
         self.subagent_settings = WebSubagentSettings(self)
         harness.tasks.settings_host = self.subagent_settings
         self._running_harness = harness
