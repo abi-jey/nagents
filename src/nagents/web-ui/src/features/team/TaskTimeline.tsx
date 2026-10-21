@@ -51,7 +51,7 @@ function TimelineNode({ item, agents, childrenByParent, depth, expanded, expand,
         <span className="task-timeline-dot" aria-hidden="true" />
         <button type="button" className="task-timeline-open" onClick={event => { event.preventDefault(); inspect(item.id); }} aria-label={`Inspect and message ${item.name}`}>
           <strong>{item.name}</strong><AgentState agent={item} />
-          <span className="task-timeline-task">{terminal ? item.reason : item.prompt}</span>
+          <span className="task-timeline-task" role={item.phase === "failed" ? "alert" : undefined}>{terminal ? item.reason : item.prompt}</span>
         </button>
         {spawn}
       </summary><p>{terminal ? item.reason || "No result text was recorded." : item.prompt}</p></details>

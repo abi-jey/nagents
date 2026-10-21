@@ -1,6 +1,7 @@
 import type { ContextStats, RetainedTask, Snapshot, WireEvent } from "../../types.js";
 import { validContextStats } from "../../api/context.js";
 import type { SessionAgentSelection } from "../sessions/sessionAgent.js";
+import type { RemoteAuthentication } from "./RemoteStatus.js";
 
 export const MAIN_AGENT = "";
 export function providerLabel(agent: Pick<TeamAgent, "provider" | "providerKind">): string {
@@ -14,6 +15,7 @@ export type TeamAgent = {
   reasoningEffort?: string;
   context?: ContextStats; compactTrigger?: string; compactTokens?: number; compactThreshold?: number; compactMessages?: number;
   canMessage: boolean; messageReason: string; task?: RetainedTask;
+  authentication?: RemoteAuthentication; trustRemoteTools?: boolean;
 };
 export type TaskActivity = WireEvent & {
   event: "task_activity"; task_id: string; activation: number; sequence: number;
@@ -32,7 +34,7 @@ export type TaskDetail = {
   history_truncated?: boolean;
   before?: string;
 };
-export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string };
+export type TeamProfile = { id: string; name: string; description: string; provider: string; model: string; source?: string; used: boolean; available: boolean; can_start?: boolean; unavailable_reason?: string; authentication?: RemoteAuthentication; trust_remote_tools?: boolean };
 export type TeamSubagentUsage = {
   limits: { max_concurrent_subagents: number; max_subagent_executions: number; max_subagent_depth: number };
   used_executions: number;

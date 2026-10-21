@@ -9,7 +9,7 @@ import { appendEvent } from "./transcript.js";
 import { TaskTimeline } from "../team/TaskTimeline.js";
 import { AgentConfiguration, TeamPane } from "../team/TeamPane.js";
 import { TeamTree } from "../team/TeamTree.js";
-import { TaskConversation, taskEntries } from "../team/TaskConversation.js";
+import { TaskConversation, TaskTranscript, taskEntries } from "../team/TaskConversation.js";
 import { profileTarget, useTeam, type TeamController } from "../team/useTeam.js";
 import { TaskDrafts, agentAncestors, mergeTaskActivity, orderedTeam, providerLabel, taskAgent, type TaskActivity, type TeamAgent, type TaskDetail, type TeamProfile } from "../team/model.js";
 import type { RetainedTask } from "../../types.js";
@@ -95,6 +95,19 @@ test("a stream resync gap keeps recorded history and drops partial evidence unti
     activity: [event("one", 3, { type: "text_chunk", chunk: "Partial" })] };
   assert.deepEqual(taskEntries(detail, [event("one", 4, { type: "resync_required" })]).map(item => item.text), ["Saved result"]);
   assert.deepEqual(taskEntries({ ...detail, activity_truncated: true }, []).map(item => item.text), ["Saved result"]);
+});
+
+test("failed child status survives cold replay, deduplicates on reconnect, and recovers on a later activation", () => {
+  const failed: RetainedTask = { ...task("one"), status: "failed", error: "Remote request timed out" };
+  const failure = event("one", 1, { type: "status", phase: "failed", detail: "Remote request timed out" });
+  const detail: TaskDetail = { task: failed, history: [], activity_cursor: 1, activity: [failure] };
+  const transcript = new TaskTranscript();
+  const first = transcript.update(detail, [failure]);
+  assert.deepEqual(first.filter(entry => entry.kind === "error").map(entry => entry.text), ["Remote request timed out"]);
+  assert.equal(transcript.update(detail, [failure]).filter(entry => entry.kind === "error").length, 1);
+  const recovered = event("one", 2, { type: "text_chunk", chunk: "Recovered" }, 1);
+  assert.deepEqual(transcript.update({ ...detail, task: { ...failed, status: "running", error: "" }, activity_cursor: 1 }, [recovered])
+    .map(entry => entry.text), ["Remote request timed out", "Recovered"]);
 });
 
 test("child shared composer has one input and no root slash commands or attachment controls", () => {

@@ -34,6 +34,22 @@ test("approval dialog explains durable workspace scope and extension reload boun
   assert.doesNotMatch(mandatory, /Always allow this tool|all chats and agents in this workspace/);
 });
 
+test("remote delegate approval names the remote operation and safely handles malformed nested data", () => {
+  const render = (arguments_: unknown) => renderToStaticMarkup(createElement(ApprovalDialog, {
+    approval: { ...approval, tool: "delegate", arguments: arguments_ }, busy: false, error: "", decide() {}, cancel() {},
+  }));
+  const remote = render({ agent: "reviewer", remote_operation: { tool: "shell", arguments: { command: "cat report.txt" } } });
+  assert.match(remote, /Review remote <code>shell<\/code>/);
+  assert.match(remote, /Requested by reviewer/);
+  assert.match(remote, /cat report\.txt/);
+  assert.doesNotMatch(remote, /Local tools are not sandboxed/);
+  assert.doesNotMatch(remote, /Always allow this tool/);
+  for (const malformed of [null, "nested", [], { remote_operation: [] }, { remote_operation: { tool: { name: "shell" } } }]) {
+    assert.doesNotThrow(() => render(malformed));
+    assert.match(render(malformed), /Review (?:remote )?<code>(?:delegate|operation)<\/code>/);
+  }
+});
+
 test("permission buttons send distinct decisions and Escape still denies", async (t) => {
   const dom = new JSDOM("<div id='root'></div>");
   const descriptors = Object.getOwnPropertyDescriptors(globalThis);

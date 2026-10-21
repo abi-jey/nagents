@@ -9,6 +9,7 @@ import { providerLabel, type TeamAgent } from "../team/model.js";
 import { ContextIndicator } from "../context/ContextIndicator.js";
 import type { ContextStats } from "../../types.js";
 import { RemoteAgentEditor } from "./navigator/RemoteAgentEditor.js";
+import { RemoteStatus } from "../team/RemoteStatus.js";
 
 type RemoteConnection = {
   url: string; rpc_url: string; issuer: string; client_id: string; scopes: string[];
@@ -22,7 +23,8 @@ const connection: RemoteConnection = {
 function catalog(signedIn = false, clientId = connection.client_id) {
   return { revision: "revision-1", source_path: "/workspace/connections/a2a.json", agents: [{
     name: "peer", description: "Remote review", connection: { ...connection, client_id: clientId },
-    signed_in: signedIn, user_invocable: true, subagent_available: true,
+    signed_in: signedIn, authentication: { state: signedIn ? "signed_in" : clientId ? "sign_in_required" : "host_setup_required", expires_at: 0, error_code: "" },
+    trust_remote_tools: false, user_invocable: true, subagent_available: true,
   }] };
 }
 function browser() {
@@ -74,6 +76,72 @@ test("remote editor exposes discovered metadata read-only without manual OAuth f
   assert.equal(document.querySelector('input[aria-label="Scopes"]'), null);
 });
 
+test("remote auth states explain server credential availability without exposing credential values", () => {
+  const statuses = [
+    [{ state: "signed_in", expires_at: 0, error_code: "", refreshable: true }, "Signed in · auto refresh"],
+    [{ state: "signed_in", expires_at: 1, error_code: "" }, "Sign-in required"],
+    [{ state: "not_required", expires_at: 0, error_code: "" }, "No sign-in required"],
+    [{ state: "token_missing", expires_at: 0, error_code: "" }, "Server token missing"],
+    [{ state: "token_ready", expires_at: 0, error_code: "" }, "Server token configured"],
+    [{ state: "host_setup_required", expires_at: 0, error_code: "" }, "Sign-in setup required"],
+  ] as const;
+  for (const [authentication, label] of statuses) {
+    const html = renderToStaticMarkup(createElement(RemoteStatus, { authentication }));
+    assert.ok(html.includes(label), `${authentication.state} should render its status`);
+    assert.doesNotMatch(html, /access_token|refresh_token|secret-value|bearer/i);
+  }
+});
+
+test("remote trust can be saved and revoked, and focus polling refreshes authentication status", async t => {
+  let trusted = false;
+  let signedIn = false;
+  const trustBodies: { revision: string; trusted: boolean }[] = [];
+  const currentCatalog = () => {
+    const result = catalog(signedIn);
+    result.agents[0].trust_remote_tools = trusted;
+    return result;
+  };
+  const ui = await renderEditor("peer", async (path, init) => {
+    if (path === "/api/remote-agents/peer/trust" && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as { revision: string; trusted: boolean };
+      trustBodies.push(body); trusted = body.trusted;
+      return Response.json(currentCatalog());
+    }
+    if (path === "/api/remote-agents") return Response.json(currentCatalog());
+    throw new Error(`Unexpected request ${path}`);
+  });
+  t.after(async () => ui.restore());
+  const document = ui.dom.window.document;
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  const trustButton = () => [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => /Trust all remote tools|Require tool review/.test(button.textContent || ""))!;
+  await act(async () => { trustButton().click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.deepEqual(trustBodies[0], { revision: "revision-1", trusted: true });
+  assert.equal(trustButton().getAttribute("aria-pressed"), "true");
+
+  signedIn = true;
+  await act(async () => { ui.dom.window.dispatchEvent(new ui.dom.window.Event("focus")); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.match(document.querySelector(".remote-auth-status")?.textContent || "", /Signed in/);
+
+  await act(async () => { trustButton().click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.deepEqual(trustBodies[1], { revision: "revision-1", trusted: false });
+  assert.equal(trustButton().getAttribute("aria-pressed"), "false");
+});
+
+test("a rejected remote trust update leaves the connection untrusted and shows the server error", async t => {
+  const ui = await renderEditor("peer", async path => {
+    if (path === "/api/remote-agents") return Response.json(catalog());
+    if (path === "/api/remote-agents/peer/trust") return Response.json({ detail: "Connection changed; reload settings" }, { status: 409 });
+    throw new Error(`Unexpected request ${path}`);
+  });
+  t.after(async () => ui.restore());
+  const button = [...ui.dom.window.document.querySelectorAll<HTMLButtonElement>("button")]
+    .find(element => element.textContent?.includes("Trust all remote tools"))!;
+  await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.equal(button.getAttribute("aria-pressed"), "false");
+  assert.match(ui.dom.window.document.querySelector('[role="alert"]')?.textContent || "", /Connection changed/);
+});
+
 test("new remote agent name pattern is valid under HTML v-mode rules", async t => {
   const ui = await renderEditor("", async () => Response.json({ revision: "revision-1", source_path: "/workspace/connections/a2a.json", agents: [] }));
   t.after(async () => ui.restore());
@@ -92,7 +160,7 @@ test("missing public client shows the exact callback and host setup guidance", a
   const ui = await renderEditor("peer", async () => Response.json(catalog(false, "")));
   t.after(async () => ui.restore());
   const document = ui.dom.window.document;
-  assert.match(document.body.textContent || "", /Host sign-in setup required/);
+  assert.match(document.body.textContent || "", /Sign-in setup required/);
   assert.match(document.body.textContent || "", /administrator must configure the client/);
   assert.match(document.body.textContent || "", /https:\/\/ngn\.example\.test\/remote-agent-login\/callback/);
   const signIn = [...document.querySelectorAll("button")].find(button => button.textContent?.includes("Sign in"));
@@ -122,7 +190,7 @@ test("sign-in opens the advertised URL and status polling reflects the saved gra
   assert.ok(intervals.length);
   signedIn = true;
   await act(async () => { intervals.forEach(callback => callback()); await new Promise(resolve => setTimeout(resolve, 0)); });
-  assert.match(ui.dom.window.document.body.textContent || "", /Signed in\. You can now use this remote agent\./);
+  assert.match(ui.dom.window.document.body.textContent || "", /Signed in\. All chats in this workspace can use this connection\./);
   assert.equal([...ui.dom.window.document.querySelectorAll("button")].some(element => element.textContent?.trim() === "Sign in again"), true);
 });
 
@@ -206,6 +274,6 @@ test("URL-only connect keeps popup sign-in pending when saved selection changes 
   assert.ok(callbacks.length, "the pending status poll survives changing the selected agent prop");
   signedIn = true;
   await act(async () => { callbacks.forEach(callback => callback()); await new Promise(resolve => setTimeout(resolve, 50)); });
-  assert.match(document.body.textContent || "", /Signed in\. You can now use this remote agent\./, requests.join("\n"));
+  assert.match(document.body.textContent || "", /Signed in\. All chats in this workspace can use this connection\./, requests.join("\n"));
   assert.equal([...document.querySelectorAll("button")].some(button => button.textContent?.trim() === "Sign in again"), true);
 });
