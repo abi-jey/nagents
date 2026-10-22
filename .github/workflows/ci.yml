@@ -184,7 +184,7 @@ jobs:
       - name: Run portable tests (POSIX harness cases are marked)
         shell: bash
         run: |
-          NGN_SQLITE_TRACE=1 pytest -p tests.support.sqlite_trace \
+          NGN_SQLITE_TRACE=1 python -m pytest -p tests.support.sqlite_trace \
             $(python .github/scripts/shard_tests.py --shards ${{ matrix.shards }} --group ${{ matrix.group }}) \
             -n auto -v -rs -o faulthandler_timeout=60
 
