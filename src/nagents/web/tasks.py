@@ -112,7 +112,8 @@ class Tasks:
 
     async def index(self, root: str) -> dict[str, object]:
         await self.store.validate(root)
-        self.state.harness.refresh_agent_definitions()
+        refreshed_primary = self.state.harness
+        refreshed_primary.refresh_agent_definitions()
         saved = {str(task["id"]): task for task in await self.store.tasks(root)}
         for task in saved.values():
             task.update(
@@ -146,7 +147,12 @@ class Tasks:
             # Keep saved conversations inspectable after an administrator removes
             # a profile; the main picker can select a replacement before work.
             return {"tasks": list(saved.values()), "profiles": []}
-        async with self.state.session_agents.view(root) as profile_owner:
+        # One discovery pass per primary owner in this request. A distinct
+        # session runtime still refreshes in view(), and a swapped primary is
+        # never mistaken for the owner whose catalog we already refreshed.
+        async with self.state.session_agents.view(
+            root, refresh_catalog=self.state.harness is not refreshed_primary
+        ) as profile_owner:
             self.state.remote_metadata_refresh.schedule(profile_owner)
             used = {task.get("profile") for task in saved.values()} | {profile_owner.config.agent}
             profiles: list[dict[str, object]] = []

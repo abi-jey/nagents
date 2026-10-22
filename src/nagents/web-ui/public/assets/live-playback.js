@@ -8,10 +8,81 @@ const RESERVE_DECAY = 0.002; // Give back two milliseconds per second of clean d
 const REALTIME_TARGET = .28;
 const REALTIME_DECAY = .00025;
 const REALTIME_LIMIT = PCM_RATE * .32;
+const QUIET_RECOVERY_TAIL_SECONDS = .006;
+const QUIET_RECOVERY_MAX_ARRIVAL_SECONDS = .1;
+const QUIET_RECOVERY_PRIME_SECONDS = MIN_TARGET;
+
+// Opt-in numeric timing evidence for diagnostics. This is independent of the
+// lossy visual waveform reports: backpressure is bounded and reported rather
+// than silently presenting incomplete measurements as continuous audio.
+class RenderTrace {
+  constructor(port) {
+    this.port = port;
+    this.enabled = false;
+    this.reset(0);
+  }
+
+  reset(epoch) {
+    this.epoch = epoch;
+    this.intervals = [];
+    this.sequence = 0;
+    this.pending = -1;
+    this.omittedIntervals = 0;
+    this.nextAt = 0;
+    this.forceQueued = false;
+  }
+
+  configure(enabled) {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    // Keep sequence numbers unique until the next explicit epoch boundary;
+    // a delayed acknowledgement cannot release a newly enabled batch.
+    this.omittedIntervals += this.intervals.length;
+    this.intervals = [];
+    this.pending = -1;
+    this.nextAt = 0;
+    this.forceQueued = false;
+  }
+
+  acknowledge(sequence) {
+    if (sequence !== this.pending) return;
+    this.pending = -1;
+    this.flush();
+  }
+
+  append(sourceStart, samples, at, until) {
+    if (!this.enabled) return;
+    if (this.intervals.length < 64) this.intervals.push({ sourceStart, samples, at, until });
+    else this.omittedIntervals++;
+    this.flush();
+  }
+
+  forceDrain() {
+    if (!this.enabled) return;
+    this.forceQueued = true;
+    this.flush();
+  }
+
+  flush() {
+    if (!this.enabled || this.pending >= 0) return;
+    if (!this.intervals.length) {
+      this.forceQueued = false;
+      return;
+    }
+    if (this.intervals.length < 10 && currentTime < this.nextAt && !this.forceQueued) return;
+    this.pending = this.sequence++;
+    this.nextAt = currentTime + .2;
+    this.port.postMessage({ type: "trace", epoch: this.epoch, sequence: this.pending,
+      intervals: this.intervals.splice(0, 10), omittedIntervals: this.omittedIntervals });
+    if (!this.intervals.length) this.forceQueued = false;
+  }
+}
 
 class LivePlayback extends AudioWorkletProcessor {
   constructor() {
     super();
+    this.trace = new RenderTrace(this.port);
+    this.pendingTraceCheckpoint = null;
     this.samples = new Int16Array(CAPACITY);
     // Only downsampling needs an anti-alias filter. Keep its delay line across
     // packets; a packet-local filter would itself create periodic transients.
@@ -50,6 +121,9 @@ class LivePlayback extends AudioWorkletProcessor {
     this.report = new Int16Array(480);
     this.reportSize = 0;
     this.reportAt = 0;
+    this.reportUntil = 0;
+    this.reportSourceStart = 0;
+    this.expectedReportTime = undefined;
     this.nextHealth = 0;
     this.healthPending = false;
     this.playedPending = false;
@@ -63,15 +137,30 @@ class LivePlayback extends AudioWorkletProcessor {
     this.latencyRecoveries = 0;
     this.silenceRefills = 0;
     this.quietFrames = 0;
+    this.lowLevelTailFrames = 0;
+    this.quietTailRecoveryPending = false;
+    this.recoveryPrimeTarget = 0;
     this.lastUnderrunAt = this.lastRecoveryAt = -1;
     this.port.onmessage = ({ data }) => {
       if (data?.type === "reset") { this.reset(data.epoch); return; }
       if (data?.type === "barrier") { this.fenceReports(data.epoch); return; }
+      if (data?.type === "trace" && data.epoch === this.epoch && typeof data.enabled === "boolean") {
+        if (!data.enabled) this.interruptTraceCheckpoint();
+        this.trace.configure(data.enabled); return;
+      }
+      if (data?.type === "trace-checkpoint" && data.epoch === this.epoch &&
+          Number.isSafeInteger(data.requestId) && data.requestId >= 0) {
+        this.requestTraceCheckpoint(data.requestId); return;
+      }
+      if (data?.type === "trace-ack" && data.epoch === this.epoch && Number.isSafeInteger(data.sequence) && data.sequence >= 0) {
+        this.trace.acknowledge(data.sequence); return;
+      }
       if (data?.type === "played-ack" && data.epoch === this.epoch) { this.playedPending = false; return; }
       if (data?.type === "health") { this.health(true); return; }
       if (data?.type === "health-ack" && data.epoch === this.epoch) { this.healthPending = false; return; }
       if (data?.type === "mode" && data.epoch === this.epoch && typeof data.realtime === "boolean") {
         this.realtime = data.realtime;
+        if (!this.realtime) this.clearQuietRecoveryState();
         return;
       }
       if (data?.type !== "pcm" || !(data.buffer instanceof ArrayBuffer) || data.epoch !== this.epoch) return;
@@ -83,25 +172,75 @@ class LivePlayback extends AudioWorkletProcessor {
 
   reset(epoch) {
     if (!Number.isSafeInteger(epoch)) return;
+    this.interruptTraceCheckpoint();
     this.interruptedSamples += this.count;
     this.epoch = epoch;
+    this.trace.reset(epoch);
     this.samples.fill(0); this.history.fill(0); this.filterIndex = 0; this.primed = false;
     this.count = this.read = this.phase = this.reportSize = 0;
     this.playing = false;
     this.firstArrival = this.lastArrival = -1;
     this.meanDepth = this.lastValue = this.fadeFrom = this.fade = 0;
     this.quietFrames = 0;
+    this.clearQuietRecoveryState();
     this.ratio = 1;
     this.healthPending = this.playedPending = false;
     this.health();
   }
 
+  clearQuietRecoveryState() {
+    this.lowLevelTailFrames = 0;
+    this.quietTailRecoveryPending = false;
+    this.recoveryPrimeTarget = 0;
+  }
+
   fenceReports(epoch) {
     if (!Number.isSafeInteger(epoch)) return;
+    this.interruptTraceCheckpoint();
     this.epoch = epoch;
+    this.trace.reset(epoch);
     this.reportSize = 0;
     this.healthPending = this.playedPending = false;
     this.health();
+  }
+
+  renderedSampleEnd() {
+    return this.playedSamples + this.droppedSamples + this.interruptedSamples;
+  }
+
+  postTraceCheckpoint(checkpoint, status, renderedAt) {
+    this.port.postMessage({ type: "trace-checkpoint", epoch: checkpoint.epoch,
+      requestId: checkpoint.requestId, status, acceptedEnd: checkpoint.acceptedEnd,
+      renderedEnd: this.renderedSampleEnd(), receivedEnd: this.receivedSamples, renderedAt,
+      omittedIntervals: this.trace.omittedIntervals });
+  }
+
+  interruptTraceCheckpoint() {
+    if (!this.pendingTraceCheckpoint) return;
+    const checkpoint = this.pendingTraceCheckpoint;
+    this.pendingTraceCheckpoint = null;
+    this.postTraceCheckpoint(checkpoint, "interrupted", currentTime);
+  }
+
+  finishTraceCheckpoint(renderedAt) {
+    const checkpoint = this.pendingTraceCheckpoint;
+    if (!checkpoint) return;
+    this.flushReport();
+    this.trace.forceDrain();
+    this.pendingTraceCheckpoint = null;
+    this.postTraceCheckpoint(checkpoint, "completed", renderedAt);
+  }
+
+  requestTraceCheckpoint(requestId) {
+    if (!this.trace.enabled) return;
+    if (this.pendingTraceCheckpoint) {
+      this.port.postMessage({ type: "trace-checkpoint", epoch: this.epoch, requestId,
+        status: "busy", acceptedEnd: this.receivedSamples, renderedEnd: this.renderedSampleEnd(),
+        receivedEnd: this.receivedSamples, renderedAt: currentTime, omittedIntervals: this.trace.omittedIntervals });
+      return;
+    }
+    this.pendingTraceCheckpoint = { epoch: this.epoch, requestId, acceptedEnd: this.receivedSamples };
+    if (this.renderedSampleEnd() >= this.receivedSamples) this.finishTraceCheckpoint(currentTime);
   }
 
   append(buffer) {
@@ -125,12 +264,24 @@ class LivePlayback extends AudioWorkletProcessor {
     }
     this.lastArrival = now;
     this.packetDuration = incoming / PCM_RATE;
-    if (!this.count) this.firstArrival = now;
+    if (!this.count) {
+      this.firstArrival = now;
+      const recoveryDelay = now - this.lastUnderrunAt;
+      // Do not stretch a natural quiet pause by rebuilding the entire learned
+      // reserve after a brief empty queue. This is one recovery only: a voiced
+      // tail or a late return still waits for the full normal jitter reserve.
+      this.recoveryPrimeTarget = this.realtime && this.quietTailRecoveryPending &&
+        recoveryDelay >= 0 && recoveryDelay <= QUIET_RECOVERY_MAX_ARRIVAL_SECONDS
+        ? Math.min(this.target, QUIET_RECOVERY_PRIME_SECONDS)
+        : 0;
+      this.quietTailRecoveryPending = false;
+    }
     const recover = this.realtime && this.count + incoming > REALTIME_LIMIT;
     const limit = recover ? Math.ceil(Math.max(.08, this.target) * PCM_RATE) : CAPACITY;
     const excess = Math.max(0, this.count + incoming - limit);
     let incomingOffset = 0;
     if (excess) {
+      this.interruptTraceCheckpoint();
       const queued = Math.min(this.count, excess);
       this.read = (this.read + queued) % CAPACITY;
       this.count -= queued;
@@ -139,7 +290,9 @@ class LivePlayback extends AudioWorkletProcessor {
       if (recover) { this.latencyRecoveries++; this.lastRecoveryAt = now; }
       this.phase = 0; this.primed = false;
       this.quietFrames = 0;
+      this.clearQuietRecoveryState();
       this.history.fill(0); this.filterIndex = 0;
+      this.flushReport();
       this.reportSize = 0;
       this.fadeFrom = this.lastValue; this.fade = 1;
     }
@@ -174,16 +327,24 @@ class LivePlayback extends AudioWorkletProcessor {
   }
 
   reportSample(value, at) {
-    if (!this.reportSize) this.reportAt = at;
+    if (!this.reportSize) {
+      this.reportAt = at;
+      // Absolute coordinates in the accepted PCM stream survive resets and
+      // skipped telemetry reports. Queue removals remain explicitly accounted.
+      this.reportSourceStart = this.playedSamples + this.droppedSamples + this.interruptedSamples;
+    }
+    this.reportUntil = at;
     this.report[this.reportSize++] = value;
     if (this.reportSize === this.report.length) this.flushReport();
   }
 
   flushReport() {
+    if (this.reportSize) this.trace.append(this.reportSourceStart, this.reportSize, this.reportAt, this.reportUntil);
     if (this.reportSize && !this.playedPending) {
       const buffer = this.reportSize === this.report.length ? this.report.buffer : this.report.slice(0, this.reportSize).buffer;
       this.playedPending = true;
-      this.port.postMessage({ type: "played", epoch: this.epoch, at: this.reportAt, buffer }, [buffer]);
+      this.port.postMessage({ type: "played", epoch: this.epoch, at: this.reportAt,
+        until: this.reportUntil, sourceStart: this.reportSourceStart, buffer }, [buffer]);
       this.report = new Int16Array(480);
     }
     // One in-flight report plus the latest working frame bounds UI telemetry.
@@ -194,20 +355,32 @@ class LivePlayback extends AudioWorkletProcessor {
   process(_inputs, outputs) {
     const output = outputs[0]?.[0];
     if (!output) return true;
+    // Chrome can repeat or jump a raw render-clock label while the graph keeps
+    // processing contiguous PCM. Keep those observations intact, but never
+    // interpolate a trace interval across the discontinuity. This is test-only
+    // metadata: playback samples, queueing and the clock itself are untouched.
+    if (this.trace.enabled && this.expectedReportTime !== undefined &&
+        Math.abs(currentTime - this.expectedReportTime) > 1e-9) this.flushReport();
+    this.expectedReportTime = currentTime + output.length / sampleRate;
     // A learned target does not refill a stream whose producer runs slightly
     // behind the speaker. Rebuild only after sustained digital silence; keep
     // every queued sample, and bound the pause by the ordinary prime timeout.
     // This leaves voiced PCM and its playback rate untouched.
     if (this.realtime && this.playing && this.count > 0 &&
         this.quietFrames >= sampleRate * .06 && this.target * PCM_RATE - this.count > PCM_RATE * .02) {
+      this.flushReport();
       this.playing = false;
+      this.clearQuietRecoveryState();
       this.firstArrival = currentTime;
       this.quietFrames = 0;
       this.silenceRefills++;
     }
+    const primeTarget = this.recoveryPrimeTarget || this.target;
     if (!this.playing && this.count > 0 &&
-        (this.count >= this.target * PCM_RATE || currentTime - this.firstArrival >= this.target)) {
+        (this.count >= primeTarget * PCM_RATE || currentTime - this.firstArrival >= primeTarget)) {
       this.playing = true;
+      this.recoveryPrimeTarget = 0;
+      this.quietTailRecoveryPending = false;
       this.fadeFrom = this.lastValue; this.fade = 1;
       this.meanDepth = 0;
     }
@@ -243,6 +416,9 @@ class LivePlayback extends AudioWorkletProcessor {
           this.b = this.nextReady ? this.filtered(this.samples[(this.read + 1) % CAPACITY]) : this.a;
         }
       } else if (this.playing) {
+        this.quietTailRecoveryPending = this.realtime &&
+          this.lowLevelTailFrames >= sampleRate * QUIET_RECOVERY_TAIL_SECONDS;
+        this.recoveryPrimeTarget = 0;
         this.playing = false; this.underruns++;
         this.lastUnderrunAt = currentTime + i / sampleRate;
         this.firstArrival = -1;
@@ -250,6 +426,7 @@ class LivePlayback extends AudioWorkletProcessor {
         this.phase = 0;
         this.primed = false; this.history.fill(0); this.filterIndex = 0;
         this.fadeFrom = this.lastValue; this.fade = 1;
+        this.lowLevelTailFrames = 0;
       }
       if (this.fade > 0) {
         value = value * (1 - this.fade) + this.fadeFrom * this.fade;
@@ -257,10 +434,17 @@ class LivePlayback extends AudioWorkletProcessor {
       }
       output[i] = this.lastValue = value;
       this.quietFrames = this.playing && Math.abs(value) <= 2 / 32768 ? this.quietFrames + 1 : 0;
+      this.lowLevelTailFrames = this.playing && Math.abs(value) <= 327 / 32768
+        ? this.lowLevelTailFrames + 1
+        : 0;
     }
     // The node is mono. Extra requested channels receive the same playout.
     for (let channel = 1; channel < outputs[0].length; channel++) outputs[0][channel].set(output);
+    if (this.pendingTraceCheckpoint && this.renderedSampleEnd() >= this.pendingTraceCheckpoint.acceptedEnd) {
+      this.finishTraceCheckpoint(currentTime + output.length / sampleRate);
+    }
     if (currentTime >= this.nextHealth) this.health();
+    if (this.trace.enabled) this.trace.flush();
     return true;
   }
 }

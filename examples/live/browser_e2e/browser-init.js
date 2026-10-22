@@ -11,19 +11,70 @@
   const contexts = [];
   const capture = [];
   const input = [];
+  const received = [];
   const events = [];
   const health = [];
+  const seenLiveEvents = new Set();
   const limit = Math.max(30, Math.min(config.maxSeconds || 120, 900));
-  const eventLimit = Math.ceil(limit * 160 + 6000);
+  const PCM_RATE = 24000;
+  // Raw network PCM is private user audio. Cap this new copy separately and
+  // preserve the existing 256 MB exported-JSON bound in cdp_runner.py.
+  const receivedPcmByteLimit = Math.min(30_000_000, PCM_RATE * 2 * limit);
+  const eventLimit = Math.ceil(limit * 240 + 6000);
   const origin = performance.timeOrigin;
   const installed = performance.now();
   let microphone;
   let stopped = false;
   let stopPromise;
   let measurementStarted;
+  let measurementStartedAudioTime;
   let receivedSamples = 0;
+  let transportReceivedPackets = 0;
+  let measurementReceivedSamples = 0;
+  let measurementCheckpointPromise;
+  let measurementCheckpoint;
+  let measurementBeginCheckpoint;
+  let receivedSamplesCaptured = 0;
+  let receivedBytesCaptured = 0;
+  let receivedPacketCount = 0;
+  let receivedOmittedBytes = 0;
+  let receivedOmittedPackets = 0;
+  let receivedLimitReported = false;
+  let captureOrder = 0;
+  const receivedByBuffer = new WeakMap();
+  const submittedSamplesByContext = new Map();
+  const traceHighWater = new Map();
+  const traceStreamKey = (contextId, epoch) => `${contextId}:${epoch}`;
+  const resolveCheckpointWhenTraceArrives = () => {
+    const pending = measurementCheckpointPromise;
+    const response = pending?.response;
+    if (!pending || !response) return;
+    if (response.status !== "completed" || !Number.isSafeInteger(response.renderedEnd) ||
+        response.renderedEnd < 0 || (traceHighWater.get(traceStreamKey(response.contextId, response.epoch)) || 0) >= response.renderedEnd) {
+      pending.resolve(response);
+    }
+  };
   let omitted = 0;
+  let currentUIState = [];
+  let selectedSessionId = "";
   const stamp = () => ({ monotonicMs: performance.now(), wallMs: Date.now() });
+  const sampleOutputTimestamp = (entry, context) => {
+    const timestamp = context.getOutputTimestamp?.();
+    if (timestamp && Number.isFinite(timestamp.contextTime) && Number.isFinite(timestamp.performanceTime) &&
+        timestamp.performanceTime > 0) {
+      entry.latestOutputTimestamp = { contextTime: timestamp.contextTime, performanceTime: timestamp.performanceTime };
+      entry.latestOutputTimestampAtMs = performance.now();
+      return entry.latestOutputTimestamp;
+    }
+    return undefined;
+  };
+  const freshOutputTimestamp = entry => {
+    const ageMs = entry.latestOutputTimestampAtMs === undefined
+      ? null : performance.now() - entry.latestOutputTimestampAtMs;
+    const fresh = ageMs !== null && ageMs >= 0 && ageMs <= 1000 && entry.latestOutputTimestamp;
+    return { timestamp: fresh ? entry.latestOutputTimestamp : undefined,
+      ageMs, source: fresh ? "cached_output_timestamp" : "context_time_fallback" };
+  };
   const record = (type, detail = {}) => {
     if (events.length < eventLimit) events.push({ type, ...stamp(), ...detail });
     else omitted++;
@@ -50,7 +101,7 @@
   };
   const safeEvent = (value) => {
     if (!value || typeof value !== "object") return {};
-    const fields = ["seq", "type", "speaker", "text", "status", "message", "delegation_id", "voice_session_id",
+    const fields = ["seq", "type", "id", "name", "tool", "call_id", "task_id", "activation", "parent_task_id", "session_id", "speaker", "text", "status", "message", "delegation_id", "voice_session_id",
       "chat_session_id", "run_id", "provider", "model", "detail_type", "phase", "error", "code", "kind", "outcome", "wire_type",
       "start_ms", "end_ms", "offset_ms"];
     return Object.fromEntries(fields.filter(key => ["string", "number", "boolean"].includes(typeof value[key]))
@@ -63,6 +114,37 @@
       throw new Error("Voice E2E requires AudioContext sinkId: { type: 'none' }; no physical-device fallback");
     }
     record("audio.virtual-sink", { role, sinkType: context.sinkId.type });
+  };
+  const safeWireRecord = (source, frame) => {
+    if (!source || typeof source !== "object") return;
+    const outer = source;
+    const nested = outer.event === "task_activity" && outer.payload && typeof outer.payload === "object" ? outer.payload : outer;
+    const eventType = nested.event || nested.type;
+    if (!new Set(["run_started", "run_finished", "tool_call", "tool_execution_started", "tool_result",
+      "task_started", "task_completed", "task_activity", "approval_closed"]).has(eventType)) return;
+    const allowed = ["id", "name", "tool", "call_id", "task_id", "activation", "parent_task_id", "run_id", "status"];
+    const detail = Object.fromEntries(allowed.filter(key => ["string", "number", "boolean"].includes(typeof nested[key]))
+      .map(key => [key, typeof nested[key] === "string" ? nested[key].slice(0, 300) : nested[key]]));
+    for (const key of ["task_id", "activation", "parent_task_id", "run_id"])
+      if (detail[key] === undefined && ["string", "number", "boolean"].includes(typeof outer[key])) detail[key] = outer[key];
+    record("live.event", {
+      ...detail,
+      eventType,
+      call_id: detail.call_id || (String(eventType).startsWith("tool_") ? detail.id : ""),
+      session_id: frame.session_id,
+      eventCursor: frame.cursor,
+    });
+  };
+  const safeEventFrame = frame => {
+    if (!frame || typeof frame !== "object" || frame.session_id !== selectedSessionId) return;
+    if (frame.type === "event") safeWireRecord(frame.record, frame);
+    if (frame.type === "snapshot" && frame.snapshot && typeof frame.snapshot === "object") {
+      const run = frame.snapshot.active_run;
+      if (run && typeof run === "object") {
+        const items = Array.isArray(run.events) ? run.events : Array.isArray(run.records) ? run.records : [];
+        for (const item of items) safeWireRecord(item, frame);
+      }
+    }
   };
   const stopRecorder = async entry => {
     await entry.ready;
@@ -81,9 +163,11 @@
       super({ ...options, sinkId: { type: "none" } });
       const context = this;
       verifySoftwareSink(context, "speaker");
-      const entry = { context, id: contexts.length, recorder: undefined, ready: undefined,
-        armed: false, armPromise: undefined, acknowledgeStart: undefined,
-        stopPromise: undefined, acknowledgeStop: undefined };
+      const entry = { context, id: contexts.length, recorder: undefined, ready: undefined, frameOrigin: undefined,
+        samplesCaptured: 0, blocksCaptured: 0, schema: 2, playbackEpoch: 0, playbackRealtime: false,
+        latestOutputTimestamp: undefined, latestOutputTimestampAtMs: undefined,
+        armed: false, armPromise: undefined,
+        acknowledgeStart: undefined, stopPromise: undefined, acknowledgeStop: undefined };
       contexts.push(entry);
       const addModule = context.audioWorklet.addModule.bind(context.audioWorklet);
       entry.ready = addModule("/assets/voice-e2e-capture.js").then(() => {
@@ -94,29 +178,43 @@
         nativeConnect.call(node, context.destination);
         node.port.onmessage = ({ data }) => {
           if (data.type === "capture-stop") {
-            const end = { contextId: entry.id, finalFrame: data.finalFrame, sampleRate: data.sampleRate, armed: data.armed };
+            const end = { contextId: entry.id, schema: data.schema, finalFrame: data.finalFrame,
+              observedFinalFrame: data.observedFinalFrame, frameOrigin: data.frameOrigin,
+              samplesCaptured: data.samplesCaptured, blocksCaptured: data.blocksCaptured,
+              sampleRate: data.sampleRate, armed: data.armed };
             record("recorder.capture-stop", end);
             entry.acknowledgeStop?.(end);
             return;
           }
           if (data.type === "capture-start") {
             entry.armed = true;
-            const start = { contextId: entry.id, frame: data.frame, sampleRate: data.sampleRate };
+            entry.frameOrigin = data.frameOrigin;
+            const start = { contextId: entry.id, schema: data.schema, frame: data.frame,
+              frameOrigin: data.frameOrigin, observedFrame: data.observedFrame,
+              sampleOffset: data.sampleOffset, sequence: data.sequence, sampleRate: data.sampleRate };
             record("recorder.capture-start", start);
             entry.acknowledgeStart?.(start);
             return;
           }
           if (data.type === "clock-discontinuity") {
-            record("recorder.clock-discontinuity", { contextId: entry.id, fromFrame: data.fromFrame,
-              toFrame: data.toFrame, sampleRate: data.sampleRate, phase: data.phase,
+            record("recorder.clock-discontinuity", { contextId: entry.id, schema: data.schema,
+              fromFrame: data.fromFrame, toFrame: data.toFrame, observedFrame: data.observedFrame,
+              capturedSamples: data.capturedSamples, sampleOffset: data.sampleOffset,
+              sequence: data.sequence, sampleRate: data.sampleRate, phase: data.phase,
               contextTimeAtDelivery: context.currentTime });
             return;
           }
           if (stopped) return;
           const bytes = pcm(data.samples);
-          capture.push({ contextId: entry.id, frame: data.frame, audioTime: data.frame / data.sampleRate,
-            sampleRate: data.sampleRate, contextTimeAtDelivery: context.currentTime,
-            outputTimestamp: context.getOutputTimestamp?.(), ...stamp(), ...stats(bytes), pcm16: base64(bytes) });
+          const outputTimestamp = sampleOutputTimestamp(entry, context);
+          entry.samplesCaptured = data.sampleOffset + data.samples.length;
+          entry.blocksCaptured = data.sequence + 1;
+          capture.push({ schema: data.schema, contextId: entry.id, frame: data.frame,
+            frameOrigin: entry.frameOrigin, observedFrame: data.observedFrame,
+            sampleOffset: data.sampleOffset, sequence: data.sequence,
+            audioTime: data.frame / data.sampleRate, sampleRate: data.sampleRate,
+            contextTimeAtDelivery: context.currentTime, outputTimestamp,
+            ...stamp(), ...stats(bytes), pcm16: base64(bytes) });
         };
         record("speaker.ready", { contextId: entry.id, sampleRate: context.sampleRate, sinkType: context.sinkId.type });
       }).catch(error => { record("harness.error", { message: String(error) }); throw error; });
@@ -163,10 +261,132 @@
       super(context, name, options);
       record("worklet.created", { name, sampleRate: context.sampleRate });
       if (name === "ngn-live-playback") {
+        const entry = contexts.find(item => item.context === context);
+        if (entry) {
+          entry.playbackNode = this;
+          const postMessage = this.port.postMessage.bind(this.port);
+          this.port.postMessage = (message, transfer) => {
+            if (message?.type === "pcm" && message.buffer instanceof ArrayBuffer) {
+              const samples = message.buffer.byteLength / 2;
+              const submittedSamples = (submittedSamplesByContext.get(entry.id) || 0) + samples;
+              submittedSamplesByContext.set(entry.id, submittedSamples);
+              const epoch = Number.isSafeInteger(message.epoch) ? message.epoch : entry.playbackEpoch;
+              const receivedMeta = receivedByBuffer.get(message.buffer);
+              record("playback.submit", {
+                contextId: entry.id, epoch,
+                samples, bytes: message.buffer.byteLength, submittedSamples, audioTime: context.currentTime,
+                captureOrder: captureOrder++, ...(receivedMeta || {}),
+              });
+            }
+            if (message && typeof message === "object" && ["reset", "barrier", "mode"].includes(message.type)) {
+              if ((message.type === "reset" || message.type === "barrier") && Number.isSafeInteger(message.epoch))
+                entry.playbackEpoch = message.epoch;
+              if (message.type === "mode" && typeof message.realtime === "boolean")
+                entry.playbackRealtime = message.realtime;
+              record("playback.control", { contextId: entry.id, controlType: message.type,
+                epoch: Number.isSafeInteger(message.epoch) ? message.epoch : entry.playbackEpoch,
+                realtime: entry.playbackRealtime, audioTime: context.currentTime, captureOrder: captureOrder++ });
+            }
+            return postMessage(message, transfer);
+          };
+        }
         this.port.addEventListener("message", ({ data }) => {
+          if (!stopped && data?.type === "trace" && Array.isArray(data.intervals)) {
+            const contextId = entry.id;
+            const epoch = data.epoch;
+            const sequence = data.sequence;
+            if (data.intervals.length > 10) {
+              record("harness.error", { message: "Playback trace batch exceeded interval bound", contextId });
+            } else {
+              for (const interval of data.intervals) {
+                if (!interval || typeof interval !== "object") {
+                  record("playback.trace", { contextId, epoch, sequence, invalid: true });
+                  continue;
+                }
+                if (Number.isSafeInteger(interval.sourceStart) && interval.sourceStart >= 0 &&
+                    Number.isSafeInteger(interval.samples) && interval.samples > 0) {
+                  const intervalEnd = interval.sourceStart + interval.samples;
+                  if (Number.isSafeInteger(intervalEnd)) {
+                    const key = traceStreamKey(contextId, epoch);
+                    traceHighWater.set(key, Math.max(traceHighWater.get(key) || 0, intervalEnd));
+                  }
+                }
+                const outputClock = freshOutputTimestamp(entry);
+                record("playback.trace", {
+                  contextId, epoch, sequence,
+                  sourceStart: interval.sourceStart, samples: interval.samples,
+                  at: interval.at, until: interval.until,
+                  omittedIntervals: data.omittedIntervals, batchIntervals: data.intervals.length,
+                  outputTimestamp: outputClock.timestamp,
+                  outputTimestampAgeMs: outputClock.ageMs,
+                  outputClockSource: outputClock.source,
+                  contextTimeAtDelivery: context.currentTime,
+                  captureOrder: captureOrder++,
+                });
+              }
+            }
+            // This is a metadata-only ACK. PCM remains in the existing bounded
+            // received/output capture channels, never duplicated in trace data.
+            this.port.postMessage({ type: "trace-ack", epoch, sequence });
+            resolveCheckpointWhenTraceArrives();
+          }
+          if (!stopped && data?.type === "trace-checkpoint") {
+            record("playback.trace-checkpoint", {
+              contextId: entry.id, epoch: data.epoch, requestId: data.requestId, status: data.status,
+              acceptedEnd: data.acceptedEnd, renderedEnd: data.renderedEnd, receivedEnd: data.receivedEnd,
+              renderedAt: data.renderedAt, omittedIntervals: data.omittedIntervals, captureOrder: captureOrder++,
+            });
+            if (measurementCheckpointPromise && data.requestId === measurementCheckpointPromise.requestId) {
+              measurementCheckpointPromise.response = { ...data, contextId: entry.id };
+              resolveCheckpointWhenTraceArrives();
+            }
+          }
+          if (!stopped && data?.type === "played" && data.buffer instanceof ArrayBuffer) {
+            const samples = data.buffer.byteLength / 2;
+            const view = new DataView(data.buffer);
+            let firstActiveSample = -1;
+            let lastActiveSample = -1;
+            let activeSamples = 0;
+            const activeSpans = [];
+            let spanStart = -1;
+            for (let offset = 0; offset < samples; offset++) {
+              const active = Math.abs(view.getInt16(offset * 2, true)) > 327;
+              if (active) {
+                if (firstActiveSample < 0) firstActiveSample = offset;
+                lastActiveSample = offset;
+                activeSamples++;
+                if (spanStart < 0) spanStart = offset;
+              } else if (spanStart >= 0) {
+                activeSpans.push([spanStart, offset]);
+                spanStart = -1;
+              }
+            }
+            if (spanStart >= 0) activeSpans.push([spanStart, samples]);
+            const outputClock = freshOutputTimestamp(entry);
+            record("playback.rendered", {
+              contextId: contexts.find(item => item.context === context)?.id,
+              epoch: data.epoch,
+              sourceStart: data.sourceStart,
+              samples,
+              sampleRate: 24000,
+              contextSampleRate: context.sampleRate,
+              at: data.at,
+              until: data.until,
+              firstActiveSample,
+              lastActiveSample,
+              activeSamples,
+              activeSpans,
+              outputTimestamp: outputClock.timestamp,
+              outputTimestampAgeMs: outputClock.ageMs,
+              outputClockSource: outputClock.source,
+              contextTimeAtDelivery: context.currentTime,
+              captureOrder: captureOrder++,
+            });
+          }
           if (!stopped && data?.type === "health" && health.length < limit * 4 + 1000) {
+            const outputTimestamp = sampleOutputTimestamp(entry, context);
             const item = { ...stamp(), audioTime: context.currentTime,
-              outputTimestamp: context.getOutputTimestamp?.(),
+              outputTimestamp,
               contextId: contexts.find(entry => entry.context === context)?.id };
             for (const [key, value] of Object.entries(data))
               if (typeof value === "number" || key === "type") item[key] = value;
@@ -174,6 +394,9 @@
           }
         });
         this.port.start();
+        // Opt in only the isolated E2E-created playback node. Normal app
+        // playback nodes never enable or pay for this metadata trace.
+        this.port.postMessage({ type: "trace", enabled: true, epoch: entry.playbackEpoch });
       }
       this.addEventListener("processorerror", () => record("worklet.error", { name }));
     }
@@ -185,22 +408,25 @@
       verifySoftwareSink(context, "microphone");
       const resumed = context.resume();
       const destination = context.createMediaStreamDestination();
-      const response = await nativeFetch(config.wavPath);
-      if (!response.ok) throw new Error(`Voice fixture download failed (${response.status})`);
-      const bytes = await response.arrayBuffer();
-      const digest = await crypto.subtle.digest("SHA-256", bytes);
-      const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
-      if (hash !== config.fixtureSha256) throw new Error("Voice fixture SHA-256 mismatch");
-      const buffer = await context.decodeAudioData(bytes);
+      const fixtures = Array.isArray(config.rounds) && config.rounds.length ? config.rounds : [config];
+      const buffers = [];
+      for (const fixture of fixtures) {
+        const response = await nativeFetch(fixture.wavPath || config.wavPath);
+        if (!response.ok) throw new Error(`Voice fixture download failed (${response.status})`);
+        const bytes = await response.arrayBuffer();
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+        if (hash !== (fixture.fixtureSha256 || config.fixtureSha256)) throw new Error("Voice fixture SHA-256 mismatch");
+        buffers.push(await context.decodeAudioData(bytes));
+      }
       const keepAlive = context.createConstantSource();
       keepAlive.offset.value = 0;
       nativeConnect.call(keepAlive, destination);
       keepAlive.start();
-      microphone = { context, destination, buffer, sources: [] };
+      microphone = { context, destination, buffers, fixtures, sources: [] };
       await resumed;
-      record("microphone.ready", { sampleRate: context.sampleRate, fixtureDuration: buffer.duration,
-        sinkType: context.sinkId.type,
-        fixtureText: config.fixtureText, fixtureSha256: config.fixtureSha256 });
+      record("microphone.ready", { sampleRate: context.sampleRate, fixtureCount: buffers.length,
+        fixtureDurations: buffers.map(buffer => buffer.duration), sinkType: context.sinkId.type });
     }
     return microphone.destination.stream.clone();
   };
@@ -208,20 +434,80 @@
     constructor(url, protocols) {
       super(url, protocols);
       const path = new URL(url, location.href).pathname;
-      if (!/^\/api\/live\/sessions\/[^/]+\/audio$/.test(path)) return;
+      const liveSocket = /^\/api\/live\/sessions\/[^/]+\/audio$/.test(path);
+      const eventSocket = path === "/api/events";
+      if (!liveSocket && !eventSocket) return;
       record("socket.created", { path }); // Never retain token-bearing protocols.
       this.addEventListener("open", () => record("socket.open", { path }));
       this.addEventListener("close", event => record("socket.close", { path, code: event.code, clean: event.wasClean }));
       this.addEventListener("error", () => record("socket.error", { path }));
       this.addEventListener("message", ({ data }) => {
-        if (data instanceof ArrayBuffer) {
+        if (liveSocket && data instanceof ArrayBuffer) {
+          const bytes = new Uint8Array(data);
           receivedSamples += data.byteLength / 2;
-          record("socket.receive", { path, bytes: data.byteLength, receivedSamples, ...stats(new Uint8Array(data)) });
+          const transportSequence = transportReceivedPackets++;
+          const arrival = stamp();
+          const captureOrderAtArrival = captureOrder++;
+          receivedByBuffer.set(data, {
+            receivedSequence: transportSequence, transportReceivedSamples: receivedSamples,
+            receiveMonotonicMs: arrival.monotonicMs, receiveWallMs: arrival.wallMs,
+          });
+          const source = contexts.find(entry => entry.context.state === "running") || contexts.at(-1);
+          record("socket.receive", { path, bytes: data.byteLength, receivedSamples, ...stats(bytes),
+            ...arrival, captureOrder: captureOrderAtArrival });
+          if (!stopped) {
+            const samples = Math.floor(data.byteLength / 2);
+            const sequence = receivedPacketCount++;
+            const sampleOffset = receivedSamples - samples;
+            if (measurementStarted !== undefined) measurementReceivedSamples += samples;
+            receivedByBuffer.set(data, { ...receivedByBuffer.get(data), receivedSamples: measurementReceivedSamples,
+              receivedSampleOffset: sampleOffset });
+            const validPcm = data.byteLength > 0 && data.byteLength <= 48000 && !(data.byteLength % 2);
+            const overLimit = receivedBytesCaptured + data.byteLength > receivedPcmByteLimit;
+            if (!validPcm || overLimit) {
+              receivedOmittedPackets++;
+              receivedOmittedBytes += data.byteLength;
+              omitted++;
+              if (!receivedLimitReported) {
+                record("harness.received-pcm-omitted", {
+                  reason: validPcm ? "capture_limit" : "invalid_pcm_frame",
+                  byteLimit: receivedPcmByteLimit,
+                });
+                receivedLimitReported = true;
+              }
+            } else {
+              // WebSocket ArrayBuffers are transferred to the playback worklet
+              // by the application listener. Snapshot before that transfer, but
+              // defer base64 encoding until export so capture adds little work
+              // on the UI thread during playback.
+            received.push({ schema: 1, sequence, transportSequence, captureOrder: captureOrderAtArrival,
+                sampleOffset, receivedSamples,
+                measurementSampleOffset: measurementStarted === undefined ? null : measurementReceivedSamples - samples,
+                measurementReceivedSamples,
+                transportReceivedSamples: receivedSamples,
+                samples, bytes: data.byteLength, sampleRate: PCM_RATE,
+                contextId: source?.id ?? null, epoch: source?.playbackEpoch ?? 0,
+                realtime: source?.playbackRealtime ?? false, audioTime: source?.context.currentTime ?? null,
+                ...arrival, pcm: data.slice(0) });
+              receivedBytesCaptured += data.byteLength;
+              receivedSamplesCaptured += samples;
+            }
+          }
         }
-        else if (typeof data === "string") record("socket.control", { path, text: data.slice(0, 256) });
+        else if (liveSocket && typeof data === "string") record("socket.control", { path, text: data.slice(0, 256) });
+        else if (eventSocket && typeof data === "string") {
+          try { safeEventFrame(JSON.parse(data)); }
+          catch { record("harness.error", { message: "Malformed app event frame; no frame content retained" }); }
+        }
       });
       const send = this.send.bind(this);
       this.send = data => {
+        if (eventSocket && typeof data === "string") {
+          try {
+            const request = JSON.parse(data);
+            if (request.type === "subscribe" && typeof request.session_id === "string") selectedSessionId = request.session_id;
+          } catch { /* Do not retain app socket payloads. */ }
+        }
         if (data instanceof ArrayBuffer && !stopped) {
           const bytes = new Uint8Array(data);
           const item = { ...stamp(), ...stats(bytes), bytes: bytes.length };
@@ -243,6 +529,15 @@
         record("http.response", { path, status: response.status, elapsedMs: performance.now() - began });
         void response.clone().json().then(body => {
           if (Array.isArray(body.events)) for (const event of body.events) {
+            const session = body.session_id || path.match(/^\/api\/live\/sessions\/([^/]+)/)?.[1];
+            if (!session || !Number.isSafeInteger(event.seq)) {
+              record("harness.error", { message: "Live event lacks a session or sequence identity" });
+              continue;
+            }
+            const identity = `${session}:${event.seq}`;
+            if (seenLiveEvents.has(identity)) continue;
+            if (seenLiveEvents.size >= eventLimit) { omitted++; continue; }
+            seenLiveEvents.add(identity);
             const detail = safeEvent(event);
             detail.eventType = detail.type;
             delete detail.type;
@@ -280,15 +575,57 @@
       selector, text: element.textContent?.trim().slice(0, 4000) || "",
       phase: element.getAttribute("data-phase") || "", status: element.getAttribute("data-status") || "",
     })));
+    currentUIState = state;
     const next = JSON.stringify(state);
     if (next !== lastUI) { lastUI = next; record("ui.voice", { state }); }
   };
   const observer = new MutationObserver(observeUI);
   observer.observe(document, { childList: true, subtree: true, characterData: true,
     attributes: true, attributeFilter: ["data-phase", "data-status"] });
+  const requestTraceCheckpoint = async phase => {
+    const contextId = contexts.find(item => item.playbackNode)?.id;
+    const entry = contexts.find(item => item.id === contextId);
+    if (!entry?.playbackNode || !Number.isSafeInteger(entry.playbackEpoch))
+      throw new Error("Measured playback context is unavailable for a trace checkpoint");
+    const requestId = Math.floor(performance.now() * 1000);
+    let resolveCheckpoint;
+    let rejectCheckpoint;
+    const promise = new Promise((resolve, reject) => { resolveCheckpoint = resolve; rejectCheckpoint = reject; });
+    measurementCheckpointPromise = { requestId, promise, resolve: resolveCheckpoint, reject: rejectCheckpoint };
+    const requestedAt = performance.now();
+    const submittedEnd = submittedSamplesByContext.get(contextId) || 0;
+    const transportReceivedAtRequest = receivedSamples;
+    record("measurement.checkpoint-request", { phase, requestId, contextId, epoch: entry.playbackEpoch,
+      submittedEnd, receivedSamples: measurementReceivedSamples, transportReceivedSamples: transportReceivedAtRequest,
+      captureOrder: captureOrder++, monotonicMs: requestedAt });
+    entry.playbackNode.port.postMessage({ type: "trace-checkpoint", epoch: entry.playbackEpoch, requestId });
+    const timeout = setTimeout(() => {
+      measurementCheckpointPromise?.reject(new Error("Playback trace checkpoint timed out"));
+      measurementCheckpointPromise = undefined;
+    }, 5000);
+    try {
+      const response = await promise;
+      const maxQuantum = Math.ceil(128 * PCM_RATE / entry.context.sampleRate);
+      const valid = submittedEnd === transportReceivedAtRequest &&
+        response.status === "completed" && response.epoch === entry.playbackEpoch &&
+        response.requestId === requestId && response.acceptedEnd === submittedEnd &&
+        Number.isSafeInteger(response.receivedEnd) && response.receivedEnd >= submittedEnd &&
+        Number.isSafeInteger(response.renderedEnd) && response.renderedEnd <= response.receivedEnd &&
+        response.renderedEnd >= response.acceptedEnd && response.renderedEnd - response.acceptedEnd <= maxQuantum &&
+        response.omittedIntervals === 0 && Number.isFinite(response.renderedAt);
+      if (!valid) throw new Error("Playback trace checkpoint was incomplete or inconsistent");
+      return { response, entry, requestId, requestedAt, submittedEnd };
+    } finally {
+      clearTimeout(timeout);
+      measurementCheckpointPromise = undefined;
+    }
+  };
   const api = {
-    async play(delayMs = 250) {
+    async play(delayMs = 250, roundNumber = 1) {
       if (!microphone || stopped) throw new Error("Start voice first; microphone must be ready and harness active");
+      if (!Number.isInteger(roundNumber) || roundNumber < 1 || roundNumber > microphone.buffers.length)
+        throw new Error("Unknown spoken fixture round");
+      const fixture = microphone.fixtures[roundNumber - 1];
       await microphone.context.resume();
       const outputStarts = await Promise.all(contexts.map(async entry => {
         await entry.ready;
@@ -300,21 +637,62 @@
         return await entry.armPromise;
       }));
       if (measurementStarted === undefined) {
+        const boundary = await requestTraceCheckpoint("begin");
+        measurementBeginCheckpoint = boundary.response;
         measurementStarted = performance.now();
-        record("measurement.start", { maxSeconds: limit });
+        const source = boundary.entry;
+        measurementStartedAudioTime = source?.context.currentTime ?? null;
+        const sourceStart = boundary.response.renderedEnd;
+        record("measurement.start", { maxSeconds: limit, contextId: source.id,
+          epoch: source.playbackEpoch, sourceStart, beginAcceptedEnd: boundary.response.acceptedEnd,
+          transportReceivedSamplesAtStart: receivedSamples, transportReceivedPacketsAtStart: transportReceivedPackets,
+          beginRequestId: boundary.requestId, audioTime: measurementStartedAudioTime });
       }
       const source = microphone.context.createBufferSource();
-      source.buffer = microphone.buffer;
+      source.buffer = microphone.buffers[roundNumber - 1];
       nativeConnect.call(source, microphone.destination);
       const audioTime = microphone.context.currentTime + delayMs / 1000;
       source.start(audioTime);
       microphone.sources.push(source);
-      const round = microphone.sources.length;
-      record("fixture.start", { round, audioTime, duration: source.buffer.duration, delayMs, outputStarts });
-      source.addEventListener("ended", () => record("fixture.ended", { round, audioTime: microphone.context.currentTime }));
+      record("fixture.start", { round: roundNumber, audioTime, duration: source.buffer.duration, delayMs, outputStarts,
+        fixtureText: fixture.fixtureText || config.fixtureText || "" });
+      source.addEventListener("ended", () => record("fixture.ended", { round: roundNumber, audioTime: microphone.context.currentTime }));
       return { audioTime, duration: source.buffer.duration, outputStarts };
     },
     mark(label) { record("operator.mark", { label: String(label).slice(0, 200) }); },
+    async finishMeasurement() {
+      if (measurementCheckpoint) return { verified: true, ...measurementCheckpoint };
+      if (measurementCheckpointPromise) return await measurementCheckpointPromise.promise;
+      if (measurementStarted === undefined) throw new Error("Audio measurement never started");
+      const start = events.find(event => event.type === "measurement.start");
+      const boundary = await requestTraceCheckpoint("end");
+      const { response, entry, requestId, requestedAt, submittedEnd } = boundary;
+      const contextId = entry.id;
+      const intervals = events.filter(event => event.type === "playback.trace" &&
+          event.contextId === contextId && event.epoch === entry.playbackEpoch &&
+          Number.isSafeInteger(event.sourceStart) && Number.isSafeInteger(event.samples))
+          .sort((left, right) => left.sourceStart - right.sourceStart);
+      let cursor = start.sourceStart;
+      let acceptedPrefixInterval = false;
+      for (const interval of intervals) {
+        const intervalEnd = interval.sourceStart + interval.samples;
+        if (intervalEnd <= cursor || interval.sourceStart >= response.renderedEnd) continue;
+        if (interval.sourceStart > cursor) throw new Error("Playback trace checkpoint has a missing source prefix");
+        if (interval.sourceStart < cursor && acceptedPrefixInterval)
+          throw new Error("Playback trace checkpoint contains overlapping source intervals");
+        acceptedPrefixInterval = true;
+        cursor = Math.min(response.renderedEnd, intervalEnd);
+        if (cursor === response.renderedEnd) break;
+      }
+      if (cursor !== response.renderedEnd) throw new Error("Playback trace checkpoint prefix was not fully received");
+      measurementCheckpoint = response;
+      record("measurement.end", { requestId, contextId, epoch: entry.playbackEpoch,
+        sourceStart: start.sourceStart, acceptedEnd: response.acceptedEnd, renderedEnd: response.renderedEnd,
+        renderedAt: response.renderedAt, requestMonotonicMs: requestedAt, submittedEnd,
+        receivedSamples: measurementReceivedSamples, transportReceivedSamples: receivedSamples,
+        captureOrder: captureOrder++ });
+      return { verified: true, ...response };
+    },
     stop() {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
@@ -332,16 +710,33 @@
       return stopPromise;
     },
     status() {
+      const liveEvents = events.filter(event => event.type === "live.event");
+      const transcripts = liveEvents.filter(event => event.eventType === "transcript").map(event => ({
+        speaker: event.speaker || "", text: event.text || "", monotonicMs: event.monotonicMs,
+      }));
+      const delegations = liveEvents.filter(event => ["delegation", "task_started", "task_completed"].includes(event.eventType)).map(event => ({
+        delegationId: event.delegation_id || "", taskId: event.task_id || "", runId: event.run_id || "",
+        eventType: event.eventType, status: event.status || "", monotonicMs: event.monotonicMs,
+      }));
+      const toolCalls = liveEvents.filter(event => ["tool_call", "tool_execution_started", "tool_result"].includes(event.eventType)).map(event => ({
+        eventType: event.eventType, callId: event.call_id || event.id || "", name: event.name || event.tool || "",
+        runId: event.run_id || "", monotonicMs: event.monotonicMs,
+      }));
+      const audible = capture.filter(block => block.rms > 0.01).at(-1);
       return { mode: config.mode, stopped, microphone: !!microphone,
         measurementElapsedMs: measurementStarted === undefined ? 0 : performance.now() - measurementStarted,
         maxSeconds: limit,
         voiceClosed: events.some(event => event.type === "live.status" && event.status === "closed"),
         providerFinalized: events.some(event => `${event.text || ""}${event.message || ""}`.includes("Finalization confirmed.")),
         outputArmed: contexts.length > 0 && contexts.every(entry => entry.armed), outputBlocks: capture.length,
-        inputFrames: input.length, events: events.length, health: health.at(-1), omitted };
+        inputFrames: input.length, events: events.length, health: health.at(-1), omitted,
+        receivedPacketCount, receivedSamples: measurementReceivedSamples,
+        receivedSamplesCaptured, receivedBytesCaptured, receivedOmittedBytes, receivedOmittedPackets,
+        transcripts, delegations, toolCalls, subscribedSessionId: selectedSessionId,
+        ui: currentUIState, lastAudibleOutputMs: audible?.monotonicMs || 0 };
     },
     export() {
-      return { schema: "ngn-browser-voice-e2e/v1", mode: config.mode,
+      return { schema: "ngn-browser-voice-e2e/v2", mode: config.mode,
         environment: { userAgent: navigator.userAgent.slice(0, 512), visibilityState: document.visibilityState,
           viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
           appRevision: "Not exposed by the public bootstrap or DOM; retain server revision separately.",
@@ -351,10 +746,21 @@
         fixture: { text: config.fixtureText, sha256: config.fixtureSha256 },
         clock: { performanceTimeOriginMs: origin, installedMonotonicMs: installed,
           measurementStartedMonotonicMs: measurementStarted,
+        measurementCheckpoint,
+        measurementBeginCheckpoint,
+          measurementStartedAudioTime, receivePcmRate: PCM_RATE, receivePcmByteLimit: receivedPcmByteLimit,
           note: "Audio frames are context-relative; callback wall/monotonic timestamps record delivery, not acoustic time." },
-        contexts: contexts.map(({ context, id }) => ({ id, sampleRate: context.sampleRate, sinkType: context.sinkId?.type,
+        contexts: contexts.map(({ context, id, frameOrigin, samplesCaptured, blocksCaptured, schema }) => ({
+          id, schema, frameOrigin, samplesCaptured, blocksCaptured,
+          sampleRate: context.sampleRate, sinkType: context.sinkId?.type,
           state: context.state, currentTime: context.currentTime, outputTimestamp: context.getOutputTimestamp?.() })),
-        stopped, omitted, events, health, input, output: capture };
+        stopped, omitted, events, health, input,
+        received: received.map(({ pcm: bytes, ...packet }) => ({ ...packet, pcm16: base64(new Uint8Array(bytes)) })),
+        receivedPcm: { sampleRate: PCM_RATE, sampleFormat: "s16le", packetCount: receivedPacketCount,
+          capturedPackets: received.length, samples: receivedSamples, capturedSamples: receivedSamplesCaptured,
+          capturedBytes: receivedBytesCaptured, omittedBytes: receivedOmittedBytes,
+          omittedPackets: receivedOmittedPackets, byteLimit: receivedPcmByteLimit },
+        output: capture };
     },
   };
   globalThis.__voiceE2E = api;

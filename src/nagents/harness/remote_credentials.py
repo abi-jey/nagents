@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import ssl
@@ -21,6 +22,8 @@ from nagents.a2a.remote_config import remote_endpoint
 
 from .private_store import ProtectedFileStore
 from .private_store import ProtectedStoreError
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -341,14 +344,20 @@ class RemoteCredentials(ProtectedFileStore):
         deadline = asyncio.get_running_loop().time() + 30
         while True:
             descriptor = -1
+            phase = "directory"
             try:
                 with self._directory(create=True) as directory:
-                    descriptor = os.open(
-                        f".{self.profile.fingerprint}.refresh.lock",
-                        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                        0o600,
-                        dir_fd=directory,
-                    )
+                    phase = "open_lock"
+                    name = f".{self.profile.fingerprint}.refresh.lock"
+                    # Avoid macOS openat's create-or-open race on the first
+                    # concurrent refresh. Never unlink or replace this lock.
+                    try:
+                        descriptor = os.open(
+                            name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory
+                        )
+                    except FileExistsError:
+                        descriptor = os.open(name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=directory)
+                phase = "validate_lock"
                 info = os.fstat(descriptor)
                 if (
                     not stat.S_ISREG(info.st_mode)
@@ -357,6 +366,7 @@ class RemoteCredentials(ProtectedFileStore):
                     or info.st_nlink != 1
                 ):
                     raise ProtectedStoreError("Remote agent credential storage is unsafe")
+                phase = "acquire_lock"
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
@@ -364,10 +374,16 @@ class RemoteCredentials(ProtectedFileStore):
                     with suppress(OSError):
                         os.close(descriptor)
                     descriptor = -1
-            except (OSError, ProtectedStoreError):
+            except (OSError, ProtectedStoreError) as error:
                 if descriptor >= 0:
                     with suppress(OSError):
                         os.close(descriptor)
+                logger.warning(
+                    "Remote credential lock failed phase=%s error_type=%s errno=%s",
+                    phase,
+                    type(error).__name__,
+                    error.errno if isinstance(error, OSError) else "unavailable",
+                )
                 raise RemoteCredentialError(
                     "Remote agent credentials could not be loaded safely", code="A2A_AUTH_STORAGE"
                 ) from None

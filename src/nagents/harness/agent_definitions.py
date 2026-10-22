@@ -11,9 +11,11 @@ import os
 import re
 import stat
 import tomllib
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 from typing import cast
 
@@ -262,6 +264,13 @@ def _tool_policy(data: dict[str, object], options: _Import) -> tuple[tuple[str, 
 
 
 def _yaml_header(source: str, *, max_bytes: int = MAX_HEADER_BYTES) -> dict[str, object]:
+    # Discovery still validates each path and rereads its bytes on every round.
+    # Only unchanged parsing is reused; each caller owns its nested policy data.
+    return deepcopy(_parsed_yaml_header(source, max_bytes))
+
+
+@lru_cache(maxsize=128)
+def _parsed_yaml_header(source: str, max_bytes: int) -> dict[str, object]:
     if len(source.encode("utf-8")) > max_bytes:
         raise ValueError(f"YAML frontmatter exceeds {max_bytes // 1024} KiB")
     for index, token in enumerate(yaml.scan(source)):

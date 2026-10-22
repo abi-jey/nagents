@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import ssl
 import uuid
 from contextlib import aclosing
@@ -79,9 +80,18 @@ async def owned_remote_task(
         from nagents.a2a.conversation import TERMINAL_STATES
 
         if conversation.task_id and conversation.state not in TERMINAL_STATES:
+            task_identity = (
+                conversation.task_id if re.fullmatch(r"[A-Za-z0-9_-]{1,256}", conversation.task_id) else "unavailable"
+            )
 
             async def cancel() -> None:
                 try:
+                    logger.info(
+                        "A2A cancellation requested session=%s message=%s task=%s",
+                        harness.session_id,
+                        message_id,
+                        task_identity,
+                    )
                     async with asyncio.timeout(10):
                         task = await remote.cancel(conversation.task_id)
                         if task.status.state in TERMINAL_STATES:
@@ -91,15 +101,37 @@ async def owned_remote_task(
                                     (task.status.state, harness.session_id, message_id),
                                 )
                                 await db.commit()
+                            logger.info(
+                                "A2A cancellation confirmed session=%s message=%s task=%s state=%d",
+                                harness.session_id,
+                                message_id,
+                                task_identity,
+                                task.status.state,
+                            )
+                        else:
+                            logger.warning(
+                                "A2A cancellation unconfirmed session=%s message=%s task=%s state=%d",
+                                harness.session_id,
+                                message_id,
+                                task_identity,
+                                task.status.state,
+                            )
                 except Exception as error:
                     logger.warning(
-                        "A2A cancellation unconfirmed session=%s message=%s error_type=%s",
+                        "A2A cancellation unconfirmed session=%s message=%s task=%s error_type=%s",
                         harness.session_id,
                         message_id,
+                        task_identity,
                         type(error).__name__,
                     )
 
             await finish_on_cancel(cancel())
+        elif not conversation.task_id:
+            logger.warning(
+                "A2A cancellation unconfirmed session=%s message=%s task_received=0 outcome=unknown",
+                harness.session_id,
+                message_id,
+            )
         raise
 
 

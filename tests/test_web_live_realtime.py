@@ -59,6 +59,27 @@ def test_source_offset_diagnostics_handle_dtx_missing_and_restarted_timestamps_a
         assert clock.observe(23 + second, second * 0.9997) == 0
 
 
+def test_source_interval_diagnostics_separate_media_gaps_from_delivery_stalls() -> None:
+    clock = MediaClock()
+    clock.observe(10, 0, duration=0.02)
+    clock.observe(10.12, 0.12, duration=0.02)
+    assert clock.arrival_interval_ms == pytest.approx(120)
+    assert clock.source_interval_ms == pytest.approx(120)
+    assert clock.source_gap_ms == pytest.approx(100)
+    assert clock.transport_late_ms == pytest.approx(0)
+    clock.observe(10.24, 0.14, duration=0.02)
+    assert clock.arrival_interval_ms == pytest.approx(120)
+    assert clock.source_interval_ms == pytest.approx(20)
+    assert clock.source_gap_ms == pytest.approx(0)
+    assert clock.transport_late_ms == pytest.approx(100)
+    clock.observe(10.26, 0, duration=0.02)
+    assert clock.resets == 1
+    assert clock.source_gap_ms == clock.transport_late_ms == 0
+    clock.observe(10.28, 0.02, valid=False, duration=0.02)
+    assert clock.missing == 1
+    assert clock.arrival_interval_ms == clock.source_gap_ms == clock.transport_late_ms == 0
+
+
 @pytest.mark.parametrize("stall", [0.15, 0.25, 0.35])
 def test_three_minute_call_with_repeated_processing_stalls_bounds_local_backlog(stall: float) -> None:
     async def scenario() -> None:

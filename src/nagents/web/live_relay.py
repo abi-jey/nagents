@@ -302,14 +302,26 @@ class ChatGPTMediaRelay:
             )
             # Source timestamps are not synchronized with the local clock.
             # Keep offset drift visible, but never use it to discard fresh PCM.
-            self._media_clock.observe(now, media_time, valid=valid_clock)
+            frame_duration = frame.samples / frame.sample_rate if frame.sample_rate else 0.0
+            self._media_clock.observe(now, media_time, valid=valid_clock, duration=frame_duration)
+            if self._media_clock.arrival_interval_ms > 40 or self._media_clock.source_gap_ms > 40:
+                logger.info(
+                    "Live decoded audio interval: voice_session_id=%s arrival_interval_ms=%.1f "
+                    "source_interval_ms=%.1f source_gap_ms=%.1f transport_late_ms=%.1f output_samples=%d",
+                    self._voice_session_id,
+                    self._media_clock.arrival_interval_ms,
+                    self._media_clock.source_interval_ms,
+                    self._media_clock.source_gap_ms,
+                    self._media_clock.transport_late_ms,
+                    self._output_samples,
+                )
             # This is observed decoded-frame spacing, not network-only jitter:
             # downstream write waits also delay the next recv(). The concurrent
             # RTP snapshot reports packet progress and receive/write wait flags.
             if previous and self._upstream_gap.observe(now - previous - duration):
                 self._report_output()
             previous = now
-            duration = frame.samples / frame.sample_rate if frame.sample_rate else 0.0
+            duration = frame_duration
             for converted in resampler.resample(frame):
                 if not self._quiet:
                     # PyAV planes may include alignment padding, which is not

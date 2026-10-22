@@ -185,8 +185,9 @@ effect on subsequent requests. Global and workspace connection scope works as
 for its other fields. Model catalogs retain their separate cap of
 `min(request_timeout, 30)` seconds.
 
-This field does not change shell limits, whole-run or child deadlines, Live
-session duration, Live backend waiting limits, or authentication SDK deadlines.
+This field does not change shell limits, Live session duration, Live backend
+waiting limits, or authentication SDK deadlines. Subagents have no overall
+execution timeout.
 Existing retries remain unchanged; retries and backoff can make a generation
 last longer than one request deadline. There is no top-level Harness JSON field
 or `NGN_REQUEST_TIMEOUT` environment alias. Use the named connection's JSON,
@@ -375,9 +376,10 @@ credentials.
 | `demo` | boolean | `false` | Offline scripted provider, no workspace mutations or shell execution, and no plugin imports. Local demo conversations are still saved. |
 
 Integer fields reject floats and booleans even if numerically equivalent.
-Subagent concurrency, per-run job counts, timeouts, and result-size budgets are
+Subagent concurrency, per-run job counts, and result-size budgets are
 additional safeguards, not extra JSON fields. See
-[subagents](ngn.md#native-background-subagents).
+[subagents](ngn.md#native-background-subagents). Subagent runs have no overall
+execution timeout; individual tools and network operations retain their deadlines.
 
 The model receives the active shell timeout, output cap, and whole-file read
 limit in the native tool descriptions. These descriptions refresh when settings

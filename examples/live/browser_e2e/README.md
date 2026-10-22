@@ -3,7 +3,7 @@
 This harness sends known spoken audio through the real browser microphone
 capture worklet and ngn WebSocket, then records the real rendered speaker graph
 after the playback worklet and volume control. It runs only when explicitly
-installed into an isolated Chrome DevTools MCP tab; the production app imports
+installed into an isolated Chrome CDP context; the production app imports
 none of these files.
 
 Two modes serve different evidence:
@@ -24,6 +24,172 @@ Authenticated tests can also use the optional deployment bridge described below
 to exercise the real public ingress and deployed ngn process.
 
 ## Prepare and launch
+
+### Automated loopback CDP runner
+
+For repeatable runs, use `cdp_runner.py`. It attaches to Chrome's loopback CDP
+endpoint, creates one disposable browser context and page, clicks the ordinary
+voice controls with native CDP mouse input, and closes only that owned context.
+It launches and stops its own local server unless `--url` points at another
+loopback server exposing the same private E2E routes. It never uses
+Playwright/Selenium, browser storage from an existing profile, or physical audio
+devices.
+
+Prerequisites are the repository `.venv`, FFmpeg with Flite, the built frontend,
+and Chrome already listening on `127.0.0.1:9222`. Keep the scenario, config,
+workspace, and artifact directory private. The offline runner isolates
+`XDG_CONFIG_HOME` and `XDG_DATA_HOME` inside the artifact directory; it makes
+no provider calls. The runner captures transcripts and audio PCM, so its output
+directory is created with mode `0700`; JSON, logs, and screenshots use `0600`.
+
+Offline baseline should exit `0`:
+
+```bash
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode offline \
+  --artifacts /tmp/ngn-voice-cdp-baseline \
+  --workspace /tmp/ngn-voice-cdp-baseline-workspace
+```
+
+An injected 200 ms audio gap without an expected-fault flag should exit `1`:
+
+```bash
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode offline --gap-ms 200 \
+  --artifacts /tmp/ngn-voice-cdp-gap-fails \
+  --workspace /tmp/ngn-voice-cdp-gap-fails-workspace
+```
+
+The same fault as an explicit negative control should exit `0` because the
+checker confirms the gap was detected:
+
+```bash
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode offline --gap-ms 200 --expect-gap-ms 200 \
+  --artifacts /tmp/ngn-voice-cdp-gap-control \
+  --workspace /tmp/ngn-voice-cdp-gap-control-workspace
+```
+
+Authenticated mode is opt-in and requires a private local ngn config, a
+separate workspace, and a scenario JSON. The example scenario runs six
+conversation turns, holds the live session across five minutes, and requires
+real tool and delegation evidence; the runner writes the deterministic
+read-only sentinel file into that test workspace. Use a config that explicitly
+allows the selected tool and delegate target. It does not infer credentials or
+fall back to offline mode:
+
+For an isolated starting configuration, copy `config.example.json`,
+`providers.example.json`, and `assistant.example.md` together into a private
+directory and use the copied config below. They select normal local Codex
+credential discovery, enable Live, and define the read-only `helper` requested
+by the scenario. No credentials are copied.
+Set `XDG_CONFIG_HOME` and `XDG_DATA_HOME` to separate, private test directories
+to avoid editing your normal ngn preferences; leave `CODEX_HOME` pointing to
+your existing signed-in Codex installation. Alternatively use your own local
+config and adjust the scenario's helper/tool names to match it.
+
+```bash
+XDG_CONFIG_HOME=/path/to/private/isolated-config \
+XDG_DATA_HOME=/path/to/private/isolated-data \
+.venv/bin/python -m examples.live.browser_e2e.cdp_runner \
+  --mode authenticated \
+  --scenario-json examples/live/browser_e2e/authenticated-scenario.example.json \
+  --config /path/to/private/ngn-config.json \
+  --workspace /path/to/private/e2e-workspace \
+  --artifacts /path/to/private/e2e-artifacts
+```
+
+The report records the scenario/round IDs, mode, package and source revision,
+source-module hashes, and the hashes of same-origin JS/CSS build assets. A
+failure leaves private status, the full bounded capture when available,
+timestamped server logs, cleanup/finalization status, and a screenshot.
+Re-run the same command after each relevant source change; use a fresh
+workspace/artifact path to avoid reusing stale fixture state.
+
+When the capture includes the complete received-PCM ledger, `artifacts.py
+unpack` also writes `speaker-received.wav` at mono 24 kHz. This is the exact
+network PCM presented to the playback worklet, before playback DSP. The
+unpacker validates packet sequence, offsets, byte/sample totals, omissions, and
+the byte bound before exporting it. Incomplete captures produce no received
+WAV and are marked `receivedPcm.status: incomplete`; older v2 captures that
+predate this channel are marked `not-captured` and are not replayable. The
+human-readable `trace.json` keeps packet metadata but strips `pcm16` from
+input, output, and received channels, avoiding a second copy of the audio.
+
+The runner requires authenticated scenario rounds to include expected spoken
+text and actual call progress. `require_delegation` means the voice handoff
+reported `queued`, `working`, and `completed`; `require_subagent` separately
+requires a native child task to start and complete. Tool lifecycle events are
+read from the app's `/api/events` socket for the subscribed session, and only
+safe IDs/names/statuses are retained. Arguments, tool results, prompts, and
+token-bearing WebSocket subprotocols are not copied to the event trace.
+
+Before sending a fixture the driver waits for the normal UI's connected state.
+It advances only after the expected final phrase, required work completion,
+and three seconds of rendered silence with a bounded playback queue. Live RTP
+can continue sending silence, so an empty queue is not required. This settling
+rule is a heuristic, not a provider turn-final acknowledgment: use concise
+answers with the expected phrase at the end, and inspect the timeline if a
+provider pauses longer in mid-answer. `--max-seconds` bounds the whole test's
+measurement window; it does not change the application's agent run policy.
+
+Underruns are not treated as proof of a glitch by themselves. The report
+correlates the audio-thread underrun timestamp with captured non-silent output
+PCM, while queue-empty periods remain explicitly ambiguous between provider
+DTX/natural pauses and starvation. A passing report confirms the configured
+PCM continuity, drop, response, and rendered-speech age gates; it cannot prove what a
+person would perceive through a physical speaker.
+
+The report keeps the existing all-queued packet-age metric as a diagnostic and
+gates on `graphRenderedSpeechAge` per minute. The isolated E2E playback node opts
+into a bounded numeric worklet trace: every flushed source-coordinate interval is
+batched and acknowledged independently of the visual played reports. The trace
+contains no PCM. Trace intervals split at discontinuous raw browser render-clock
+labels, preserving those observations without stretching the PCM timeline across
+them. The checker validates batch sequence, omissions, source
+coordinates, then correlates voiced received PCM with actual post-volume
+recorder PCM within one output quantum. Before the first fixture, the runner
+checkpoints the graph after it drains preloaded warmup audio. This gives the
+measured window an exact source-sample boundary even when the first packet is
+not quantum-aligned. Before normal UI End, it requests a second checkpoint that
+snapshots accepted source samples and drains the trace through the matching
+rendered coordinate. The graph gate uses only this complete atomic prefix;
+capture continues through normal close/finalization, and later received or
+rendered PCM remains visible as post-measurement tail data. Stale periodic health
+samples cannot substitute for either checkpoint. It reports packet
+arrival-to-software-render-graph age and detects added gaps between voiced source
+samples. Missing intervals, incomplete receive/output PCM, silent or unrelated
+output, dropped samples, and added gaps over 40 ms during short source pauses
+fail closed. Overlapping half-interval windows must also match at the same alignment,
+reducing the chance that a loud section hides a muted or reordered segment. These
+checks do not certify arbitrary sub-window glitches or perceptual smoothness.
+Output PCM is linearly interpolated at a shared fractional frame alignment to
+account for the playback resampler's phase, with the same bounded clock search
+and correlation threshold. It does not require a
+fixed amplitude threshold on each short span, so valid low-level tails remain
+verifiable without hiding coordinate holes. A gap is compared against source
+sample time: a 61 ms source pause rendered as 78 ms adds 17 ms and passes, while
+the same pause stretched to 209 ms fails. Source pauses over 200 ms and packet
+gaps without corresponding source silence remain visible as long-pause or
+unclassifiable-input-pause diagnostics; they are not silently discarded or
+claimed as measured smoothness.
+
+Raw underrun-near-speech classifications remain in the report. The complete
+trace can override those proximity-only checks only when received PCM, trace
+coordinates, final counters, and post-volume waveform matching all validate and
+the source-aware gap/latency bounds pass. Missing trace data cannot override a
+counter failure. A long packet gap without source-silence samples is
+unclassifiable and fails the smoothness gate.
+
+The separately reported cached `getOutputTimestamp()` estimate maps context time
+to output-device presentation time. It is diagnostic only: in one measured
+Chrome/software-sink run it differed from software-graph render time by about
+27 ms. That offset is not acoustic latency, and the
+required `sinkId: none` has no physical speaker presentation to measure. The
+default gate therefore uses graph time. Neither metric measures provider
+generation time or what a person hears through physical hardware.
+
+### Manual Chrome DevTools MCP procedure
 
 Use the repository virtual environment. Build the frontend first with
 `npm --prefix src/nagents/web-ui run build`. Keep generated audio, init scripts, and traces outside Git.
@@ -105,7 +271,8 @@ with the actual starting audio frame. Only then does it schedule the known
 utterance 250 ms later. The PCM measurement window therefore begins before the
 test utterance, rather than at connection creation. Pre-arm render-clock changes
 remain in the trace as `phase: "warmup"` events; they are not misrepresented as
-recorded speech. Every discontinuity after arming remains a validation failure.
+recorded speech. Raw clock changes after arming remain explicit diagnostics;
+missing or reordered PCM fails the independent sample-counter checks.
 
 Observe real captions and, in authenticated mode, the delegation status via
 snapshots. Open Request & events through normal clicks if inspecting a failure.
@@ -134,6 +301,13 @@ poetry run python examples/live/browser_e2e/artifacts.py unpack \
   /tmp/ngn-voice-e2e/capture.json /tmp/ngn-voice-e2e/result
 ```
 
+The unpacker always preserves received PCM in `speaker-callback-order-*.wav`,
+including failed captures. Those files use message delivery order, without
+sorting samples or inserting silence; they do not establish timing continuity.
+It writes `speaker-rendered-*.wav` only when processed sample counters, block
+sequence, and actual PCM are continuous. Raw browser clock observations stay in
+`trace.json`, separately from sample continuity.
+
 Validate the original capture with a command that exits nonzero on failure:
 
 ```bash
@@ -156,12 +330,24 @@ poetry run python examples/live/browser_e2e/artifacts.py check \
 
 All checks require actual PCM in both directions, stopped capture, closed voice,
 playback health, no runtime errors/dropped samples, and recorder continuity.
-The first output frame must match the recorder's start acknowledgement. Warmup
-clock anomalies remain visible separately. Every measured gap, overlapping
-block, or post-arm clock jump fails continuity, including jumps inside a partially
-accumulated block. No missing samples are silently removed or declared continuous.
-Older captures without an explicit measurement-start acknowledgement do not pass
-the current measurement contract; retain them as historical evidence.
+The v2 recorder numbers every delivered block and every captured sample from
+zero, independently of the browser's `currentFrame` labels. Start/stop
+acknowledgments must match the first frame, total samples, and total block count.
+Missing, duplicate, reordered, truncated, or overlapping data fails validation;
+no missing samples are silently repaired. Older captures without these independent
+counters cannot pass the current contract; retain them as historical evidence.
+
+`frame` follows processed samples anchored at recording start; `sampleOffset`
+and `sequence` establish data continuity. `observedFrame` preserves the raw
+browser frame label, and every raw clock jump remains in the trace and
+`renderClockConsistent` diagnostic. A raw clock jump alone does not establish
+PCM loss: Chromium's [worklet clock update](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/modules/webaudio/base_audio_context.cc)
+can skip updating the global frame when the graph lock is unavailable. An
+independent known-ramp calibration reproduced paired label jumps with no lost or
+reordered source samples. The recorder therefore does not sort or repair PCM
+using those labels. Playback starvation, dropped samples, network gaps, and
+context timing remain separate observations; this does not measure the physical
+speaker clock or guarantee perceptual smoothness.
 
 The offline checker uses the known response sample count, packet intervals,
 and playback-health counters. One queue exhaustion after the complete response
@@ -284,7 +470,8 @@ Artifacts contain:
   speech. Offline `server-events.jsonl` adds server monotonic/wall timestamps,
   microphone RMS, and each planned/sent response frame.
 
-Audio-thread frame positions are authoritative for waveform continuity.
+Processed-sample offsets and block sequences establish recorder data continuity.
+Raw `observedFrame` labels remain clock diagnostics, not proof of PCM loss.
 Callback timestamps describe main-thread delivery and may lag rendering.
 Browser and server monotonic clocks have different origins; correlate with
 wall time and corresponding socket events, not by subtracting them directly.
@@ -312,3 +499,19 @@ poetry run pytest tests/test_browser_voice_e2e.py
 node --test examples/live/browser_e2e/capture-worklet.test.mjs
 node --test examples/live/browser_e2e/browser-init.test.mjs
 ```
+
+## Private received-PCM replay proposal
+
+The review-only received-PCM prototype captures each accepted binary packet from the live audio WebSocket before the app transfers its original `ArrayBuffer` to the playback worklet. It copies the bytes immediately, but defers base64 encoding until export to keep the message callback lightweight. Captured blocks retain packet order, measurement-relative and transport-global sample counts, 24 kHz PCM16 format, the active playback epoch/realtime mode, output-context time, and monotonic/wall receipt clocks. `playback.submit` records numeric metadata when that same buffer reaches the worklet port; a received packet without a matching submission is not treated as played or replayable. `playback.control` records only reset/barrier/mode metadata so offline replay can reproduce epoch changes.
+
+This is decrypted user/provider audio. Treat it like the existing microphone and rendered-speaker PCM: artifact directory mode `0700`, JSON/audio files mode `0600`, isolated disposable browser context, and software sinks only. The packet payload is stored only under the new `received` array; no tokens, socket protocols, transcripts, or payloads enter logs or browser storage. The copy is limited to `min(30,000,000 bytes, 24,000 samples/s × 2 × maxSeconds)`; invalid frames and data beyond the limit increment omission counters and make exact replay fail closed. The runner retains its 256 MB export bound.
+
+A private trace can be replayed through the production playback worklet without a provider call:
+
+```bash
+umask 077
+node examples/live/browser_e2e/replay-received.mjs /private/path/capture.json > /private/path/replay-summary.json
+chmod 600 /private/path/replay-summary.json
+```
+
+The offline Node VM uses the recorded 48 kHz capture origin, port-submission audio times, 128-frame quanta, captured playback controls, and health/played acknowledgements. It emits a bounded numeric health series alongside counters, underruns, drops, queue/target maxima, and output signal statistics; it writes no audio. Replay models when the app submitted PCM, but excludes MessagePort scheduling delay and pre-capture buffered playback state. It isolates playback DSP from browser/network scheduling and physical output, so it cannot establish whether a captured packet gap was intentional provider DTX or a transport stall.

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import copy
+import hashlib
+import importlib.metadata
 import json
 import struct
+import subprocess
 import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
-from typing import cast
 
 import uvicorn
 from fastapi import APIRouter
@@ -19,12 +20,12 @@ from fastapi import HTTPException
 from fastapi import WebSocket
 from starlette.responses import FileResponse
 from starlette.websockets import WebSocketDisconnect
-from uvicorn.logging import AccessFormatter
-from uvicorn.logging import DefaultFormatter
 
+import nagents.web.app as web_app
 from nagents.harness.config import HarnessConfig
 from nagents.harness.config import load_config
 from nagents.web.app import create_app
+from nagents.web.runtime import server_logging_config
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -33,29 +34,9 @@ SESSION = "voice-e2e-offline"
 REVISION = "e" * 64
 
 
-class UTCDefaultFormatter(DefaultFormatter):
-    @staticmethod
-    def converter(timestamp: float | None = None) -> time.struct_time:
-        return time.gmtime(timestamp)
-
-
-class UTCAccessFormatter(AccessFormatter):
-    @staticmethod
-    def converter(timestamp: float | None = None) -> time.struct_time:
-        return time.gmtime(timestamp)
-
-
 def log_configuration() -> dict[str, object]:
-    """Add UTC milliseconds to ordinary server logs; do not log payloads."""
-    configuration: dict[str, object] = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
-    formatters = cast("dict[str, dict[str, object]]", configuration["formatters"])
-    for name, formatter_type in (("default", UTCDefaultFormatter), ("access", UTCAccessFormatter)):
-        formatter = formatters[name]
-        formatter["()"] = formatter_type
-        formatter["fmt"] = "%(asctime)s.%(msecs)03dZ " + str(formatter["fmt"])
-        formatter["datefmt"] = "%Y-%m-%dT%H:%M:%S"
-        formatter["use_colors"] = False
-    return configuration
+    """Use the application logging allowlist with UTC millisecond timestamps."""
+    return server_logging_config()
 
 
 class ScriptedVoice:
@@ -218,9 +199,57 @@ def instrument(app: FastAPI, fixtures: Path, *, offline: bool, gap_ms: int) -> N
     async def recorder() -> FileResponse:
         return FileResponse(Path(__file__).with_name("capture-worklet.js"), media_type="text/javascript")
 
+    @router.get("/__voice-e2e/meta")
+    async def metadata() -> dict[str, object]:
+        source_root = Path(web_app.__file__).resolve().parent.parent
+        package_root = source_root.parents[1]
+        module_names = (
+            "web/app.py",
+            "web/live.py",
+            "web/live_runtime.py",
+            "web/live_relay.py",
+            "web/live_updates.py",
+        )
+        modules = {
+            name: hashlib.sha256((source_root / name).read_bytes()).hexdigest()
+            for name in module_names
+            if (source_root / name).is_file()
+        }
+        revision = ""
+        dirty: bool | None = None
+        try:
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=package_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            dirty = bool(
+                subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=package_root, check=True, capture_output=True, text=True
+                ).stdout.strip()
+            )
+        except (OSError, subprocess.CalledProcessError):
+            pass
+        try:
+            version = importlib.metadata.version("nagents")
+        except importlib.metadata.PackageNotFoundError:
+            version = "unknown"
+        return {
+            "packageVersion": version,
+            "sourceRevision": revision or "unavailable",
+            "sourceTreeDirty": dirty,
+            "moduleSha256": modules,
+        }
+
     @router.get("/assets/voice-e2e-input.wav")
     async def caller() -> FileResponse:
-        return FileResponse(fixtures / "caller.wav", media_type="audio/wav")
+        fixture = fixtures / "round-1.wav"
+        return FileResponse(fixture if fixture.is_file() else fixtures / "caller.wav", media_type="audio/wav")
+
+    @router.get("/assets/voice-e2e-input-round-{round_number}.wav")
+    async def caller_round(round_number: int) -> FileResponse:
+        if not 1 <= round_number <= 64:
+            raise HTTPException(404)
+        fixture = fixtures / f"round-{round_number}.wav"
+        return FileResponse(fixture if fixture.is_file() else fixtures / "caller.wav", media_type="audio/wav")
 
     if offline:
         ScriptedVoice(fixtures, gap_ms).register(router)
