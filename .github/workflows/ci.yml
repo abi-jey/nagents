@@ -29,6 +29,11 @@ on:
           - patch
           - minor
           - major
+      sqlite_trace:
+        description: 'Enable scoped failure-only SQLite diagnostics for Windows tests'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   # =============================================================================
@@ -183,8 +188,10 @@ jobs:
 
       - name: Run portable tests (POSIX harness cases are marked)
         shell: bash
+        env:
+          NGN_SQLITE_TRACE: ${{ (github.event_name == 'workflow_dispatch' && inputs.sqlite_trace) && '1' || '0' }}
         run: |
-          NGN_SQLITE_TRACE=1 python -m pytest -p tests.support.sqlite_trace \
+          python -m pytest -p tests.support.sqlite_trace \
             $(python .github/scripts/shard_tests.py --shards ${{ matrix.shards }} --group ${{ matrix.group }}) \
             -n auto -v -rs -o faulthandler_timeout=60
 
