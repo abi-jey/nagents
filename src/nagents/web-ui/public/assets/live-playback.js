@@ -8,6 +8,9 @@ const RESERVE_DECAY = 0.002; // Give back two milliseconds per second of clean d
 const REALTIME_TARGET = .28;
 const REALTIME_DECAY = .00025;
 const REALTIME_LIMIT = PCM_RATE * .32;
+// Verified digital silence can use a smaller packet-jitter guard. The normal
+// speech guard, minimum startup reserve and maximum learned reserve stay intact.
+const QUIET_NETWORK_GUARD_SECONDS = .03;
 const QUIET_RECOVERY_TAIL_SECONDS = .006;
 const QUIET_RECOVERY_MAX_ARRIVAL_SECONDS = .1;
 const QUIET_RECOVERY_PRIME_SECONDS = MIN_TARGET;
@@ -137,6 +140,7 @@ class LivePlayback extends AudioWorkletProcessor {
     this.latencyRecoveries = 0;
     this.silenceRefills = 0;
     this.quietFrames = 0;
+    this.quietReceivedSamples = 0;
     this.lowLevelTailFrames = 0;
     this.quietTailRecoveryPending = false;
     this.recoveryPrimeTarget = 0;
@@ -182,6 +186,7 @@ class LivePlayback extends AudioWorkletProcessor {
     this.firstArrival = this.lastArrival = -1;
     this.meanDepth = this.lastValue = this.fadeFrom = this.fade = 0;
     this.quietFrames = 0;
+    this.quietReceivedSamples = 0;
     this.clearQuietRecoveryState();
     this.ratio = 1;
     this.healthPending = this.playedPending = false;
@@ -246,6 +251,14 @@ class LivePlayback extends AudioWorkletProcessor {
   append(buffer) {
     const now = currentTime;
     const incoming = buffer.byteLength / 2;
+    const bytes = new DataView(buffer);
+    let incomingQuiet = true;
+    let trailingQuietSamples = 0;
+    for (let i = 0; i < incoming; i++) {
+      if (Math.abs(bytes.getInt16(i * 2, true)) <= 2) trailingQuietSamples++;
+      else { incomingQuiet = false; trailingQuietSamples = 0; }
+    }
+    const useQuietPeakGuard = this.realtime && this.quietReceivedSamples >= PCM_RATE * .06 && incomingQuiet && Math.abs(this.lastValue) <= 2 / 32768;
     if (this.lastArrival >= 0) {
       const interval = now - this.lastArrival;
       const relaxedTarget = Math.max(MIN_TARGET, this.target - interval * (this.realtime ? REALTIME_DECAY : RESERVE_DECAY));
@@ -257,7 +270,7 @@ class LivePlayback extends AudioWorkletProcessor {
         // immediately so the next re-prime can absorb repeated delivery gaps.
         // This cannot recover audio already missing during the first stall.
         const late = Math.max(0, interval - this.packetDuration);
-        this.target = Math.min(this.realtime ? REALTIME_TARGET : MAX_TARGET, Math.max(relaxedTarget, MIN_TARGET + late, MIN_TARGET + 3 * this.jitter));
+        this.target = Math.min(this.realtime ? REALTIME_TARGET : MAX_TARGET, Math.max(relaxedTarget, (useQuietPeakGuard ? QUIET_NETWORK_GUARD_SECONDS : MIN_TARGET) + late, MIN_TARGET + 3 * this.jitter));
       } else {
         this.target = relaxedTarget;
       }
@@ -290,15 +303,16 @@ class LivePlayback extends AudioWorkletProcessor {
       if (recover) { this.latencyRecoveries++; this.lastRecoveryAt = now; }
       this.phase = 0; this.primed = false;
       this.quietFrames = 0;
+      this.quietReceivedSamples = 0;
       this.clearQuietRecoveryState();
       this.history.fill(0); this.filterIndex = 0;
       this.flushReport();
       this.reportSize = 0;
       this.fadeFrom = this.lastValue; this.fade = 1;
     }
-    const bytes = new DataView(buffer);
     for (let i = incomingOffset; i < incoming; i++) this.samples[(this.read + this.count + i - incomingOffset) % CAPACITY] = bytes.getInt16(i * 2, true);
     this.count += incoming - incomingOffset;
+    this.quietReceivedSamples = Math.min(PCM_RATE * .06, incomingQuiet ? this.quietReceivedSamples + incoming : trailingQuietSamples);
     this.receivedSamples += incoming;
     this.peakBufferedSamples = Math.max(this.peakBufferedSamples, this.count);
   }
