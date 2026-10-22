@@ -26,9 +26,12 @@ from typing import Literal
 
 from nagents._async import join_owned as _await_cleanup
 from nagents.error_presentation import remote_error_message
+from nagents.error_presentation import safe_error_code
+from nagents.error_presentation import subagent_error_message
 from nagents.events import DoneEvent
 from nagents.events import ErrorEvent
 from nagents.events import TextDoneEvent
+from nagents.provider._diagnostics import transport_diagnostic
 from nagents.provider.openai import OpenAIProvider
 from nagents.provider.reasoning import validate_reasoning_choice
 
@@ -1048,19 +1051,20 @@ class SubagentManager:
                             )
                         if isinstance(event, ErrorEvent) and not event.recoverable:
                             remote_error = remote_error_message(event) if child._remote_profile.configured else ""
-                            info.error = remote_error or (
-                                "Subagent reached its tool-round limit; its response is not a successful result."
-                                if event.code == "MAX_TOOL_ROUNDS"
-                                else "Subagent reported a provider or tool-loop error; its response is not a successful result."
-                            )
+                            info.error = subagent_error_message(event)
                             if remote_error and event.code == "A2A_TASK_CANCELLED":
                                 info.status = "cancelled"
                             logger.warning(
-                                "Subagent failed: task=%s profile=%s remote=%s code=%s",
+                                "Subagent failed: task=%s profile=%s session=%s child_session=%s activation=%d "
+                                "remote=%s code=%s diagnostic=%s",
                                 info.id,
                                 info.profile,
+                                info.session_id,
+                                info.child_session_id,
+                                info.activation,
                                 child._remote_profile.configured,
-                                event.code if remote_error else "subagent_error",
+                                safe_error_code(event),
+                                transport_diagnostic(event.extra) or "unavailable",
                             )
                         elif isinstance(event, DoneEvent):
                             done = event
