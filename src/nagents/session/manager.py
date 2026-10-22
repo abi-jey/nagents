@@ -12,6 +12,7 @@ from typing import Any
 
 import aiosqlite
 
+from .._async import finish_on_cancel
 from ..extensions import _validate_context
 from ..migrations.manager import MigrationManager
 from ..migrations.sessions import migrations as session_migrations
@@ -43,7 +44,8 @@ class SessionManager:
     SQLite-based session and message history management.
 
     Stores conversation history in a SQLite database, allowing for
-    persistent sessions across restarts.
+    persistent sessions across restarts. Reads own their complete worker-thread
+    cursor lifetime, so cancellation propagates only after database cleanup.
 
     Example:
         session = SessionManager(Path("sessions.db"))
@@ -135,6 +137,8 @@ class SessionManager:
         """
         Get or create a session.
 
+        An in-flight lookup or creation finishes before cancellation propagates.
+
         Args:
             session_id: Unique session identifier
             user_id: User identifier
@@ -142,19 +146,23 @@ class SessionManager:
         Returns:
             The session ID
         """
-        await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT id FROM v2_sessions WHERE id = ?", (session_id,))
-            if await cursor.fetchone() is None:
-                await db.execute(
-                    "INSERT INTO v2_sessions (id, user_id) VALUES (?, ?)",
-                    (session_id, user_id),
-                )
-                await db.commit()
-                logger.debug(f"Created new session: {session_id}")
+        async def get_or_create() -> str:
+            await self.initialize()
 
-        return session_id
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("SELECT id FROM v2_sessions WHERE id = ?", (session_id,))
+                if await cursor.fetchone() is None:
+                    await db.execute(
+                        "INSERT INTO v2_sessions (id, user_id) VALUES (?, ?)",
+                        (session_id, user_id),
+                    )
+                    await db.commit()
+                    logger.debug(f"Created new session: {session_id}")
+
+            return session_id
+
+        return await finish_on_cancel(get_or_create())
 
     async def get_history(
         self,
@@ -171,57 +179,61 @@ class SessionManager:
         Returns:
             List of Message objects in chronological order
         """
-        await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
+        async def read() -> list[Message]:
+            await self.initialize()
 
-            # Check for compaction boundary
-            boundary_cursor = await db.execute(
-                "SELECT compacted_at_message_id FROM v2_sessions WHERE id = ?",
-                (session_id,),
-            )
-            boundary_row = await boundary_cursor.fetchone()
-            compaction_boundary: int | None = None
-            if boundary_row and boundary_row["compacted_at_message_id"] is not None:
-                compaction_boundary = boundary_row["compacted_at_message_id"]
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
 
-            if limit:
-                # Get most recent N messages (respecting compaction boundary)
-                if compaction_boundary is not None:
-                    cursor = await db.execute(
-                        """SELECT * FROM (
-                            SELECT * FROM v2_messages
-                            WHERE session_id = ? AND id >= ?
-                            ORDER BY id DESC
-                            LIMIT ?
-                        ) ORDER BY id ASC""",
-                        (session_id, compaction_boundary, limit),
-                    )
+                # Check for compaction boundary
+                boundary_cursor = await db.execute(
+                    "SELECT compacted_at_message_id FROM v2_sessions WHERE id = ?",
+                    (session_id,),
+                )
+                boundary_row = await boundary_cursor.fetchone()
+                compaction_boundary: int | None = None
+                if boundary_row and boundary_row["compacted_at_message_id"] is not None:
+                    compaction_boundary = boundary_row["compacted_at_message_id"]
+
+                if limit:
+                    # Get most recent N messages (respecting compaction boundary)
+                    if compaction_boundary is not None:
+                        cursor = await db.execute(
+                            """SELECT * FROM (
+                                SELECT * FROM v2_messages
+                                WHERE session_id = ? AND id >= ?
+                                ORDER BY id DESC
+                                LIMIT ?
+                            ) ORDER BY id ASC""",
+                            (session_id, compaction_boundary, limit),
+                        )
+                    else:
+                        cursor = await db.execute(
+                            """SELECT * FROM (
+                                SELECT * FROM v2_messages
+                                WHERE session_id = ?
+                                ORDER BY id DESC
+                                LIMIT ?
+                            ) ORDER BY id ASC""",
+                            (session_id, limit),
+                        )
                 else:
-                    cursor = await db.execute(
-                        """SELECT * FROM (
-                            SELECT * FROM v2_messages
-                            WHERE session_id = ?
-                            ORDER BY id DESC
-                            LIMIT ?
-                        ) ORDER BY id ASC""",
-                        (session_id, limit),
-                    )
-            else:
-                if compaction_boundary is not None:
-                    cursor = await db.execute(
-                        "SELECT * FROM v2_messages WHERE session_id = ? AND id >= ? ORDER BY id",
-                        (session_id, compaction_boundary),
-                    )
-                else:
-                    cursor = await db.execute(
-                        "SELECT * FROM v2_messages WHERE session_id = ? ORDER BY id",
-                        (session_id,),
-                    )
+                    if compaction_boundary is not None:
+                        cursor = await db.execute(
+                            "SELECT * FROM v2_messages WHERE session_id = ? AND id >= ? ORDER BY id",
+                            (session_id, compaction_boundary),
+                        )
+                    else:
+                        cursor = await db.execute(
+                            "SELECT * FROM v2_messages WHERE session_id = ? ORDER BY id",
+                            (session_id,),
+                        )
 
-            rows = await cursor.fetchall()
-            return [self._row_to_message(row) for row in rows]
+                rows = await cursor.fetchall()
+                return [self._row_to_message(row) for row in rows]
+
+        return await finish_on_cancel(read())
 
     async def add_message(self, session_id: str, message: Message) -> int:
         """
@@ -292,15 +304,19 @@ class SessionManager:
 
     async def context_identity(self, session_id: str) -> int:
         """Identify the active history origin across resets and compaction."""
-        await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT MIN(m.id) FROM v2_messages m JOIN v2_sessions s ON s.id = m.session_id "
-                "WHERE s.id = ? AND m.id >= COALESCE(s.compacted_at_message_id, 0)",
-                (session_id,),
-            )
-            row = await cursor.fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
+
+        async def read() -> int:
+            await self.initialize()
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT MIN(m.id) FROM v2_messages m JOIN v2_sessions s ON s.id = m.session_id "
+                    "WHERE s.id = ? AND m.id >= COALESCE(s.compacted_at_message_id, 0)",
+                    (session_id,),
+                )
+                row = await cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+
+        return await finish_on_cancel(read())
 
     async def replace_context(self, session_id: str, messages: list[Message]) -> None:
         """Append a validated replacement and move the inclusive boundary atomically.
@@ -406,21 +422,25 @@ class SessionManager:
         Returns:
             List of session info dicts
         """
-        await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
+        async def read() -> list[dict[str, object]]:
+            await self.initialize()
 
-            if user_id:
-                cursor = await db.execute(
-                    "SELECT * FROM v2_sessions WHERE user_id = ? ORDER BY updated_at DESC",
-                    (user_id,),
-                )
-            else:
-                cursor = await db.execute("SELECT * FROM v2_sessions ORDER BY updated_at DESC")
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
 
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+                if user_id:
+                    cursor = await db.execute(
+                        "SELECT * FROM v2_sessions WHERE user_id = ? ORDER BY updated_at DESC",
+                        (user_id,),
+                    )
+                else:
+                    cursor = await db.execute("SELECT * FROM v2_sessions ORDER BY updated_at DESC")
+
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+        return await finish_on_cancel(read())
 
     async def get_message_count(self, session_id: str) -> int:
         """
@@ -432,15 +452,19 @@ class SessionManager:
         Returns:
             Number of messages
         """
-        await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM v2_messages WHERE session_id = ?",
-                (session_id,),
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
+        async def read() -> int:
+            await self.initialize()
+
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM v2_messages WHERE session_id = ?",
+                    (session_id,),
+                )
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+        return await finish_on_cancel(read())
 
     async def session_exists(self, session_id: str) -> bool:
         """
@@ -452,14 +476,18 @@ class SessionManager:
         Returns:
             True if session exists, False otherwise
         """
-        await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM v2_sessions WHERE id = ?",
-                (session_id,),
-            )
-            return await cursor.fetchone() is not None
+        async def read() -> bool:
+            await self.initialize()
+
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT 1 FROM v2_sessions WHERE id = ?",
+                    (session_id,),
+                )
+                return await cursor.fetchone() is not None
+
+        return await finish_on_cancel(read())
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         """
@@ -471,16 +499,20 @@ class SessionManager:
         Returns:
             Session info dict or None if not found
         """
-        await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM v2_sessions WHERE id = ?",
-                (session_id,),
-            )
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+        async def read() -> dict[str, object] | None:
+            await self.initialize()
+
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    "SELECT * FROM v2_sessions WHERE id = ?",
+                    (session_id,),
+                )
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+        return await finish_on_cancel(read())
 
     def _row_to_message(self, row: aiosqlite.Row) -> Message:
         """Convert database row to Message."""
