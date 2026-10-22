@@ -13,7 +13,8 @@ import aiosqlite
 from nagents._async import finish_on_cancel
 from nagents.compaction import ModelCompaction
 from nagents.compaction import describe_compaction
-from nagents.error_presentation import remote_error_message
+from nagents.error_presentation import safe_error_code
+from nagents.error_presentation import subagent_error_message
 from nagents.events import CompactionDoneEvent
 from nagents.events import CompactionStartedEvent
 from nagents.events import ErrorEvent
@@ -124,14 +125,16 @@ def public_payload(event: HarnessEvent) -> dict[str, object]:
     if isinstance(event, (CompactionStartedEvent, CompactionDoneEvent)):
         return {"type": "status", "phase": "compacting" if isinstance(event, CompactionStartedEvent) else "running"}
     if isinstance(event, ErrorEvent):
-        remote_message = remote_error_message(event)
+        code = safe_error_code(event)
         payload: dict[str, object] = {
             "type": "status",
             "phase": "running" if event.recoverable else "failed",
-            "detail": remote_message or "Provider or tool processing encountered an error.",
+            "detail": subagent_error_message(event)
+            if code != "SUBAGENT_ERROR"
+            else "Provider or tool processing encountered an error.",
         }
-        if remote_message:
-            payload["code"] = event.code
+        if code != "SUBAGENT_ERROR":
+            payload["code"] = code
         return payload
     return {}
 

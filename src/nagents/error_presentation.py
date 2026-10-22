@@ -46,6 +46,54 @@ _REMOTE_MESSAGES = {
     "A2A_RUNTIME": "The local remote-agent runtime failed. Ask the ngn administrator to check the correlated backend logs.",
 }
 
+_PROVIDER_MESSAGES = {
+    "CODEX_AUTH": "ChatGPT sign-in is missing or expired; sign in again with /login.",
+    "CODEX_REQUEST_INVALID": "The Codex request is invalid. Check the exact model ID, reasoning effort, and conversation inputs.",
+    "CODEX_STREAM_INVALID": "Codex returned an invalid or incomplete response. No tool calls from that response were released.",
+    "CODEX_CONNECTION": "The connection to Codex failed. Check the provider connection and backend logs.",
+    "MODEL_CONNECTION_UNAVAILABLE": "The selected model connection is unavailable. Check the agent's provider and model settings.",
+    "MODEL_NOT_FOUND": "The selected model was not found. Check the exact model ID and provider settings.",
+    "PROVIDER_PROTOCOL_ERROR": "The provider request or response could not be validated. Check the model settings and correlated backend logs.",
+    "PROVIDER_REQUEST_FAILED": "The provider request failed. Check the provider connection and backend logs.",
+}
+_CODEX_HTTP_CODES = {f"CODEX_HTTP_{status}": status for status in range(100, 600) if status != 200}
+
+
+def safe_error_code(event: ErrorEvent) -> str:
+    """Retain framework-known codes without echoing an arbitrary plugin value."""
+    code = event.code
+    if type(code) is str and (
+        code in _REMOTE_MESSAGES or code in _PROVIDER_MESSAGES or code in _CODEX_HTTP_CODES or code == "MAX_TOOL_ROUNDS"
+    ):
+        return code
+    return "SUBAGENT_ERROR"
+
+
+def subagent_error_message(event: ErrorEvent) -> str:
+    """Give the parent and UI the same fixed explanation, never raw error text."""
+    if remote := remote_error_message(event):
+        return remote
+    code = safe_error_code(event)
+    if code == "MAX_TOOL_ROUNDS":
+        return "Subagent reached its tool-round limit; its response is not a successful result."
+    if code == "SUBAGENT_ERROR":
+        return "Subagent reported a provider or tool-loop error; its response is not a successful result."
+    message = transport_error_message(event) or _PROVIDER_MESSAGES.get(code, "")
+    if status := _CODEX_HTTP_CODES.get(code):
+        if status == 401:
+            message = "ChatGPT sign-in expired or was rejected; sign in again with /login."
+        elif status == 403:
+            message = "Codex access was denied. Check this account's permissions and model access."
+        elif status == 429:
+            message = "The ChatGPT Codex usage limit was reached. Check the account limits before retrying."
+        elif 400 <= status < 500:
+            message = "Codex rejected the request. Check the exact model ID, reasoning effort, and request settings."
+        elif status >= 500:
+            message = "Codex returned a server error. Check service availability before retrying."
+        else:
+            message = "Codex returned an unexpected HTTP response. Check the provider endpoint and backend logs."
+    return f"Subagent request failed ({code}). {message} No successful result from this request is available."
+
 
 def remote_error_message(event: ErrorEvent) -> str:
     """Explain a known remote code without trusting remote text or metadata."""
