@@ -4287,4 +4287,4 @@ web = ["aiortc", "fastapi", "pydantic", "uvicorn", "websockets"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11, <4.0"
-content-hash = "7baa28eb9222d096fa9ce6b0533bd40ec9c0b60b66805d314dbbbaa73d1a1349"
+content-hash = "4f6b35e03209eb10c40d88223731aa363278e983d07a678951ce3fe99712839e"

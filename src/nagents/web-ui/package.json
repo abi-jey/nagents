@@ -21,20 +21,20 @@
     "test": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && node --test scripts/*.test.mjs && tsc -p tsconfig.test.json && node --test .test-build/app/*.test.js .test-build/api/*.test.js .test-build/features/chat/*.test.js .test-build/features/context/*.test.js .test-build/features/settings/*.test.js .test-build/features/live/*.test.js && npm run demo:voice:test && npm run demo:chat-flow:test"
   },
   "dependencies": {
-    "entities": "8.1.0",
-    "highlight.js": "11.11.1",
-    "lowlight": "3.3.0",
-    "marked": "18.1.1",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "entities": ">=8.1.0",
+    "highlight.js": ">=11.11.1",
+    "lowlight": ">=3.3.0",
+    "marked": ">=18.1.1",
+    "react": ">=19.2.4",
+    "react-dom": ">=19.2.4"
   },
   "devDependencies": {
-    "@types/jsdom": "^21.1.7",
-    "@types/node": "^22.19.15",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "jsdom": "^26.1.0",
-    "typescript": "^5.9.3",
-    "vite": "^7.3.7"
+    "@types/jsdom": ">=21.1.7",
+    "@types/node": ">=22.19.15",
+    "@types/react": ">=19.2.14",
+    "@types/react-dom": ">=19.2.3",
+    "jsdom": ">=26.1.0",
+    "typescript": ">=5.9.3",
+    "vite": ">=7.3.7"
   }
 }

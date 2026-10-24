@@ -15,7 +15,7 @@ Install only where needed:
 pip install 'nagents[a2a]'
 ```
 
-The integration uses official `a2a-sdk==1.2.3`, protocol **1.0**, JSON-RPC at
+The integration uses official `a2a-sdk>=1.2.3` (locked to 1.2.3), protocol **1.0**, JSON-RPC at
 `/rpc`, and SSE streaming. Its public minimal Agent Card is at
 `/.well-known/agent-card.json`. The card declares one configured profile,
 `text/plain` input/output and streaming. Push callbacks, gRPC, REST bindings,
