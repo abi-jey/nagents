@@ -2,6 +2,7 @@ import type { IconName } from "../../components/Icon.js";
 import type { ActivityCategory, ChatAppearance } from "../settings/appearance.js";
 import { toolPresentation } from "./toolPresentation.js";
 import type { Entry, TranscriptItem } from "./transcript.js";
+import { hasResponseDetails } from "./responseMetadata.js";
 
 export const activityLabels: Record<Exclude<ActivityCategory, "reasoning">, { label: string; icon: IconName }> = {
   shell: { label: "Commands", icon: "terminal" }, files: { label: "File changes", icon: "edit" },
@@ -22,6 +23,18 @@ export function activityCategory(item: TranscriptItem): Exclude<ActivityCategory
   if (["context", "status", "notification", "wakeup", "agent_change", "retained_tasks"].includes(entry.kind)) return "notices";
   return undefined;
 }
+export function hasDisplayableReasoning(entry: Entry, appearance?: ChatAppearance): boolean {
+  return appearance?.activity.reasoning.placement !== "hidden" && hasResponseDetails(entry.responseMetadata) ||
+    !!entry.responseMetadata && ["failed", "cancelled"].includes(entry.responseMetadata.status);
+}
+export function visibleTranscriptItems(items: TranscriptItem[], appearance?: ChatAppearance, shownResponses = new Set<string>()): TranscriptItem[] {
+  return items.filter(item => {
+    if (item.kind !== "entry" || item.entry.kind !== "assistant") return true;
+    const hasReasoning = hasDisplayableReasoning(item.entry, appearance);
+    if (item.entry.text || hasReasoning) shownResponses.add(item.entry.id);
+    return !!item.entry.text || hasReasoning || shownResponses.has(item.entry.id);
+  });
+}
 export function importantActivity(item: TranscriptItem): boolean {
   return item.kind === "entry" ? !!item.entry.error || item.entry.kind === "error" ||
     ["error", "warning"].includes(item.entry.level || "") ||
@@ -41,13 +54,40 @@ export type PresentationItem = TranscriptItem | ActivityGroup;
 export class ActivityLayout {
   private appearance = "";
   private slots = new Map<string, { group?: string }>();
+  private segments = new Map<string, string>();
+  private shownResponses = new Set<string>();
+  private reasoningPlacement: ChatAppearance["activity"]["reasoning"]["placement"] | undefined;
 
   render(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
     const signature = JSON.stringify([appearance, insideGroup]);
-    if (signature !== this.appearance) { this.appearance = signature; this.slots.clear(); }
-    if (!items.length) this.slots.clear();
+    if (signature !== this.appearance) {
+      this.appearance = signature;
+      this.slots.clear();
+      this.segments.clear();
+    }
+    const reasoningPlacement = appearance?.activity.reasoning.placement;
+    if (reasoningPlacement !== this.reasoningPlacement) {
+      this.reasoningPlacement = reasoningPlacement;
+      this.shownResponses.clear();
+    }
+    if (!items.length) this.shownResponses.clear();
+    const visibleItems = visibleTranscriptItems(items, appearance, this.shownResponses);
+    if (!visibleItems.length) this.slots.clear();
+
+    const segments = new Map<string, string>();
+    let boundary = "";
+    for (const item of visibleItems) {
+      const key = itemKey(item);
+      segments.set(key, boundary);
+      if (!activityCategory(item)) boundary = key;
+    }
+    for (const [key, segment] of segments) {
+      if (this.segments.has(key) && this.segments.get(key) !== segment) this.slots.delete(key);
+    }
+    this.segments = segments;
+
     const result: PresentationItem[] = [], groups = new Map<string, ActivityGroup>();
-    for (const item of items) {
+    for (const item of visibleItems) {
       const key = itemKey(item), category = activityCategory(item), rule = category && appearance?.activity[category];
       let slot = this.slots.get(key);
       if (!slot) {
@@ -75,12 +115,16 @@ export class ActivityLayout {
     }
     return result;
   }
+
+  hasShownResponse(id: string): boolean {
+    return this.shownResponses.has(id);
+  }
 }
 
 /** Derive reading layout without changing transcript identities or execution state. */
 export function activityLayout(items: TranscriptItem[], appearance?: ChatAppearance, insideGroup = false): PresentationItem[] {
   const result: PresentationItem[] = [];
-  items.forEach((item) => {
+  visibleTranscriptItems(items, appearance).forEach((item) => {
     const category = activityCategory(item), rule = category && appearance?.activity[category];
     const hidden = rule?.placement === "hidden" && !importantActivity(item);
     if (!hidden) {

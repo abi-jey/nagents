@@ -7,9 +7,8 @@ import { MessageContent } from "./MessageContent.js";
 import { ActivityRecord } from "./ActivityRecord.js";
 import { ResponseDetails, type ResponseDetailsProps } from "./ResponseDetails.js";
 import { agentLabels, transcriptEntries } from "./agentLabels.js";
-import { ActivityLayout, activityCategory, activityLabels, activityState, importantActivity } from "./activityLayout.js";
+import { ActivityLayout, activityCategory, activityLabels, activityState, hasDisplayableReasoning, importantActivity } from "./activityLayout.js";
 import type { ChatAppearance } from "../settings/appearance.js";
-import { hasResponseDetails } from "./responseMetadata.js";
 import { ChannelAttachments, ChannelHeader } from "./ChannelMessage.js";
 import { LocalDeliveryCard, MediaToken } from "./LocalDelivery.js";
 import { UploadAttachment, UploadSession } from "./UploadAttachment.js";
@@ -71,19 +70,12 @@ export function TranscriptItems({
   inspectTask?: (id: string) => void;
 }) {
   const layout = useRef(new ActivityLayout());
-  const shownResponses = useRef(new Set<string>());
   const expandedRecords = useRef(new Set<string>());
   const appearanceKey = JSON.stringify(appearance);
   const expandedAppearance = useRef(appearanceKey);
   if (!items.length || expandedAppearance.current !== appearanceKey) {
     expandedAppearance.current = appearanceKey;
     expandedRecords.current.clear();
-    if (!items.length) shownResponses.current.clear();
-  }
-  const reasoningPlacement = useRef(appearance?.activity.reasoning.placement);
-  if (reasoningPlacement.current !== appearance?.activity.reasoning.placement) {
-    reasoningPlacement.current = appearance?.activity.reasoning.placement;
-    shownResponses.current.clear();
   }
   const visibleItems = renderTask ? items.filter(item => item.kind !== "retained") : items;
   const bylines = labels ?? agentLabels(transcriptEntries(items), agentName, names, appearance);
@@ -192,11 +184,8 @@ export function TranscriptItems({
     }
     const entry = item.entry;
     const reasoning = appearance?.activity.reasoning;
-    const hasReasoning = reasoning?.placement !== "hidden" && hasResponseDetails(entry.responseMetadata) ||
-      !!entry.responseMetadata && ["failed", "cancelled"].includes(entry.responseMetadata.status);
-    if (entry.kind === "assistant" && (entry.text || hasReasoning)) shownResponses.current.add(entry.id);
-    const keepVisible = shownResponses.current.has(entry.id);
-    if (entry.kind === "assistant" && !entry.text && !hasReasoning && !keepVisible) return null;
+    const hasReasoning = hasDisplayableReasoning(entry, appearance);
+    const keepVisible = layout.current.hasShownResponse(entry.id);
     const category = activityCategory(item);
     if (importantActivity(item)) expandedRecords.current.add(entry.id);
     const expanded = expandedRecords.current.has(entry.id) || !!category && appearance?.activity[category].details === "expanded";
