@@ -27,6 +27,14 @@ saved context are evidence inside these rows. Later wake-ups and additional
 messages remain separate notices. Appearance visibility controls still apply,
 and failures remain visible even when ordinary activity is hidden.
 
+The activity mark is a four-node Relay network. A new delegation briefly gathers
+its nodes before the starting animation, then changes shape for reasoning, tools,
+waiting and writing. Completion resolves the network into a check; failed and
+cancelled work use distinct shapes. Existing recorded results appear settled.
+Streaming text keeps the same element while its trailing content slides into
+view, so incoming chunks do not restart an opacity animation. Reduced-motion
+preferences disable the movement.
+
 A2A conversations show a compact **A2A** connection chip. An open lock means
 credentials are ready or no sign-in is required; an amber closed lock needs
 attention. An unknown status uses a question mark. Hover for the exact status,
