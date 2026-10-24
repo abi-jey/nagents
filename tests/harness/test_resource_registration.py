@@ -17,6 +17,8 @@ from tests.harness.test_resource_reload import plugin
 from tests.support.hang_guard import HANG_GUARD
 from tests.support.providers import setup_harness
 
+pytestmark = pytest.mark.usefixtures("workspace_discovery_only")
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
